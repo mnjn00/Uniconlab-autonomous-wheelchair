@@ -1,0 +1,284 @@
+<?xml version="1.0"?>
+<robot name="wheelchair" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find wheelchair_description)/urdf/dimensions.xacro"/>
+
+  <material name="frame_black"><color rgba="0.02 0.02 0.02 1.0"/></material>
+  <material name="seat_blue"><color rgba="0.05 0.18 0.45 1.0"/></material>
+  <material name="wheel_dark"><color rgba="0.01 0.01 0.01 1.0"/></material>
+  <material name="electronics_gray"><color rgba="0.45 0.45 0.45 1.0"/></material>
+  <material name="lidar_green"><color rgba="0.0 0.45 0.20 1.0"/></material>
+
+  <xacro:macro name="box_inertial" params="mass x y z">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${mass}"/>
+      <inertia ixx="${mass * (y*y + z*z) / 12.0}" ixy="0" ixz="0"
+               iyy="${mass * (x*x + z*z) / 12.0}" iyz="0"
+               izz="${mass * (x*x + y*y) / 12.0}"/>
+    </inertial>
+  </xacro:macro>
+
+  <xacro:macro name="cylinder_inertial" params="mass radius length axis">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${mass}"/>
+      <xacro:if value="${axis == 'y'}">
+        <inertia ixx="${mass * (3*radius*radius + length*length) / 12.0}" ixy="0" ixz="0"
+                 iyy="${0.5 * mass * radius * radius}" iyz="0"
+                 izz="${mass * (3*radius*radius + length*length) / 12.0}"/>
+      </xacro:if>
+      <xacro:unless value="${axis == 'y'}">
+        <inertia ixx="${mass * (3*radius*radius + length*length) / 12.0}" ixy="0" ixz="0"
+                 iyy="${mass * (3*radius*radius + length*length) / 12.0}" iyz="0"
+                 izz="${0.5 * mass * radius * radius}"/>
+      </xacro:unless>
+    </inertial>
+  </xacro:macro>
+
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${rear_wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.065" rpy="0 0 0"/>
+      <geometry><box size="${base_box_length} ${base_box_width} ${base_box_height}"/></geometry>
+      <material name="frame_black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.065" rpy="0 0 0"/>
+      <geometry><box size="${base_box_length} ${base_box_width} ${base_box_height}"/></geometry>
+    </collision>
+    <xacro:box_inertial mass="${wheelchair_mass * 0.45}" x="${base_box_length}" y="${base_box_width}" z="${base_box_height}"/>
+  </link>
+
+  <link name="seat_link">
+    <visual>
+      <origin xyz="0 0 ${seat_thickness / 2.0}" rpy="0 0 0"/>
+      <geometry><box size="${seat_depth} ${seat_width} ${seat_thickness}"/></geometry>
+      <material name="seat_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${seat_thickness / 2.0}" rpy="0 0 0"/>
+      <geometry><box size="${seat_depth} ${seat_width} ${seat_thickness}"/></geometry>
+    </collision>
+    <xacro:box_inertial mass="${wheelchair_mass * 0.12}" x="${seat_depth}" y="${seat_width}" z="${seat_thickness}"/>
+  </link>
+
+  <joint name="seat_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="seat_link"/>
+    <origin xyz="0.03 0 ${seat_height - rear_wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="backrest_link">
+    <visual>
+      <origin xyz="0 0 ${backrest_height / 2.0}" rpy="0 0 0"/>
+      <geometry><box size="${backrest_thickness} ${seat_width} ${backrest_height}"/></geometry>
+      <material name="seat_blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${backrest_height / 2.0}" rpy="0 0 0"/>
+      <geometry><box size="${backrest_thickness} ${seat_width} ${backrest_height}"/></geometry>
+    </collision>
+    <xacro:box_inertial mass="${wheelchair_mass * 0.10}" x="${backrest_thickness}" y="${seat_width}" z="${backrest_height}"/>
+  </link>
+
+  <joint name="backrest_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="backrest_link"/>
+    <origin xyz="${-seat_depth / 2.0 + 0.02} 0 ${seat_height - rear_wheel_radius + seat_thickness}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="nuc_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="${nuc_length} ${nuc_width} ${nuc_height}"/></geometry>
+      <material name="electronics_gray"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="${nuc_length} ${nuc_width} ${nuc_height}"/></geometry>
+    </collision>
+    <xacro:box_inertial mass="0.9" x="${nuc_length}" y="${nuc_width}" z="${nuc_height}"/>
+  </link>
+
+  <joint name="nuc_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="nuc_link"/>
+    <origin xyz="0.10 0 ${seat_height - rear_wheel_radius + seat_thickness + nuc_height / 2.0}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="lidar_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder radius="${lidar_radius}" length="${lidar_height}"/></geometry>
+      <material name="lidar_green"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder radius="${lidar_radius}" length="${lidar_height}"/></geometry>
+    </collision>
+    <xacro:cylinder_inertial mass="0.4" radius="${lidar_radius}" length="${lidar_height}" axis="z"/>
+  </link>
+
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="0.22 0 ${wheelchair_height - rear_wheel_radius - lidar_height / 2.0}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="rear_left_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="${rear_wheel_radius}" length="${rear_wheel_thickness}"/></geometry>
+      <material name="wheel_dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="${rear_wheel_radius}" length="${rear_wheel_thickness}"/></geometry>
+    </collision>
+    <xacro:cylinder_inertial mass="1.1" radius="${rear_wheel_radius}" length="${rear_wheel_thickness}" axis="y"/>
+  </link>
+
+  <joint name="rear_left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_left_wheel_link"/>
+    <origin xyz="${rear_wheel_x} ${rear_wheel_track / 2.0} 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="rear_right_wheel_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="${rear_wheel_radius}" length="${rear_wheel_thickness}"/></geometry>
+      <material name="wheel_dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="${rear_wheel_radius}" length="${rear_wheel_thickness}"/></geometry>
+    </collision>
+    <xacro:cylinder_inertial mass="1.1" radius="${rear_wheel_radius}" length="${rear_wheel_thickness}" axis="y"/>
+  </link>
+
+  <joint name="rear_right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_right_wheel_link"/>
+    <origin xyz="${rear_wheel_x} ${-rear_wheel_track / 2.0} 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="front_left_caster_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="${front_wheel_radius}" length="${front_wheel_thickness}"/></geometry>
+      <material name="wheel_dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <!-- Low-friction caster contact: a fixed front cylinder drags like a brake
+           because it cannot spin/swivel, so use a caster-like sphere for Gazebo
+           collision while retaining the wheel-shaped visual. -->
+      <geometry><sphere radius="${front_wheel_radius}"/></geometry>
+    </collision>
+    <xacro:cylinder_inertial mass="0.25" radius="${front_wheel_radius}" length="${front_wheel_thickness}" axis="y"/>
+  </link>
+
+  <joint name="front_left_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_left_caster_link"/>
+    <origin xyz="${front_caster_x} ${front_caster_track / 2.0} ${front_wheel_radius - rear_wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="front_right_caster_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <geometry><cylinder radius="${front_wheel_radius}" length="${front_wheel_thickness}"/></geometry>
+      <material name="wheel_dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.57079632679 0 0"/>
+      <!-- See front_left_caster_link collision note. -->
+      <geometry><sphere radius="${front_wheel_radius}"/></geometry>
+    </collision>
+    <xacro:cylinder_inertial mass="0.25" radius="${front_wheel_radius}" length="${front_wheel_thickness}" axis="y"/>
+  </link>
+
+  <joint name="front_right_caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_right_caster_link"/>
+    <origin xyz="${front_caster_x} ${-front_caster_track / 2.0} ${front_wheel_radius - rear_wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <transmission name="rear_left_wheel_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="rear_left_wheel_joint">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="rear_left_wheel_motor">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <transmission name="rear_right_wheel_transmission">
+    <type>transmission_interface/SimpleTransmission</type>
+    <joint name="rear_right_wheel_joint">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+    </joint>
+    <actuator name="rear_right_wheel_motor">
+      <hardwareInterface>hardware_interface/VelocityJointInterface</hardwareInterface>
+      <mechanicalReduction>1</mechanicalReduction>
+    </actuator>
+  </transmission>
+
+  <gazebo reference="base_link">
+    <material>Gazebo/Black</material>
+    <mu1>0.8</mu1>
+    <mu2>0.8</mu2>
+  </gazebo>
+  <gazebo reference="rear_left_wheel_link">
+    <material>Gazebo/Black</material>
+    <mu1>1.2</mu1>
+    <mu2>1.2</mu2>
+  </gazebo>
+  <gazebo reference="rear_right_wheel_link">
+    <material>Gazebo/Black</material>
+    <mu1>1.2</mu1>
+    <mu2>1.2</mu2>
+  </gazebo>
+  <gazebo reference="front_left_caster_link">
+    <material>Gazebo/Black</material>
+    <mu1>0.02</mu1>
+    <mu2>0.02</mu2>
+  </gazebo>
+  <gazebo reference="front_right_caster_link">
+    <material>Gazebo/Black</material>
+    <mu1>0.02</mu1>
+    <mu2>0.02</mu2>
+  </gazebo>
+  <gazebo reference="lidar_link">
+    <sensor type="ray" name="lidar_3d_placeholder">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <visualize>true</visualize>
+      <ray>
+        <scan><horizontal><samples>64</samples><resolution>1</resolution><min_angle>-3.14159</min_angle><max_angle>3.14159</max_angle></horizontal></scan>
+        <range><min>0.10</min><max>30.0</max><resolution>0.02</resolution></range>
+      </ray>
+      <plugin name="gazebo_ros_lidar_points" filename="libgazebo_ros_laser.so">
+        <topicName>/scan</topicName>
+        <frameName>lidar_link</frameName>
+      </plugin>
+    </sensor>
+  </gazebo>
+  <gazebo>
+    <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+      <robotNamespace>/</robotNamespace>
+    </plugin>
+  </gazebo>
+</robot>

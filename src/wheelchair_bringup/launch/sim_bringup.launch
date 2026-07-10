@@ -1,0 +1,31 @@
+<launch>
+  <arg name="world" default="sidewalk_obstacles"/>
+  <arg name="world_file" default="$(eval find('wheelchair_gazebo') + '/worlds/' + arg('world') + '.world')"/>
+  <arg name="gui" default="true"/>
+  <arg name="paused" default="false"/>
+  <arg name="use_sim_time" default="true"/>
+
+  <rosparam command="load" file="$(find wheelchair_bringup)/config/params.yaml"/>
+  <rosparam command="load" file="$(find wheelchair_bringup)/config/runtime_modes.yaml" ns="runtime_modes"/>
+
+  <include file="$(find wheelchair_gazebo)/launch/sim.launch">
+    <arg name="world_file" value="$(arg world_file)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+  </include>
+
+  <include file="$(find wheelchair_navigation)/launch/navigation.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="cmd_vel_nav_topic" value="/cmd_vel_nav"/>
+  </include>
+
+  <include file="$(find wheelchair_safety)/launch/safety.launch">
+    <arg name="input_cmd_topic" value="/cmd_vel_nav"/>
+    <arg name="output_cmd_topic" value="/cmd_vel_safe"/>
+  </include>
+
+  <!-- Gazebo diff_drive_controller subscribes to its controller-local cmd_vel topic; only the safety output feeds it. -->
+  <node pkg="topic_tools" type="relay" name="cmd_vel_safe_to_wheelchair_base_controller"
+        args="/cmd_vel_safe /wheelchair_base_controller/cmd_vel" output="screen"/>
+</launch>

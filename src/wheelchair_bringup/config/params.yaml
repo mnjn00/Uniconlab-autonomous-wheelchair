@@ -1,0 +1,16 @@
+wheelchair:
+  description: simulation_development_scaffold_only
+  base_frame: base_footprint
+  odom_frame: odom
+  map_frame: map
+  command_chain:
+    navigation_output: /cmd_vel_nav
+    safety_gate_output: /cmd_vel_safe
+    gazebo_controller_command_relay: /cmd_vel_safe -> /wheelchair_base_controller/cmd_vel
+  base_controller_interface:
+    required_input_topic: /cmd_vel_safe
+    hardware_driver_note: Hardware driver must subscribe to /cmd_vel_safe or an equivalent relay fed only by /cmd_vel_safe.
+  lidar:
+    frame_id: lidar_link
+    pointcloud_topic: /lidar/points
+    scan_topic: /scan

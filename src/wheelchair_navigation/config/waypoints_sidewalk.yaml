@@ -1,0 +1,6 @@
+frame_id: map
+waypoints:
+  - {name: start, x: 0.0, y: 0.0, yaw: 0.0}
+  - {name: pass_person_1, x: 1.4, y: -0.35, yaw: 0.0}
+  - {name: narrow_gap, x: 3.2, y: 0.20, yaw: 0.0}
+  - {name: finish, x: 6.8, y: 0.0, yaw: 0.0}

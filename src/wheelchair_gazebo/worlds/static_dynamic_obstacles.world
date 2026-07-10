@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="static_dynamic_obstacles">
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <model name="sidewalk_slab">
+      <static>true</static>
+      <pose>3.6 0 0.011 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>9.0 2.4 0.02</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>9.0 2.4 0.02</size></box></geometry><material><ambient>0.56 0.56 0.56 1</ambient><diffuse>0.56 0.56 0.56 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="curb_left">
+      <static>true</static>
+      <pose>3.6 1.25 0.08 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>9.0 0.10 0.16</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>9.0 0.10 0.16</size></box></geometry><material><ambient>0.32 0.32 0.32 1</ambient><diffuse>0.32 0.32 0.32 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <model name="curb_right">
+      <static>true</static>
+      <pose>3.6 -1.25 0.08 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>9.0 0.10 0.16</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>9.0 0.10 0.16</size></box></geometry><material><ambient>0.32 0.32 0.32 1</ambient><diffuse>0.32 0.32 0.32 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Static obstacle: blue box parked in the corridor. -->
+    <model name="static_obstacle_blue_box">
+      <static>true</static>
+      <pose>4.65 -0.45 0.35 0 0 0</pose>
+      <link name="box">
+        <collision name="collision"><geometry><box><size>0.60 0.55 0.70</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>0.60 0.55 0.70</size></box></geometry><material><ambient>0.05 0.20 0.95 1</ambient><diffuse>0.05 0.20 0.95 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- Moving obstacle: red person-like cylinder. A ROS demo script moves this model with /gazebo/set_model_state. -->
+    <model name="moving_obstacle_red_person">
+      <static>false</static>
+      <pose>2.35 0.95 0.85 0 0 0</pose>
+      <link name="body">
+        <gravity>false</gravity>
+        <collision name="collision"><geometry><cylinder><radius>0.22</radius><length>1.70</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.22</radius><length>1.70</length></cylinder></geometry><material><ambient>0.95 0.05 0.05 1</ambient><diffuse>0.95 0.05 0.05 1</diffuse></material></visual>
+        <inertial><mass>5.0</mass><inertia><ixx>1</ixx><iyy>1</iyy><izz>1</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia></inertial>
+      </link>
+    </model>
+
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>3.7 -4.8 3.1 0 0.56 1.13</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+
+    <physics name="ode" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+  </world>
+</sdf>

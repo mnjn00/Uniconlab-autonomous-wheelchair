@@ -1,0 +1,36 @@
+joint_state_controller:
+  type: joint_state_controller/JointStateController
+  publish_rate: 50
+
+gazebo_ros_control:
+  pid_gains:
+    rear_left_wheel_joint: {p: 5.0, i: 0.0, d: 0.0}
+    rear_right_wheel_joint: {p: 5.0, i: 0.0, d: 0.0}
+
+wheelchair_base_controller:
+  type: diff_drive_controller/DiffDriveController
+  left_wheel: [rear_left_wheel_joint]
+  right_wheel: [rear_right_wheel_joint]
+  wheel_separation: 0.550
+  wheel_radius: 0.254
+  publish_rate: 50
+  cmd_vel_timeout: 0.25
+  base_frame_id: base_footprint
+  odom_frame_id: odom
+  enable_odom_tf: true
+  estimate_velocity_from_position: false
+  velocity_rolling_window_size: 10
+  pose_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.03]
+  twist_covariance_diagonal: [0.001, 0.001, 1000000.0, 1000000.0, 1000000.0, 0.03]
+  linear:
+    x:
+      has_velocity_limits: true
+      max_velocity: 0.70
+      has_acceleration_limits: true
+      max_acceleration: 0.60
+  angular:
+    z:
+      has_velocity_limits: true
+      max_velocity: 1.00
+      has_acceleration_limits: true
+      max_acceleration: 1.20

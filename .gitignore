@@ -1,0 +1,28 @@
+# Catkin/ROS build outputs
+build/
+devel/
+install/
+log/
+logs/
+.catkin_tools/
+
+# Python/test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# ROS/Gazebo runtime
+.ros/
+*.bag
+*.db3
+*.mcap
+*.active
+*.log
+
+# Large local generated artifacts
+artifacts/
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store

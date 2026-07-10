@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="sidewalk_obstacles">
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <model name="sidewalk_slab">
+      <static>true</static>
+      <pose>0 0 0.011 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>12 2.4 0.02</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>12 2.4 0.02</size></box></geometry><material><ambient>0.55 0.55 0.55 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="curb_left">
+      <static>true</static>
+      <pose>0 1.25 0.08 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>12 0.10 0.16</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>12 0.10 0.16</size></box></geometry><material><ambient>0.35 0.35 0.35 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="curb_right">
+      <static>true</static>
+      <pose>0 -1.25 0.08 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>12 0.10 0.16</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>12 0.10 0.16</size></box></geometry><material><ambient>0.35 0.35 0.35 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="person_obstacle_1">
+      <static>true</static>
+      <pose>2.0 0.45 0.85 0 0 0</pose>
+      <link name="body">
+        <collision name="collision"><geometry><cylinder><radius>0.22</radius><length>1.70</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.22</radius><length>1.70</length></cylinder></geometry><material><ambient>0.1 0.1 0.8 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="person_obstacle_2">
+      <static>true</static>
+      <pose>4.6 -0.35 0.85 0 0 0</pose>
+      <link name="body">
+        <collision name="collision"><geometry><cylinder><radius>0.20</radius><length>1.70</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.20</radius><length>1.70</length></cylinder></geometry><material><ambient>0.8 0.2 0.1 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="bollard_row_1">
+      <static>true</static>
+      <pose>6.0 0.82 0.35 0 0 0</pose>
+      <link name="post">
+        <collision name="collision"><geometry><cylinder><radius>0.06</radius><length>0.70</length></cylinder></geometry></collision>
+        <visual name="visual"><geometry><cylinder><radius>0.06</radius><length>0.70</length></cylinder></geometry><material><ambient>0.05 0.05 0.05 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>3.6 -4.4 3.0 0 0.58 1.15</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+
+    <physics name="ode" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+  </world>
+</sdf>

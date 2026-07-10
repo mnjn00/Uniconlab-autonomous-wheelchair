@@ -1,0 +1,18 @@
+<launch>
+  <arg name="model" default="$(find wheelchair_description)/urdf/wheelchair.urdf.xacro"/>
+  <arg name="robot_name" default="wheelchair"/>
+  <arg name="x" default="0.0"/>
+  <arg name="y" default="0.0"/>
+  <arg name="z" default="0.05"/>
+  <arg name="yaw" default="0.0"/>
+
+  <param name="robot_description" command="$(find xacro)/xacro $(arg model)"/>
+  <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" output="screen"/>
+  <rosparam command="load" file="$(find wheelchair_gazebo)/config/controllers.yaml"/>
+
+  <node pkg="gazebo_ros" type="spawn_model" name="spawn_wheelchair" output="screen"
+        args="-urdf -param robot_description -model $(arg robot_name) -x $(arg x) -y $(arg y) -z $(arg z) -Y $(arg yaw)"/>
+
+  <node pkg="controller_manager" type="spawner" name="controller_spawner" output="screen"
+        args="joint_state_controller wheelchair_base_controller"/>
+</launch>

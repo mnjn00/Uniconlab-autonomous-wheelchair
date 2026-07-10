@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>wheelchair_navigation</name>
+  <version>0.1.0</version>
+  <description>ROS1 Noetic move_base, costmap_2d, DWA, geofence, and waypoint configuration for the wheelchair scaffold.</description>
+  <maintainer email="maintainer@example.com">GJC Scaffold Maintainer</maintainer>
+  <license>GPL-2.0-only</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>move_base</exec_depend>
+  <exec_depend>costmap_2d</exec_depend>
+  <exec_depend>dwa_local_planner</exec_depend>
+  <exec_depend>navfn</exec_depend>
+  <exec_depend>clear_costmap_recovery</exec_depend>
+  <exec_depend>rotate_recovery</exec_depend>
+
+  <export>
+    <architecture_independent/>
+  </export>
+</package>

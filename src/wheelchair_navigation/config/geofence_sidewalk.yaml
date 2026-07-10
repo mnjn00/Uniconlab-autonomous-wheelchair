@@ -1,0 +1,10 @@
+mode: sidewalk
+frame_id: map
+max_linear_speed: 0.55
+max_angular_speed: 0.85
+min_clearance_m: 0.35
+polygon:
+  - [-0.5, -1.10]
+  - [8.0, -1.10]
+  - [8.0, 1.10]
+  - [-0.5, 1.10]

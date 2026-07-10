@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Metric constants transcribed from the source wheelchair dimensions image. -->
+  <xacro:property name="wheelchair_length" value="0.970"/>
+  <xacro:property name="wheelchair_height" value="0.910"/>
+  <xacro:property name="wheelchair_width" value="0.600"/>
+  <xacro:property name="seat_width" value="0.445"/>
+  <xacro:property name="seat_height" value="0.475"/>
+  <xacro:property name="front_wheel_radius" value="0.0635"/>
+  <xacro:property name="rear_wheel_radius" value="0.254"/>
+  <xacro:property name="wheelchair_mass" value="13.5"/>
+  <xacro:property name="folded_length" value="0.730"/>
+  <xacro:property name="folded_width" value="0.300"/>
+
+  <!-- Derived simulation dimensions. These are kept here so tests can validate extents without xacro. -->
+  <xacro:property name="base_box_length" value="0.780"/>
+  <xacro:property name="base_box_width" value="0.430"/>
+  <xacro:property name="base_box_height" value="0.090"/>
+  <xacro:property name="rear_wheel_thickness" value="0.050"/>
+  <xacro:property name="front_wheel_thickness" value="0.035"/>
+  <xacro:property name="rear_wheel_track" value="0.550"/>
+  <xacro:property name="front_caster_track" value="0.440"/>
+  <xacro:property name="rear_wheel_x" value="-0.215"/>
+  <xacro:property name="front_caster_x" value="0.360"/>
+  <xacro:property name="seat_depth" value="0.420"/>
+  <xacro:property name="seat_thickness" value="0.055"/>
+  <xacro:property name="backrest_height" value="0.430"/>
+  <xacro:property name="backrest_thickness" value="0.045"/>
+  <xacro:property name="nuc_length" value="0.120"/>
+  <xacro:property name="nuc_width" value="0.110"/>
+  <xacro:property name="nuc_height" value="0.045"/>
+  <xacro:property name="lidar_radius" value="0.045"/>
+  <xacro:property name="lidar_height" value="0.070"/>
+</robot>

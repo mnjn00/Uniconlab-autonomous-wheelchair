@@ -1,0 +1,12 @@
+default_mode: sidewalk
+modes:
+  sidewalk:
+    max_linear_speed: 0.55
+    max_angular_speed: 0.85
+    requires_geofence: true
+    geofence_config: $(find wheelchair_navigation)/config/geofence_sidewalk.yaml
+  road_free_space:
+    max_linear_speed: 0.70
+    max_angular_speed: 1.00
+    requires_geofence: true
+    geofence_config: $(find wheelchair_navigation)/config/geofence_road_free_space.yaml

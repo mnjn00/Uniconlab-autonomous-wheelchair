@@ -1,0 +1,23 @@
+{
+  "cloud_points": 783303,
+  "trajectory_poses": 6871,
+  "occupied_source_cells": 47806,
+  "grid_width": 3219,
+  "grid_height": 2360,
+  "resolution": 0.1,
+  "origin": [
+    -60.072998046875,
+    -148.32440185546875,
+    0.0
+  ],
+  "pgm": "/tmp/wheelchair_ws/src/wheelchair_mapping/maps/hanyang_aegimun_loop/map.pgm",
+  "yaml": "/tmp/wheelchair_ws/src/wheelchair_mapping/maps/hanyang_aegimun_loop/map.yaml",
+  "grade": {
+    "z_min": -6.891697,
+    "z_max": 4.056862,
+    "max_grade_percent": 2.514491713957969,
+    "p95_grade_percent": 2.4485401872237325,
+    "mean_grade_percent": 1.8549764466156022,
+    "grade_sample_min_distance_m": 0.2
+  }
+}

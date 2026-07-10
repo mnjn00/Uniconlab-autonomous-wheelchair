@@ -1,0 +1,25 @@
+<launch>
+  <arg name="input_cmd_topic" default="/cmd_vel_nav"/>
+  <arg name="output_cmd_topic" default="/cmd_vel_safe"/>
+
+  <rosparam command="load" file="$(find wheelchair_safety)/config/safety_limits.yaml" ns="safety_gate"/>
+
+  <node pkg="wheelchair_safety" type="safety_gate.py" name="safety_gate" output="screen">
+    <param name="input_cmd_topic" value="$(arg input_cmd_topic)"/>
+    <param name="output_cmd_topic" value="$(arg output_cmd_topic)"/>
+  </node>
+
+  <node pkg="wheelchair_safety" type="mode_manager.py" name="mode_manager" output="screen">
+    <rosparam param="modes">
+      sidewalk:
+        max_linear_speed: 0.55
+        max_angular_speed: 0.85
+        requires_geofence: true
+      road_free_space:
+        max_linear_speed: 0.70
+        max_angular_speed: 1.00
+        requires_geofence: true
+    </rosparam>
+    <param name="default_mode" value="sidewalk"/>
+  </node>
+</launch>

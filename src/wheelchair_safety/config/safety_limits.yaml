@@ -1,0 +1,13 @@
+input_cmd_topic: /cmd_vel_nav
+output_cmd_topic: /cmd_vel_safe
+estop_topic: /safety/estop
+estop_reset_topic: /safety/estop_reset
+geofence_ok_topic: /safety/geofence_ok
+mode_allowed_topic: /safety/mode_allowed
+collision_stop_topic: /safety/collision_stop
+status_topic: /safety/status
+publish_rate_hz: 20.0
+stale_timeout_s: 0.30
+max_linear_speed: 0.55
+max_angular_speed: 0.85
+collision_stop_distance_m: 0.45

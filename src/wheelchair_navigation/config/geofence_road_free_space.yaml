@@ -1,0 +1,10 @@
+mode: road_free_space
+frame_id: map
+max_linear_speed: 0.70
+max_angular_speed: 1.00
+min_clearance_m: 0.50
+polygon:
+  - [-1.0, -2.5]
+  - [12.0, -2.5]
+  - [12.0, 2.5]
+  - [-1.0, 2.5]
