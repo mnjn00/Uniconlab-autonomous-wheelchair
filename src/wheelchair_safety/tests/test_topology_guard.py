@@ -18,7 +18,8 @@ def valid_snapshot(profile="sim", input_topic="/cmd_vel_nav", output_topic=None,
     output_topic = output_topic or ("/shadow/cmd_vel_safe" if profile == "replay" else "/cmd_vel_safe")
     expected = topology_guard.expected_graph(
         profile, input_topic, output_topic,
-        hardware_authority_proven=profile == "hardware_enabled")
+        hardware_authority_proven=profile == "hardware_enabled",
+        hardware_sink_topic="/hardware/manifest/cmd_vel" if profile == "hardware_enabled" else None)
     publishers, subscribers, observations = {}, {}, {}
     deadlines = topology_guard.profile_deadlines(expected)
     for topic, authority in expected.authorities.items():
@@ -39,7 +40,9 @@ def valid_snapshot(profile="sim", input_topic="/cmd_vel_nav", output_topic=None,
     transforms = {
         edge: (topology_guard.TransformObservation(
             authority.owners[0], 9.9, 0.0 if authority.static else 100.0,
-            authority.static, None if authority.static else 0.10),)
+            authority.static, None if authority.static else 0.10,
+            (0.0, 0.0, 0.0) if edge == ("map", "odom") else None,
+            0.0 if edge == ("map", "odom") else None),)
         for edge, authority in expected.transforms.items()
     }
     return expected, topology_guard.GraphSnapshot(
@@ -326,17 +329,25 @@ def test_unknown_profile_and_wrong_replay_output_are_rejected():
         topology_guard.expected_graph("native", "/cmd_vel_nav", "/cmd_vel_safe")
 
 
-def test_hardware_enabled_requires_explicit_boundary_contract_proof():
+def test_hardware_enabled_requires_explicit_boundary_and_sink_contract():
     with pytest.raises(ValueError, match="proven hardware boundary authority"):
         topology_guard.expected_graph(
             "hardware_enabled", "/cmd_vel_nav", "/cmd_vel_safe")
+    with pytest.raises(ValueError, match="manifest-selected sink topic"):
+        topology_guard.expected_graph(
+            "hardware_enabled", "/cmd_vel_nav", "/cmd_vel_safe",
+            hardware_authority_proven=True)
+    with pytest.raises(ValueError, match="manifest-selected sink topic"):
+        topology_guard.expected_graph(
+            "hardware_enabled", "/cmd_vel_nav", "/cmd_vel_safe",
+            hardware_authority_proven=True, hardware_sink_topic="/cmd_vel_safe")
     expected = topology_guard.expected_graph(
         "hardware_enabled", "/cmd_vel_nav", "/cmd_vel_safe",
-        hardware_authority_proven=True)
+        hardware_authority_proven=True, hardware_sink_topic="/hardware/manifest/cmd_vel")
     assert expected.profile == "hardware_enabled"
     assert expected.authorities["/cmd_vel_safe"].subscribers == (
         "collision_supervisor", "hardware_enabled_adapter")
-    assert expected.authorities["/hardware/driver_status"].publishers == (
+    assert expected.authorities["/hardware/manifest/cmd_vel"].publishers == (
         "hardware_enabled_adapter",)
 
 
@@ -397,3 +408,164 @@ def test_route_active_deadline_is_a_monotonic_receipt_contract():
                            source.index("    def observe_motion_intent(")]
     assert "time.monotonic()" in observe_source
     assert "header.stamp" not in observe_source
+def test_canonical_raw_inputs_and_route_zone_have_exact_authority():
+    expected, snapshot = valid_snapshot()
+    for topic in ("/sensors/lidar/points", "/sensors/imu/data", "/odom", "/route/zone_policy"):
+        assert topic in expected.authorities
+    publishers = dict(snapshot.publishers)
+    publishers["/sensors/lidar/points"] = ("rogue_sensor_adapter",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, publishers=publishers))
+    assert not result.ok
+    assert any("/sensors/lidar/points publisher authority" in item for item in result.violations)
+
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/route/zone_policy"] += ("route_zone_monitor",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, subscribers=subscribers))
+    assert not result.ok
+    assert any("/route/zone_policy unauthorized subscribers" in item for item in result.violations)
+
+
+def test_disguised_command_subscriber_is_not_passive():
+    expected, snapshot = valid_snapshot()
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/cmd_vel_safe"] += ("cmd_vel_observer",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, subscribers=subscribers))
+    assert not result.ok
+    assert any("/cmd_vel_safe unauthorized subscribers" in item for item in result.violations)
+
+
+def test_tf_uses_full_caller_identity_and_rejects_same_basename_publishers():
+    expected, snapshot = valid_snapshot()
+    transforms = dict(snapshot.transforms)
+    transforms[("map", "odom")] = (
+        topology_guard.TransformObservation(
+            "/primary/localization_adapter", 9.9, 100.0, False, 0.10, (0.0, 0.0, 0.0), 0.0),
+        topology_guard.TransformObservation(
+            "/rogue/localization_adapter", 9.9, 100.0, False, 0.10, (0.0, 0.0, 0.0), 0.0),
+    )
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, transforms=transforms))
+    assert not result.ok
+    assert result.reason_mask & topology_guard.TF
+
+
+def test_tf_stamp_regression_static_stamp_and_map_jump_stop():
+    expected, snapshot = valid_snapshot()
+    auditor = topology_guard.TopologyAuditor(expected)
+    assert auditor.audit(snapshot).ok
+
+    transforms = dict(snapshot.transforms)
+    transforms[("map", "odom")] = (topology_guard.TransformObservation(
+        "localization_adapter", 9.9, 99.9, False, 0.10, (0.0, 0.0, 0.0), 0.0),)
+    result = auditor.audit(replace(snapshot, transforms=transforms))
+    assert not result.ok
+    assert any("source stamp regression" in item for item in result.violations)
+
+    static = dict(snapshot.transforms)
+    static[("base_link", "lidar_link")] = (topology_guard.TransformObservation(
+        "robot_state_publisher", 9.9, 1.0, True),)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, transforms=static))
+    assert not result.ok
+    assert any("invalid static TF evidence" in item for item in result.violations)
+
+    auditor = topology_guard.TopologyAuditor(expected)
+    assert auditor.audit(snapshot).ok
+    jumped = dict(snapshot.transforms)
+    jumped[("map", "odom")] = (topology_guard.TransformObservation(
+        "localization_adapter", 9.9, 100.1, False, 0.10, (1.0, 0.0, 0.0), 0.0),)
+    result = auditor.audit(replace(snapshot, transforms=jumped))
+    assert not result.ok
+    assert any("unapproved relocalization jump" in item for item in result.violations)
+
+
+def test_unrelated_graph_topics_are_ignored_but_unknown_command_and_safety_edges_stop():
+    expected, snapshot = valid_snapshot()
+    publishers = dict(snapshot.publishers)
+    publishers["/rosout"] = ("/rosout",)
+    publishers["/unrelated/diagnostics"] = ("diagnostics",)
+    assert topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, publishers=publishers)).ok
+
+    publishers["/other/cmd_vel"] = ("rogue",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, publishers=publishers))
+    assert not result.ok
+    assert any("unknown active authority edge on /other/cmd_vel" in item
+               for item in result.violations)
+
+
+def test_forbidden_basename_on_safety_or_command_surface_stops():
+    expected, snapshot = valid_snapshot()
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/cmd_vel_safe"] += ("/foo/twist_mux",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, subscribers=subscribers))
+    assert not result.ok
+    assert any("forbidden relay/mux/plugin" in item for item in result.violations)
+
+
+def test_map_to_odom_jump_requires_explicit_relocalizing_evidence():
+    expected, snapshot = valid_snapshot()
+    auditor = topology_guard.TopologyAuditor(expected)
+    assert auditor.audit(snapshot).ok
+    transforms = dict(snapshot.transforms)
+    transforms[("map", "odom")] = (topology_guard.TransformObservation(
+        "localization_adapter", 9.9, 100.1, False, 0.10, (1.0, 0.0, 0.0), 0.0),)
+
+    assert not auditor.audit(replace(snapshot, transforms=transforms,
+                                     relocalizing=False)).ok
+
+    auditor = topology_guard.TopologyAuditor(expected)
+    assert auditor.audit(snapshot).ok
+    assert auditor.audit(replace(snapshot, transforms=transforms,
+                                 relocalizing=True)).ok
+
+
+def test_command_path_classifier_covers_selected_and_unknown_cmd_vel_variants():
+    expected, snapshot = valid_snapshot("sim", "/nav/selected_cmd", "/safe/selected_cmd")
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/safe/selected_cmd"] += ("twist_mux",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, subscribers=subscribers))
+    assert not result.ok
+    assert any("forbidden relay/mux/plugin" in item for item in result.violations)
+
+    publishers = dict(snapshot.publishers)
+    publishers["/cmd_vel_nav"] = ("move_base",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, publishers=publishers))
+    assert not result.ok
+    assert any("unknown active authority edge on /cmd_vel_nav" in item
+               for item in result.violations)
+
+
+def test_localization_status_observer_exposes_only_exact_relocalizing_state():
+    class Status:
+        UNINITIALIZED = 0
+        INITIALIZING = 1
+        OK = 2
+        DEGRADED = 3
+        LOST = 4
+        RELOCALIZING = 5
+
+        def __init__(self, state):
+            self.state = state
+
+    observer = topology_guard.DeadlineObserver({"/localization/status": 0.25})
+    assert observer.relocalizing() is None
+
+    observer.observe_localization_status(Status(Status.RELOCALIZING), 10.0)
+    assert observer.relocalizing() is True
+    assert observer.evidence()["/localization/status"].last_receipt_s == 10.0
+
+    observer.observe_localization_status(Status(Status.OK), 10.1)
+    assert observer.relocalizing() is False
+
+    observer.observe_localization_status(Status(True), 10.2)
+    assert observer.relocalizing() is None
+    observer.observe_localization_status(object(), 10.3)
+    assert observer.relocalizing() is None

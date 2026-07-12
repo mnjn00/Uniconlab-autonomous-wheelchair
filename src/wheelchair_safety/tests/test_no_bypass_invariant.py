@@ -120,7 +120,9 @@ def _minimal_valid_graph():
     return topology_guard.GraphSnapshot(
         publishers=publishers,
         subscribers=subscribers,
-        transforms={("map", "odom"): ("selected_localization_adapter",)},
+        transforms={("map", "odom"): (topology_guard.TransformObservation(
+            "selected_localization_adapter", 4.9, 4.9, False, 0.1,
+            (0.0, 0.0, 0.0), 0.0),)},
         observations=observations,
         captured_at_s=5.0,
         master_evidence_complete=True,

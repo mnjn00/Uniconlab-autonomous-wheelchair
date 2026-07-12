@@ -46,6 +46,8 @@ class TransformObservation:
     source_stamp_s: Optional[float]
     static: bool = False
     source_age_s: Optional[float] = None
+    translation_m: Optional[Tuple[float, float, float]] = None
+    yaw_rad: Optional[float] = None
 
 
 TransformEvidence = Union[str, TransformObservation]
@@ -62,6 +64,7 @@ class GraphSnapshot:
     tf_evidence_complete: bool = False
     timing_evidence_complete: bool = False
     motion_active: Optional[bool] = None
+    relocalizing: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -103,10 +106,13 @@ DEFAULT_AUTHORITIES: Mapping[str, TopicAuthority] = {
 DEFAULT_TIMED_TOPICS = tuple(topic for topic, authority in DEFAULT_AUTHORITIES.items()
                              if not authority.publisher_optional)
 
-PASSIVE_NODE_TOKENS = ("diagnostic", "monitor", "observer", "recorder", "rosbag", "rostopic", "rqt", "rviz")
-FORBIDDEN_ACTIVE_NODE_TOKENS = ("relay", "mux", "twist_mux", "yocs_cmd_vel", "velocity_smoother", "plugin")
-COMMAND_TOPIC_TOKENS = ("cmd_vel", "motor_command", "wheel_command", "drive_command", "actuator_command")
-EVENT_TOPICS = ("/safety/estop", "/safety/estop_reset", "/safety/arm", "/safety/mission_cancelled")
+FORBIDDEN_ACTIVE_NODES = (
+    "relay", "mux", "twist_mux", "yocs_cmd_vel", "velocity_smoother", "plugin",
+)
+EVENT_TOPICS = (
+    "/safety/estop", "/safety/estop_reset", "/safety/arm",
+    "/safety/mission_cancelled", "/initialpose", "/localization/relocalize",
+)
 SIM_OBSERVER_TOPIC_GRANTS = {
     "rc_scenario_driver": (
         "/route/progress",
@@ -145,15 +151,16 @@ class ExpectedGraph:
     authorities: Mapping[str, TopicAuthority] = field(default_factory=lambda: dict(DEFAULT_AUTHORITIES))
     timed_topics: Tuple[str, ...] = DEFAULT_TIMED_TOPICS
     transforms: Mapping[Tuple[str, str], TransformAuthority] = field(default_factory=lambda: {
-        ("map", "odom"): TransformAuthority(("localization_adapter", "selected_localization_adapter", "amcl", "slam_toolbox"), None)
+        ("map", "odom"): TransformAuthority(("localization_adapter", "selected_localization_adapter", "amcl", "slam_toolbox"), 0.25)
     })
     command_topics: Tuple[str, ...] = ("/cmd_vel_nav", "/cmd_vel_safe")
-    passive_subscribers: Tuple[str, ...] = ("topology_guard",)
+    passive_subscribers: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
     profile: str = "sim"
 
 
 def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
-                   hardware_authority_proven: bool = False) -> ExpectedGraph:
+                   hardware_authority_proven: bool = False,
+                   hardware_sink_topic: Optional[str] = None) -> ExpectedGraph:
     """Build an exact profile boundary from launch-selected command topics."""
     profile = str(profile).strip()
     if profile not in ("sim", "replay", "hardware_shadow", "hardware_enabled"):
@@ -163,9 +170,14 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
     input_topic, output_topic = str(input_cmd_topic), str(output_cmd_topic)
     if not input_topic.startswith("/") or not output_topic.startswith("/") or input_topic == output_topic:
         raise ValueError("command topics must be distinct absolute ROS topic names")
+    sink_contract = None if hardware_sink_topic is None else str(hardware_sink_topic)
+    if profile == "hardware_enabled":
+        if not sink_contract or not sink_contract.startswith("/") or sink_contract in (input_topic, output_topic):
+            raise ValueError("hardware_enabled requires a distinct absolute manifest-selected sink topic")
+    elif sink_contract:
+        raise ValueError("hardware sink contract is only valid for hardware_enabled")
     if profile == "replay" and output_topic != "/shadow/cmd_vel_safe":
         raise ValueError("replay safe output must be /shadow/cmd_vel_safe")
-
     if profile == "sim":
         evidence_owner = ("sim_evidence_bridge",)
         output_consumers = ("collision_supervisor", "simulation_controller_adapter")
@@ -173,6 +185,8 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
                       "base_model_localization_adapter")
         odom_owners = ("gazebo", "gazebo_ros_control", "wheelchair_base_controller",
                        "sim_evidence_bridge")
+        sensor_owners = ("sim_sensor_canonicalizer",)
+        initialization_owners = ("operator_request", "guarded_operator_request", "rc_scenario_driver")
         candidate_owners = ("localization_adapter", "selected_localization_adapter",
                             "base_model_localization_adapter")
         sink_topic = "/wheelchair_base_controller/cmd_vel"
@@ -184,6 +198,8 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
         output_consumers = ("collision_supervisor",)
         map_owners = ("play", "rosbag", "replay_localization_adapter", "localization_adapter")
         odom_owners = ("play", "rosbag", "replay_base_adapter")
+        sensor_owners = ("play", "rosbag", "replay_evidence_bridge")
+        initialization_owners = ("operator_request", "guarded_operator_request")
         candidate_owners = ("replay_localization_adapter", "localization_adapter")
         sink_topic = None
         sink_authority = None
@@ -192,6 +208,8 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
         output_consumers = ("collision_supervisor", "hardware_shadow_adapter")
         map_owners = ("localization_adapter", "selected_localization_adapter", "amcl")
         odom_owners = ("hardware_shadow_adapter", "verified_base_adapter")
+        sensor_owners = ("hardware_shadow_adapter",)
+        initialization_owners = ("operator_request", "guarded_operator_request")
         candidate_owners = ("localization_adapter", "selected_localization_adapter", "amcl")
         sink_topic = None
         sink_authority = None
@@ -200,9 +218,11 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
         output_consumers = ("collision_supervisor", "hardware_enabled_adapter")
         map_owners = ("localization_adapter", "selected_localization_adapter", "amcl")
         odom_owners = ("verified_base_adapter", "hardware_enabled_adapter")
+        sensor_owners = ("hardware_enabled_adapter",)
+        initialization_owners = ("operator_request", "guarded_operator_request")
         candidate_owners = ("localization_adapter", "selected_localization_adapter", "amcl")
-        sink_topic = None
-        sink_authority = None
+        sink_topic = sink_contract
+        sink_authority = TopicAuthority(("hardware_enabled_adapter",), ("physical_driver",))
 
     guard_owners = ("localization_guard", "independent_localization_guard")
     authorities = {
@@ -215,6 +235,20 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
                                         ("route_manager", "wheelchair_route_safety")),
         "/route/progress": TopicAuthority(("route_manager",),
                                           ("wheelchair_mission", "wheelchair_route_safety")),
+        "/sensors/lidar/points": TopicAuthority(
+            sensor_owners, ("collision_supervisor", "localization_guard", "perception_node")),
+        "/sensors/imu/data": TopicAuthority(
+            sensor_owners, ("slope_supervisor", "selected_localization_adapter", "perception_node")),
+        "/odom": TopicAuthority(
+            odom_owners, ("collision_supervisor", "localization_guard",
+                          "wheelchair_mission", "hardware_adapter")),
+        "/route/zone_policy": TopicAuthority(("wheelchair_route_safety",), ("slope_supervisor",)),
+        "/initialpose": TopicAuthority(
+            initialization_owners,
+            ("localization_guard",), publisher_optional=True),
+        "/localization/relocalize": TopicAuthority(
+            ("operator_request", "guarded_operator_request"),
+            ("localization_guard",), publisher_optional=True),
         "/localization/candidate": TopicAuthority(
             candidate_owners, ("wheelchair_route_safety",),
             ("localization_guard", "independent_localization_guard"),
@@ -271,7 +305,8 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
 
     deadlines = {
         input_topic: 0.30, output_topic: 0.10, "/decision/motion_intent": 0.30,
-        "/route/active": 0.75, "/route/progress": 0.50,
+        "/sensors/lidar/points": 0.30, "/sensors/imu/data": 0.10, "/odom": 0.20,
+        "/route/zone_policy": 0.10, "/route/active": 0.75, "/route/progress": 0.50,
         "/localization/candidate": 0.25, "/localization/status": 0.25,
         "/safety/localization": 0.25, "/route_safety/geofence_status": 0.25,
         "/safety/geofence": 0.25, "/safety/collision_status": 0.30,
@@ -289,15 +324,18 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
     command_topics = (input_topic, output_topic) + (
         (sink_topic,) if sink_topic is not None else ()
     )
+    passive_grants = {topic: ("topology_guard",) for topic in deadlines}
     return ExpectedGraph(authorities, tuple(deadlines), transforms, command_topics,
-                         ("topology_guard",), profile)
+                         passive_grants, profile)
 
 
 def profile_deadlines(expected: ExpectedGraph) -> Dict[str, float]:
     defaults = {topic: 0.30 for topic in expected.timed_topics}
-    for topic, value in ((expected.command_topics[1], 0.10), ("/safety/slope", 0.10),
-                         ("/safety/slope_status", 0.10), ("/hardware/driver_status", 0.15),
-                         ("/safety/mode", 0.15), ("/safety/driver", 0.15)):
+    for topic, value in ((expected.command_topics[1], 0.10), ("/sensors/imu/data", 0.10),
+                         ("/odom", 0.20), ("/route/zone_policy", 0.10),
+                         ("/safety/slope", 0.10), ("/safety/slope_status", 0.10),
+                         ("/hardware/driver_status", 0.15), ("/safety/mode", 0.15),
+                         ("/safety/driver", 0.15)):
         if topic in defaults:
             defaults[topic] = value
     for topic, value in (("/route/active", 0.75), ("/route/progress", 0.50)):
@@ -329,6 +367,7 @@ class DeadlineObserver:
         self._last_receipt = {}  # type: Dict[str, float]
         self._lock = threading.Lock()
         self._motion_active = None  # type: Optional[bool]
+        self._relocalizing = None  # type: Optional[bool]
 
     def observe(self, topic: str, receipt_s: Optional[float] = None) -> None:
         if topic not in self._deadlines:
@@ -345,6 +384,22 @@ class DeadlineObserver:
         valid = isinstance(behavior, int) and not isinstance(behavior, bool) and behavior in (0, 1, 2, 3)
         with self._lock:
             self._motion_active = behavior in (1, 2) if valid else None
+    def observe_localization_status(self, message, receipt_s: Optional[float] = None) -> None:
+        self.observe("/localization/status", receipt_s)
+        state = getattr(message, "state", None)
+        states = tuple(
+            getattr(message.__class__, name, None)
+            for name in ("UNINITIALIZED", "INITIALIZING", "OK", "DEGRADED", "LOST", "RELOCALIZING")
+        )
+        valid = (isinstance(state, int) and not isinstance(state, bool) and
+                 None not in states and state in states)
+        with self._lock:
+            self._relocalizing = state == getattr(message.__class__, "RELOCALIZING") if valid else None
+
+    def relocalizing(self) -> Optional[bool]:
+        with self._lock:
+            return self._relocalizing
+
 
     def motion_active(self) -> Optional[bool]:
         with self._lock:
@@ -369,7 +424,9 @@ class TransformObserver:
 
     def callback(self, message, static: bool = False) -> None:
         receipt = float(self._clock())
-        owner = _node_name(getattr(message, "_connection_header", {}).get("callerid", ""))
+        owner = str(getattr(message, "_connection_header", {}).get("callerid", "")).rstrip("/")
+        if owner:
+            owner = "/" + owner.lstrip("/")
         with self._lock:
             self._seen_static = self._seen_static or static
             self._seen_tf = self._seen_tf or not static
@@ -381,8 +438,15 @@ class TransformObserver:
                 if not static and self._source_clock is not None:
                     source_age = float(self._source_clock()) - stamp
                 if parent and child and owner:
+                    translation = transform.transform.translation
+                    rotation = transform.transform.rotation
+                    yaw = math.atan2(
+                        2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
+                        1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z),
+                    )
                     self._edges.setdefault((parent, child), {})[owner] = TransformObservation(
-                        owner, receipt, stamp, static, source_age)
+                        owner, receipt, stamp, static, source_age,
+                        (float(translation.x), float(translation.y), float(translation.z)), yaw)
 
     def evidence(self):
         with self._lock:
@@ -393,6 +457,8 @@ class TransformObserver:
 class TopologyAuditor:
     def __init__(self, expected: Optional[ExpectedGraph] = None):
         self.expected = expected or ExpectedGraph()
+        self._tf_source_high_water = {}
+        self._map_to_odom_pose = {}
 
     def audit(self, snapshot: GraphSnapshot) -> AuditResult:
         violations, mask = [], 0
@@ -409,8 +475,9 @@ class TopologyAuditor:
             publisher_entries = tuple(value for value in snapshot.publishers.get(topic, ())
                                       if str(value).strip())
             publishers = _nodes(publisher_entries)
-            subscribers = tuple(n for n in _nodes(snapshot.subscribers.get(topic, ()))
-                                if n not in passive and n not in self.expected.passive_subscribers)
+            subscribers = tuple(
+                n for n in _nodes(snapshot.subscribers.get(topic, ()))
+                if n not in self.expected.passive_subscribers.get(topic, ()))
             publisher_required = not authority.publisher_optional or (
                 authority.required_when_motion_active and motion_active is True)
             publisher_ok = (not publisher_entries and not publisher_required) or \
@@ -445,7 +512,10 @@ class TopologyAuditor:
         mask |= self._audit_active_edges(snapshot, passive, violations)
         mask |= self._audit_tf(snapshot, violations)
         mask |= self._audit_timing(snapshot, violations, motion_active)
-        return AuditResult(not violations, mask, tuple(violations), tuple(sorted(passive | set(self.expected.passive_subscribers))))
+        passive_grants = set()
+        for grants in self.expected.passive_subscribers.values():
+            passive_grants.update(grants)
+        return AuditResult(not violations, mask, tuple(violations), tuple(sorted(passive_grants)))
 
     def _effective_motion_active(self, snapshot: GraphSnapshot) -> Optional[bool]:
         if type(snapshot.motion_active) is bool:
@@ -464,25 +534,28 @@ class TopologyAuditor:
         return None
 
     def _passive_nodes(self, snapshot: GraphSnapshot) -> set:
-        nodes = set()
-        for endpoints in tuple(snapshot.publishers.values()) + tuple(snapshot.subscribers.values()):
-            nodes.update(_nodes(endpoints))
-        return {node for node in nodes if any(token in node.lower() for token in PASSIVE_NODE_TOKENS)}
+        passive = set()
+        for topic, grants in self.expected.passive_subscribers.items():
+            passive.update(set(_nodes(snapshot.subscribers.get(topic, ()))) & set(grants))
+        return passive
 
     def _audit_active_edges(self, snapshot, passive, violations):
         mask = 0
-        topics = set(snapshot.publishers) | set(snapshot.subscribers)
-        for topic in sorted(topics):
-            publishers = set(_nodes(snapshot.publishers.get(topic, ())))
-            subscribers = set(_nodes(snapshot.subscribers.get(topic, ()))) - passive - set(self.expected.passive_subscribers)
-            active = publishers | subscribers
-            forbidden = sorted(node for node in active if any(token in node.lower() for token in FORBIDDEN_ACTIVE_NODE_TOKENS))
-            if forbidden and (topic.startswith("/safety/") or self._is_command_topic(topic)):
-                violations.append("%s forbidden relay/mux/plugin nodes: %s" % (topic, tuple(forbidden))); mask |= GRAPH_TOPOLOGY
-            if topic.startswith("/safety/") and topic not in self.expected.authorities and "safety_gate" in subscribers:
-                violations.append("unknown safety authority edge on %s" % topic); mask |= GRAPH_TOPOLOGY
-            if self._is_command_topic(topic) and topic not in self.expected.command_topics and active:
-                violations.append("unknown active command edge on %s" % topic); mask |= GRAPH_TOPOLOGY
+        protected = set(self.expected.authorities)
+        for topic in sorted(set(snapshot.publishers) | set(snapshot.subscribers)):
+            subscribers = set(_nodes(snapshot.subscribers.get(topic, ()))) - \
+                set(self.expected.passive_subscribers.get(topic, ()))
+            active = set(_nodes(snapshot.publishers.get(topic, ()))) | subscribers
+            protected_surface = (topic in self.expected.command_topics or
+                                 topic.startswith("/safety/") or self._is_command_topic(topic))
+            if protected_surface:
+                forbidden = tuple(sorted(active & set(FORBIDDEN_ACTIVE_NODES)))
+                if forbidden:
+                    violations.append("%s forbidden relay/mux/plugin nodes: %s" % (topic, forbidden))
+                    mask |= GRAPH_TOPOLOGY
+            if protected_surface and topic not in protected and active:
+                violations.append("unknown active authority edge on %s" % topic)
+                mask |= GRAPH_TOPOLOGY
         return mask
 
     def _audit_tf(self, snapshot, violations):
@@ -492,25 +565,53 @@ class TopologyAuditor:
         for edge, authority in self.expected.transforms.items():
             evidence = normalized.get(edge, ())
             converted = [item if isinstance(item, TransformObservation)
-                         else TransformObservation(str(item), now, None, authority.static) for item in evidence]
-            owners = tuple(sorted(_node_name(item.owner) for item in converted))
-            if len(owners) != 1 or owners[0] not in authority.owners:
+                         else TransformObservation(str(item), now, None, authority.static)
+                         for item in evidence]
+            identities = tuple(sorted(str(item.owner).rstrip("/") for item in converted))
+            owners = tuple(_node_name(identity) for identity in identities)
+            if len(identities) != 1 or len(set(identities)) != 1 or owners[0] not in authority.owners:
                 violations.append("%s->%s authority: expected exactly one of %s, got %s" %
-                                  (edge[0], edge[1], authority.owners, owners)); mask |= TF | GRAPH_TOPOLOGY
+                                  (edge[0], edge[1], authority.owners, identities)); mask |= TF | GRAPH_TOPOLOGY
                 continue
-            item = converted[0]
+            item, identity = converted[0], identities[0]
             if item.static != authority.static:
                 violations.append("%s->%s static/dynamic class mismatch" % edge); mask |= TF
+                continue
             if authority.static:
-                if not _is_finite(item.last_receipt_s):
-                    violations.append("%s->%s missing static TF receipt" % edge); mask |= TF | INPUT_UNKNOWN
-            elif authority.maximum_age_s is not None:
-                if not all(_is_finite(v) for v in
-                           (now, item.last_receipt_s, item.source_stamp_s, item.source_age_s)) or \
-                        item.source_stamp_s <= 0.0 or item.last_receipt_s > now or \
-                        now - item.last_receipt_s > authority.maximum_age_s or \
-                        item.source_age_s < -0.05 or item.source_age_s > authority.maximum_age_s:
-                    violations.append("%s->%s stale or invalid TF evidence" % edge); mask |= TF
+                if not _is_finite(item.last_receipt_s) or item.source_stamp_s != 0.0:
+                    violations.append("%s->%s invalid static TF evidence" % edge); mask |= TF | INPUT_UNKNOWN
+                continue
+            if authority.maximum_age_s is None or not all(
+                    _is_finite(v) for v in
+                    (now, item.last_receipt_s, item.source_stamp_s, item.source_age_s)):
+                violations.append("%s->%s stale or invalid TF evidence" % edge); mask |= TF
+                continue
+            if item.source_stamp_s <= 0.0 or item.last_receipt_s > now or \
+                    now - item.last_receipt_s > authority.maximum_age_s or \
+                    item.source_age_s < -0.05 or item.source_age_s > authority.maximum_age_s:
+                violations.append("%s->%s stale or invalid TF evidence" % edge); mask |= TF
+                continue
+            key = (edge, identity)
+            high_water = self._tf_source_high_water.get(key)
+            if high_water is not None and item.source_stamp_s < high_water:
+                violations.append("%s->%s source stamp regression" % edge); mask |= TF
+                continue
+            if edge == ("map", "odom"):
+                pose = item.translation_m, item.yaw_rad
+                if pose[0] is None or not _is_finite(pose[1]) or \
+                        len(pose[0]) != 3 or not all(_is_finite(value) for value in pose[0]):
+                    violations.append("map->odom missing transform continuity evidence"); mask |= TF | INPUT_UNKNOWN
+                    continue
+                prior = self._map_to_odom_pose.get(identity)
+                if prior is not None:
+                    distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(pose[0], prior[0])))
+                    yaw_delta = abs((pose[1] - prior[1] + math.pi) % (2.0 * math.pi) - math.pi)
+                    if distance > 0.50 or yaw_delta > math.radians(15.0):
+                        if snapshot.relocalizing is not True:
+                            violations.append("map->odom unapproved relocalization jump"); mask |= TF
+                            continue
+                self._map_to_odom_pose[identity] = pose
+            self._tf_source_high_water[key] = item.source_stamp_s
         return mask
 
     def _audit_timing(self, snapshot, violations, motion_active):
@@ -536,15 +637,25 @@ class TopologyAuditor:
 
     @staticmethod
     def _is_command_topic(topic):
-        return any(token in topic.lower() for token in COMMAND_TOPIC_TOKENS)
+        segments = tuple(part for part in str(topic).lower().split("/") if part)
+        exact_commands = (
+            "motor_command", "wheel_command", "drive_command", "actuator_command",
+        )
+        return any(
+            segment == "cmd_vel" or segment.startswith("cmd_vel_") or
+            segment.endswith("_cmd_vel") or segment in exact_commands
+            for segment in segments
+        )
 
 
 class RosMasterAdapter:
     def __init__(self, caller_id="/topology_guard", transform_provider=None,
-                 observation_provider=None, motion_active_provider=None, clock=time.monotonic):
+                 observation_provider=None, motion_active_provider=None,
+                 relocalizing_provider=None, clock=time.monotonic):
         self.caller_id, self.transform_provider = caller_id, transform_provider
         self.observation_provider = observation_provider
-        self.motion_active_provider, self.clock = motion_active_provider, clock
+        self.motion_active_provider = motion_active_provider
+        self.relocalizing_provider, self.clock = relocalizing_provider, clock
 
     def snapshot(self):
         try:
@@ -566,27 +677,32 @@ class RosMasterAdapter:
             motion_active = self.motion_active_provider() if self.motion_active_provider else None
         except Exception:
             motion_active = None
+        try:
+            relocalizing = self.relocalizing_provider() if self.relocalizing_provider else None
+        except Exception:
+            relocalizing = None
         return GraphSnapshot({t: tuple(n) for t, n in publishers}, {t: tuple(n) for t, n in subscribers},
                              dict(transforms), dict(observations), float(self.clock()), master_complete,
-                             bool(tf_complete), timing_complete, motion_active)
+                             bool(tf_complete), timing_complete, motion_active, relocalizing)
 
 
 def main() -> None:
     import rospy
     from tf2_msgs.msg import TFMessage
-    from wheelchair_interfaces.msg import MotionIntent, SafetySignal
+    from wheelchair_interfaces.msg import LocalizationStatus, MotionIntent, SafetySignal
 
     rospy.init_node("topology_guard")
     profile = rospy.get_param("~profile", rospy.get_param("/wheelchair_bringup/profile", ""))
     input_topic = rospy.get_param("~input_cmd_topic", "")
     output_topic = rospy.get_param("~output_cmd_topic", "")
+    hardware_sink_topic = rospy.get_param("~hardware_sink_topic", "")
     try:
         boundary_proven = (
             rospy.get_param("~hardware_boundary_authority_proven", False) is True and
             rospy.get_param("/hardware_motion_authorized", False) is True and
             rospy.get_param("/passenger_operation_authorized", False) is False)
         expected = expected_graph(
-            profile, input_topic, output_topic, boundary_proven)
+            profile, input_topic, output_topic, boundary_proven, hardware_sink_topic)
     except ValueError as exc:
         rospy.logfatal(str(exc))
         raise
@@ -596,6 +712,9 @@ def main() -> None:
         if topic == "/decision/motion_intent":
             callback = deadline_observer.observe_motion_intent
             message_type = MotionIntent
+        elif topic == "/localization/status":
+            callback = deadline_observer.observe_localization_status
+            message_type = LocalizationStatus
         else:
             callback = lambda _msg, name=topic: deadline_observer.observe(name)
             message_type = rospy.AnyMsg
@@ -609,7 +728,8 @@ def main() -> None:
     signal_pub = rospy.Publisher(signal_topic, SafetySignal, queue_size=1, latch=False)
     adapter = RosMasterAdapter(transform_provider=tf_observer.evidence,
                                observation_provider=deadline_observer.evidence,
-                               motion_active_provider=deadline_observer.motion_active)
+                               motion_active_provider=deadline_observer.motion_active,
+                               relocalizing_provider=deadline_observer.relocalizing)
     auditor = TopologyAuditor(expected)
     sequence = 0
     rate = rospy.Rate(float(rospy.get_param("~audit_rate_hz", 2.0)))
