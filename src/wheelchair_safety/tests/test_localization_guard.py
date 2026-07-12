@@ -804,7 +804,8 @@ def test_map_to_odom_lookup_is_candidate_stamped_not_latest():
     assert 'self._lookup("map", "odom", stamp)' in derive_evidence
     assert 'self._lookup("map", "odom", self.rospy.Time(0))' not in derive_evidence
     assert 'odom.child_frame_id != "base_footprint"' in derive_evidence
-    assert 'self._lookup("base_footprint", cloud.header.frame_id, cloud.header.stamp)' in derive_evidence
+    assert 'self._lookup("base_link", cloud.header.frame_id, cloud.header.stamp)' in derive_evidence
+    assert 'self._lookup("base_footprint", cloud.header.frame_id, cloud.header.stamp)' not in derive_evidence
 
     synchronized = guard.LocalizationGuardCore(policy()).evaluate(
         evidence(transform_age_s=0.011), 1.0

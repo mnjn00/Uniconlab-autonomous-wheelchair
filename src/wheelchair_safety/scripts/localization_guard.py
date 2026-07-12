@@ -1343,7 +1343,7 @@ class LocalizationGuardNode:
             raise ValueError("cloud/odom stale, future, or unsynchronized")
         if odom.header.frame_id != "odom" or odom.child_frame_id != "base_footprint":
             raise ValueError("odometry frame contract is invalid")
-        sensor_tf, _ = self._lookup("base_footprint", cloud.header.frame_id, cloud.header.stamp)
+        sensor_tf, _ = self._lookup("base_link", cloud.header.frame_id, cloud.header.stamp)
         map_to_odom, transform_age = self._lookup("map", "odom", stamp)
         translation = sensor_tf.transform.translation
         rotation = sensor_tf.transform.rotation
