@@ -1,0 +1,9 @@
+# Offline-only deterministic Livox conversion environment (Python >=3.10).
+# Keep this dependency set out of the ROS 1 NUC runtime image.
+rosbags==0.10.11
+lz4==4.4.4
+numpy==2.2.6
+ruamel.yaml==0.18.14
+ruamel.yaml.clib==0.2.12
+typing_extensions==4.14.1
+zstandard==0.23.0

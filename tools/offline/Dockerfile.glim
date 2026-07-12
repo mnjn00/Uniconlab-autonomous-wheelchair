@@ -1,0 +1,74 @@
+# Offline artifact builder only. This image is prohibited from the wheelchair/NUC runtime.
+FROM osrf/ros:humble-desktop@sha256:3d87cf339919a85cff7743ec9ba5e7ec81ccc26c9f722f1c7a6af5008dfdc128
+
+ARG GLIM_REVISION=d0eeebead1ab8240edf3645682ec12d79fbfa70a
+ARG GLIM_ROS2_REVISION=a62811dc3ab73076f4a43fc21005f96cd712903c
+ARG GTSAM_POINTS_REVISION=17578c8e8c1dc9bd55b0b8c31d2656230098977c
+LABEL org.opencontainers.image.source="https://github.com/koide3/glim" \
+      org.opencontainers.image.revision="${GLIM_REVISION}" \
+      wheelchair.glim-ros2.revision="${GLIM_ROS2_REVISION}" \
+      wheelchair.gtsam-points.revision="${GTSAM_POINTS_REVISION}" \
+      wheelchair.execution.scope="offline-replay-only" \
+      wheelchair.nuc-runtime="prohibited"
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive \
+    GLIM_REVISION=${GLIM_REVISION} \
+    GLIM_ROS2_REVISION=${GLIM_ROS2_REVISION} \
+    GTSAM_POINTS_REVISION=${GTSAM_POINTS_REVISION} \
+    OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONHASHSEED=20260707
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates cmake git libboost-all-dev libeigen3-dev \
+      libfmt-dev libgl-dev libglfw3-dev libmetis-dev libomp-dev libpcl-dev \
+      libspdlog-dev libtbb-dev libyaml-cpp-dev ninja-build python3-colcon-common-extensions \
+      python3-numpy python3-pip python3-rosdep software-properties-common \
+      ros-humble-rosbag2-compression ros-humble-rosbag2-storage-default-plugins \
+    && python3 -m pip install --no-cache-dir rosbags==0.10.11 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN add-apt-repository -y ppa:koide3/gtsam \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends libgtsam-no-tbb-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --filter=blob:none --no-checkout https://github.com/koide3/gtsam_points.git /opt/gtsam_points \
+    && git -C /opt/gtsam_points fetch --depth 1 origin "${GTSAM_POINTS_REVISION}" \
+    && git -C /opt/gtsam_points checkout --detach "${GTSAM_POINTS_REVISION}" \
+    && test "$(git -C /opt/gtsam_points rev-parse HEAD)" = "${GTSAM_POINTS_REVISION}" \
+    && cmake -S /opt/gtsam_points -B /opt/gtsam_points/build -GNinja \
+         -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_CUDA=OFF \
+    && cmake --build /opt/gtsam_points/build --parallel 1 \
+    && cmake --install /opt/gtsam_points/build \
+    && rm -rf /opt/gtsam_points
+
+RUN test "${GLIM_REVISION}" = "d0eeebead1ab8240edf3645682ec12d79fbfa70a" \
+    && test "${GLIM_ROS2_REVISION}" = "a62811dc3ab73076f4a43fc21005f96cd712903c" \
+    && mkdir -p /opt/glim_ws/src \
+    && git clone --filter=blob:none --no-checkout https://github.com/koide3/glim.git /opt/glim_ws/src/glim \
+    && git -C /opt/glim_ws/src/glim fetch --depth 1 origin "${GLIM_REVISION}" \
+    && git -C /opt/glim_ws/src/glim checkout --detach "${GLIM_REVISION}" \
+    && git clone --filter=blob:none --no-checkout https://github.com/koide3/glim_ros2.git /opt/glim_ws/src/glim_ros2 \
+    && git -C /opt/glim_ws/src/glim_ros2 fetch --depth 1 origin "${GLIM_ROS2_REVISION}" \
+    && git -C /opt/glim_ws/src/glim_ros2 checkout --detach "${GLIM_ROS2_REVISION}" \
+    && test "$(git -C /opt/glim_ws/src/glim rev-parse HEAD)" = "${GLIM_REVISION}" \
+    && test "$(git -C /opt/glim_ws/src/glim_ros2 rev-parse HEAD)" = "${GLIM_ROS2_REVISION}"
+
+RUN source /opt/ros/humble/setup.bash \
+    && (rosdep init 2>/dev/null || true) \
+    && rosdep update --rosdistro humble \
+    && rosdep install --from-paths /opt/glim_ws/src --ignore-src --rosdistro humble -y \
+    && colcon build --base-paths /opt/glim_ws/src --build-base /opt/glim_ws/build \
+         --install-base /opt/glim_ws/install --merge-install --executor sequential \
+         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_CUDA=OFF -DBUILD_WITH_VIEWER=OFF -DBUILD_WITH_OPENCV=OFF \
+    && test -x /opt/glim_ws/install/lib/glim_ros/glim_rosbag \
+    && cp -a /opt/glim_ws/src/glim/config /opt/glim-config \
+    && rm -rf /opt/glim_ws/build /opt/glim_ws/log
+
+COPY tools/offline/glim-config.json /opt/glim-config/config.json
+COPY scripts/run_glim_repro.py /usr/local/lib/wheelchair/run_glim_repro.py
+COPY scripts/export_glim_rosbag2.py /usr/local/lib/wheelchair/export_glim_rosbag2.py
+COPY scripts/export_glim_2d_map.py /usr/local/lib/wheelchair/export_glim_2d_map.py
+RUN chmod 0555 /usr/local/lib/wheelchair/*.py
+
+WORKDIR /work
+ENTRYPOINT ["/ros_entrypoint.sh", "bash", "-lc", "source /opt/glim_ws/install/setup.bash && exec python3 /usr/local/lib/wheelchair/run_glim_repro.py --inside-container \"$@\"", "glim-offline"]

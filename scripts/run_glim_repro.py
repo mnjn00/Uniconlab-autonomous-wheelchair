@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Run three isolated networkless GLIM rosbag2 replays and record actual dump outputs."""
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import shutil
+import sqlite3
+import struct
+import subprocess
+import sys
+import time
+
+GLIM_REVISION = "d0eeebead1ab8240edf3645682ec12d79fbfa70a"
+GLIM_ROS2_REVISION = "a62811dc3ab73076f4a43fc21005f96cd712903c"
+PINNED_NORMALIZED_BAG_SHA256 = "b317642b44140629b3447f5744adb068f74c57a58a3f6498df59ac582d8d8aa5"
+SEED = 20260707
+THREADS = 1
+GLIM_ROSBAG_EXECUTABLE = "/opt/glim_ws/install/lib/glim_ros/glim_rosbag"
+TOPICS = {"/sensors/lidar/points": ("sensor_msgs/msg/PointCloud2", 6882),
+          "/sensors/imu/data": ("sensor_msgs/msg/Imu", 137602)}
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_json(path, value):
+    Path(path).write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+def load_input_manifest(path):
+    """Load and hash-check the canonical ROS 1 normalization manifest."""
+    path = Path(path).resolve(strict=True)
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("normalization manifest is not an object")
+    if (manifest.get("schema_version") != 1
+            or manifest.get("artifact_id") != "wheelchair.normalized_livox/v1"
+            or manifest.get("status") != "candidate"):
+        raise ValueError("normalization manifest schema/artifact/status mismatch")
+    output = manifest.get("output")
+    expected_topics = {
+        "/sensors/lidar/points": {"type": "sensor_msgs/msg/PointCloud2", "count": 6882},
+        "/sensors/imu/data": {"type": "sensor_msgs/msg/Imu", "count": 137602},
+    }
+    if (not isinstance(output, dict)
+            or output.get("bag_path") != "normalized.bag"
+            or output.get("format") != "rosbag1-v2"
+            or output.get("topics") != expected_topics):
+        raise ValueError("normalization manifest GLIM input ABI mismatch")
+    digest = output.get("sha256")
+    if (not isinstance(digest, str) or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)):
+        raise ValueError("normalization manifest output SHA-256 is invalid")
+    bag = (path.parent / output["bag_path"]).resolve(strict=True)
+    try:
+        bag.relative_to(path.parent)
+    except ValueError as exc:
+        raise ValueError("normalized bag escapes its manifest directory") from exc
+    if not bag.is_file() or sha256_file(bag) != digest:
+        raise ValueError("normalized bag hash mismatch")
+    return manifest, bag, digest
+
+
+
+def validate_ros2_manifest(path):
+    path = path.resolve(strict=True)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if value.get("artifact_id") != "wheelchair.glim_rosbag2_input/v1" or value.get("nuc_runtime_artifact") is not False:
+        raise ValueError("input is not an offline-only derived GLIM rosbag2 artifact")
+    if value.get("source", {}).get("normalized_bag_sha256") != PINNED_NORMALIZED_BAG_SHA256:
+        raise ValueError("derived input is not bound to the canonical normalized bag")
+    output = value.get("output", {})
+    expected = {name: {"type": kind, "count": count} for name, (kind, count) in TOPICS.items()}
+    if output.get("format") != "rosbag2-sqlite3" or output.get("topics") != expected:
+        raise ValueError("derived rosbag2 ABI mismatch")
+    database = path.parent / output.get("database", "")
+    metadata = path.parent / "metadata.yaml"
+    if not database.is_file() or not metadata.is_file():
+        raise ValueError("derived rosbag2 files are absent")
+    if sha256_file(database) != output.get("database_sha256") or sha256_file(metadata) != output.get("metadata_sha256"):
+        raise ValueError("derived rosbag2 hash mismatch")
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    rows = connection.execute("SELECT t.name,t.type,COUNT(m.id),MIN(m.timestamp),MAX(m.timestamp) FROM topics t LEFT JOIN messages m ON m.topic_id=t.id GROUP BY t.id ORDER BY t.name").fetchall()
+    observed = {name: {"type": kind, "count": count} for name, kind, count, _, _ in rows}
+    if observed != expected or min(row[3] for row in rows) != output.get("first_storage_time_ns") or max(row[4] for row in rows) != output.get("last_storage_time_ns"):
+        connection.close()
+        raise ValueError("derived rosbag2 counts or timestamps mismatch")
+    semantic = hashlib.sha256()
+    messages = connection.execute(
+        "SELECT t.name,m.timestamp,m.data FROM messages m JOIN topics t ON t.id=m.topic_id ORDER BY m.timestamp,m.id")
+    for topic, timestamp, payload in messages:
+        payload = bytes(payload)
+        semantic.update(struct.pack("<IQ", len(topic), timestamp))
+        semantic.update(topic.encode())
+        semantic.update(struct.pack("<I", len(payload)))
+        semantic.update(payload)
+    connection.close()
+    expected_semantic = output.get("ros2_semantic_stream_sha256")
+    if not isinstance(expected_semantic, str) or semantic.hexdigest() != expected_semantic:
+        raise ValueError("derived rosbag2 semantic stream hash mismatch")
+    return value, path.parent, database
+
+
+def actual_glim_command(bag, config_dir, dump):
+    return [GLIM_ROSBAG_EXECUTABLE, str(bag), "--ros-args",
+            "-p", f"config_path:={config_dir}", "-p", "auto_quit:=true", "-p", f"dump_path:={dump}"]
+
+
+def derive_outputs(dump, output):
+    trajectory = dump / "traj_lidar.txt"
+    submaps = sorted(item for item in dump.iterdir() if item.is_dir() and (item / "points_compact.bin").is_file() and (item / "data.txt").is_file()) if dump.is_dir() else []
+    if not trajectory.is_file() or trajectory.stat().st_size == 0 or not submaps:
+        raise ValueError("actual GLIM dump lacks traj_lidar.txt or serialized submaps")
+    rows = []
+    for number, line in enumerate(trajectory.read_text(encoding="utf-8").splitlines(), 1):
+        fields = line.split()
+        if len(fields) != 8:
+            raise ValueError(f"invalid GLIM TUM trajectory row {number}")
+        values = [float(item) for item in fields]
+        if not all(math.isfinite(item) for item in values):
+            raise ValueError("nonfinite GLIM trajectory")
+        stamp, x, y, _z, qx, qy, qz, qw = values
+        yaw = math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+        rows.append((stamp, x, y, yaw))
+    if len(rows) < 3 or any(rows[index][0] <= rows[index - 1][0] for index in range(1, len(rows))):
+        raise ValueError("actual GLIM trajectory is too short or timestamps regress")
+    with (output / "trajectory.csv").open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream, lineterminator="\n"); writer.writerow(("timestamp", "x", "y", "yaw")); writer.writerows(rows)
+    exported = output / ".map-export"
+    command = [sys.executable, "/usr/local/lib/wheelchair/export_glim_2d_map.py",
+               "--glim-dump", str(dump), "--trajectory", str(trajectory), "--output-dir", str(exported),
+               "--map-name", "occupancy", "--route-name", "derived_route", "--footprint-source", "simulation",
+               "--footprint-width", "0.70", "--footprint-length", "1.10", "--split-index", str(len(rows) // 2)]
+    subprocess.run(command, check=True)
+    for name in ("occupancy.pgm", "occupancy.yaml"):
+        source = exported / name
+        if not source.is_file() or source.stat().st_size == 0:
+            raise ValueError(f"map exporter omitted {name}")
+        os.replace(source, output / name)
+    shutil.rmtree(exported)
+    return {"trajectory_rows": len(rows), "submap_count": len(submaps)}
+
+
+def inside_container(argv):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bag", type=Path, required=True); parser.add_argument("--config-dir", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+    dump = args.output / "glim-dump"
+    command = actual_glim_command(args.bag, args.config_dir, dump)
+    write_json(args.output / "actual_glim_command.json", command)
+    completed = subprocess.run(command, check=False)
+    if completed.returncode:
+        return completed.returncode
+    try:
+        evidence = derive_outputs(dump, args.output); write_json(args.output / "actual_output_evidence.json", evidence)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        print(f"E_GLIM_ACTUAL_OUTPUT: {exc}", file=sys.stderr); return 65
+    return 0
+
+
+def container_command(args, bag_dir, run_dir):
+    return [args.container_engine, "run", "--rm", "--network=none", "--read-only",
+            "--security-opt=no-new-privileges", "--cap-drop=ALL",
+            f"--user={os.getuid()}:{os.getgid()}",
+            "--tmpfs=/tmp:rw,nosuid,nodev,size=1g",
+            f"--mount=type=bind,src={bag_dir},dst=/input/rosbag2,readonly",
+            f"--mount=type=bind,src={args.config.resolve()},dst=/opt/glim-config/config.json,readonly",
+            f"--mount=type=bind,src={run_dir},dst=/output",
+            "--env=HOME=/tmp", "--env=OMP_NUM_THREADS=1",
+            "--env=OPENBLAS_NUM_THREADS=1", "--env=MKL_NUM_THREADS=1",
+            f"--env=GLIM_REPRO_SEED={SEED}", "--label=wheelchair.offline-only=true", args.image,
+            "--bag", "/input/rosbag2", "--config-dir", "/opt/glim-config", "--output", "/output"]
+
+
+def artifacts(root):
+    return {str(path.relative_to(root)): {"sha256": sha256_file(path), "size_bytes": path.stat().st_size}
+            for path in sorted(root.rglob("*")) if path.is_file() and path.name != "run_manifest.json"}
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ros2-manifest", type=Path, required=True)
+    parser.add_argument("--config", type=Path, required=True); parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--image", required=True); parser.add_argument("--container-engine", default="docker")
+    parser.add_argument("--source-revision", default=GLIM_REVISION); parser.add_argument("--glim-ros2-revision", default=GLIM_ROS2_REVISION)
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    if argv is None: argv = sys.argv[1:]
+    if argv and argv[0] == "--inside-container": return inside_container(argv[1:])
+    args = parse_args(argv)
+    try:
+        if args.output_dir.exists(): raise ValueError("output directory already exists")
+        if args.source_revision != GLIM_REVISION or args.glim_ros2_revision != GLIM_ROS2_REVISION: raise ValueError("source revision differs from image pins")
+        if "@sha256:" not in args.image or len(args.image.rsplit("@sha256:", 1)[1]) != 64: raise ValueError("image must use an immutable digest")
+        config = args.config.resolve(strict=True); json.loads(config.read_text(encoding="utf-8"))
+        source, bag_dir, database = validate_ros2_manifest(args.ros2_manifest)
+    except (OSError, ValueError, json.JSONDecodeError, sqlite3.DatabaseError) as exc:
+        print(f"E_GLIM_REPRO_INPUT: {exc}", file=sys.stderr); return 2
+    args.output_dir.mkdir(parents=True)
+    report = {"schema_version": 2, "artifact_id": "wheelchair.glim-reproduction/v2", "status": "failed",
+              "execution_scope": "OFFLINE_WORKSTATION_ONLY", "nuc_runtime_dependency": False,
+              "claim_label": "REPLAY_CONSISTENCY_NOT_TRUTH", "qualification": "candidate",
+              "image": args.image, "source_revision": GLIM_REVISION, "glim_ros2_revision": GLIM_ROS2_REVISION,
+              "seed": SEED, "threads": THREADS, "input_manifest_sha256": sha256_file(args.ros2_manifest),
+              "ros2_database_sha256": sha256_file(database), "config_sha256": sha256_file(config), "runs": []}
+    success = True
+    for index in range(1, 4):
+        run_dir = args.output_dir / f"run-{index:02d}"; run_dir.mkdir()
+        command = container_command(args, bag_dir, run_dir); started = time.time()
+        try: returncode = subprocess.run(command, check=False, stdout=(run_dir / "stdout.log").open("wb"), stderr=(run_dir / "stderr.log").open("wb")).returncode
+        except OSError as exc: returncode = 127; (run_dir / "stderr.log").write_text(str(exc) + "\n")
+        missing = [name for name in ("trajectory.csv", "occupancy.pgm", "occupancy.yaml", "actual_output_evidence.json") if not (run_dir / name).is_file()]
+        okay = returncode == 0 and not missing; success &= okay
+        record = {"run_id": index, "directory": run_dir.name, "status": "success" if okay else "failed",
+                  "failure": None if okay else (f"E_GLIM_EXIT_{returncode}" if returncode else "E_GLIM_MISSING_ACTUAL_OUTPUT:" + ",".join(missing)),
+                  "returncode": returncode, "command": command, "image": args.image, "source_revision": GLIM_REVISION,
+                  "glim_ros2_revision": GLIM_ROS2_REVISION, "seed": SEED, "threads": THREADS,
+                  "elapsed_s": time.time() - started, "artifacts": artifacts(run_dir)}
+        write_json(run_dir / "run_manifest.json", record); report["runs"].append(record)
+    report["status"] = "success" if success else "failed"; write_json(args.output_dir / "repro_manifest.json", report)
+    print(args.output_dir / "repro_manifest.json"); return 0 if success else 1
+
+
+if __name__ == "__main__": raise SystemExit(main())

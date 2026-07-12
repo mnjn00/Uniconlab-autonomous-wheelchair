@@ -1,23 +1,87 @@
 {
-  "cloud_points": 783303,
-  "trajectory_poses": 6871,
-  "occupied_source_cells": 47806,
-  "grid_width": 3219,
-  "grid_height": 2360,
-  "resolution": 0.1,
-  "origin": [
-    -60.072998046875,
-    -148.32440185546875,
-    0.0
-  ],
-  "pgm": "/tmp/wheelchair_ws/src/wheelchair_mapping/maps/hanyang_aegimun_loop/map.pgm",
-  "yaml": "/tmp/wheelchair_ws/src/wheelchair_mapping/maps/hanyang_aegimun_loop/map.yaml",
+  "candidate_limits": {
+    "loop_position_residual_target_m": 0.5,
+    "max_grid_cells": 100000000,
+    "max_route_waypoints_per_direction": 65536
+  },
+  "candidate_qualification": {
+    "approved": false,
+    "loop_target_met": false,
+    "physically_qualified": false,
+    "route_map_aligned": true,
+    "surveyed": false
+  },
+  "footprint": {
+    "clearance_margin_m": 0.2,
+    "inflation_cells": 7,
+    "length_m": 0.97,
+    "source": "simulation",
+    "width_m": 0.6
+  },
   "grade": {
-    "z_min": -6.891697,
-    "z_max": 4.056862,
-    "max_grade_percent": 2.514491713957969,
-    "p95_grade_percent": 2.4485401872237325,
-    "mean_grade_percent": 1.8549764466156022,
-    "grade_sample_min_distance_m": 0.2
-  }
+    "formula": "100*abs(dz)/sqrt(dx^2+dy^2)",
+    "max_grade_percent": 25.221439565415114,
+    "mean_grade_percent": 5.351743286901445,
+    "p95_grade_percent": 13.141158882829261,
+    "sample_count": 3632,
+    "sample_min_horizontal_distance_m": 0.2,
+    "z_max_m": 4.056862,
+    "z_min_m": -6.891697
+  },
+  "grid": {
+    "cleared_occupied_cells_in_recorded_corridor": 2399,
+    "height": 2361,
+    "occupied_source_cells": 16629,
+    "origin": [
+      -60.1,
+      -148.4,
+      0.0
+    ],
+    "resolution": 0.1,
+    "semantics": {
+      "free": 254,
+      "occupied": 0,
+      "unknown": 205
+    },
+    "width": 3220
+  },
+  "hardware_motion_authorized": false,
+  "hashes": {
+    "cloud_source_sha256": "8350193a1e2d3911de0a96ac5c1a1888f08103e74dab24d21bbf43ccfd02a88d",
+    "map_yaml_sha256": "9f36ab2d3d35a667996570b45babb7cb3ba8bd1e706a971af22603da1220e7ff",
+    "pgm_sha256": "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278",
+    "route_sha256": "96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32",
+    "trajectory_source_sha256": "7c236960bcf4f7600facd023aeb8f4f05906215c10b97a9187c6401f151ec614"
+  },
+  "limitations": [
+    "recorded trajectory proves only a traversed candidate corridor",
+    "map clearing is navigation preprocessing, not survey or physical safety approval",
+    "no odometry, TF, command, mode, driver, or ground-truth evidence"
+  ],
+  "loop_closure": {
+    "is_consistency_only": true,
+    "position_residual_m": 0.9760259268134223,
+    "target_m": 0.5,
+    "target_met": false
+  },
+  "passenger_operation_authorized": false,
+  "projection": {
+    "gravity": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "mode": "ground-relative",
+    "obstacle_height_band_m": [
+      0.15,
+      2.0
+    ]
+  },
+  "qualification": "candidate",
+  "schema_version": 1,
+  "source": {
+    "cloud": "glim-dump-directory",
+    "trajectory_format": "tum"
+  },
+  "surveyed": false
 }

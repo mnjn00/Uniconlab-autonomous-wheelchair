@@ -1,0 +1,24 @@
+{
+  "global": {
+    "config_path": "/opt/glim-config",
+    "config_ros": "config.json",
+    "config_logging": "config_logging.json",
+    "config_viewer": "config_viewer.json",
+    "config_sensors": "config_sensors.json",
+    "config_preprocess": "config_preprocess.json",
+    "config_odometry": "config_odometry_cpu.json",
+    "config_sub_mapping": "config_sub_mapping_cpu.json",
+    "config_global_mapping": "config_global_mapping_cpu.json"
+  },
+  "glim_ros": {
+    "imu_topic": "/sensors/imu/data",
+    "points_topic": "/sensors/lidar/points",
+    "image_topic": "/unused/image",
+    "playback_speed": 0.0,
+    "acc_scale": 1.0,
+    "keep_raw_points": false,
+    "enable_local_mapping": true,
+    "enable_global_mapping": true,
+    "extension_modules": []
+  }
+}
