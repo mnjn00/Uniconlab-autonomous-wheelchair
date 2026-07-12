@@ -3,6 +3,8 @@ import importlib.util
 import math
 import sys
 from pathlib import Path
+import threading
+import types
 
 import pytest
 
@@ -50,6 +52,104 @@ def release(core, first_sequence=1, first_time=1.0):
     for offset, elapsed in enumerate((0.0, 0.1, 0.2, 0.3, 0.5)):
         decision = core.evaluate(inputs(first_sequence + offset, first_time + elapsed, (static_point(10.0),), speed=0.0))
     return decision
+
+def _slope_message(source, evaluation, policy_sha256, state):
+    return types.SimpleNamespace(
+        header=types.SimpleNamespace(stamp=types.SimpleNamespace(to_sec=lambda: source)),
+        evaluation_stamp=types.SimpleNamespace(to_sec=lambda: evaluation),
+        pitch_rad=0.0,
+        policy_sha256=policy_sha256,
+        state=state,
+    )
+
+
+def _slope_callback_node(policy_sha256):
+    node = object.__new__(cs.CollisionSupervisorRosNode)
+    node._lock = threading.RLock()
+    node.slope = None
+    node.slope_high_water = None
+    node.slope_policy_sha256 = policy_sha256
+    return node
+
+
+@pytest.mark.parametrize(
+    "source,evaluation,receipt,expected",
+    (
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, 1.0, 1.0, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, 1.0, 1.0, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 1.0, 1.0, False),
+        (0.5, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, 1.0, True),
+        (0.5, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, 1.0, True),
+        (0.5, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 1.0, False),
+    ),
+)
+def test_slope_chronology_allows_only_50ms_future_skew(source, evaluation, receipt, expected):
+    assert cs._slope_chronology_valid(source, evaluation, receipt, None) is expected
+
+
+@pytest.mark.parametrize(
+    "source,evaluation,cloud_stamp,now,expected",
+    (
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, 0.5, 1.0, 1.0, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, 0.5, 1.0, 1.0, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 0.5, 1.0, 1.0, False),
+        (0.5, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, 1.0, 1.0, True),
+        (0.5, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, 1.0, 1.0, True),
+        (0.5, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 1.0, 1.0, False),
+    ),
+)
+def test_slope_cloud_revalidation_allows_only_50ms_future_skew(
+    source, evaluation, cloud_stamp, now, expected
+):
+    assert cs._slope_cloud_time_valid(source, evaluation, cloud_stamp, now) is expected
+
+
+def test_slope_callback_rejects_source_regression(monkeypatch):
+    policy_sha256 = "a" * 64
+    node = _slope_callback_node(policy_sha256)
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: 1.0)
+            )
+        ),
+    )
+
+    node._slope_cb(_slope_message(1.0, 1.0, policy_sha256, cs.CLEAR))
+    assert node.slope[-1] is True
+    node._slope_cb(_slope_message(0.9, 1.0, policy_sha256, cs.CLEAR))
+
+    assert node.slope[-1] is False
+    assert node.slope_high_water == 1.0
+
+
+@pytest.mark.parametrize(
+    "policy_sha256,state",
+    (
+        ("b" * 64, cs.CLEAR),
+        ("a" * 64, cs.STOP),
+        ("a" * 64, cs.UNKNOWN),
+    ),
+)
+def test_slope_callback_rejects_wrong_policy_and_unsafe_states(monkeypatch, policy_sha256, state):
+    expected_policy_sha256 = "a" * 64
+    node = _slope_callback_node(expected_policy_sha256)
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: 1.0)
+            )
+        ),
+    )
+
+    node._slope_cb(_slope_message(1.0, 1.0, policy_sha256, state))
+
+    assert node.slope[-1] is False
+    assert node.slope_high_water is None
 
 
 def test_policy_is_hash_checked_and_simulation_only():

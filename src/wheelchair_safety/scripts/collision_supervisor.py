@@ -15,6 +15,7 @@ from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Sequence
 
 
 IMMUTABLE_HARD_LINEAR_SPEED_MPS = 0.55
+CLOCK_FUTURE_TOLERANCE_S = 0.05
 
 UNKNOWN, CLEAR, CAUTION, STOP = 0, 1, 2, 3
 VIS_UNKNOWN, VIS_FULL, VIS_PARTIAL, VIS_BLIND = 0, 1, 2, 3
@@ -1396,6 +1397,31 @@ class CollisionSupervisorCore:
 def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
+def _slope_chronology_valid(
+    source_s: float,
+    evaluation_s: float,
+    receipt_s: float,
+    source_high_water_s: Optional[float],
+) -> bool:
+    return (
+        all(_finite(value) for value in (source_s, evaluation_s, receipt_s))
+        and 0.0 <= source_s <= evaluation_s + CLOCK_FUTURE_TOLERANCE_S
+        and evaluation_s <= receipt_s + CLOCK_FUTURE_TOLERANCE_S
+        and (source_high_water_s is None or source_s > source_high_water_s)
+    )
+
+
+def _slope_cloud_time_valid(
+    source_s: float,
+    evaluation_s: float,
+    cloud_stamp_s: float,
+    now_s: float,
+) -> bool:
+    return (
+        source_s <= cloud_stamp_s + CLOCK_FUTURE_TOLERANCE_S
+        and evaluation_s <= now_s + CLOCK_FUTURE_TOLERANCE_S
+    )
+
 
 def _direction_disagreement(values: Sequence[float], tolerance: float) -> bool:
     material = [float(value) for value in values if _finite(value) and abs(float(value)) >= tolerance]
@@ -1522,11 +1548,12 @@ class CollisionSupervisorRosNode:
             policy = str(msg.policy_sha256)
             state = int(msg.state)
             valid = (
-                all(_finite(value) for value in (source, evaluation, receipt, pitch))
-                and 0.0 <= source <= evaluation <= receipt
+                _slope_chronology_valid(
+                    source, evaluation, receipt, self.slope_high_water
+                )
+                and _finite(pitch)
                 and state in (CLEAR, CAUTION)
                 and policy == self.slope_policy_sha256
-                and (self.slope_high_water is None or source > self.slope_high_water)
             )
         except (AttributeError, TypeError, ValueError):
             source, evaluation, pitch, policy, state, valid = (
@@ -1599,8 +1626,7 @@ class CollisionSupervisorRosNode:
         slope_valid = bool(
             slope_valid
             and slope_policy == self.slope_policy_sha256
-            and slope_source <= stamp + 0.05
-            and slope_evaluation <= now
+            and _slope_cloud_time_valid(slope_source, slope_evaluation, stamp, now)
         )
         intent_behavior = self.intent[1] if self.intent is not None else -1
         coverage_linear = self._conservative_component(
