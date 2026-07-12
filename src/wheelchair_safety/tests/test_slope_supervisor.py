@@ -202,6 +202,7 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.node._initial_zone_bootstrap_deadline_s = None
         self.node._bootstrap_zone_sequence_high_water = None
         self.node._bootstrap_zone_evaluation_high_water_stamp_s = None
+        self.node._bootstrap_zone_source_high_water_stamp_s = None
         self.node.operation_mode = "simulation"
         self.node._zone_sequence_high_water = None
         self.node._zone_source_high_water_stamp_s = None
@@ -273,6 +274,7 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.node._initial_zone_bootstrap_deadline_s = 20.1
         self.node._bootstrap_zone_sequence_high_water = None
         self.node._bootstrap_zone_evaluation_high_water_stamp_s = None
+        self.node._bootstrap_zone_source_high_water_stamp_s = None
 
     def test_bootstrap_deadline_starts_at_first_valid_calibration_receipt(self):
         self._enable_bootstrap()
@@ -328,6 +330,96 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         ))
         self.assertEqual(self.node.zone, "normal")
         self.assertEqual(self.node._zone_source_high_water_stamp_s, None)
+
+    def test_positive_source_bootstrap_requires_monotonic_source_chronology(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.node._zone_cb(self.bootstrap_message(
+            sequence=2,
+            evaluation_stamp=self.stamp(9.99),
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.node._zone_cb(self.bootstrap_message(
+            sequence=2,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+
+    def test_static_transform_lookup_is_cached_but_dynamic_is_not(self):
+        transform = SimpleNamespace(
+            header=SimpleNamespace(frame_id="base_link", stamp=self.stamp(0.0)),
+            child_frame_id="imu_link",
+            transform=SimpleNamespace(
+                rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+                translation=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            ),
+        )
+        calls = []
+        self.node.rospy.Duration = lambda value: value
+        self.node.tf_buffer = SimpleNamespace(
+            lookup_transform=lambda *args: calls.append(args) or transform
+        )
+        self.node.imu_frame = "imu_link"
+        self.node.transform_is_static = True
+        self.node.transform_verified = True
+        self.node._static_imu_transform = None
+        self.node._lookup_imu_transform(self.stamp(1.0), object())
+        self.node._lookup_imu_transform(self.stamp(2.0), object())
+        self.assertEqual(len(calls), 1)
+
+        class Receipt:
+            def __sub__(self, other):
+                return SimpleNamespace(to_sec=lambda: 0.0)
+
+        self.node.transform_is_static = False
+        transform.header.stamp = self.stamp(1.0)
+        receipt = Receipt()
+        self.node._lookup_imu_transform(self.stamp(3.0), receipt)
+        self.node._lookup_imu_transform(self.stamp(4.0), receipt)
+        self.assertEqual(len(calls), 3)
+
+    def test_static_transform_wrong_frame_is_not_cached(self):
+        self.node.rospy.Duration = lambda value: value
+        self.node.tf_buffer = SimpleNamespace(lookup_transform=lambda *args: SimpleNamespace(
+            header=SimpleNamespace(frame_id="wrong", stamp=self.stamp(0.0)),
+            child_frame_id="imu_link",
+            transform=SimpleNamespace(
+                rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+                translation=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            ),
+        ))
+        self.node.imu_frame = "imu_link"
+        self.node.transform_is_static = True
+        self.node.transform_verified = True
+        self.node._static_imu_transform = None
+        with self.assertRaises(ValueError):
+            self.node._lookup_imu_transform(self.stamp(1.0), object())
+        self.assertIsNone(self.node._static_imu_transform)
+
+    def test_static_transform_nonfinite_rotation_is_not_cached(self):
+        self.node.rospy.Duration = lambda value: value
+        self.node.tf_buffer = SimpleNamespace(lookup_transform=lambda *args: SimpleNamespace(
+            header=SimpleNamespace(frame_id="base_link", stamp=self.stamp(0.0)),
+            child_frame_id="imu_link",
+            transform=SimpleNamespace(
+                rotation=SimpleNamespace(x=float("nan"), y=0.0, z=0.0, w=1.0),
+                translation=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            ),
+        ))
+        self.node.imu_frame = "imu_link"
+        self.node.transform_is_static = True
+        self.node.transform_verified = True
+        self.node._static_imu_transform = None
+        with self.assertRaises(ValueError):
+            self.node._lookup_imu_transform(self.stamp(1.0), object())
+        self.assertIsNone(self.node._static_imu_transform)
 
     def test_clear_handoff_must_follow_bootstrap_chronology(self):
         self._enable_bootstrap()

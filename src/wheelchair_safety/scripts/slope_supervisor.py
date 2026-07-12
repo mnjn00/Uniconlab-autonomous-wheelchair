@@ -762,8 +762,10 @@ class SlopeSupervisorRosNode:
         self.zone_receipt_stamp_s = rospy.Time.now().to_sec() if self._initial_zone_bootstrap_active else -math.inf
         self._bootstrap_zone_sequence_high_water = None
         self._bootstrap_zone_evaluation_high_water_stamp_s = None
+        self._bootstrap_zone_source_high_water_stamp_s = None
         self._zone_sequence_high_water = None
         self._zone_source_high_water_stamp_s = None
+        self._static_imu_transform = None
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(1.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.status_pub = rospy.Publisher("/safety/slope_status", SlopeStatus, queue_size=1)
@@ -802,7 +804,8 @@ class SlopeSupervisorRosNode:
             ):
                 raise ValueError("invalid route safety identity")
             if (
-                source_stamp == 0.0
+                source_stamp >= 0.0
+                and source_stamp <= evaluation_stamp
                 and state == 0
                 and reason_mask == (INPUT_UNKNOWN | GEOFENCE)
                 and evaluation_stamp > 0.0
@@ -818,9 +821,20 @@ class SlopeSupervisorRosNode:
                      or sequence > self._bootstrap_zone_sequence_high_water)
                 and (self._bootstrap_zone_evaluation_high_water_stamp_s is None
                      or evaluation_stamp > self._bootstrap_zone_evaluation_high_water_stamp_s)
+                and (
+                    self._bootstrap_zone_source_high_water_stamp_s is None
+                    and source_stamp == 0.0
+                    or source_stamp > 0.0
+                    and (
+                        self._bootstrap_zone_source_high_water_stamp_s is None
+                        or source_stamp > self._bootstrap_zone_source_high_water_stamp_s
+                    )
+                )
             ):
                 self._bootstrap_zone_sequence_high_water = sequence
                 self._bootstrap_zone_evaluation_high_water_stamp_s = evaluation_stamp
+                if source_stamp > 0.0:
+                    self._bootstrap_zone_source_high_water_stamp_s = source_stamp
                 self.zone_receipt_stamp_s = receipt_stamp
                 return
             if (
@@ -836,6 +850,8 @@ class SlopeSupervisorRosNode:
                 and sequence <= self._bootstrap_zone_sequence_high_water
                 or self._bootstrap_zone_evaluation_high_water_stamp_s is not None
                 and evaluation_stamp <= self._bootstrap_zone_evaluation_high_water_stamp_s
+                or self._bootstrap_zone_source_high_water_stamp_s is not None
+                and source_stamp <= self._bootstrap_zone_source_high_water_stamp_s
                 or state != 1
                 or reason_mask != 0
                 or not route_id
@@ -859,6 +875,39 @@ class SlopeSupervisorRosNode:
         self.zone = "unknown"
         self.zone_receipt_stamp_s = receipt_stamp
 
+    def _lookup_imu_transform(self, source_stamp, receipt):
+        if self.transform_is_static and self._static_imu_transform is not None:
+            return self._static_imu_transform + (0.0,)
+        tf = self.tf_buffer.lookup_transform(
+            "base_link", self.imu_frame, source_stamp, self.rospy.Duration(0.01)
+        )
+        q = tf.transform.rotation
+        transform_q = (q.x, q.y, q.z, q.w)
+        translation = tf.transform.translation
+        transform_translation = (translation.x, translation.y, translation.z)
+        transform_stamp = tf.header.stamp.to_sec()
+        if self.transform_is_static:
+            if (
+                transform_stamp != 0.0
+                or tf.header.frame_id != "base_link"
+                or tf.child_frame_id != self.imu_frame
+            ):
+                raise ValueError("static TF evidence is invalid")
+            normalize_quaternion(transform_q, self.core.policy.quaternion_norm_tolerance)
+            _components(transform_translation, 3)
+            if not all(math.isfinite(value) for value in transform_translation):
+                raise ValueError("static TF translation is invalid")
+            if self.transform_verified:
+                self._static_imu_transform = (
+                    transform_q, transform_translation, transform_stamp,
+                )
+                return self._static_imu_transform + (0.0,)
+            return transform_q, transform_translation, transform_stamp, 0.0
+        if transform_stamp == 0.0:
+            raise ValueError("zero-stamp TF was not identified as static")
+        return transform_q, transform_translation, transform_stamp, (
+            receipt - tf.header.stamp
+        ).to_sec()
     def _start_initial_zone_bootstrap_deadline(self, receipt_stamp):
         if self._initial_zone_bootstrap_active and self._initial_zone_bootstrap_deadline_s is None:
             self._initial_zone_bootstrap_deadline_s = (
@@ -970,18 +1019,9 @@ class SlopeSupervisorRosNode:
         try:
             if not transform_valid:
                 raise ValueError("unexpected IMU frame")
-            tf = self.tf_buffer.lookup_transform("base_link", self.imu_frame, msg.header.stamp, rospy.Duration(0.01))
-            q = tf.transform.rotation
-            transform_q = (q.x, q.y, q.z, q.w)
-            translation = tf.transform.translation
-            transform_translation = (translation.x, translation.y, translation.z)
-            transform_stamp = tf.header.stamp.to_sec()
-            if transform_stamp == 0.0:
-                if not self.transform_is_static:
-                    raise ValueError("zero-stamp TF was not identified as static")
-                transform_age = 0.0
-            else:
-                transform_age = (receipt - tf.header.stamp).to_sec()
+            transform_q, transform_translation, transform_stamp, transform_age = (
+                self._lookup_imu_transform(msg.header.stamp, receipt)
+            )
         except Exception:
             transform_valid = False
         sample = CalibrationSample(
