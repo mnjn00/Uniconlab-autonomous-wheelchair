@@ -219,6 +219,13 @@ class CalibrationTests(unittest.TestCase):
             for index in range(count)
         ]
 
+    def jittered_stamps(self):
+        return [
+            1.0 + 10.0 * index / 1899
+            + (0.020 * (1899 - index) / 949 if index >= 950 else 0.0)
+            for index in range(1900)
+        ]
+
     def calibrate(self, core, samples, **overrides):
         evidence = dict(
             transform_verified=True,
@@ -249,6 +256,33 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(result.safety_signal_state, slope.CLEAR)
         self.assertFalse(result.hardware_motion_authorized)
         self.assertFalse(result.passenger_operation_authorized)
+
+    def test_jittered_dropped_samples_meeting_coverage_calibrate(self):
+        samples = self.make_samples()
+        stamps = self.jittered_stamps()
+        samples = [
+            slope.CalibrationSample(
+                quaternion=sample.quaternion,
+                acceleration=sample.acceleration,
+                angular_velocity=sample.angular_velocity,
+                source_stamp_s=stamp,
+                imu_to_base_quaternion=sample.imu_to_base_quaternion,
+            )
+            for sample, stamp in zip(samples, stamps)
+        ]
+
+        core = slope.SlopeSupervisorCore()
+        self.assertTrue(self.calibrate(core, samples))
+        self.assertEqual(core.calibration_state, slope.CAL_VALID)
+
+    def test_window_duration_boundaries(self):
+        for duration in (10.0, 10.005):
+            core = slope.SlopeSupervisorCore()
+            self.assertTrue(self.calibrate(core, self.make_samples(duration=duration)))
+
+        core = slope.SlopeSupervisorCore()
+        self.assertFalse(self.calibrate(core, self.make_samples(duration=10.005001)))
+        self.assertEqual(core.calibration_state, slope.CAL_INVALID)
 
     def test_insufficient_coverage_or_short_window_fails_closed(self):
         for samples in (
@@ -335,6 +369,7 @@ class CalibrationTests(unittest.TestCase):
         result = decide(core)
         self.assertEqual(result.state, slope.UNKNOWN)
         self.assertEqual(result.recommended_max_linear_mps, 0.0)
+        self.assertTrue(result.reason_mask & slope.IMU_UNCALIBRATED)
 
     def make_calibrating_node(self):
         node = slope.SlopeSupervisorRosNode.__new__(slope.SlopeSupervisorRosNode)
@@ -376,31 +411,31 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(node.core.calibration_state, slope.CAL_VALID)
         self.assertEqual(node._calibration_samples, [])
 
-    def test_candidate_memory_is_bounded_during_high_rate_startup(self):
+    def test_overlong_candidate_restarts_with_current_sample(self):
         node = self.make_calibrating_node()
-        maximum_samples = (
-            math.ceil(
-                node.core.policy.calibration_rate_hz
-                * (
-                    node.core.policy.calibration_duration_s
-                    + 1.0 / node.core.policy.calibration_rate_hz
-                )
-            )
-            + 1
+        self.observe(node, 1.0)
+        self.observe(node, 11.005001)
+        self.assertEqual(
+            [sample.source_stamp_s for sample in node._calibration_samples],
+            [11.005001],
         )
-        for index in range(maximum_samples + 5):
-            self.observe(node, 1.0 + index / 1000.0)
-        self.assertLessEqual(len(node._calibration_samples), maximum_samples)
         self.assertEqual(node.core.calibration_state, slope.CAL_CALIBRATING)
 
-    def test_timestamp_gap_and_regression_restart_consecutive_window(self):
+    def test_live_collector_calibrates_jittered_dropped_window(self):
+        node = self.make_calibrating_node()
+        for stamp in self.jittered_stamps():
+            self.observe(node, stamp)
+        self.assertEqual(node.core.calibration_state, slope.CAL_VALID)
+        self.assertEqual(node._calibration_samples, [])
+
+    def test_timestamp_gap_is_retained_and_regression_restarts_candidate(self):
         node = self.make_calibrating_node()
         self.observe(node, 1.0)
         self.observe(node, 1.005)
         self.observe(node, 1.020)
         self.assertEqual(
             [sample.source_stamp_s for sample in node._calibration_samples],
-            [1.020],
+            [1.0, 1.005, 1.020],
         )
 
         self.observe(node, 1.010)

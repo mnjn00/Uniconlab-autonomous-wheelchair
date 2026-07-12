@@ -182,13 +182,6 @@ def _percentile95(values: Sequence[float]) -> float:
     return ordered[int(math.ceil(0.95 * len(ordered))) - 1]
 
 
-def _maximum_calibration_sample_gap(policy: SlopePolicy) -> float:
-    minimum = math.ceil(
-        policy.calibration_duration_s
-        * policy.calibration_rate_hz
-        * policy.calibration_sample_fraction
-    )
-    return policy.calibration_duration_s / (minimum - 1)
 
 
 def _angle_stddev(values: Sequence[float]) -> float:
@@ -288,12 +281,6 @@ class SlopeSupervisorCore:
                 raise ValueError("invalid calibration timestamp")
             if any(current <= previous for previous, current in zip(stamps, stamps[1:])):
                 raise ValueError("calibration timestamps are not strictly increasing")
-            maximum_gap = _maximum_calibration_sample_gap(self.policy)
-            if any(
-                current - previous > maximum_gap + 1.0e-12
-                for previous, current in zip(stamps, stamps[1:])
-            ):
-                raise ValueError("calibration timestamp gap is invalid")
             window_duration = stamps[-1] - stamps[0]
             maximum_window = self.policy.calibration_duration_s + 1.0 / self.policy.calibration_rate_hz
             if (
@@ -700,28 +687,25 @@ class SlopeSupervisorRosNode:
         stamp = float(stamp)
         if self._calibration_samples:
             previous_stamp = self._calibration_samples[-1].source_stamp_s
-            maximum_gap = _maximum_calibration_sample_gap(self.core.policy)
-            if stamp <= previous_stamp or stamp - previous_stamp > maximum_gap + 1.0e-12:
+            if stamp <= previous_stamp:
                 self._reset_calibration_candidate()
-
         self._calibration_samples.append(sample)
-        maximum_samples = (
-            math.ceil(
-                self.core.policy.calibration_rate_hz
-                * (
-                    self.core.policy.calibration_duration_s
-                    + 1.0 / self.core.policy.calibration_rate_hz
-                )
-            )
-            + 1
+        maximum_window = (
+            self.core.policy.calibration_duration_s
+            + 1.0 / self.core.policy.calibration_rate_hz
         )
-        if len(self._calibration_samples) > maximum_samples:
+        if stamp - self._calibration_samples[0].source_stamp_s > maximum_window + 1.0e-12:
             self._reset_calibration_candidate()
             self._calibration_samples.append(sample)
             return
 
+        minimum_samples = math.ceil(
+            self.core.policy.calibration_duration_s
+            * self.core.policy.calibration_rate_hz
+            * self.core.policy.calibration_sample_fraction
+        )
         if (
-            len(self._calibration_samples) >= 2
+            len(self._calibration_samples) >= minimum_samples
             and stamp - self._calibration_samples[0].source_stamp_s
             >= self.core.policy.calibration_duration_s
         ):
