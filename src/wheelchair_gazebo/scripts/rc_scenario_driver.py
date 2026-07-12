@@ -460,13 +460,14 @@ class ScenarioDriver:
         self._DiagnosticStatus = DiagnosticStatus
         self._KeyValue = KeyValue
         self._PoseWithCovarianceStamped = PoseWithCovarianceStamped
+        self._Bool = Bool
         self._initial_pose_values = initial_pose
         self._initial_pose_required_subscribers = required_subscriber_count(
             initial_pose_required_subscribers)
         self._diagnostics = rospy.Publisher("/diagnostics", DiagnosticArray, queue_size=1)
         self._initial_pose = rospy.Publisher(
             "/initialpose", PoseWithCovarianceStamped, queue_size=1, latch=False)
-        self._arm = rospy.Publisher("/safety/arm", Bool, queue_size=1, latch=False)
+        self._arm = rospy.Publisher("/safety/arm", self._Bool, queue_size=1, latch=False)
         self._mission_arm = rospy.ServiceProxy("/wheelchair_mission/arm", Trigger)
         self._action = actionlib.SimpleActionClient("/wheelchair_mission/execute_route", ExecuteRouteAction)
         topics = (
@@ -567,11 +568,41 @@ class ScenarioDriver:
             time.sleep(min(0.05, remaining))
         raise ScenarioError("timeout waiting for initial pose subscriber")
 
+    def _publish_arm_low_baseline(self):
+        """Publish the bounded simulation-only low observation required before arming."""
+        deadline = time.monotonic() + self.ready_timeout_s
+        while not self.rospy.is_shutdown():
+            try:
+                connected = self._arm.get_num_connections() >= 1
+            except Exception as exc:
+                raise ScenarioError("unable to check safety arm subscribers") from exc
+            if connected:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                raise ScenarioError("timeout waiting for safety arm subscriber")
+            time.sleep(min(0.05, remaining))
+        else:
+            raise ScenarioError("ROS shutdown waiting for safety arm subscriber")
+
+        for unused_attempt in range(3):
+            try:
+                self._arm.publish(self._Bool(data=False))
+            except Exception as exc:
+                raise ScenarioError("unable to publish safety arm low baseline") from exc
+            time.sleep(0.02)
+
+    def _publish_arm_request(self):
+        try:
+            self._arm.publish(self._Bool(data=True))
+        except Exception as exc:
+            raise ScenarioError("unable to publish safety arm request") from exc
+
     def run(self):
         from actionlib_msgs.msg import GoalStatus
-        from std_msgs.msg import Bool
         from wheelchair_interfaces.msg import ExecuteRouteGoal
 
+        self._publish_arm_low_baseline()
         self.rospy.wait_for_service("/wheelchair_mission/arm", timeout=self.ready_timeout_s)
         response = self._mission_arm()
         if not response.success:
@@ -598,7 +629,7 @@ class ScenarioDriver:
             self._emit(self._DiagnosticStatus.OK, "publishing initial localization pose")
             self._publish_initial_pose()
             self._wait(self.evidence.startup_ready, self.ready_timeout_s, "startup evidence")
-            self._arm.publish(Bool(data=True))
+            self._publish_arm_request()
             self._wait(self.evidence.safety_clear, self.ready_timeout_s, "armed safety gate")
         except ScenarioError:
             self._cancel("startup failure")

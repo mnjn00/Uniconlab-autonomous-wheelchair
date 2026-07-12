@@ -83,6 +83,10 @@ class Attribute:
     pass
 
 
+class FakeBool:
+    def __init__(self, data):
+        self.data = data
+
 class FakeInitialPose:
     def __init__(self):
         self.header = Attribute()
@@ -418,6 +422,56 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertAlmostEqual(wall.now, 0.12)
         self.assertTrue(all(duration > 0.0 for duration in wall.sleeps))
 
+    def arm_baseline_scenario(self, connections=(0, 1), timeout=3.0):
+        scenario = driver.ScenarioDriver.__new__(driver.ScenarioDriver)
+        scenario.rospy = FakeRospy({})
+        scenario.rospy.is_shutdown = lambda: False
+        scenario.ready_timeout_s = timeout
+        scenario._arm = ConnectionPublisher(connections)
+        scenario._Bool = FakeBool
+        wall = FakeWallClock()
+        original_monotonic, original_sleep = driver.time.monotonic, driver.time.sleep
+        self.addCleanup(setattr, driver.time, "monotonic", original_monotonic)
+        self.addCleanup(setattr, driver.time, "sleep", original_sleep)
+        driver.time.monotonic, driver.time.sleep = wall.monotonic, wall.sleep
+        return scenario, wall
+
+    def test_arm_low_baseline_waits_for_subscriber_then_publishes_three_lows(self):
+        scenario, wall = self.arm_baseline_scenario()
+
+        scenario._publish_arm_low_baseline()
+
+        self.assertEqual([message.data for message in scenario._arm.messages],
+                         [False, False, False])
+        self.assertEqual(wall.sleeps, [0.05, 0.02, 0.02, 0.02])
+
+    def test_arm_low_baseline_precedes_the_single_true_request(self):
+        scenario, unused_wall = self.arm_baseline_scenario(connections=(1,))
+
+        scenario._publish_arm_low_baseline()
+        scenario._publish_arm_request()
+
+        self.assertEqual([message.data for message in scenario._arm.messages],
+                         [False, False, False, True])
+
+    def test_arm_low_baseline_fails_closed_without_a_subscriber(self):
+        scenario, wall = self.arm_baseline_scenario(connections=(0,), timeout=0.12)
+
+        with self.assertRaisesRegex(driver.ScenarioError,
+                                    "timeout waiting for safety arm subscriber"):
+            scenario._publish_arm_low_baseline()
+
+        self.assertEqual(scenario._arm.messages, [])
+        self.assertAlmostEqual(wall.now, 0.12)
+
+    def test_arm_low_baseline_fails_closed_when_publication_fails(self):
+        scenario, unused_wall = self.arm_baseline_scenario(connections=(1,))
+        scenario._arm.publish = lambda unused_message: (_ for _ in ()).throw(RuntimeError())
+
+        with self.assertRaisesRegex(driver.ScenarioError,
+                                    "unable to publish safety arm low baseline"):
+            scenario._publish_arm_low_baseline()
+
     def startup_wait_scenario(self, connections=(2,), stamps=(1.0, 2.0, 3.0)):
         scenario = self.initial_pose_scenario(connections, timeout=3.0)
         scenario.rospy.Time = SequenceTime(stamps)
@@ -503,16 +557,18 @@ class ScenarioDriverTests(unittest.TestCase):
     def test_goal_activation_and_evidence_precede_gate_arming(self):
         source = SCRIPT.read_text(encoding="utf-8")
         run = source[source.index("    def run(self):"):source.index("\ndef main():")]
+        baseline = run.index("self._publish_arm_low_baseline()")
         mission_arm = run.index("self._mission_arm()")
         send_goal = run.index("self._action.send_goal(goal)")
         goal_active = run.index('"active mission goal"')
         pre_initialization = run.index('"pre-initialization evidence"')
         initial_pose = run.index("self._publish_initial_pose()")
         startup_evidence = run.index('"startup evidence"')
-        gate_arm = run.index("self._arm.publish")
+        gate_arm = run.index("self._publish_arm_request()")
         gate_clear = run.index('"armed safety gate"')
         monitoring = run.index("self._safety_monitoring = True")
 
+        self.assertLess(baseline, mission_arm)
         self.assertLess(mission_arm, send_goal)
         self.assertLess(send_goal, goal_active)
         self.assertLess(goal_active, pre_initialization)
@@ -521,6 +577,8 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertLess(startup_evidence, gate_arm)
         self.assertLess(gate_arm, gate_clear)
         self.assertLess(gate_clear, monitoring)
+        self.assertEqual(run.count("self._publish_arm_low_baseline()"), 1)
+        self.assertEqual(run.count("self._publish_arm_request()"), 1)
         self.assertEqual(run.count("self._action.send_goal(goal)"), 1)
         self.assertEqual(run.count("self._publish_initial_pose()"), 1)
         self.assertEqual(source.count('"/initialpose"'), 1)
@@ -530,6 +588,12 @@ class ScenarioDriverTests(unittest.TestCase):
             '            self._wait(self.evidence.startup_ready, self.ready_timeout_s, '
             '"startup evidence")',
             run)
+        arm_baseline = source[source.index("    def _publish_arm_low_baseline(self):"):
+                              source.index("    def _publish_arm_request(self):")]
+        self.assertIn("get_num_connections() >= 1", arm_baseline)
+        self.assertIn("range(3)", arm_baseline)
+        self.assertEqual(arm_baseline.count("self._arm.publish"), 1)
+        self.assertIn("time.sleep(0.02)", arm_baseline)
         self.assertNotIn("tick=", run)
         self.assertIn('self._cancel("safety loss")', source)
         self.assertIn('self._cancel("action timeout")', source)
