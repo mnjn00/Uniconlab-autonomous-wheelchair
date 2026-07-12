@@ -10,7 +10,7 @@ artifacts:
   - path: A02-interface-abi-v1.md
     sha256: be34063bdc8521a72a08512519b7c315ae66c0b80161aa2603d367680aaf531d
   - path: A03-topic-tf-time-ownership.yaml
-    sha256: 698721f0efb097907553f45587b8b9a15ff9e51738ad2f949c166c26ca7de9d2
+    sha256: b0e2ff6273e4230d6068599c348460dd0706541b634522bf4cba57b8d48980f5
   - path: A04-safety-reason-registry.yaml
     sha256: 9ab82c36d470776ce3a69bb75bdb90b449235f8773a149b5be87ceab54b5baa7
   - path: A05-route-schema.json

@@ -67,8 +67,14 @@ runtime_profiles:
     real_motor_topic: null
     read_only_observers:
       exact_topic_grants:
-        rc_scenario_driver: [/route/progress, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status]
-        rc_metrics_collector: [/route/progress, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status, /cmd_vel_nav, /cmd_vel_safe, /wheelchair_base_controller/cmd_vel]
+        control_monitor: [/cmd_vel_nav, /cmd_vel_safe, /decision/motion_intent, /route/active, /route/progress, /odom, /safety/state]
+        incident_recorder: [/cmd_vel_nav, /cmd_vel_safe, /route/progress, /sensors/lidar/points, /sensors/imu/data, /odom, /localization/status, /hardware/driver_status, /safety/state]
+        localization_adapter: [/odom, /initialpose]
+        move_base: [/odom]
+        collision_supervisor: [/safety/slope_status]
+        rc_fault_injector: [/safety/state]
+        rc_scenario_driver: [/route/progress, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status, /safety/state]
+        rc_metrics_collector: [/route/progress, /localization/candidate, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status, /safety/state, /cmd_vel_nav, /cmd_vel_safe, /wheelchair_base_controller/cmd_vel]
       publishing_authority: none
       profile_scope: sim_only
   replay:
@@ -100,14 +106,14 @@ runtime_profiles:
     passenger_operation_authorized: false
     real_motor_topic: null
 topics:
-  - {name: /sensors/lidar/points, type: sensor_msgs/PointCloud2, sole_owner: selected_sensor_adapter, consumers: [collision_supervisor], nominal_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: COLLISION_BLIND_STOP}
-  - {name: /sensors/imu/data, type: sensor_msgs/Imu, sole_owner: selected_sensor_adapter, consumers: [slope_supervisor, selected_localization_adapter], nominal_rate_hz: 200.0, ttl_s: 0.10, queue_size: 1, stale_action: IMU_UNKNOWN_STOP}
-  - {name: /odom, type: nav_msgs/Odometry, sole_owner: verified_base_or_sim_adapter, consumers: [collision_supervisor, localization_guard, hardware_adapter], minimum_rate_hz: 20.0, ttl_s: 0.20, queue_size: 1, stale_action: ODOM_STALE_STOP}
+  - {name: /sensors/lidar/points, type: sensor_msgs/PointCloud2, sole_owner: selected_sensor_adapter, consumers: [collision_supervisor, localization_guard, perception_node], nominal_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: COLLISION_BLIND_STOP}
+  - {name: /sensors/imu/data, type: sensor_msgs/Imu, sole_owner: selected_sensor_adapter, consumers: [slope_supervisor, perception_node], nominal_rate_hz: 200.0, ttl_s: 0.10, queue_size: 1, stale_action: IMU_UNKNOWN_STOP}
+  - {name: /odom, type: nav_msgs/Odometry, sole_owner: verified_base_or_sim_adapter, consumers: [collision_supervisor, localization_guard, wheelchair_mission], minimum_rate_hz: 20.0, ttl_s: 0.20, queue_size: 1, stale_action: ODOM_STALE_STOP}
   - {name: /localization/candidate, type: wheelchair_interfaces/LocalizationCandidate, sole_owner: profile_selected_localization_candidate_adapter, owner_alternatives_by_profile: {sim: [localization_adapter, selected_localization_adapter, base_model_localization_adapter], replay: [replay_localization_adapter, localization_adapter], hardware_shadow: [localization_adapter, selected_localization_adapter, amcl]}, required_consumers: [wheelchair_route_safety], ros_consumer_alternatives: [localization_guard, independent_localization_guard], ros_consumer_optional_when_guard_colocated: false, minimum_ros_consumers: 2, maximum_ros_consumers: 2, minimum_rate_hz: 10.0, ttl_s: 0.25, queue_size: 1, authority: untrusted_candidate, stale_action: LOST_STOP}
   - {name: /localization/status, type: wheelchair_interfaces/LocalizationStatus, sole_owner: independent_localization_guard, runtime_owner_aliases: [localization_guard, independent_localization_guard], consumers: [safety_gate, wheelchair_route_safety, wheelchair_mission, localization_adapter], minimum_rate_hz: 10.0, ttl_s: 0.25, queue_size: 1, stale_action: LOST_STOP}
   - {name: /safety/localization, type: wheelchair_interfaces/SafetySignal, sole_owner: independent_localization_guard, runtime_owner_aliases: [localization_guard, independent_localization_guard], consumers: [safety_gate], minimum_rate_hz: 10.0, ttl_s: 0.25, queue_size: 1, stale_action: UNKNOWN_STOP}
   - {name: /route/active, type: wheelchair_interfaces/ActiveRoute, sole_owner: wheelchair_mission, consumers: [wheelchair_route_safety, route_manager], heartbeat_rate_hz: 2.0, ttl_s: 0.75, queue_size: 1, authority: untrusted_request, stale_action: ROUTE_STOP}
-  - {name: /route/progress, type: wheelchair_interfaces/RouteProgress, sole_owner: route_manager, consumers: [wheelchair_mission, wheelchair_route_safety], minimum_rate_hz: 5.0, ttl_s: 0.50, queue_size: 1, authority: progress_only, stale_action: HOLD_CANCEL}
+  - {name: /route/progress, type: wheelchair_interfaces/RouteProgress, sole_owner: route_manager, consumers: [wheelchair_mission], minimum_rate_hz: 5.0, ttl_s: 0.50, queue_size: 1, authority: progress_only, stale_action: HOLD_CANCEL}
   - {name: /route_safety/geofence_status, type: wheelchair_interfaces/GeofenceStatus, sole_owner: wheelchair_route_safety, consumers: [safety_gate, wheelchair_mission], nominal_rate_hz: 20.0, ttl_s: 0.25, queue_size: 1, stale_action: STOP}
   - {name: /safety/geofence, type: wheelchair_interfaces/SafetySignal, sole_owner: wheelchair_route_safety, consumers: [safety_gate], nominal_rate_hz: 20.0, ttl_s: 0.25, queue_size: 1, stale_action: UNKNOWN_STOP}
   - {name: /safety/collision_status, type: wheelchair_interfaces/CollisionStatus, sole_owner: collision_supervisor, consumers: [safety_gate, wheelchair_mission], nominal_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: BLIND_STOP}
@@ -115,6 +121,7 @@ topics:
   - {name: /safety/slope_status, type: wheelchair_interfaces/SlopeStatus, sole_owner: slope_supervisor, consumers: [safety_gate, wheelchair_mission], nominal_rate_hz: 50.0, ttl_s: 0.10, queue_size: 1, stale_action: UNKNOWN_STOP}
   - {name: /safety/slope, type: wheelchair_interfaces/SafetySignal, sole_owner: slope_supervisor, consumers: [safety_gate], nominal_rate_hz: 50.0, ttl_s: 0.10, queue_size: 1, stale_action: UNKNOWN_STOP}
   - {name: /decision/motion_intent, type: wheelchair_interfaces/MotionIntent, sole_owner: wheelchair_mission, consumers: [safety_gate, collision_supervisor], minimum_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: HOLD_STOP}
+  - {name: /safety/state, type: wheelchair_interfaces/SafetyState, sole_owner: safety_gate, consumers: [wheelchair_mission], queue_size: 1, stale_action: STOP}
   - {name: /cmd_vel_nav, type: geometry_msgs/Twist, sole_owner: move_base, consumers: [safety_gate, collision_supervisor], required_when: "motion_intent_in_[PROCEED,SLOW]", absent_during_hold_allowed: true, minimum_active_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: ZERO_STOP}
   - {name: /hardware/driver_status, type: wheelchair_interfaces/DriverStatus, sole_owner: profile_selected_driver_status_signal_owner, owner_alternatives_by_profile: {sim: [sim_evidence_bridge], replay: [play, rosbag, replay_evidence_bridge], hardware_shadow: [hardware_shadow_adapter]}, consumers: [safety_gate], minimum_rate_hz: 20.0, ttl_s: 0.15, queue_size: 1, hardware_authorized: false, stale_action: DISARM_STOP}
   - {name: /safety/mode, type: wheelchair_interfaces/SafetySignal, sole_owner: profile_selected_driver_status_signal_owner, owner_alternatives_by_profile: {sim: [sim_evidence_bridge], replay: [play, rosbag, replay_evidence_bridge], hardware_shadow: [hardware_shadow_adapter]}, consumers: [safety_gate], minimum_rate_hz: 20.0, ttl_s: 0.15, queue_size: 1, hardware_authorized: false, stale_action: UNKNOWN_STOP}
@@ -145,7 +152,7 @@ transforms:
   - {parent: base_link, child: lidar_link, sole_owner: robot_state_publisher, kind: fixed, calibration: measured_required}
   - {parent: base_link, child: imu_link, sole_owner: robot_state_publisher, kind: fixed, calibration: measured_required}
 time_validation:
-  source_stamp_zero_permitted: fixed_tf_static_only
+  static_tf_source_stamp: finite_nonnegative
   source_stamp_regression_action: STOP
   receipt_age_regression_action: STOP
   future_over_tolerance_action: STOP

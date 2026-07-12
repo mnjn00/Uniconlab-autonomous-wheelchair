@@ -125,19 +125,55 @@ EVENT_TOPICS = (
     "/safety/mission_cancelled", "/initialpose", "/localization/relocalize",
 )
 SIM_OBSERVER_TOPIC_GRANTS = {
+    "control_monitor": (
+        "/cmd_vel_nav",
+        "/cmd_vel_safe",
+        "/decision/motion_intent",
+        "/route/active",
+        "/route/progress",
+        "/odom",
+        "/safety/state",
+    ),
+    "incident_recorder": (
+        "/cmd_vel_nav",
+        "/cmd_vel_safe",
+        "/route/progress",
+        "/sensors/lidar/points",
+        "/sensors/imu/data",
+        "/odom",
+        "/localization/status",
+        "/hardware/driver_status",
+        "/safety/state",
+    ),
+    "localization_adapter": (
+        "/odom",
+        "/initialpose",
+    ),
+    "move_base": (
+        "/odom",
+    ),
+    "collision_supervisor": (
+        "/safety/slope_status",
+    ),
+    "rc_fault_injector": (
+        "/safety/state",
+    ),
     "rc_scenario_driver": (
         "/route/progress",
         "/localization/status",
         "/route_safety/geofence_status",
         "/safety/collision_status",
         "/safety/slope_status",
+        "/safety/state",
     ),
     "rc_metrics_collector": (
         "/route/progress",
+        "/localization/candidate",
         "/localization/status",
         "/route_safety/geofence_status",
         "/safety/collision_status",
         "/safety/slope_status",
+        "/safety/state",
         "/cmd_vel_nav",
         "/cmd_vel_safe",
         "/wheelchair_base_controller/cmd_vel",
@@ -245,14 +281,14 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
         "/route/active": TopicAuthority(("wheelchair_mission",),
                                         ("route_manager", "wheelchair_route_safety")),
         "/route/progress": TopicAuthority(("route_manager",),
-                                          ("wheelchair_mission", "wheelchair_route_safety")),
+                                          ("wheelchair_mission",)),
         "/sensors/lidar/points": TopicAuthority(
             sensor_owners, ("collision_supervisor", "localization_guard", "perception_node")),
         "/sensors/imu/data": TopicAuthority(
-            sensor_owners, ("slope_supervisor", "selected_localization_adapter", "perception_node")),
+            sensor_owners, ("slope_supervisor", "perception_node")),
         "/odom": TopicAuthority(
             odom_owners, ("collision_supervisor", "localization_guard",
-                          "wheelchair_mission", "hardware_adapter")),
+                          "wheelchair_mission")),
         "/initialpose": TopicAuthority(
             initialization_owners,
             ("localization_guard",), publisher_optional=True),
@@ -281,6 +317,7 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
         "/hardware/driver_status": TopicAuthority(evidence_owner, ("safety_gate",)),
         "/safety/mode": TopicAuthority(evidence_owner, ("safety_gate",)),
         "/safety/driver": TopicAuthority(evidence_owner, ("safety_gate",)),
+        "/safety/state": TopicAuthority(("safety_gate",), ("wheelchair_mission",)),
         "/safety/topology": TopicAuthority(("topology_guard",), ("safety_gate",)),
     }
     if sink_topic is not None:
@@ -595,7 +632,10 @@ class TopologyAuditor:
                 violations.append("%s->%s static/dynamic class mismatch" % edge); mask |= TF
                 continue
             if authority.static:
-                if not _is_finite(item.last_receipt_s) or item.source_stamp_s != 0.0:
+                if not all(_is_finite(value) for value in
+                           (now, item.last_receipt_s, item.source_stamp_s)) or \
+                        item.last_receipt_s < 0.0 or item.last_receipt_s > now or \
+                        item.source_stamp_s < 0.0:
                     violations.append("%s->%s invalid static TF evidence" % edge); mask |= TF | INPUT_UNKNOWN
                 continue
             if authority.maximum_age_s is None or not all(

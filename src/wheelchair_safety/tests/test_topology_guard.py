@@ -179,19 +179,14 @@ def test_topology_observers_are_passive_per_edge():
         replace(snapshot, publishers=publishers)).ok
 
 
-def test_sim_qualification_observers_have_exact_per_topic_grants():
+def test_live_sim_read_only_subscriber_grants_are_exact_and_non_publishing():
     expected, snapshot = valid_snapshot("sim")
     subscribers = dict(snapshot.subscribers)
-    scenario_topics = topology_guard.SIM_OBSERVER_TOPIC_GRANTS["rc_scenario_driver"]
-    collector_topics = topology_guard.SIM_OBSERVER_TOPIC_GRANTS["rc_metrics_collector"]
-
-    for topic in scenario_topics:
-        assert expected.authorities[topic].allowed_subscribers == (
-            "/rc_metrics_collector", "/rc_scenario_driver")
-        subscribers[topic] += ("rc_scenario_driver", "rc_metrics_collector")
-    for topic in set(collector_topics) - set(scenario_topics):
-        assert expected.authorities[topic].allowed_subscribers == ("/rc_metrics_collector",)
-        subscribers[topic] += ("rc_metrics_collector",)
+    for observer, topics in topology_guard.SIM_OBSERVER_TOPIC_GRANTS.items():
+        observer_id = topology_guard._caller_id(observer)
+        for topic in topics:
+            assert observer_id in expected.authorities[topic].allowed_subscribers
+            subscribers[topic] += (observer,)
     snapshot = replace(snapshot, subscribers=subscribers)
     assert topology_guard.TopologyAuditor(expected).audit(snapshot).ok
 
@@ -202,23 +197,18 @@ def test_sim_qualification_observers_have_exact_per_topic_grants():
     assert not result.ok
     assert any("/route/progress publisher authority" in item for item in result.violations)
 
-    for topic in set(collector_topics) - set(scenario_topics):
-        assert "/rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
-    for topic in ("/safety/localization", "/localization/candidate", "/route/active"):
-        assert "/rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
-        assert "/rc_metrics_collector" not in expected.authorities[topic].allowed_subscribers
-
 
 @pytest.mark.parametrize("profile", ("replay", "hardware_shadow", "hardware_enabled"))
 @pytest.mark.parametrize(
     ("observer", "topic"),
     (
+        ("control_monitor", "/cmd_vel_nav"),
+        ("incident_recorder", "/sensors/imu/data"),
         ("rc_scenario_driver", "/route/progress"),
-        ("rc_metrics_collector", "/route/progress"),
-        ("rc_metrics_collector", "/cmd_vel_nav"),
+        ("rc_metrics_collector", "/localization/candidate"),
     ),
 )
-def test_qualification_observers_are_rejected_outside_sim(profile, observer, topic):
+def test_sim_read_only_observers_are_rejected_outside_sim(profile, observer, topic):
     expected, snapshot = valid_snapshot(profile)
     subscribers = dict(snapshot.subscribers)
     subscribers[topic] += (observer,)
@@ -229,10 +219,42 @@ def test_qualification_observers_are_rejected_outside_sim(profile, observer, top
                for item in result.violations)
 
 
-def test_differently_named_observer_is_rejected_in_sim():
+def test_arbitrary_observer_is_rejected_in_sim():
     expected, snapshot = valid_snapshot("sim")
     subscribers = dict(snapshot.subscribers)
-    subscribers["/route/progress"] += ("rc_metrics_collector_extra",)
+    subscribers["/safety/state"] += ("rogue_observer",)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, subscribers=subscribers))
+    assert not result.ok
+    assert any("/safety/state unauthorized subscribers" in item
+               for item in result.violations)
+
+
+def test_safety_state_has_exact_sim_functional_and_observer_consumers():
+    expected, snapshot = valid_snapshot("sim")
+    authority = expected.authorities["/safety/state"]
+    assert authority.publishers == ("/safety_gate",)
+    assert authority.subscribers == ("/wheelchair_mission",)
+    assert set(authority.allowed_subscribers) == {
+        "/control_monitor",
+        "/incident_recorder",
+        "/rc_fault_injector",
+        "/rc_scenario_driver",
+        "/rc_metrics_collector",
+    }
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/safety/state"] += authority.allowed_subscribers
+    assert topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, subscribers=subscribers)).ok
+
+
+def test_sim_route_progress_uses_mission_not_route_safety_consumer():
+    expected, snapshot = valid_snapshot("sim")
+    authority = expected.authorities["/route/progress"]
+    assert authority.subscribers == ("/wheelchair_mission",)
+    assert "/wheelchair_route_safety" not in authority.subscribers
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/route/progress"] += ("/wheelchair_route_safety",)
     result = topology_guard.TopologyAuditor(expected).audit(
         replace(snapshot, subscribers=subscribers))
     assert not result.ok
@@ -351,14 +373,15 @@ def test_profile_command_topic_remap_is_audited_as_selected():
     collector_topics = topology_guard.sim_observer_topic_grants(
         "/nav/selected_cmd", "/safe/selected_cmd")["rc_metrics_collector"]
     assert collector_topics == (
-        "/route/progress", "/localization/status", "/route_safety/geofence_status",
-        "/safety/collision_status", "/safety/slope_status", "/nav/selected_cmd",
+        "/route/progress", "/localization/candidate", "/localization/status",
+        "/route_safety/geofence_status", "/safety/collision_status",
+        "/safety/slope_status", "/safety/state", "/nav/selected_cmd",
         "/safe/selected_cmd", "/wheelchair_base_controller/cmd_vel",
     )
     assert expected.authorities["/nav/selected_cmd"].allowed_subscribers == (
-        "/rc_metrics_collector",)
+        "/control_monitor", "/incident_recorder", "/rc_metrics_collector")
     assert expected.authorities["/safe/selected_cmd"].allowed_subscribers == (
-        "/rc_metrics_collector",)
+        "/control_monitor", "/incident_recorder", "/rc_metrics_collector")
     assert expected.command_topics == (
         "/nav/selected_cmd",
         "/safe/selected_cmd",
@@ -421,13 +444,17 @@ def test_duplicate_rogue_and_stale_dynamic_tf_stop():
         assert result.reason_mask & topology_guard.TF
 
 
-def test_odom_and_fixed_tf_are_unique_and_static_zero_stamp_is_valid():
+def test_odom_and_fixed_tf_are_unique_and_static_stamped_evidence_is_valid():
     expected, snapshot = valid_snapshot()
-    assert topology_guard.TopologyAuditor(expected).audit(snapshot).ok
-    edge = ("base_link", "lidar_link")
     transforms = dict(snapshot.transforms)
+    edge = ("base_link", "lidar_link")
+    transforms[edge] = (topology_guard.TransformObservation(
+        "robot_state_publisher", 9.9, 1.0, True),)
+    assert topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, transforms=transforms)).ok
+
     transforms[edge] += (topology_guard.TransformObservation(
-        "rogue_state_publisher", 9.9, 0.0, True),)
+        "rogue_state_publisher", 9.9, 1.0, True),)
     result = topology_guard.TopologyAuditor(expected).audit(
         replace(snapshot, transforms=transforms))
     assert not result.ok
@@ -517,7 +544,7 @@ def test_tf_uses_full_caller_identity_and_rejects_same_basename_publishers():
     assert result.reason_mask & topology_guard.TF
 
 
-def test_tf_stamp_regression_static_stamp_and_map_jump_stop():
+def test_tf_stamp_regression_invalid_static_evidence_and_map_jump_stop():
     expected, snapshot = valid_snapshot()
     auditor = topology_guard.TopologyAuditor(expected)
     baseline_transforms = dict(snapshot.transforms)
@@ -533,8 +560,16 @@ def test_tf_stamp_regression_static_stamp_and_map_jump_stop():
     assert any("source stamp regression" in item for item in result.violations)
 
     static = dict(snapshot.transforms)
+    for receipt in (-0.1, 10.1):
+        static[("base_link", "lidar_link")] = (topology_guard.TransformObservation(
+            "robot_state_publisher", receipt, 1.0, True),)
+        result = topology_guard.TopologyAuditor(expected).audit(
+            replace(snapshot, transforms=static))
+        assert not result.ok
+        assert any("invalid static TF evidence" in item for item in result.violations)
+
     static[("base_link", "lidar_link")] = (topology_guard.TransformObservation(
-        "robot_state_publisher", 9.9, 1.0, True),)
+        "robot_state_publisher", 9.9, -1.0, True),)
     result = topology_guard.TopologyAuditor(expected).audit(
         replace(snapshot, transforms=static))
     assert not result.ok
