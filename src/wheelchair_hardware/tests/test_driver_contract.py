@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from copy import deepcopy
+import hashlib
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -223,13 +225,12 @@ def test_adapter_uses_canonical_fail_closed_evidence_topics_at_twenty_hz():
     assert shadow[-1] & hardware_adapter._INPUT_UNKNOWN_REASON
 
 
-def test_hardware_and_passenger_authority_are_independent_at_adapter_boundary():
+def test_either_false_authority_flag_rejects_adapter_boundary():
     manifest = authorized_manifest()
-    manifest["passenger_operation_authorized"] = False
     authority = {
         "release_scope": {
             "hardware_motion_authorized": True,
-            "passenger_operation_authorized": False,
+            "passenger_operation_authorized": True,
         },
         "blocked_profiles": {"hardware_enabled": {"allowed": True}},
     }
@@ -238,20 +239,115 @@ def test_hardware_and_passenger_authority_are_independent_at_adapter_boundary():
         "platform_matches": True,
         "base_model_matches": True,
         "graph_valid": True,
+        "receipt_verified": True,
     }
-    preflight_decision = hardware_adapter._adapter_preflight(
-        manifest, "hardware_enabled", runtime
-    )
-    assert preflight_decision.allowed
-    assert preflight_decision.real_motor_path
     assert hardware_adapter._endpoint_authorized(
         manifest, authority, decision, "hardware_enabled", True, runtime
     )
 
+    manifest["passenger_operation_authorized"] = False
+    assert not hardware_adapter._adapter_preflight(
+        manifest, "hardware_enabled", runtime
+    ).allowed
+    assert not hardware_adapter._endpoint_authorized(
+        manifest, authority, decision, "hardware_enabled", True, runtime
+    )
+    manifest["passenger_operation_authorized"] = True
     authority["release_scope"]["hardware_motion_authorized"] = False
     assert not hardware_adapter._endpoint_authorized(
         manifest, authority, decision, "hardware_enabled", True, runtime
     )
+    authority["release_scope"]["hardware_motion_authorized"] = True
+    runtime["receipt_verified"] = False
+    assert not hardware_adapter._endpoint_authorized(
+        manifest, authority, decision, "hardware_enabled", True, runtime
+    )
+
+
+def _sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_hash_bound_runtime_receipt_is_required_and_contained(tmp_path):
+    root = tmp_path / "bundle"
+    root.mkdir()
+    driver = root / "driver.yaml"
+    authority = root / "authority.yaml"
+    release = root / "release-manifest.json"
+    driver.write_bytes((ROOT / "contracts/wp0/driver-verified-fixture.yaml").read_bytes())
+    authority.write_bytes((ROOT / "contracts/wp0/A16-release-authority.yaml").read_bytes())
+    release.write_text("{}")
+    receipt = root / "runtime-evidence.json"
+    value = {
+        "schema_version": 1,
+        "status": "verified",
+        "driver_manifest_path": driver.name,
+        "driver_manifest_sha256": _sha(driver),
+        "release_authority_path": authority.name,
+        "release_authority_sha256": _sha(authority),
+        "bundle_manifest_path": release.name,
+        "bundle_manifest_sha256": _sha(release),
+        "platform_matches": True,
+        "base_model_matches": True,
+        "graph_valid": True,
+    }
+    receipt.write_text(json.dumps(value, sort_keys=True))
+    evidence = hardware_adapter._load_runtime_evidence(
+        root, receipt.name, _sha(receipt), driver, authority
+    )
+    assert evidence == {
+        "platform_matches": True,
+        "base_model_matches": True,
+        "graph_valid": True,
+        "receipt_verified": True,
+    }
+
+    with pytest.raises(DriverContractError):
+        hardware_adapter._load_runtime_evidence(
+            root, "../runtime-evidence.json", _sha(receipt), driver, authority
+        )
+    value["graph_valid"] = False
+    receipt.write_text(json.dumps(value, sort_keys=True))
+    with pytest.raises(DriverContractError):
+        hardware_adapter._load_runtime_evidence(
+            root, receipt.name, _sha(receipt), driver, authority
+        )
+
+
+def _twist(linear_x=0.0, angular_z=0.0, **axes):
+    return SimpleNamespace(
+        linear=SimpleNamespace(
+            x=linear_x, y=axes.get("linear_y", 0.0), z=axes.get("linear_z", 0.0)
+        ),
+        angular=SimpleNamespace(
+            x=axes.get("angular_x", 0.0), y=axes.get("angular_y", 0.0), z=angular_z
+        ),
+    )
+
+
+def test_final_twist_contract_rejects_nonfinite_axes_and_bounds():
+    command = authorized_manifest()["command"]
+    assert hardware_adapter._twist_contract_error(_twist(), command) is None
+    assert hardware_adapter._twist_contract_error(
+        _twist(linear_x=float("nan")), command
+    ) == "nonfinite"
+    assert hardware_adapter._twist_contract_error(
+        _twist(linear_y=0.01), command
+    ) == "unsupported_axis"
+    assert hardware_adapter._twist_contract_error(
+        _twist(linear_x=command["linear"]["maximum"] + 0.01), command
+    ) == "linear_bounds"
+    assert hardware_adapter._twist_contract_error(
+        _twist(angular_z=command["angular"]["minimum"] - 0.01), command
+    ) == "angular_bounds"
+
+
+def test_generic_adapter_never_publishes_to_direct_input():
+    source = (PACKAGE / "scripts/hardware_adapter.py").read_text()
+    assert "rospy.Publisher(driver_topic" not in source
+    assert "if not enabled:" in source
+    assert "status.measured_linear_mps = -1.0" in source
+    assert "status.measured_angular_rps = -1.0" in source
 
 
 def test_enabled_clear_requires_fresh_actual_mode_override_and_estop():

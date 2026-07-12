@@ -41,14 +41,18 @@ def test_enabled_profile_is_explicit_and_fail_closed_by_default():
     assert _arg(root, "release_authority").get("default").endswith(
         "/contracts/wp0/A16-release-authority.yaml"
     )
-    for evidence in ("platform_matches", "base_model_matches", "graph_valid"):
-        assert _arg(root, evidence).get("default") == "false"
+    assert _arg(root, "bundle_root").get("default").startswith("/nonexistent/")
+    assert _arg(root, "runtime_evidence").get("default") == "UNSET"
+    assert _arg(root, "runtime_evidence_sha256").get("default") == "0" * 64
 
     text = (LAUNCH / "hardware_enabled.launch").read_text()
     assert "/base_controller/cmd_vel" not in text
     assert "driver_topic" not in text
     assert "--hardware-enable $(arg hardware_enable)" in text
     assert "--release-authority $(arg release_authority)" in text
+    assert "--bundle-root $(arg bundle_root)" in text
+    assert "--runtime-evidence $(arg runtime_evidence)" in text
+    assert "--runtime-evidence-sha256 $(arg runtime_evidence_sha256)" in text
 
 
 def test_shadow_has_no_motor_publisher_or_real_topic_configuration():
@@ -97,7 +101,18 @@ def test_adapter_preflights_before_publishers_and_uses_latest_only_queues():
 def test_only_safe_command_topic_is_subscribed_and_sim_has_no_hardware_path():
     adapter = ADAPTER.read_text()
     assert 'safe_topic != "/cmd_vel_safe"' in adapter
-    assert "rospy.Subscriber(safe_topic" in adapter
+    tree = ast.parse(adapter)
+    safe_subscribers = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Subscriber"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "safe_topic"
+    ]
+    assert len(safe_subscribers) == 1
+    assert "rospy.Publisher(driver_topic" not in adapter
 
     sim = (LAUNCH / "sim_bringup.launch").read_text()
     rc_sim = (ROOT / "src" / "wheelchair_gazebo" / "launch" / "rc_sim.launch").read_text()
