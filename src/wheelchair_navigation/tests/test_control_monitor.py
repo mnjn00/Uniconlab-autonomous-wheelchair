@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic fake-series tests for the diagnostics-only control monitor."""
 
+import dataclasses
 import importlib.util
 import math
 import sys
@@ -23,9 +24,13 @@ def complete_inputs(now, nav=0.2, safe=0.2, actual=0.2, angular=0.0,
                     linear_cap=0.4, angular_cap=0.6, safety_state=control_monitor.CLEAR,
                     deadline_count=0, stamp=None):
     source = now if stamp is None else stamp
+    sequence = int(round(now * 100)) if math.isfinite(now) else 0
     return control_monitor.MonitorInputs(
         now_s=now,
-        route=control_monitor.RouteObservation(now, cross_track, 10.0 - now, source, now),
+        route=control_monitor.RouteObservation(
+            now, cross_track, 10.0 - now, source, now,
+            "mission-a", "route-a", "map-a", "segment-a", 0,
+            control_monitor.ACTIVE, sequence, 0, 9),
         odom=control_monitor.TimedVelocity(actual, angular, source, now),
         nav_command=velocity(nav, now, angular),
         safe_command=velocity(safe, now, angular),
@@ -147,3 +152,75 @@ def test_safety_stop_and_nonfinite_time_never_create_an_authority_output():
     assert "nonfinite" in invalid_time.faults
     assert not hasattr(core, "publish_command")
     assert not hasattr(stopped, "command")
+def test_route_samples_reject_stale_regressed_identity_and_invalid_state_without_bias():
+    core = control_monitor.ControlMonitorCore()
+    accepted = core.observe(complete_inputs(20.00, cross_track=0.1))
+    wrong_identity = core.observe(dataclasses.replace(
+        complete_inputs(20.05, cross_track=9.0),
+        route=dataclasses.replace(complete_inputs(20.05).route, cross_track_m=9.0,
+                                  route_id="forged-route")))
+    regressed = core.observe(dataclasses.replace(
+        complete_inputs(20.10, cross_track=8.0),
+        route=dataclasses.replace(complete_inputs(20.10).route, cross_track_m=8.0,
+                                  sequence=accepted.sequence)))
+    invalid = core.observe(dataclasses.replace(
+        complete_inputs(20.15, cross_track=7.0),
+        route=dataclasses.replace(complete_inputs(20.15).route, cross_track_m=7.0,
+                                  state=control_monitor.INACTIVE)))
+    stale = core.observe(dataclasses.replace(
+        complete_inputs(20.20, cross_track=6.0),
+        route=dataclasses.replace(complete_inputs(20.20).route, cross_track_m=6.0,
+                                  source_stamp_s=19.69)))
+    assert "route_identity_mismatch" in wrong_identity.faults
+    assert "route_sequence_regression" in regressed.faults
+    assert "route_invalid_state" in invalid.faults
+    assert "route_stale" in stale.faults
+    assert stale.route_rejected_sample_count == 4
+    assert stale.route_rejection_counts == {
+        "identity_mismatch": 1, "sequence_regression": 1, "invalid_state": 1, "stale": 1,
+    }
+    assert stale.cross_track_mean_m == accepted.cross_track_mean_m == 0.1
+
+
+def test_route_complete_requires_bound_terminal_and_independent_terminal_action_evidence():
+    core = control_monitor.ControlMonitorCore()
+    core.observe(complete_inputs(21.00, cross_track=0.1))
+    forged_waypoint = core.observe(dataclasses.replace(
+        complete_inputs(21.05, cross_track=4.0),
+        route=dataclasses.replace(complete_inputs(21.05).route, cross_track_m=4.0,
+                                  state=control_monitor.COMPLETE, waypoint_index=8,
+                                  action_terminal=True)))
+    forged_action = core.observe(dataclasses.replace(
+        complete_inputs(21.10, cross_track=3.0),
+        route=dataclasses.replace(complete_inputs(21.10).route, cross_track_m=3.0,
+                                  state=control_monitor.COMPLETE, waypoint_index=9)))
+    complete = core.observe(dataclasses.replace(
+        complete_inputs(21.15, cross_track=0.2),
+        route=dataclasses.replace(complete_inputs(21.15).route, cross_track_m=0.2,
+                                  state=control_monitor.COMPLETE, waypoint_index=9,
+                                  action_terminal=True)))
+    assert "route_terminal_waypoint" in forged_waypoint.faults
+    assert "route_terminal_action" in forged_action.faults
+    assert math.isclose(complete.cross_track_mean_m, 0.15)
+    assert complete.route_rejected_sample_count == 2
+
+
+def test_route_generation_reset_is_explicit_and_resets_only_route_monotonic_state():
+    core = control_monitor.ControlMonitorCore()
+    core.observe(complete_inputs(22.00, cross_track=0.1))
+    drift = core.observe(dataclasses.replace(
+        complete_inputs(22.05, cross_track=5.0),
+        route=dataclasses.replace(complete_inputs(22.05).route, cross_track_m=5.0,
+                                  route_id="route-b")))
+    same_binding = core.observe(dataclasses.replace(
+        complete_inputs(22.10, cross_track=0.2),
+        route=dataclasses.replace(complete_inputs(22.10).route, cross_track_m=0.2,
+                                  sequence=2210)))
+    new_generation = core.observe(dataclasses.replace(
+        complete_inputs(22.15, cross_track=0.3),
+        route=dataclasses.replace(complete_inputs(22.15).route, cross_track_m=0.3,
+                                  route_id="route-b", route_generation=1, sequence=1)))
+    assert "route_identity_mismatch" in drift.faults
+    assert same_binding.route_rejected_sample_count == 1
+    assert "route_generation_reset" in new_generation.events
+    assert math.isclose(new_generation.cross_track_mean_m, (0.1 + 0.2 + 0.3) / 3.0)

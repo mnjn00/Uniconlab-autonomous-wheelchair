@@ -15,6 +15,7 @@ from typing import Deque, Dict, Optional, Tuple
 
 HOLD, PROCEED, SLOW, STOP = range(4)
 DISARMED, CLEAR, STOPPED, LATCHED, FAULT = range(5)
+INACTIVE, ACTIVE, AT_STOP, COMPLETE, INVALID = range(5)
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class MonitorConfig:
     command_ttl_s: float = 0.30
     intent_ttl_s: float = 0.30
     odom_ttl_s: float = 0.25
-    route_ttl_s: float = 0.30
+    route_ttl_s: float = 0.50
     safety_ttl_s: float = 0.15
     deadline_limit_s: float = 0.05
     stop_persistence_s: float = 0.05
@@ -60,6 +61,16 @@ class RouteObservation:
     distance_remaining_m: float
     source_stamp_s: float
     receipt_stamp_s: float
+    mission_id: str = ""
+    route_id: str = ""
+    map_id: str = ""
+    segment_id: str = ""
+    waypoint_index: int = 0
+    state: int = INVALID
+    sequence: int = 0
+    route_generation: int = 0
+    terminal_waypoint_index: Optional[int] = None
+    action_terminal: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,6 +126,8 @@ class MonitorResult:
     cap_event_count: int
     deadline_miss_count: int
     fault_counts: Dict[str, int] = field(default_factory=dict)
+    route_rejected_sample_count: int = 0
+    route_rejection_counts: Dict[str, int] = field(default_factory=dict)
 
 
 class ControlMonitorCore:
@@ -125,6 +138,7 @@ class ControlMonitorCore:
         "nav_command": "command_ttl_s", "safe_command": "command_ttl_s",
         "intent": "intent_ttl_s", "safety": "safety_ttl_s",
     }
+    MAX_ROUTE_SAMPLE_AGE_S = 0.50
 
     def __init__(self, config: Optional[MonitorConfig] = None):
         self.config = config or MonitorConfig()
@@ -138,6 +152,11 @@ class ControlMonitorCore:
         self._last_acceleration: Optional[Tuple[float, float, float]] = None
         self._last_source_stamps: Dict[str, float] = {}
         self._last_receipt_stamps: Dict[str, float] = {}
+        self._route_binding: Optional[Tuple[int, Tuple[str, str, str, str], Optional[int]]] = None
+        self._last_route_sequence: Optional[int] = None
+        self._last_route_source_stamp_s: Optional[float] = None
+        self._route_rejected_sample_count = 0
+        self._route_rejection_counts: Counter = Counter()
         self._last_intent_stop = False
         self._last_intervention = False
         self._stop_since_s: Optional[float] = None
@@ -176,15 +195,28 @@ class ControlMonitorCore:
                 ages[name + "_receipt"] = -1.0
                 faults.add("stale_" + name)
                 continue
-            numeric = [getattr(value, field_name) for field_name in value.__dataclass_fields__
-                       if field_name != "behavior" and field_name != "state" and field_name != "deadline_miss_count"]
+            if isinstance(value, RouteObservation):
+                numeric = (value.along_track_m, value.cross_track_m, value.distance_remaining_m,
+                           value.source_stamp_s, value.receipt_stamp_s)
+            else:
+                numeric = [getattr(value, field_name) for field_name in value.__dataclass_fields__
+                           if field_name != "behavior" and field_name != "state"
+                           and field_name != "deadline_miss_count"]
             if not all(_finite(item) for item in numeric):
                 faults.add("nonfinite")
-                continue
+                if name != "route":
+                    continue
             source_age = now - value.source_stamp_s
             receipt_age = now - value.receipt_stamp_s
             ages[name + "_source"] = source_age
             ages[name + "_receipt"] = receipt_age
+            if name == "route":
+                if source_age < 0.0 or receipt_age < 0.0:
+                    faults.add("time_regression")
+                if (source_age > getattr(self.config, ttl_name) + 1e-12 or
+                        receipt_age > getattr(self.config, ttl_name) + 1e-12):
+                    faults.add("stale_" + name)
+                continue
             previous_source = self._last_source_stamps.get(name)
             previous_receipt = self._last_receipt_stamps.get(name)
             if ((previous_source is not None and value.source_stamp_s < previous_source) or
@@ -220,7 +252,7 @@ class ControlMonitorCore:
                     self._last_acceleration = (linear_accel, angular_accel, inputs.odom.source_stamp_s)
             self._last_odom = inputs.odom
 
-        if inputs.route is not None and _finite(inputs.route.cross_track_m):
+        if inputs.route is not None and self._accept_route(inputs.route, now, faults, events):
             self._cross_track.append(inputs.route.cross_track_m)
 
         intent_stop = inputs.intent is not None and inputs.intent.behavior in (HOLD, STOP)
@@ -309,7 +341,84 @@ class ControlMonitorCore:
             linear_jerk, angular_jerk, mean, rms, maximum,
             self.stop_count, self.intervention_count, self.saturation_count,
             self.cap_event_count, self.deadline_miss_count, dict(self._fault_counts),
+            self._route_rejected_sample_count, dict(self._route_rejection_counts),
         )
+
+    def _accept_route(self, route: RouteObservation, now: float, faults: set,
+                      events: list) -> bool:
+        """Accept only bound, fresh RouteProgress evidence; never authorize motion."""
+        identity = (route.mission_id, route.route_id, route.map_id, route.segment_id)
+        if not all(isinstance(value, str) and value for value in identity):
+            return self._reject_route("identity", faults, events)
+        if (not isinstance(route.sequence, int) or isinstance(route.sequence, bool)
+                or route.sequence < 0
+                or not isinstance(route.waypoint_index, int) or isinstance(route.waypoint_index, bool)
+                or route.waypoint_index < 0
+                or not isinstance(route.route_generation, int) or isinstance(route.route_generation, bool)
+                or route.route_generation < 0):
+            return self._reject_route("malformed", faults, events)
+        if route.terminal_waypoint_index is not None and (
+                not isinstance(route.terminal_waypoint_index, int)
+                or isinstance(route.terminal_waypoint_index, bool)
+                or route.terminal_waypoint_index < 0):
+            return self._reject_route("malformed", faults, events)
+        if route.state not in (ACTIVE, AT_STOP, COMPLETE):
+            return self._reject_route("invalid_state", faults, events)
+        if not _finite(now) or not all(_finite(value) for value in (
+                route.along_track_m, route.cross_track_m, route.distance_remaining_m,
+                route.source_stamp_s, route.receipt_stamp_s)):
+            return self._reject_route("nonfinite", faults, events)
+        source_age, receipt_age = now - route.source_stamp_s, now - route.receipt_stamp_s
+        if source_age < 0.0 or receipt_age < 0.0:
+            return self._reject_route("time_regression", faults, events)
+        if (source_age > min(self.config.route_ttl_s, self.MAX_ROUTE_SAMPLE_AGE_S) + 1e-12
+                or receipt_age > min(self.config.route_ttl_s, self.MAX_ROUTE_SAMPLE_AGE_S) + 1e-12):
+            return self._reject_route("stale", faults, events)
+
+        binding = self._route_binding
+        if binding is None:
+            if route.state == COMPLETE:
+                return self._reject_route("terminal_unbound", faults, events)
+            self._bind_route(route, identity)
+        elif route.route_generation != binding[0]:
+            if route.route_generation < binding[0]:
+                return self._reject_route("generation_regression", faults, events)
+            if route.state == COMPLETE:
+                return self._reject_route("terminal_unbound", faults, events)
+            self._bind_route(route, identity)
+            events.append("route_generation_reset")
+        elif identity != binding[1]:
+            return self._reject_route("identity_mismatch", faults, events)
+
+        terminal_waypoint = self._route_binding[2]
+        if route.state == COMPLETE:
+            if terminal_waypoint is None:
+                return self._reject_route("terminal_unbound", faults, events)
+            if route.waypoint_index != terminal_waypoint:
+                return self._reject_route("terminal_waypoint", faults, events)
+            if route.action_terminal is not True:
+                return self._reject_route("terminal_action", faults, events)
+        if (self._last_route_sequence is not None
+                and route.sequence <= self._last_route_sequence):
+            return self._reject_route("sequence_regression", faults, events)
+        if (self._last_route_source_stamp_s is not None
+                and route.source_stamp_s <= self._last_route_source_stamp_s):
+            return self._reject_route("source_time_regression", faults, events)
+        self._last_route_sequence = route.sequence
+        self._last_route_source_stamp_s = route.source_stamp_s
+        return True
+
+    def _bind_route(self, route: RouteObservation, identity: Tuple[str, str, str, str]) -> None:
+        self._route_binding = (route.route_generation, identity, route.terminal_waypoint_index)
+        self._last_route_sequence = None
+        self._last_route_source_stamp_s = None
+
+    def _reject_route(self, reason: str, faults: set, events: list) -> bool:
+        self._route_rejected_sample_count += 1
+        self._route_rejection_counts[reason] += 1
+        faults.add("route_" + reason)
+        events.append("route_rejected:" + reason)
+        return False
 
     def _is_zero(self, velocity: TimedVelocity) -> bool:
         return (abs(velocity.linear_mps) <= self.config.zero_linear_mps and
@@ -356,7 +465,7 @@ class ControlMonitorNode:
         get = rospy.get_param
         self._core = ControlMonitorCore(MonitorConfig(
             command_ttl_s=get("~command_ttl_s", 0.30), intent_ttl_s=get("~intent_ttl_s", 0.30),
-            odom_ttl_s=get("~odom_ttl_s", 0.25), route_ttl_s=get("~route_ttl_s", 0.30),
+            odom_ttl_s=get("~odom_ttl_s", 0.25), route_ttl_s=get("~route_ttl_s", 0.50),
             safety_ttl_s=get("~safety_ttl_s", 0.15), deadline_limit_s=get("~deadline_limit_s", 0.05),
             stop_persistence_s=get("~stop_persistence_s", 0.05),
             statistics_window=get("~statistics_window", 200), event_history=get("~event_history", 100),
@@ -382,8 +491,12 @@ class ControlMonitorNode:
 
     def _route(self, message) -> None:
         receipt = self._now()
-        self._latest["route"] = RouteObservation(message.along_track_m, message.cross_track_error_m,
-                                                   message.distance_remaining_m, self._stamp(message, receipt), receipt)
+        self._latest["route"] = RouteObservation(
+            message.along_track_m, message.cross_track_error_m, message.distance_remaining_m,
+            self._stamp(message, receipt), receipt, message.mission_id, message.route_id,
+            message.map_id, message.segment_id, message.waypoint_index, message.state,
+            message.sequence, self._rospy.get_param("~route_generation", 0),
+            self._rospy.get_param("~terminal_waypoint_index", None), False)
 
     def _odom(self, message) -> None:
         receipt = self._now()
@@ -424,8 +537,11 @@ class ControlMonitorNode:
             "stop_count": result.stop_count, "intervention_count": result.intervention_count,
             "saturation_count": result.saturation_count, "cap_event_count": result.cap_event_count,
             "deadline_miss_count": result.deadline_miss_count,
+            "route_rejected_sample_count": result.route_rejected_sample_count,
         }
         values.update(result.ages_s)
+        values.update({"route_rejected_" + reason: count
+                       for reason, count in result.route_rejection_counts.items()})
         status.values = [KeyValue(str(key), str(value)) for key, value in sorted(values.items())]
         array = self._DiagnosticArray()
         array.header.stamp = self._rospy.Time.now()
