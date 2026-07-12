@@ -16,6 +16,7 @@ from typing import Any, Mapping, Optional, Tuple
 import os
 import struct
 from typing import Iterable, List, Sequence
+import time
 
 
 # LocalizationStatus states.
@@ -1037,6 +1038,13 @@ class LocalizationGuardNode:
         map_path = str(rospy.get_param("~map_file"))
         map_hash = str(rospy.get_param("~expected_map_file_sha256"))
         image_hash = str(rospy.get_param("~expected_map_image_sha256", "")) or None
+        self.initialization_attempt_timeout_s = float(
+            rospy.get_param("~initialization_attempt_timeout_s")
+        )
+        if (not math.isfinite(self.initialization_attempt_timeout_s) or
+                self.initialization_attempt_timeout_s <= 0.0):
+            raise ValueError("~initialization_attempt_timeout_s must be finite and positive")
+        self._monotonic = time.monotonic
         self.policy = load_localization_policy(policy_path, policy_hash)
         if (self.policy.calibration_qualified and
                 not has_explicit_synthetic_qualification(policy_path)):
@@ -1051,6 +1059,9 @@ class LocalizationGuardNode:
         self.status_pub = rospy.Publisher(self.STATUS_TOPIC, LocalizationStatus, queue_size=1)
         self.signal_pub = rospy.Publisher(self.SIGNAL_TOPIC, SafetySignal, queue_size=1)
         self.cloud = self.odom = self.initial_pose = None
+        self.initialization_attempt_pose = None
+        self.initialization_attempt_deadline = None
+        self.initialization_request_consumed = False
         self.mission_canceled = False
         self.relocalization_requested = False
         self.tf_authorities = {}
@@ -1092,15 +1103,66 @@ class LocalizationGuardNode:
                   abs(message.twist.twist.angular.z) >= self.policy.stationary_angular_rps)
         if moving:
             self.stationary_since = None
+            self._clear_initialization_attempt()
         elif self.stationary_since is None:
             self.stationary_since = now
+
+    def _clear_initialization_attempt(self):
+        self.initialization_attempt_pose = None
+        self.initialization_attempt_deadline = None
+
+    def _initialization_attempt_active(self):
+        if self.initialization_attempt_deadline is None:
+            return False
+        if self._monotonic() >= self.initialization_attempt_deadline:
+            self._clear_initialization_attempt()
+            return False
+        return True
+
+    def _clear_initialization_attempt_on_state_exit(self, state):
+        if state not in (UNINITIALIZED, INITIALIZING):
+            self._clear_initialization_attempt()
+
+    def _initial_pose_fresh(self, now):
+        if self.core.state in (UNINITIALIZED, INITIALIZING):
+            return self._initialization_attempt_active()
+        return bool(
+            self.initial_pose and
+            now - self.initial_pose[1] <= (
+                self.policy.relocalization_span_s + self.policy.max_candidate_age_s
+            ) and
+            self.initial_pose[0].header.frame_id == self.policy.expected_frame
+        )
+
+
+    def _stationary_hold_satisfied(self, now):
+        return (
+            self.stationary_since is not None and
+            now - self.stationary_since >= self.policy.stationary_duration_s
+        )
 
     def _initial_pose_callback(self, message):
         now = self.rospy.Time.now().to_sec()
         age = now - message.header.stamp.to_sec()
-        if (message.header.frame_id == self.policy.expected_frame and
-                -self.policy.max_future_skew_s <= age <= self.policy.max_candidate_age_s):
+        valid = (
+            message.header.frame_id == self.policy.expected_frame and
+            -self.policy.max_future_skew_s <= age <= self.policy.max_candidate_age_s
+        )
+        if not valid:
+            return
+        if self.core.state in (UNINITIALIZED, INITIALIZING):
+            if self.initialization_request_consumed:
+                return
             self.initial_pose = (message, now)
+            if self.mission_canceled and self._stationary_hold_satisfied(now):
+                self.initialization_request_consumed = True
+                self.initialization_attempt_pose = (message, self._monotonic())
+                self.initialization_attempt_deadline = (
+                    self.initialization_attempt_pose[1] +
+                    self.initialization_attempt_timeout_s
+                )
+            return
+        self.initial_pose = (message, now)
 
     def _mission_callback(self, message):
         self.mission_canceled = bool(message.data)
@@ -1155,6 +1217,7 @@ class LocalizationGuardNode:
             )
             return
         result = self.core.evaluate(evidence, evaluation_now)
+        self._clear_initialization_attempt_on_state_exit(result.state)
         self._publish_result(result, candidate_sequence, evidence.stamp_s)
 
     def _derive_evidence(self, message, now):
@@ -1216,13 +1279,7 @@ class LocalizationGuardNode:
         )
         position_std = math.sqrt(max(covariance[0], covariance[4]))
         yaw_std = math.sqrt(covariance[8])
-        initial_fresh = bool(
-            self.initial_pose and
-            now - self.initial_pose[1] <= (
-                self.policy.relocalization_span_s + self.policy.max_candidate_age_s
-            ) and
-            self.initial_pose[0].header.frame_id == self.policy.expected_frame
-        )
+        initial_fresh = self._initial_pose_fresh(now)
         stationary_duration = 0.0 if self.stationary_since is None else now - self.stationary_since
         return CandidateEvidence(
             stamp_s=stamp_s, source=message.source, raw_state=message.raw_state,
@@ -1251,6 +1308,7 @@ class LocalizationGuardNode:
         )
 
     def _watchdog_callback(self, _event):
+        self._initialization_attempt_active()
         now = self.rospy.Time.now().to_sec()
         if (self.last_candidate_receipt is None or
                 now - self.last_candidate_receipt > self.policy.max_candidate_age_s):

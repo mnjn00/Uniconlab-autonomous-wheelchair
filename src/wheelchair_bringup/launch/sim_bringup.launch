@@ -5,6 +5,7 @@
   <arg name="fault_id" default="normal"/>
   <arg name="seed" default="1701"/>
   <arg name="auto_start" default="false"/>
+  <arg name="startup_readiness_timeout_sec" default="30.0"/>
   <arg name="scenario_direction" default="outbound"/>
   <arg name="gui" default="false"/>
   <arg name="headless" default="true"/>
@@ -123,6 +124,7 @@
     <arg name="localization_map" value="$(find wheelchair_navigation)/../../data/hanyang_aegimun_loop/map.yaml"/>
     <arg name="localization_map_file_sha256" value="9f36ab2d3d35a667996570b45babb7cb3ba8bd1e706a971af22603da1220e7ff"/>
     <arg name="localization_map_image_sha256" value="$(arg map_sha256)"/>
+    <arg name="localization_initialization_attempt_timeout_s" value="$(arg startup_readiness_timeout_sec)"/>
   </include>
 
   <include file="$(find wheelchair_navigation)/launch/control_monitor.launch"/>
@@ -148,6 +150,7 @@
     <param name="initial_pose_x" value="$(arg spawn_x)"/>
     <param name="initial_pose_y" value="$(arg spawn_y)"/>
     <param name="initial_pose_yaw" value="$(arg spawn_yaw)"/>
+    <param name="readiness_timeout_sec" value="$(arg startup_readiness_timeout_sec)"/>
   </node>
   <!-- Fault effects are opt-in, bounded, and restricted by exact simulation preflight. -->
   <node if="$(arg auto_start)" pkg="wheelchair_gazebo" type="rc_fault_injector.py"

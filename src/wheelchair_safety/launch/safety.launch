@@ -18,6 +18,7 @@
   <arg name="localization_map"/>
   <arg name="localization_map_file_sha256"/>
   <arg name="localization_map_image_sha256"/>
+  <arg name="localization_initialization_attempt_timeout_s" default="30.0"/>
 
   <!-- The gate is the sole autonomous command publisher. Supervisors only emit evidence. -->
   <rosparam command="load" file="$(find wheelchair_safety)/config/safety_limits.yaml" ns="safety_gate"/>
@@ -60,6 +61,7 @@
     <param name="map_file" value="$(arg localization_map)"/>
     <param name="expected_map_file_sha256" value="$(arg localization_map_file_sha256)"/>
     <param name="expected_map_image_sha256" value="$(arg localization_map_image_sha256)"/>
+    <param name="initialization_attempt_timeout_s" value="$(arg localization_initialization_attempt_timeout_s)"/>
   </node>
 
   <node pkg="wheelchair_safety" type="topology_guard.py" name="topology_guard" output="screen" required="true">

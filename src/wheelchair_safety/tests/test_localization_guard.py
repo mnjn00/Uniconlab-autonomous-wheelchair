@@ -54,6 +54,124 @@ def initialize(core, start=1.0):
     return result
 
 
+def initialization_node(ros_now=10.0, monotonic_now=100.0):
+    clock = [monotonic_now]
+    node = guard.LocalizationGuardNode.__new__(guard.LocalizationGuardNode)
+    node.policy = policy()
+    node.core = guard.LocalizationGuardCore(node.policy)
+    node.rospy = SimpleNamespace(
+        Time=SimpleNamespace(now=lambda: SimpleNamespace(to_sec=lambda: ros_now))
+    )
+    node.mission_canceled = True
+    node.stationary_since = ros_now - node.policy.stationary_duration_s
+    node.initial_pose = None
+    node.initialization_attempt_pose = None
+    node.initialization_attempt_deadline = None
+    node.initialization_request_consumed = False
+    node.initialization_attempt_timeout_s = 30.0
+    node._monotonic = lambda: clock[0]
+    node.last_odom_stamp = None
+    node.odom = None
+    return node, clock
+
+
+def initial_pose_message(stamp=10.0):
+    return SimpleNamespace(
+        header=SimpleNamespace(
+            frame_id="map",
+            stamp=SimpleNamespace(to_sec=lambda: stamp),
+        )
+    )
+
+
+def test_process_construction_starts_with_unconsumed_initialization_request():
+    node, _ = initialization_node()
+    assert not node.initialization_request_consumed
+
+def test_initialization_attempt_survives_bad_sample_then_clears_on_success():
+    node, clock = initialization_node()
+    node._initial_pose_callback(initial_pose_message())
+    assert node.initialization_attempt_deadline == 130.0
+
+    bad = node.core.evaluate(
+        evidence(10.1, initial_pose_fresh=node._initial_pose_fresh(10.1),
+                 transform_age_s=-0.01),
+        10.1,
+    )
+    assert bad.state == guard.INITIALIZING
+    assert bad.consecutive_good_samples == 0
+
+    for index in range(20):
+        stamp = 11.0 + index * 2.0 / 19.0
+        result = node.core.evaluate(
+            evidence(stamp, initial_pose_fresh=node._initial_pose_fresh(stamp)),
+            stamp,
+        )
+    assert clock[0] < node.initialization_attempt_deadline
+    assert result.state == guard.OK
+    node._clear_initialization_attempt_on_state_exit(result.state)
+    assert node.initialization_attempt_deadline is None
+    assert node.initialization_request_consumed
+
+
+def test_duplicate_initial_pose_does_not_extend_initialization_attempt():
+    node, clock = initialization_node()
+    node._initial_pose_callback(initial_pose_message())
+    first_deadline = node.initialization_attempt_deadline
+    clock[0] += 10.0
+    node._initial_pose_callback(initial_pose_message())
+    assert node.initialization_attempt_deadline == first_deadline
+    assert node.initialization_attempt_pose[1] == 100.0
+
+
+def test_motion_invalidates_initialization_attempt():
+    node, _ = initialization_node()
+    node._initial_pose_callback(initial_pose_message())
+    moving_odom = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(to_sec=lambda: 10.0)),
+        twist=SimpleNamespace(
+            twist=SimpleNamespace(
+                linear=SimpleNamespace(x=node.policy.stationary_linear_mps),
+                angular=SimpleNamespace(z=0.0),
+            )
+        ),
+    )
+    node._odom_callback(moving_odom)
+    assert not node._initialization_attempt_active()
+    assert node.initialization_attempt_deadline is None
+    assert node.initialization_request_consumed
+    node.stationary_since = 8.0
+    node._initial_pose_callback(initial_pose_message())
+    assert node.initialization_attempt_deadline is None
+
+
+def test_initialization_attempt_deadline_is_monotonic_and_fail_closed_at_boundary():
+    node, clock = initialization_node()
+    node._initial_pose_callback(initial_pose_message())
+    deadline = node.initialization_attempt_deadline
+    clock[0] = deadline - 0.001
+    assert node._initialization_attempt_active()
+    clock[0] = deadline
+    assert not node._initialization_attempt_active()
+    assert node.initialization_attempt_deadline is None
+    node._initial_pose_callback(initial_pose_message())
+    assert node.initialization_attempt_deadline is None
+    assert node.initialization_request_consumed
+    clock[0] = deadline + 0.001
+    assert not node._initialization_attempt_active()
+
+
+def test_relocalization_initial_pose_freshness_remains_ros_time_based():
+    node, clock = initialization_node()
+    node.core.state = guard.LOST
+    node._initial_pose_callback(initial_pose_message())
+    clock[0] += 1000.0
+    assert node._initial_pose_fresh(10.0)
+    assert not node._initial_pose_fresh(
+        10.0 + node.policy.relocalization_span_s + node.policy.max_candidate_age_s + 0.001
+    )
+
+
 def test_map_loader_verifies_yaml_and_image_hashes(tmp_path):
     image = b"P2\n3 2\n255\n255 0 255\n255 255 255\n"
     (tmp_path / "map.pgm").write_bytes(image)

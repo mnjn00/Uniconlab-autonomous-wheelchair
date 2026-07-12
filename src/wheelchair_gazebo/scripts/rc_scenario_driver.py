@@ -37,6 +37,7 @@ class RouteBinding:
 
 def _sha256(raw):
     return hashlib.sha256(raw).hexdigest()
+
 def _valid_sha256(value):
     return (isinstance(value, str) and len(value) == 64
             and all(character in "0123456789abcdef" for character in value))
@@ -79,6 +80,7 @@ def load_binding(path, expected_file_sha256, direction, scenario, seed):
     material = "%s\n%s\n%s\n%s" % (scenario, int(seed), direction, required["route_id"])
     mission_id = "rc-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
     return RouteBinding(mission_id=mission_id, direction=DIRECTION_VALUES[direction], **required)
+
 def positive_timeout(name, value):
     try:
         value = float(value)
@@ -226,6 +228,30 @@ class Evidence:
                     and route.route_id == self.binding.route_id
                     and route.map_id == self.binding.map_id)
 
+    def pre_initialization_ready(self, now):
+        """Require stationary startup evidence before the one localization request."""
+        with self.lock:
+            required = ("safety", "collision", "slope", "route")
+            if not all(name in self.values and self._fresh(self.values[name], now)
+                       for name in required):
+                return False
+            safety = self.values["safety"]
+            collision = self.values["collision"]
+            slope = self.values["slope"]
+            route = self.values["route"]
+            if not (safety.state in (safety.DISARMED, safety.STOPPED)
+                    and not safety.armed and not safety.estop_latched):
+                return False
+            if not (collision.state in (collision.STATE_CLEAR, collision.STATE_CAUTION)
+                    and collision.reason_mask == 0):
+                return False
+            if not (slope.state in (slope.STATE_CLEAR, slope.STATE_SLOW)
+                    and slope.reason_mask == 0):
+                return False
+            return (route.state == route.ACTIVE
+                    and route.route_id == self.binding.route_id
+                    and route.map_id == self.binding.map_id)
+
     def safety_clear(self, now):
         with self.lock:
             safety = self.values.get("safety")
@@ -300,16 +326,11 @@ class ScenarioDriver:
         array.status = [status]
         self._diagnostics.publish(array)
 
-    def _wait(self, predicate, timeout, description, tick=None, tick_interval_s=1.0):
+    def _wait(self, predicate, timeout, description):
         deadline = time.monotonic() + timeout
-        next_tick = time.monotonic() + tick_interval_s if tick is not None else None
         while not self.rospy.is_shutdown() and time.monotonic() <= deadline:
             if predicate(float(self.rospy.Time.now().to_sec())):
                 return
-            wall_now = time.monotonic()
-            if tick is not None and wall_now >= next_tick:
-                tick()
-                next_tick = wall_now + tick_interval_s
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
                 break
@@ -321,6 +342,7 @@ class ScenarioDriver:
             self._canceled = True
             self._action.cancel_goal()
             self._emit(self._DiagnosticStatus.ERROR, "action canceled: " + reason)
+
     def _wait_for_mission_action(self, terminal):
         deadline = time.monotonic() + self.action_timeout_s
         while not self.rospy.is_shutdown():
@@ -363,12 +385,12 @@ class ScenarioDriver:
                 break
             time.sleep(min(0.05, remaining))
         raise ScenarioError("timeout waiting for initial pose subscriber")
+
     def run(self):
         from actionlib_msgs.msg import GoalStatus
         from std_msgs.msg import Bool
         from wheelchair_interfaces.msg import ExecuteRouteGoal
 
-        self._publish_initial_pose()
         self.rospy.wait_for_service("/wheelchair_mission/arm", timeout=self.ready_timeout_s)
         response = self._mission_arm()
         if not response.success:
@@ -388,9 +410,13 @@ class ScenarioDriver:
         try:
             self._wait(lambda unused_now: self._action.get_state() == GoalStatus.ACTIVE,
                        self.ready_timeout_s, "active mission goal")
-            self._emit(self._DiagnosticStatus.OK, "waiting for fresh disarmed evidence")
-            self._wait(self.evidence.startup_ready, self.ready_timeout_s, "startup evidence",
-                       tick=self._publish_initial_pose_message)
+            self._emit(self._DiagnosticStatus.OK,
+                       "waiting for fresh stationary startup evidence")
+            self._wait(self.evidence.pre_initialization_ready, self.ready_timeout_s,
+                       "pre-initialization evidence")
+            self._emit(self._DiagnosticStatus.OK, "publishing initial localization pose")
+            self._publish_initial_pose()
+            self._wait(self.evidence.startup_ready, self.ready_timeout_s, "startup evidence")
             self._arm.publish(Bool(data=True))
             self._wait(self.evidence.safety_clear, self.ready_timeout_s, "armed safety gate")
         except ScenarioError:

@@ -12,6 +12,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 SCRIPT = PACKAGE / "scripts" / "rc_scenario_driver.py"
 CMAKE = PACKAGE / "CMakeLists.txt"
 SIM_LAUNCH = PACKAGE.parent / "wheelchair_bringup" / "launch" / "sim_bringup.launch"
+SAFETY_LAUNCH = PACKAGE.parent / "wheelchair_safety" / "launch" / "safety.launch"
 
 spec = importlib.util.spec_from_file_location("rc_scenario_driver", str(SCRIPT))
 driver = importlib.util.module_from_spec(spec)
@@ -101,6 +102,7 @@ class ConnectionPublisher:
 
     def publish(self, message):
         self.messages.append(message)
+
 class CallbackEvidence:
     def __init__(self, clear):
         self.clear = clear
@@ -111,6 +113,7 @@ class CallbackEvidence:
 
     def safety_clear(self, now):
         return self.clear
+
 class ActiveAction:
     def __init__(self):
         self.cancel_count = 0
@@ -241,6 +244,48 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertFalse(evidence.startup_ready(12.0))
         evidence.values["geofence"].state = evidence.values["geofence"].INSIDE
         self.assertTrue(evidence.startup_ready(12.0))
+
+    def test_pre_initialization_requires_fresh_stationary_route_evidence(self):
+        evidence = driver.Evidence(self.binding("outbound"), 1.0)
+
+        def message(**values):
+            status = Attribute()
+            status.header = Attribute()
+            status.header.stamp = FakeStamp(12.0)
+            for name, value in values.items():
+                setattr(status, name, value)
+            return status
+
+        evidence.update("safety", message(
+            state="DISARMED", DISARMED="DISARMED", STOPPED="STOPPED",
+            armed=False, estop_latched=False, reason_mask=driver.STARTUP_REASON))
+        evidence.update("collision", message(
+            state="CAUTION", STATE_CLEAR="CLEAR", STATE_CAUTION="CAUTION", reason_mask=0))
+        evidence.update("slope", message(
+            state="SLOW", STATE_CLEAR="CLEAR", STATE_SLOW="SLOW", reason_mask=0))
+        evidence.update("route", message(
+            state="ACTIVE", ACTIVE="ACTIVE", route_id="route-out", map_id="map-a"))
+
+        self.assertTrue(evidence.pre_initialization_ready(12.0))
+        evidence.values["safety"].state = evidence.values["safety"].STOPPED
+        self.assertTrue(evidence.pre_initialization_ready(12.0))
+        evidence.values["safety"].state = "LATCHED"
+        self.assertFalse(evidence.pre_initialization_ready(12.0))
+        evidence.values["safety"].state = evidence.values["safety"].DISARMED
+        evidence.values["safety"].armed = True
+        self.assertFalse(evidence.pre_initialization_ready(12.0))
+        evidence.values["safety"].armed = False
+        evidence.values["safety"].estop_latched = True
+        self.assertFalse(evidence.pre_initialization_ready(12.0))
+        evidence.values["safety"].estop_latched = False
+        evidence.values["slope"].reason_mask = 1
+        self.assertFalse(evidence.pre_initialization_ready(12.0))
+        evidence.values["slope"].reason_mask = 0
+        evidence.values["route"].route_id = "other-route"
+        self.assertFalse(evidence.pre_initialization_ready(12.0))
+        evidence.values["route"].route_id = "route-out"
+        evidence.values["collision"].header.stamp = FakeStamp(10.0)
+        self.assertFalse(evidence.pre_initialization_ready(12.0))
 
     def test_sim_time_wait_succeeds_immediately_without_sleeping(self):
         rospy = FakeRospy({})
@@ -377,33 +422,13 @@ class ScenarioDriverTests(unittest.TestCase):
         scenario = self.initial_pose_scenario(connections, timeout=3.0)
         scenario.rospy.Time = SequenceTime(stamps)
         wall = FakeWallClock()
-
-        class Rate:
-            def sleep(unused_self):
-                wall.sleep(0.25)
-
-        scenario.rospy.Rate = lambda unused_hz: Rate()
         original_monotonic, original_sleep = driver.time.monotonic, driver.time.sleep
         self.addCleanup(setattr, driver.time, "monotonic", original_monotonic)
         self.addCleanup(setattr, driver.time, "sleep", original_sleep)
         driver.time.monotonic, driver.time.sleep = wall.monotonic, wall.sleep
         return scenario, wall
 
-    def test_startup_wait_refreshes_periodically_with_current_stamps(self):
-        scenario, wall = self.startup_wait_scenario(stamps=range(10, 100))
-        def ready(unused_now):
-            return wall.now >= 2.25
-
-        scenario._wait(ready, 3.0, "startup evidence",
-                       tick=scenario._publish_initial_pose_message)
-
-        self.assertEqual(len(scenario._initial_pose.messages), 2)
-        stamps = [message.header.stamp.value
-                  for message in scenario._initial_pose.messages]
-        self.assertGreater(stamps[1], stamps[0])
-        self.assertAlmostEqual(wall.now, 2.25)
-
-    def test_other_waits_do_not_refresh_initial_pose(self):
+    def test_ordinary_waits_do_not_publish_initial_pose(self):
         scenario, unused_wall = self.startup_wait_scenario()
         calls = {"count": 0}
 
@@ -411,35 +436,30 @@ class ScenarioDriverTests(unittest.TestCase):
             calls["count"] += 1
             return calls["count"] == 6
 
-        scenario._wait(ready, 2.0, "other wait")
+        scenario._wait(ready, 2.0, "ordinary wait")
 
         self.assertEqual(scenario._initial_pose.messages, [])
 
-    def test_startup_wait_does_not_publish_after_predicate_success(self):
-        scenario, wall = self.startup_wait_scenario()
-        scenario._wait(lambda unused_now: wall.now >= 1.0, 2.0, "startup evidence",
-                       tick=scenario._publish_initial_pose_message)
-
-        self.assertEqual(scenario._initial_pose.messages, [])
-
-    def test_startup_refresh_fails_closed_if_subscribers_disappear(self):
+    def test_subscriber_disappearance_rejects_one_time_initialization(self):
         scenario, unused_wall = self.startup_wait_scenario(connections=(2, 1))
         self.assertEqual(scenario._initial_pose.get_num_connections(), 2)
+
         with self.assertRaisesRegex(driver.ScenarioError,
                                     "initial pose subscribers disappeared"):
-            scenario._wait(lambda unused_now: False, 2.0, "startup evidence",
-                           tick=scenario._publish_initial_pose_message)
+            scenario._publish_initial_pose_message()
+
         self.assertEqual(scenario._initial_pose.messages, [])
 
-    def test_startup_refresh_timeout_remains_wall_clock_bounded(self):
+    def test_startup_wait_timeout_is_wall_clock_bounded_without_publication(self):
         scenario, wall = self.startup_wait_scenario()
+
         with self.assertRaisesRegex(driver.ScenarioError,
                                     "timeout waiting for startup evidence"):
-            scenario._wait(lambda unused_now: False, 1.5, "startup evidence",
-                           tick=scenario._publish_initial_pose_message)
+            scenario._wait(lambda unused_now: False, 1.5, "startup evidence")
 
-        self.assertLessEqual(wall.now, 1.75)
-        self.assertEqual(len(scenario._initial_pose.messages), 1)
+        self.assertAlmostEqual(wall.now, 1.5)
+        self.assertEqual(scenario._initial_pose.messages, [])
+
     def test_mission_action_timeout_cancels_once_with_frozen_sim_clock(self):
         scenario = driver.ScenarioDriver.__new__(driver.ScenarioDriver)
         scenario.rospy = FrozenClockRospy()
@@ -484,29 +504,43 @@ class ScenarioDriverTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         run = source[source.index("    def run(self):"):source.index("\ndef main():")]
         mission_arm = run.index("self._mission_arm()")
-        initial_pose = run.index("self._publish_initial_pose()")
         send_goal = run.index("self._action.send_goal(goal)")
         goal_active = run.index('"active mission goal"')
+        pre_initialization = run.index('"pre-initialization evidence"')
+        initial_pose = run.index("self._publish_initial_pose()")
         startup_evidence = run.index('"startup evidence"')
         gate_arm = run.index("self._arm.publish")
         gate_clear = run.index('"armed safety gate"')
         monitoring = run.index("self._safety_monitoring = True")
+
         self.assertLess(mission_arm, send_goal)
-        self.assertLess(initial_pose, mission_arm)
         self.assertLess(send_goal, goal_active)
-        self.assertLess(goal_active, startup_evidence)
+        self.assertLess(goal_active, pre_initialization)
+        self.assertLess(pre_initialization, initial_pose)
+        self.assertLess(initial_pose, startup_evidence)
         self.assertLess(startup_evidence, gate_arm)
         self.assertLess(gate_arm, gate_clear)
         self.assertLess(gate_clear, monitoring)
         self.assertEqual(run.count("self._action.send_goal(goal)"), 1)
+        self.assertEqual(run.count("self._publish_initial_pose()"), 1)
+        self.assertEqual(source.count('"/initialpose"'), 1)
+        self.assertEqual(source.count("self._initial_pose.publish"), 1)
+        self.assertIn(
+            'self._publish_initial_pose()\n'
+            '            self._wait(self.evidence.startup_ready, self.ready_timeout_s, '
+            '"startup evidence")',
+            run)
+        self.assertNotIn("tick=", run)
         self.assertIn('self._cancel("safety loss")', source)
         self.assertIn('self._cancel("action timeout")', source)
         self.assertNotIn("reset", run.lower())
         self.assertNotIn("resume", run.lower())
-        startup_ready = source[source.index("    def startup_ready(self, now):"):
-                               source.index("    def safety_clear(self, now):")]
-        self.assertIn("route.state == route.ACTIVE", startup_ready)
-        self.assertNotIn("route.INACTIVE", startup_ready)
+        pre_initialization_ready = source[
+            source.index("    def pre_initialization_ready(self, now):"):
+            source.index("    def safety_clear(self, now):")]
+        self.assertIn("route.state == route.ACTIVE", pre_initialization_ready)
+        self.assertIn("slope.STATE_SLOW", pre_initialization_ready)
+        self.assertNotIn('"localization"', pre_initialization_ready)
 
     def test_pre_clear_safety_callback_cannot_cancel_submitted_goal(self):
         scenario = driver.ScenarioDriver.__new__(driver.ScenarioDriver)
@@ -547,6 +581,41 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertNotIn("hardware/", source)
         self.assertEqual(source.count("send_goal(goal)"), 1)
         self.assertIn('queue_size=1', source)
+
+    def test_sim_startup_readiness_bound_wires_driver_and_guard(self):
+        sim_root = ET.parse(str(SIM_LAUNCH)).getroot()
+        sim_args = {element.attrib["name"]: element.attrib for element in sim_root.findall("arg")}
+        self.assertEqual(sim_args["startup_readiness_timeout_sec"]["default"], "30.0")
+
+        safety_include = next(
+            element for element in sim_root.findall("include")
+            if element.attrib["file"] == "$(find wheelchair_safety)/launch/safety.launch")
+        safety_args = {element.attrib["name"]: element.attrib["value"]
+                       for element in safety_include.findall("arg")}
+        self.assertEqual(
+            safety_args["localization_initialization_attempt_timeout_s"],
+            "$(arg startup_readiness_timeout_sec)")
+
+        driver_node = next(
+            element for element in sim_root.findall("node")
+            if element.attrib.get("type") == "rc_scenario_driver.py")
+        driver_params = {element.attrib["name"]: element.attrib["value"]
+                         for element in driver_node.findall("param")}
+        self.assertEqual(driver_params["readiness_timeout_sec"],
+                         "$(arg startup_readiness_timeout_sec)")
+
+        safety_root = ET.parse(str(SAFETY_LAUNCH)).getroot()
+        guard_args = {element.attrib["name"]: element.attrib
+                      for element in safety_root.findall("arg")}
+        self.assertEqual(
+            guard_args["localization_initialization_attempt_timeout_s"]["default"], "30.0")
+        guard_node = next(
+            element for element in safety_root.findall("node")
+            if element.attrib.get("name") == "localization_guard")
+        guard_params = {element.attrib["name"]: element.attrib["value"]
+                        for element in guard_node.findall("param")}
+        self.assertEqual(guard_params["initialization_attempt_timeout_s"],
+                         "$(arg localization_initialization_attempt_timeout_s)")
 
     def test_launch_is_default_disabled_and_cmake_installs_driver(self):
         root = ET.parse(str(SIM_LAUNCH)).getroot()
