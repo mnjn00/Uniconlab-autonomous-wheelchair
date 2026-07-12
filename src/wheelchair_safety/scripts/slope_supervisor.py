@@ -873,8 +873,7 @@ class SlopeSupervisorRosNode:
                 and (self._bootstrap_zone_evaluation_high_water_stamp_s is None
                      or evaluation_stamp > self._bootstrap_zone_evaluation_high_water_stamp_s)
                 and (
-                    self._bootstrap_zone_source_high_water_stamp_s is None
-                    and source_stamp == 0.0
+                    source_stamp == 0.0
                     or source_stamp > 0.0
                     and (
                         self._bootstrap_zone_source_high_water_stamp_s is None

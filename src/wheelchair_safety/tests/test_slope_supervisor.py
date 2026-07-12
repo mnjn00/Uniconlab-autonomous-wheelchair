@@ -426,6 +426,56 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         ))
         self.assertEqual(self.node.zone, "normal")
         self.assertEqual(self.node._zone_source_high_water_stamp_s, None)
+    def test_positive_source_bootstrap_allows_later_zero_source_without_lowering_high_water(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.node.rospy.Time.now = lambda: self.stamp(10.01)
+        self.node._zone_cb(self.bootstrap_message(
+            sequence=2,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.assertEqual(self.node.zone_receipt_stamp_s, 10.01)
+        self.assertEqual(self.node.zone, "normal")
+        self.assertTrue(self.node._initial_zone_bootstrap_active)
+        self.assertEqual(self.node._bootstrap_zone_source_high_water_stamp_s, 9.95)
+        self.assertEqual(self.node._bootstrap_zone_sequence_high_water, 2)
+        self.assertEqual(self.node._bootstrap_zone_evaluation_high_water_stamp_s, 9.99)
+
+    def test_zero_source_bootstrap_rejects_regressed_or_invalid_evidence(self):
+        invalid_messages = (
+            self.bootstrap_message(sequence=1),
+            self.bootstrap_message(sequence=2, evaluation_stamp=self.stamp(9.98)),
+            self.bootstrap_message(sequence=2, evaluation_stamp=self.stamp(9.0)),
+            self.bootstrap_message(sequence=2, reason_mask=slope.GEOFENCE),
+            self.bootstrap_message(sequence=2, state=1),
+            self.bootstrap_message(
+                sequence=2,
+                manifest_sha256="0" * 64,
+            ),
+        )
+        for message in invalid_messages:
+            self.setUp()
+            self._enable_bootstrap()
+            self.node._zone_cb(self.bootstrap_message(
+                header=SimpleNamespace(stamp=self.stamp(9.95)),
+            ))
+            self.node._zone_cb(message)
+            self.assertEqual(self.node.zone, "unknown")
+            self.assertFalse(self.node._initial_zone_bootstrap_active)
+
+    def test_zero_source_bootstrap_rejects_after_deadline_and_outside_bootstrap(self):
+        self._enable_bootstrap()
+        self.node.rospy.Time.now = lambda: self.stamp(20.1)
+        self.node._zone_cb(self.bootstrap_message(evaluation_stamp=self.stamp(20.08)))
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
+
+        self.setUp()
+        self.node._zone_cb(self.bootstrap_message())
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
 
     def test_positive_source_bootstrap_accepts_heartbeats_and_rejects_regression(self):
         self._enable_bootstrap()
