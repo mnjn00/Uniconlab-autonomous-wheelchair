@@ -25,6 +25,7 @@ MAP = ROOT / "data" / "hanyang_aegimun_loop" / "map.pgm"
 METADATA = ROOT / "data" / "hanyang_aegimun_loop" / "map.metadata.json"
 NAVIGATION_ROUTES = ROOT / "src" / "wheelchair_navigation" / "config" / "hanyang_routes.yaml"
 CONFIG_SHA256 = "9aa228033d01667b34dd0927fb83cdbcd174987893bcf99ba78f65898bcd8d68"
+A03_FUTURE_TOLERANCE_S = 0.05
 SPEC = importlib.util.spec_from_file_location("route_safety", SCRIPT)
 route_safety = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = route_safety
@@ -73,8 +74,15 @@ def _selection(policy):
     )
 
 
-def _pose(x=0.0, y=0.0, yaw=0.0, stamp=9.9, sigma=0.01, state="OK"):
-    return route_safety.PoseSample(x, y, yaw, stamp, stamp, stamp, sigma, state)
+def _pose(x=0.0, y=0.0, yaw=0.0, stamp=9.9, sigma=0.01, state="OK",
+          pose_stamp=None, status_stamp=None, transform_stamp=None):
+    return route_safety.PoseSample(
+        x, y, yaw,
+        stamp if pose_stamp is None else pose_stamp,
+        stamp if status_stamp is None else status_stamp,
+        stamp if transform_stamp is None else transform_stamp,
+        sigma, state,
+    )
 
 
 def _point_segment_distance(point, first, second):
@@ -323,6 +331,63 @@ def test_inside_clear_boundary_uncertainty_stale_and_manual_only_stop():
     assert route_safety.evaluate(policy, _pose(stamp=9.0), selection, 10.0).reason_mask & route_safety.REASON_SENSOR_STALE
     manual = _load(_manifest(normal=False))
     assert route_safety.evaluate(manual, _pose(), _selection(manual), 10.0).signal_state == route_safety.STOP
+
+
+def test_a03_future_tolerance_bounds_each_evidence_age():
+    assert route_safety.FUTURE_TOLERANCE_S == A03_FUTURE_TOLERANCE_S
+    policy = _load(_manifest())
+    selection = _selection(policy)
+    cases = (
+        (-A03_FUTURE_TOLERANCE_S, True),
+        (-A03_FUTURE_TOLERANCE_S - 1e-9, False),
+        (0.0, True),
+    )
+    for field in ("pose_stamp", "status_stamp", "transform_stamp"):
+        for age, allowed in cases:
+            evaluation = route_safety.evaluate(
+                policy, _pose(stamp=0.0, **{field: -age}), selection, 0.0,
+            )
+            assert evaluation.clear is allowed
+            if not allowed:
+                assert evaluation.reason_mask == (
+                    route_safety.REASON_SENSOR_STALE | route_safety.REASON_GEOFENCE
+                )
+
+    for field, ttl_s in (
+            ("pose_stamp", policy.pose_ttl_s),
+            ("status_stamp", policy.status_ttl_s),
+            ("transform_stamp", policy.transform_ttl_s)):
+        evaluation = route_safety.evaluate(
+            policy, _pose(stamp=0.0, **{field: -ttl_s - 1e-9}), selection, 0.0,
+        )
+        assert evaluation.signal_state == route_safety.STOP
+        assert evaluation.reason_mask == (
+            route_safety.REASON_SENSOR_STALE | route_safety.REASON_GEOFENCE
+        )
+
+
+def test_live_shaped_future_transform_evidence_is_accepted_without_age_clamping():
+    policy = _load(_manifest())
+    evaluation = route_safety.evaluate(
+        policy,
+        _pose(pose_stamp=9.998, status_stamp=9.997, transform_stamp=10.007),
+        _selection(policy),
+        10.0,
+    )
+    assert evaluation.clear
+    assert evaluation.transform_age_s == pytest.approx(-0.007)
+
+
+@pytest.mark.parametrize("field", ("pose_stamp", "status_stamp", "transform_stamp"))
+def test_nonfinite_evidence_age_remains_input_unknown(field):
+    policy = _load(_manifest())
+    evaluation = route_safety.evaluate(
+        policy, _pose(**{field: float("nan")}), _selection(policy), 10.0,
+    )
+    assert evaluation.signal_state == route_safety.STOP
+    assert evaluation.reason_mask == (
+        route_safety.REASON_INPUT_UNKNOWN | route_safety.REASON_GEOFENCE
+    )
 
 
 def test_untrusted_selection_exclusion_and_mutation_attempts_fail_closed():

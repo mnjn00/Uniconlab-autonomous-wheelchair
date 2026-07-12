@@ -21,6 +21,7 @@ Point = Tuple[float, float]
 Polygon = Tuple[Point, ...]
 SHA256_LENGTH = 64
 SOURCE = "wheelchair_route_safety"
+FUTURE_TOLERANCE_S = 0.05  # Frozen A03 clock contract.
 
 UNKNOWN = 0
 CLEAR = 1
@@ -629,7 +630,7 @@ def evaluate(policy: RouteSafetyPolicy, pose: Optional[PoseSample], selection: O
     if pose.pose_frame_id != policy.frame_id or not pose.transform_valid:
         return _stop(policy, pose, selection, now_s, sequence, STATUS_UNKNOWN, REASON_TF | REASON_GEOFENCE)
     ages = (now_s - pose.pose_stamp_s, now_s - pose.status_stamp_s, now_s - pose.transform_stamp_s)
-    if any(age < 0 for age in ages):
+    if any(age < -FUTURE_TOLERANCE_S for age in ages):
         return _stop(policy, pose, selection, now_s, sequence, STATUS_UNKNOWN, REASON_SENSOR_STALE | REASON_GEOFENCE)
     if ages[0] > policy.pose_ttl_s or ages[1] > policy.status_ttl_s or ages[2] > policy.transform_ttl_s:
         return _stop(policy, pose, selection, now_s, sequence, STATUS_UNKNOWN, REASON_SENSOR_STALE | REASON_GEOFENCE)
