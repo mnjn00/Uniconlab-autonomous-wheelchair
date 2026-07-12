@@ -65,11 +65,15 @@ def _slope_message(source, evaluation, policy_sha256, state):
 
 def _slope_callback_node(policy_sha256):
     node = object.__new__(cs.CollisionSupervisorRosNode)
-    node._lock = threading.RLock()
+    node._input_lock = threading.RLock()
     node.slope = None
     node.slope_high_water = None
     node.slope_evidence = cs.deque()
     node.slope_policy_sha256 = policy_sha256
+    node.odom = node.nav = node.safe = node.intent = None
+    node.odom_stamp = node.odom_receipt = node.odom_high_water = None
+    node.odom_valid = False
+    node.nav_stamp = node.safe_stamp = None
     return node
 
 
@@ -182,6 +186,32 @@ def test_slope_buffer_selects_async_cloud_pair_and_restrictive_entry():
     assert selected.valid is False
 
 
+def test_slope_buffer_fresh_restrictive_evidence_dominates_newer_permissive():
+    evidence = cs.deque((
+        _evidence(0.94, receipt=0.94, valid=False),
+        _evidence(0.95, receipt=0.95, valid=True),
+    ))
+
+    selected = cs._select_slope_evidence(evidence, 0.90, 1.00)
+
+    assert selected is not None
+    assert selected.source_s == pytest.approx(0.94)
+    assert selected.valid is False
+
+
+def test_slope_buffer_stale_restrictive_evidence_does_not_mask_exactly_fresh_permissive():
+    evidence = cs.deque((
+        _evidence(0.89, receipt=0.89, valid=False),
+        _evidence(0.90, receipt=0.90, valid=True),
+    ))
+
+    selected = cs._select_slope_evidence(evidence, 0.90, 1.00)
+
+    assert selected is not None
+    assert selected.source_s == pytest.approx(0.90)
+    assert selected.valid is True
+
+
 def test_slope_buffer_has_no_candidate_when_all_samples_are_too_new():
     evidence = cs.deque((_evidence(0.96), _evidence(0.98)))
 
@@ -240,6 +270,123 @@ def test_slope_callback_clears_prior_evidence_after_malformed_callback(monkeypat
     node._slope_cb(_slope_message(1.01, 1.01, "a" * 64, cs.CLEAR))
 
     assert node.slope_evidence[-1].valid is True
+
+
+def test_slope_callback_receipt_is_sampled_after_input_lock_wait(monkeypatch):
+    node = _slope_callback_node("a" * 64)
+    clock = {"now": 1.0}
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: clock["now"])
+            )
+        ),
+    )
+    node._input_lock.acquire()
+    worker = threading.Thread(
+        target=node._slope_cb,
+        args=(_slope_message(1.0, 1.0, "a" * 64, cs.CLEAR),),
+    )
+    worker.start()
+    clock["now"] = 2.0
+    node._input_lock.release()
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert node.slope[2] == 2.0
+
+
+def test_input_callback_does_not_wait_for_cloud_decision_lock(monkeypatch):
+    node = _slope_callback_node("a" * 64)
+    node._decision_lock = threading.RLock()
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: 1.0)
+            )
+        ),
+    )
+    completed = threading.Event()
+    worker = threading.Thread(
+        target=lambda: (
+            node._slope_cb(_slope_message(1.0, 1.0, "a" * 64, cs.CLEAR)),
+            completed.set(),
+        ),
+    )
+    with node._decision_lock:
+        worker.start()
+        assert completed.wait(1.0)
+    worker.join(timeout=1.0)
+
+    assert node.slope_evidence[-1].valid is True
+
+
+def test_snapshot_is_immutable_and_uses_only_copied_slope_evidence(monkeypatch):
+    node = _slope_callback_node("a" * 64)
+    node.slope_evidence.append(_evidence(0.90, valid=True))
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: 1.0)
+            )
+        ),
+    )
+
+    snapshot = node._take_input_snapshot()
+    node.slope_evidence.append(_evidence(0.95, valid=False))
+
+    assert snapshot.now_s == 1.0
+    assert isinstance(snapshot.slope_evidence, tuple)
+    assert cs._select_slope_evidence(snapshot.slope_evidence, 0.90, snapshot.now_s).valid
+    assert not cs._select_slope_evidence(
+        tuple(node.slope_evidence), 0.90, snapshot.now_s
+    ).valid
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        snapshot.now_s = 2.0
+
+
+def test_postprocess_fake_clock_uses_later_time_for_decision_ages():
+    fake_clock = iter((1.00, 1.15))
+    snapshot_now = next(fake_clock)
+    evaluation_now = cs._postprocess_evaluation_time(snapshot_now, next(fake_clock))
+    core = cs.CollisionSupervisorCore(policy())
+
+    decision = core.evaluate(inputs(
+        now=evaluation_now,
+        cloud_stamp_s=1.14,
+        odom_stamp_s=1.00,
+        odom_receipt_s=1.00,
+        nav_stamp_s=1.00,
+        safe_stamp_s=1.00,
+        intent_stamp_s=1.00,
+    ))
+
+    assert decision.evaluation_stamp == pytest.approx(1.15)
+    assert decision.odom_age_s == pytest.approx(0.15)
+
+
+@pytest.mark.parametrize("postprocess_now", (0.99, math.nan, math.inf))
+def test_postprocess_clock_regression_or_nonfinite_is_fail_closed(postprocess_now):
+    evaluation_now = cs._postprocess_evaluation_time(1.00, postprocess_now)
+
+    assert math.isnan(evaluation_now)
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        now=evaluation_now,
+        cloud_stamp_s=1.0,
+        odom_stamp_s=1.0,
+        odom_receipt_s=1.0,
+        nav_stamp_s=1.0,
+        safe_stamp_s=1.0,
+        intent_stamp_s=1.0,
+    ))
+    assert decision.state == cs.STOP
+    assert decision.reason == "nonfinite_input"
 
 
 def test_slope_buffer_selects_equal_source_restrictive_latest_entry():
@@ -1471,11 +1618,25 @@ def test_watchdog_sequences_are_monotonic_and_latch_fresh_core_evaluation():
     assert fresh.reason == "clear_hysteresis"
 
 
-def test_ros_adapter_uses_queue_one_and_timer_watchdog_under_a_lock():
+def test_ros_adapter_uses_queue_one_and_two_lock_ownership_contract():
     source = SCRIPT.read_text()
     assert source.count("queue_size=1") >= 7
     assert "rospy.Timer(" in source
-    assert "with self._lock:" in source
+    assert "self._input_lock = threading.RLock()" in source
+    assert "self._decision_lock = threading.RLock()" in source
+    assert "with self._input_lock:" in source
+    assert "with self._decision_lock:" in source
+    assert "with self._lock:" not in source
+    cloud_callback = source[source.index("    def _cloud_cb"):source.index("    def _evaluate_cloud")]
+    watchdog_callback = source[source.index("    def _watchdog_cb"):source.index("    def _next_sequence")]
+    input_callbacks = source[source.index("    def _odom_cb"):source.index("    def _cloud_cb")]
+    assert "with self._decision_lock:" in cloud_callback
+    assert "with self._decision_lock:" in watchdog_callback
+    assert "self._decision_lock" not in input_callbacks
+    evaluation = source[source.index("    def _evaluate_cloud"):source.index("    def _schedule_cloud_deadline")]
+    assert evaluation.index("self.preprocessor.process(") < evaluation.index(
+        "_postprocess_evaluation_time("
+    ) < evaluation.index("inputs = CollisionInputs(")
 
 def reference_clusters(points, cluster_policy):
     tolerance_sq = cluster_policy.cluster_tolerance_m ** 2

@@ -1421,6 +1421,19 @@ class SlopeEvidence:
     valid: bool
 
 
+@dataclass(frozen=True)
+class CollisionInputSnapshot:
+    now_s: float
+    odom: Optional[Tuple[float, float]]
+    odom_stamp: Optional[float]
+    odom_receipt: Optional[float]
+    odom_valid: bool
+    nav: Optional[Tuple[float, float]]
+    nav_stamp: Optional[float]
+    safe: Optional[Tuple[float, float]]
+    safe_stamp: Optional[float]
+    intent: Optional[Tuple[float, int, float, float]]
+    slope_evidence: Tuple[SlopeEvidence, ...]
 def _buffer_slope_evidence(
     evidence: Deque[SlopeEvidence], entry: SlopeEvidence
 ) -> None:
@@ -1448,15 +1461,24 @@ def _buffer_slope_evidence(
 def _select_slope_evidence(
     evidence: Iterable[SlopeEvidence], cloud_stamp_s: float, now_s: float
 ) -> Optional[SlopeEvidence]:
-    candidates = (
+    candidates = tuple(
         entry for entry in evidence
         if _finite(entry.source_s)
         and _slope_cloud_time_valid(
             entry.source_s, entry.evaluation_s, cloud_stamp_s, now_s
         )
     )
+    fresh = tuple(
+        entry for entry in candidates
+        if _slope_timing_valid(entry.source_s, entry.receipt_s, cloud_stamp_s, now_s)
+    )
+    selected = fresh if fresh else candidates
+    if fresh:
+        restrictive = tuple(entry for entry in fresh if not entry.valid)
+        if restrictive:
+            selected = restrictive
     return max(
-        candidates,
+        selected,
         key=lambda entry: (entry.source_s, entry.evaluation_s, entry.receipt_s),
         default=None,
     )
@@ -1473,6 +1495,13 @@ def _slope_timing_valid(
         and now_s - source_s <= 0.10
         and now_s - receipt_s <= 0.10
     )
+
+
+def _postprocess_evaluation_time(snapshot_now_s: float, postprocess_now_s: float) -> float:
+    if (_finite(snapshot_now_s) and _finite(postprocess_now_s)
+            and postprocess_now_s >= snapshot_now_s):
+        return float(postprocess_now_s)
+    return math.nan
 
 
 
@@ -1513,7 +1542,8 @@ class CollisionSupervisorRosNode:
         )
         self.core = CollisionSupervisorCore(CollisionPolicy.load(policy_path))
         self.preprocessor = CloudPreprocessorTracker(self.core.policy)
-        self._lock = threading.RLock()
+        self._input_lock = threading.RLock()
+        self._decision_lock = threading.RLock()
         self.watchdog = CollisionWatchdogState(self.core.policy.cloud_ttl_s)
         self.cloud_deadline_timer = None
         self.sequence = 0
@@ -1565,19 +1595,19 @@ class CollisionSupervisorRosNode:
 
     def _odom_cb(self, msg):
         import rospy
-        receipt = rospy.Time.now().to_sec()
         try:
             source = float(msg.header.stamp.to_sec())
             values = (
                 float(msg.twist.twist.linear.x),
                 float(msg.twist.twist.angular.z),
             )
+        except (AttributeError, TypeError, ValueError):
+            source, values = math.nan, (math.nan, math.nan)
+        with self._input_lock:
+            receipt = rospy.Time.now().to_sec()
             valid = (all(_finite(value) for value in values + (source, receipt,))
                      and 0.0 <= source <= receipt
                      and (self.odom_high_water is None or source > self.odom_high_water))
-        except (AttributeError, TypeError, ValueError):
-            source, values, valid = math.nan, (math.nan, math.nan), False
-        with self._lock:
             self.odom = values
             self.odom_stamp = source
             self.odom_receipt = receipt
@@ -1587,8 +1617,9 @@ class CollisionSupervisorRosNode:
 
     def _nav_cb(self, msg):
         import rospy
-        with self._lock:
-            self.nav = (float(msg.linear.x), float(msg.angular.z))
+        values = (float(msg.linear.x), float(msg.angular.z))
+        with self._input_lock:
+            self.nav = values
             self.nav_stamp = rospy.Time.now().to_sec()
 
     def _intent_cb(self, msg):
@@ -1599,7 +1630,7 @@ class CollisionSupervisorRosNode:
             angular_cap = float(msg.max_angular_rps)
         except (AttributeError, TypeError, ValueError):
             stamp, behavior, linear_cap, angular_cap = math.nan, -1, math.nan, math.nan
-        with self._lock:
+        with self._input_lock:
             self.intent = (stamp, behavior, linear_cap, angular_cap)
             if behavior == INTENT_HOLD and linear_cap == 0.0 and angular_cap == 0.0:
                 # A later PROCEED/SLOW must receive a command newer than this HOLD.
@@ -1607,7 +1638,6 @@ class CollisionSupervisorRosNode:
 
     def _slope_cb(self, msg):
         import rospy
-        receipt = rospy.Time.now().to_sec()
         try:
             source = float(msg.header.stamp.to_sec())
         except (AttributeError, TypeError, ValueError):
@@ -1619,7 +1649,8 @@ class CollisionSupervisorRosNode:
             state = int(msg.state)
         except (AttributeError, TypeError, ValueError):
             evaluation, pitch, policy, state = math.nan, math.nan, "", UNKNOWN
-        with self._lock:
+        with self._input_lock:
+            receipt = rospy.Time.now().to_sec()
             chronology_valid = _slope_chronology_valid(
                 source, evaluation, receipt, self.slope_high_water
             )
@@ -1639,21 +1670,36 @@ class CollisionSupervisorRosNode:
 
     def _safe_cb(self, msg):
         import rospy
-        with self._lock:
-            self.safe = (float(msg.linear.x), float(msg.angular.z))
+        values = (float(msg.linear.x), float(msg.angular.z))
+        with self._input_lock:
+            self.safe = values
             self.safe_stamp = rospy.Time.now().to_sec()
 
+    def _take_input_snapshot(self):
+        import rospy
+        with self._input_lock:
+            return CollisionInputSnapshot(
+                now_s=rospy.Time.now().to_sec(),
+                odom=self.odom,
+                odom_stamp=self.odom_stamp,
+                odom_receipt=self.odom_receipt,
+                odom_valid=self.odom_valid,
+                nav=self.nav,
+                nav_stamp=self.nav_stamp,
+                safe=self.safe,
+                safe_stamp=self.safe_stamp,
+                intent=self.intent,
+                slope_evidence=tuple(self.slope_evidence),
+            )
+
     def _cloud_cb(self, msg):
-        with self._lock:
+        with self._decision_lock:
             self._evaluate_cloud(msg)
 
     def _evaluate_cloud(self, msg):
         import rospy
         from sensor_msgs import point_cloud2
-        now = rospy.Time.now().to_sec()
         stamp = msg.header.stamp.to_sec()
-        if self.watchdog.observe_cloud(stamp, now):
-            self._schedule_cloud_deadline(now, stamp)
         result = CloudTransformResult((), self.core.policy.evaluation_frame, -1.0, False, "lookup_failure")
         try:
             transform = self.tf_buffer.lookup_transform(
@@ -1685,30 +1731,21 @@ class CollisionSupervisorRosNode:
             )
         except Exception as exc:  # tf2 and PointCloud2 decoding failures are safety evidence.
             rospy.logwarn_throttle(1.0, "Collision cloud transform failed: %s", exc)
+
+        snapshot = self._take_input_snapshot()
         processing = CloudProcessingResult(
             (), 0, self.core.policy.coverage_bins * self.core.policy.coverage_elevation_bins,
             0, 0.0, False, result.reason
         )
-        odom_linear, odom_angular = self.odom or (math.nan, math.nan)
-        nav_linear, nav_angular = self.nav or (0.0, 0.0)
-        safe_linear, safe_angular = self.safe or (0.0, 0.0)
-        slope_entry = _select_slope_evidence(self.slope_evidence, stamp, now)
-        slope_source, slope_evaluation, slope_receipt, pitch, slope_policy, slope_valid = (
-            (slope_entry.source_s, slope_entry.evaluation_s, slope_entry.receipt_s,
-             slope_entry.pitch_rad, slope_entry.policy_sha256, slope_entry.valid)
-            if slope_entry is not None
-            else (math.nan, math.nan, math.nan, math.nan, "", False)
-        )
-        slope_valid = bool(
-            slope_valid
-            and slope_policy == self.slope_policy_sha256
-        )
-        intent_behavior = self.intent[1] if self.intent is not None else -1
+        odom_linear, odom_angular = snapshot.odom or (math.nan, math.nan)
+        nav_linear, nav_angular = snapshot.nav or (0.0, 0.0)
+        safe_linear, safe_angular = snapshot.safe or (0.0, 0.0)
+        intent_behavior = snapshot.intent[1] if snapshot.intent is not None else -1
         coverage_linear = self._conservative_component(
-            odom_linear, nav_linear, safe_linear, self.nav is not None, intent_behavior
+            odom_linear, nav_linear, safe_linear, snapshot.nav is not None, intent_behavior
         )
         coverage_angular = self._conservative_component(
-            odom_angular, nav_angular, safe_angular, self.nav is not None, intent_behavior
+            odom_angular, nav_angular, safe_angular, snapshot.nav is not None, intent_behavior
         )
         if result.ok:
             processing = self.preprocessor.process(
@@ -1725,16 +1762,32 @@ class CollisionSupervisorRosNode:
                 1.0, "Collision cloud rejected: %s",
                 result.reason if not result.ok else processing.reason,
             )
+        now = _postprocess_evaluation_time(
+            snapshot.now_s, rospy.Time.now().to_sec()
+        )
+        if self.watchdog.observe_cloud(stamp, now):
+            self._schedule_cloud_deadline(now, stamp)
+        slope_entry = _select_slope_evidence(snapshot.slope_evidence, stamp, now)
+        slope_source, slope_evaluation, slope_receipt, pitch, slope_policy, slope_valid = (
+            (slope_entry.source_s, slope_entry.evaluation_s, slope_entry.receipt_s,
+             slope_entry.pitch_rad, slope_entry.policy_sha256, slope_entry.valid)
+            if slope_entry is not None
+            else (math.nan, math.nan, math.nan, math.nan, "", False)
+        )
+        slope_valid = bool(
+            slope_valid
+            and slope_policy == self.slope_policy_sha256
+        )
         points = processing.points
         self.sequence = self._next_sequence()
         intent_stamp, intent_behavior, linear_cap, angular_cap = (
-            self.intent if self.intent is not None else (0.0, -1, math.nan, math.nan)
+            snapshot.intent if snapshot.intent is not None else (0.0, -1, math.nan, math.nan)
         )
         inputs = CollisionInputs(
             now, self.sequence, stamp,
-            self.odom_stamp if self.odom_valid else math.nan,
-            self.nav_stamp or 0.0,
-            self.safe_stamp or 0.0, points, odom_linear, nav_linear,
+            snapshot.odom_stamp if snapshot.odom_valid else math.nan,
+            snapshot.nav_stamp or 0.0,
+            snapshot.safe_stamp or 0.0, points, odom_linear, nav_linear,
             safe_linear, frame_id=result.frame_id,
             pitch_downhill_rad=pitch,
             coverage_fraction=processing.coverage_fraction,
@@ -1745,10 +1798,10 @@ class CollisionSupervisorRosNode:
             policy_id=self.core.policy.policy_id, policy_sha256=self.core.policy.policy_sha256,
             raw_point_count=processing.raw_point_count, intent_stamp_s=intent_stamp,
             intent_behavior=intent_behavior, intent_max_linear_mps=linear_cap,
-            intent_max_angular_rps=angular_cap, nav_available=self.nav is not None,
+            intent_max_angular_rps=angular_cap, nav_available=snapshot.nav is not None,
             odom_angular_rps=odom_angular, nav_angular_rps=nav_angular,
             safe_angular_rps=safe_angular,
-            odom_receipt_s=self.odom_receipt,
+            odom_receipt_s=snapshot.odom_receipt,
             slope_stamp_s=slope_source,
             slope_receipt_s=slope_receipt,
             slope_valid=slope_valid,
@@ -1778,8 +1831,8 @@ class CollisionSupervisorRosNode:
     def _watchdog_cb(self, _event):
         import rospy
         from std_msgs.msg import Header
-        now = rospy.Time.now().to_sec()
-        with self._lock:
+        with self._decision_lock:
+            now = rospy.Time.now().to_sec()
             cloud_age = self.watchdog.stale_age(now)
             if cloud_age is None:
                 return
