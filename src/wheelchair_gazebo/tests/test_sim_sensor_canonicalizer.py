@@ -334,32 +334,65 @@ class ImuValidationTest(unittest.TestCase):
             (4.0, -2.0, 8.0),
         )
 
-    def test_gap_regression_and_nonfinite_each_reset_consecutive_evidence(self):
-        for bad_kind in ("gap", "regression", "nonfinite"):
-            with self.subTest(bad_kind=bad_kind):
-                core = adapter.SensorCanonicalizerCore(
-                    imu_window_samples=3, imu_max_gap_ns=10
-                )
-                self.assertIsNone(core.adapt_imu(imu(source_ns=100), 100))
-                self.assertIsNone(core.adapt_imu(imu(source_ns=105), 101))
-                if bad_kind == "gap":
-                    self.assertIsNone(core.adapt_imu(imu(source_ns=120), 102))
-                    next_stamp = 125
-                elif bad_kind == "regression":
-                    self.assertIsNone(core.adapt_imu(imu(source_ns=99), 102))
-                    next_stamp = 104
-                else:
-                    bad = imu(source_ns=110)
-                    bad.linear_acceleration.x = math.nan
-                    with self.assertRaises(adapter.SensorValidationError):
-                        core.adapt_imu(bad, 102)
-                    next_stamp = 115
-                self.assertIsNone(core.adapt_imu(imu(source_ns=next_stamp), 103))
-                output = core.adapt_imu(imu(source_ns=next_stamp + 5), 104)
-                if bad_kind == "nonfinite":
-                    self.assertIsNone(output)
-                    output = core.adapt_imu(imu(source_ns=next_stamp + 10), 105)
-                self.assertIsNotNone(output)
+    def test_forward_gap_is_distinct_and_requires_a_complete_fresh_window(self):
+        core = adapter.SensorCanonicalizerCore(imu_window_samples=3, imu_max_gap_ns=10)
+        self.assertIsNone(core.adapt_imu(imu(source_ns=100), 100))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=105), 101))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=120), 102))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=125), 103))
+        self.assertIsNotNone(core.adapt_imu(imu(source_ns=130), 104))
+        diagnostics = core.imu_diagnostics()
+        self.assertEqual(1, diagnostics["imu_gap_count"])
+        self.assertEqual("", diagnostics["imu_chronology_failure"])
+        self.assertFalse(diagnostics["imu_recovery_pending"])
+
+    def test_source_regression_is_sticky_never_rebased_or_appended(self):
+        core = adapter.SensorCanonicalizerCore(imu_window_samples=3, imu_max_gap_ns=10)
+        self.assertIsNone(core.adapt_imu(imu(source_ns=100), 100))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=105), 101))
+        with self.assertRaisesRegex(adapter.SensorValidationError, "E_STAMP_REGRESSION"):
+            core.adapt_imu(imu(source_ns=99), 102)
+        with self.assertRaisesRegex(adapter.SensorValidationError, "E_STAMP_REGRESSION"):
+            core.adapt_imu(imu(source_ns=105), 103)
+        diagnostics = core.imu_diagnostics()
+        self.assertEqual(105, diagnostics["imu_source_high_water_ns"])
+        self.assertEqual(101, diagnostics["imu_receipt_high_water_ns"])
+        self.assertEqual("E_STAMP_REGRESSION", diagnostics["imu_chronology_failure"])
+        self.assertEqual(2, diagnostics["imu_chronology_failure_count"])
+        self.assertEqual(0, diagnostics["imu_window_samples"])
+        self.assertTrue(diagnostics["imu_recovery_pending"])
+        self.assertIsNone(core.adapt_imu(imu(source_ns=110), 104))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=115), 105))
+        self.assertIsNotNone(core.adapt_imu(imu(source_ns=120), 106))
+
+    def test_receipt_regression_and_duplicate_are_sticky_never_appended(self):
+        core = adapter.SensorCanonicalizerCore(imu_window_samples=3, imu_max_gap_ns=10)
+        self.assertIsNone(core.adapt_imu(imu(source_ns=100), 100))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=105), 101))
+        with self.assertRaisesRegex(adapter.SensorValidationError, "E_RECEIPT_REGRESSION"):
+            core.adapt_imu(imu(source_ns=110), 100)
+        with self.assertRaisesRegex(adapter.SensorValidationError, "E_RECEIPT_REGRESSION"):
+            core.adapt_imu(imu(source_ns=115), 101)
+        diagnostics = core.imu_diagnostics()
+        self.assertEqual(105, diagnostics["imu_source_high_water_ns"])
+        self.assertEqual(101, diagnostics["imu_receipt_high_water_ns"])
+        self.assertEqual("E_RECEIPT_REGRESSION", diagnostics["imu_chronology_failure"])
+        self.assertEqual(0, diagnostics["imu_window_samples"])
+        self.assertIsNone(core.adapt_imu(imu(source_ns=120), 102))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=125), 103))
+        self.assertIsNotNone(core.adapt_imu(imu(source_ns=130), 104))
+
+    def test_nonfinite_resets_partial_evidence_and_requires_a_fresh_window(self):
+        core = adapter.SensorCanonicalizerCore(imu_window_samples=3, imu_max_gap_ns=10)
+        self.assertIsNone(core.adapt_imu(imu(source_ns=100), 100))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=105), 101))
+        bad = imu(source_ns=110)
+        bad.linear_acceleration.x = math.nan
+        with self.assertRaises(adapter.SensorValidationError):
+            core.adapt_imu(bad, 102)
+        self.assertIsNone(core.adapt_imu(imu(source_ns=115), 103))
+        self.assertIsNone(core.adapt_imu(imu(source_ns=120), 104))
+        self.assertIsNotNone(core.adapt_imu(imu(source_ns=125), 105))
 
     def test_invalid_frame_stamp_quaternion_vectors_and_covariance_reject_whole_imu(self):
         malformed = [imu(frame="base_link")]

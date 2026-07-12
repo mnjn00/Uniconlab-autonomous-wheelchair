@@ -85,22 +85,66 @@ class ImuCacheTests(unittest.TestCase):
         self.assertEqual([], errors)
         self.assertEqual(32.0, result[0].stamp_s)
 
-    def test_capacity_retains_only_newest_samples_in_append_order(self):
+    def test_capacity_retains_only_newest_valid_samples_in_source_order(self):
         cache = perception_node.ImuCache(max_skew_s=100.0, capacity=3)
-        for stamp in (10.0, 12.0, 11.0, 13.0):
+        for stamp in (10.0, 11.0, 12.0, 13.0):
             cache.add(imu_message(stamp))
-
         with cache._lock:
             retained = tuple(item.stamp_s for item in cache._samples)
-        self.assertEqual((12.0, 11.0, 13.0), retained)
+        self.assertEqual((11.0, 12.0, 13.0), retained)
         self.assertEqual(11.0, cache.aligned(11.0).stamp_s)
 
-    def test_nearest_selection_is_deterministic_for_ties_and_regression(self):
-        cache = perception_node.ImuCache(max_skew_s=2.0)
-        first = cache.add(imu_message(11.0))
-        cache.add(imu_message(9.0))
+    def test_source_regression_and_duplicate_are_sticky_and_not_aligned(self):
+        cache = perception_node.ImuCache(max_skew_s=0.05)
+        accepted = cache.add(imu_message(10.0), receipt_s=10.0)
+        with self.assertRaisesRegex(ValueError, "E_IMU_SOURCE_CHRONOLOGY"):
+            cache.add(imu_message(9.0), receipt_s=10.1)
+        with self.assertRaisesRegex(ValueError, "E_IMU_SOURCE_CHRONOLOGY"):
+            cache.add(imu_message(9.1), receipt_s=10.2)
+        with self.assertRaisesRegex(ValueError, "E_IMU_SOURCE_CHRONOLOGY"):
+            cache.add(imu_message(10.0), receipt_s=10.3)
+        self.assertIs(accepted, cache.aligned(10.0))
+        self.assertIsNone(cache.aligned(9.1))
+        diagnostics = cache.diagnostics()
+        self.assertEqual("E_IMU_SOURCE_CHRONOLOGY", diagnostics["imu_chronology_failure"])
+        self.assertEqual(3, diagnostics["imu_invalid_samples"])
 
+    def test_receipt_regression_equal_and_future_are_rejected(self):
+        cache = perception_node.ImuCache(max_future_s=0.05)
+        cache.add(imu_message(10.0), receipt_s=10.0)
+        with self.assertRaisesRegex(ValueError, "E_IMU_RECEIPT_CHRONOLOGY"):
+            cache.add(imu_message(10.1), receipt_s=9.0)
+        with self.assertRaisesRegex(ValueError, "E_IMU_RECEIPT_CHRONOLOGY"):
+            cache.add(imu_message(10.2), receipt_s=9.1)
+        self.assertIsNone(cache.aligned(10.1))
+        self.assertEqual("E_IMU_RECEIPT_CHRONOLOGY", cache.diagnostics()["imu_chronology_failure"])
+
+        equal_receipt = perception_node.ImuCache()
+        equal_receipt.add(imu_message(10.0), receipt_s=10.0)
+        with self.assertRaisesRegex(ValueError, "E_IMU_RECEIPT_CHRONOLOGY"):
+            equal_receipt.add(imu_message(10.1), receipt_s=10.0)
+
+        future = perception_node.ImuCache(max_future_s=0.05)
+        future.add(imu_message(10.0), receipt_s=10.0)
+        with self.assertRaisesRegex(ValueError, "E_IMU_FUTURE"):
+            future.add(imu_message(10.2), receipt_s=10.1)
+        self.assertIsNone(future.aligned(10.2))
+        self.assertEqual("E_IMU_FUTURE", future.diagnostics()["imu_chronology_failure"])
+
+    def test_ordinary_gaps_are_recorded_without_invalidating_samples(self):
+        cache = perception_node.ImuCache(max_gap_s=0.5, max_skew_s=0.01)
+        first = cache.add(imu_message(10.0), receipt_s=10.0)
+        second = cache.add(imu_message(12.0), receipt_s=13.0)
+        diagnostics = cache.diagnostics()
+        self.assertEqual(2.0, diagnostics["imu_source_gap_s"])
+        self.assertEqual(3.0, diagnostics["imu_receipt_gap_s"])
+        self.assertEqual(0.5, diagnostics["imu_source_rate_hz"])
+        self.assertEqual(1.0 / 3.0, diagnostics["imu_receipt_rate_hz"])
+        self.assertEqual(1, diagnostics["imu_source_gap_count"])
+        self.assertEqual(1, diagnostics["imu_receipt_gap_count"])
+        self.assertEqual("", diagnostics["imu_chronology_failure"])
         self.assertIs(first, cache.aligned(10.0))
+        self.assertIs(second, cache.aligned(12.0))
 
     def test_empty_stale_future_and_boundary_timestamps(self):
         cache = perception_node.ImuCache(max_skew_s=0.5)

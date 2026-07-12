@@ -28,6 +28,55 @@ def load(name, path):
 
 runner = load("glim_runner", RUNNER_PATH)
 converter = load("glim_converter", CONVERTER_PATH)
+class CdrWriter:
+    def __init__(self):
+        self.data = bytearray(runner.CDR_LE)
+
+    def primitive(self, code, value, alignment):
+        self.data.extend(b"\0" * ((-(len(self.data) - 4)) % alignment))
+        self.data.extend(struct.pack(code, value))
+
+    def string(self, value):
+        raw = value.encode() + b"\0"
+        self.primitive("<I", len(raw), 4); self.data.extend(raw)
+
+
+def lidar_cdr(times=(10, 20), *, bigendian=False, point_step=24, field_name="t", finite=True):
+    writer = CdrWriter()
+    writer.primitive("<i", 1, 4); writer.primitive("<I", 2, 4); writer.string("lidar")
+    writer.primitive("<I", 1, 4); writer.primitive("<I", len(times), 4)
+    writer.primitive("<I", len(runner.GLIM_LIDAR_FIELDS), 4)
+    for name, offset, datatype, count in runner.GLIM_LIDAR_FIELDS:
+        writer.string(field_name if name == "t" else name); writer.primitive("<I", offset, 4)
+        writer.primitive("<B", datatype, 1); writer.primitive("<I", count, 4)
+    writer.primitive("<?", bigendian, 1); writer.primitive("<I", point_step, 4)
+    writer.primitive("<I", point_step * len(times), 4)
+    point_x = 1.0 if finite else float("nan")
+    data = b"".join(struct.pack("<ffffIBBBB", point_x, 2.0, 3.0, 4.0, time, 2, 3, 4, 5)
+                    for time in times)
+    writer.primitive("<I", len(data), 4); writer.data.extend(data)
+    writer.primitive("<?", True, 1)
+    return bytes(writer.data)
+
+
+def imu_cdr(*, finite=True):
+    writer = CdrWriter()
+    writer.primitive("<i", 1, 4); writer.primitive("<I", 3, 4); writer.string("imu")
+    for count in (4, 9, 3, 9, 3, 9):
+        for _ in range(count):
+            writer.primitive("<d", 0.0 if finite else float("nan"), 8)
+    return bytes(writer.data)
+
+
+def semantic_digest(connection):
+    digest = hashlib.sha256()
+    for topic, timestamp, payload in connection.execute(
+            "SELECT t.name,m.timestamp,m.data FROM messages m JOIN topics t ON t.id=m.topic_id "
+            "ORDER BY m.timestamp,m.id"):
+        payload = bytes(payload)
+        digest.update(struct.pack("<IQ", len(topic), timestamp)); digest.update(topic.encode())
+        digest.update(struct.pack("<I", len(payload))); digest.update(payload)
+    return digest.hexdigest()
 
 
 class GlimStaticContracts(unittest.TestCase):
@@ -114,13 +163,11 @@ class Rosbag2ValidationTests(unittest.TestCase):
         for topic_id, (name, (kind, count)) in enumerate(runner.TOPICS.items(), 1):
             connection.execute("INSERT INTO topics VALUES(?,?,?,?,?)", (topic_id, name, kind, "cdr", ""))
             timestamp = first if topic_id == 1 else last
-            connection.executemany("INSERT INTO messages(topic_id,timestamp,data) VALUES(?,?,?)", [(topic_id, timestamp, b"x")] * count)
+            payload = lidar_cdr() if topic_id == 1 else imu_cdr()
+            connection.executemany("INSERT INTO messages(topic_id,timestamp,data) VALUES(?,?,?)",
+                                   [(topic_id, timestamp, payload)] * count)
         connection.commit()
-        semantic = hashlib.sha256()
-        for topic, timestamp, payload in connection.execute(
-                "SELECT t.name,m.timestamp,m.data FROM messages m JOIN topics t ON t.id=m.topic_id ORDER BY m.timestamp,m.id"):
-            semantic.update(struct.pack("<IQ", len(topic), timestamp)); semantic.update(topic.encode())
-            semantic.update(struct.pack("<I", len(payload))); semantic.update(payload)
+        semantic = semantic_digest(connection)
         connection.close()
         (self.root / "metadata.yaml").write_text(runner.expected_metadata(first, last, self.db.name))
         value = {"schema_version": 1, "artifact_id": "wheelchair.glim_rosbag2_input/v1", "nuc_runtime_artifact": False,
@@ -130,10 +177,66 @@ class Rosbag2ValidationTests(unittest.TestCase):
                             "database_sha256": runner.sha256_file(self.db), "metadata_sha256": runner.sha256_file(self.root / "metadata.yaml"),
                             "topics": {name: {"type": kind, "count": count} for name, (kind, count) in runner.TOPICS.items()},
                             "first_storage_time_ns": first, "last_storage_time_ns": last,
-                            "ros2_semantic_stream_sha256": semantic.hexdigest()}}
+                            "ros2_semantic_stream_sha256": semantic}}
         self.manifest = self.root / "glim_rosbag2_manifest.json"; self.manifest.write_text(json.dumps(value))
 
     def tearDown(self): self.temp.cleanup()
+    def rebind(self):
+        connection = sqlite3.connect(self.db)
+        connection.commit()
+        semantic = semantic_digest(connection)
+        connection.close()
+        value = json.loads(self.manifest.read_text())
+        value["output"]["database_sha256"] = runner.sha256_file(self.db)
+        value["output"]["metadata_sha256"] = runner.sha256_file(self.root / "metadata.yaml")
+        value["output"]["ros2_semantic_stream_sha256"] = semantic
+        self.manifest.write_text(json.dumps(value))
+
+    def replace_topic_payload(self, topic, payload):
+        connection = sqlite3.connect(self.db)
+        connection.execute(
+            "UPDATE messages SET data=? WHERE topic_id=(SELECT id FROM topics WHERE name=?)",
+            (payload, topic))
+        connection.commit(); connection.close()
+        self.rebind()
+
+    def test_cdr_deserializers_reject_opaque_malformed_and_wrong_field(self):
+        with self.assertRaisesRegex(ValueError, "encapsulation"):
+            runner.validate_lidar_cdr(b"x")
+        with self.assertRaisesRegex(ValueError, "encapsulation"):
+            runner.validate_imu_cdr(b"x")
+        with self.assertRaisesRegex(ValueError, "field ABI"):
+            runner.validate_lidar_cdr(lidar_cdr(field_name="q"))
+        with self.assertRaisesRegex(ValueError, "layout"):
+            runner.validate_lidar_cdr(lidar_cdr(bigendian=True))
+        with self.assertRaisesRegex(ValueError, "layout"):
+            runner.validate_lidar_cdr(lidar_cdr(point_step=20))
+        with self.assertRaisesRegex(ValueError, "nonfinite"):
+            runner.validate_lidar_cdr(lidar_cdr(finite=False))
+        with self.assertRaisesRegex(ValueError, "nonfinite"):
+            runner.validate_imu_cdr(imu_cdr(finite=False))
+
+    def test_manifest_rejects_malformed_cdr_and_constant_point_time_after_rebinding(self):
+        self.replace_topic_payload("/sensors/imu/data", b"\x00\x01\x00\x00")
+        with self.assertRaisesRegex(ValueError, "malformed CDR"):
+            runner.validate_ros2_manifest(self.manifest)
+        self.replace_topic_payload("/sensors/imu/data", imu_cdr())
+        self.replace_topic_payload("/sensors/lidar/points", lidar_cdr((7, 7)))
+        with self.assertRaisesRegex(ValueError, "constant-invalid"):
+            runner.validate_ros2_manifest(self.manifest)
+
+    def test_wrong_cdr_connection_is_rejected_after_rebinding(self):
+        connection = sqlite3.connect(self.db)
+        connection.execute("UPDATE topics SET serialization_format='json' WHERE name='/sensors/imu/data'")
+        connection.commit(); connection.close()
+        self.rebind()
+        with self.assertRaisesRegex(ValueError, "connection ABI"):
+            runner.validate_ros2_manifest(self.manifest)
+    def test_manifest_symlink_is_rejected(self):
+        alias = self.root / "manifest-alias.json"
+        alias.symlink_to(self.manifest.name)
+        with self.assertRaisesRegex(ValueError, "manifest must not be a symlink"):
+            runner.validate_ros2_manifest(alias)
 
     def test_exact_types_counts_timestamps_and_hashes_are_validated(self):
         value, directory, database = runner.validate_ros2_manifest(self.manifest)

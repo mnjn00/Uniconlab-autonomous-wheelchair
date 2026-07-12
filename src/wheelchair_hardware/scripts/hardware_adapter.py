@@ -27,6 +27,14 @@ from driver_contract import DriverContractError, load_manifest, preflight
 
 
 _REQUIRED_RUNTIME_EVIDENCE = ("platform_matches", "base_model_matches", "graph_valid")
+_RELEASE_MANIFEST_SCHEMA = "wheelchair-noetic-release-manifest/v1"
+_RUNTIME_RECEIPT_FIELDS = (
+    "schema_version", "status", "driver_manifest_path", "driver_manifest_sha256",
+    "release_authority_path", "release_authority_sha256", "bundle_manifest_path",
+    "bundle_manifest_sha256", "platform_receipt_path", "platform_receipt_sha256",
+    "graph_receipt_path", "graph_receipt_sha256", "preflight_receipt_path",
+    "preflight_receipt_sha256",
+)
 
 
 def _bool(value):
@@ -157,6 +165,89 @@ def _sha256(value):
         character in "0123456789abcdef" for character in value
     )
 
+def _canonical_hash(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _strict_json(path, fields, label):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DriverContractError("E_FORMAT", label + " is malformed") from exc
+    if not isinstance(value, dict) or set(value) != set(fields):
+        raise DriverContractError("E_FORMAT", label + " fields mismatch")
+    return value
+
+
+def _release_inventory(manifest):
+    if not isinstance(manifest.get("hashes"), dict):
+        raise DriverContractError("E_FORMAT", "release inventory is malformed")
+    inventory = {}
+    for category in manifest["hashes"].values():
+        if not isinstance(category, dict) or set(category) != {"digest", "files"}:
+            raise DriverContractError("E_FORMAT", "release inventory category is malformed")
+        files = category["files"]
+        if not isinstance(files, list):
+            raise DriverContractError("E_FORMAT", "release inventory files are malformed")
+        for entry in files:
+            if (not isinstance(entry, dict) or set(entry) != {"path", "sha256", "executable"}
+                    or not isinstance(entry["path"], str) or not _sha256(entry["sha256"])
+                    or type(entry["executable"]) is not bool or entry["path"] in inventory):
+                raise DriverContractError("E_FORMAT", "release inventory entry is malformed")
+            inventory[entry["path"]] = entry["sha256"]
+    if not inventory:
+        raise DriverContractError("E_FORMAT", "release inventory is empty")
+    return inventory
+
+
+def _release_manifest(path):
+    release = _strict_json(
+        path,
+        ("schema", "source", "hashes", "gate_matrix", "authority", "qualification",
+         "test_reports", "known_blockers", "rollback", "release_binding_sha256"),
+        "release manifest",
+    )
+    if release["schema"] != _RELEASE_MANIFEST_SCHEMA or not _sha256(release["release_binding_sha256"]):
+        raise DriverContractError("E_FORMAT", "release manifest schema or binding is invalid")
+    unsigned = dict(release)
+    unsigned.pop("release_binding_sha256")
+    if _canonical_hash(unsigned) != release["release_binding_sha256"]:
+        raise DriverContractError("E_FORMAT", "release manifest binding mismatch")
+    source, authority = release["source"], release["authority"]
+    if (not isinstance(source, dict) or set(source) != {"kind", "revision", "worktree_clean"}
+            or source["kind"] != "git_commit" or not isinstance(source["revision"], str)
+            or len(source["revision"]) != 40 or not all(c in "0123456789abcdef" for c in source["revision"])
+            or source["worktree_clean"] is not True or not isinstance(authority, dict)
+            or authority.get("hardware_motion_authorized") is not False
+            or authority.get("passenger_operation_authorized") is not False
+            or authority.get("physical_authority") is not False):
+        raise DriverContractError("E_FORMAT", "release manifest authority is invalid")
+    return release, _release_inventory(release)
+
+
+def _measured_platform(receipt, manifest):
+    fields = ("schema_version", "artifact_type", "manufacturer", "model", "serial",
+              "nuc_machine_id_sha256", "base_model_source_sha256")
+    if (set(receipt) != set(fields) or receipt["schema_version"] != 1
+            or receipt["artifact_type"] != "wheelchair-platform-measurement/v1"):
+        raise DriverContractError("E_FORMAT", "platform receipt schema mismatch")
+    platform = manifest.get("platform")
+    if not isinstance(platform, dict) or any(receipt[key] != platform.get(key) for key in fields[2:]):
+        raise DriverContractError("E_FORMAT", "measured platform identity mismatch")
+
+
+def _measured_graph(receipt, manifest):
+    fields = ("schema_version", "artifact_type", "graph_snapshot_sha256",
+              "command_polarity_report_sha256", "timeout_report_sha256",
+              "mode_override_report_sha256", "estop_report_sha256", "odom_tf_report_sha256")
+    if (set(receipt) != set(fields) or receipt["schema_version"] != 1
+            or receipt["artifact_type"] != "wheelchair-graph-measurement/v1"):
+        raise DriverContractError("E_FORMAT", "graph receipt schema mismatch")
+    evidence = manifest.get("evidence")
+    if not isinstance(evidence, dict) or any(receipt[key] != evidence.get(key) for key in fields[2:]):
+        raise DriverContractError("E_FORMAT", "measured graph identity mismatch")
 
 def _contained_regular_file(root, relative):
     root = Path(root)
@@ -182,46 +273,83 @@ def _contained_regular_file(root, relative):
 
 def _load_runtime_evidence(bundle_root, receipt_relative, receipt_sha256,
                            manifest_path, authority_path):
-    """Verify measured runtime facts and every file identity before ROS exists."""
+    """Derive runtime matches from release-inventoried raw measurements."""
     if not _sha256(receipt_sha256):
         raise DriverContractError("E_FORMAT", "runtime evidence SHA-256 is invalid")
     root = Path(bundle_root)
     receipt_path = _contained_regular_file(root, receipt_relative)
     if _contract_hash(receipt_path) != receipt_sha256:
         raise DriverContractError("E_FORMAT", "runtime evidence SHA-256 mismatch")
-    try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise DriverContractError("E_FORMAT", "runtime evidence is malformed") from exc
-    required = {
-        "schema_version", "status", "driver_manifest_path", "driver_manifest_sha256",
-        "release_authority_path", "release_authority_sha256", "bundle_manifest_path",
-        "bundle_manifest_sha256", "platform_matches", "base_model_matches", "graph_valid",
-    }
-    if not isinstance(receipt, dict) or set(receipt) != required:
-        raise DriverContractError("E_FORMAT", "runtime evidence fields mismatch")
-    if receipt.get("schema_version") != 1 or receipt.get("status") != "verified":
+    receipt = _strict_json(receipt_path, _RUNTIME_RECEIPT_FIELDS, "runtime evidence")
+    if receipt["schema_version"] != 2 or receipt["status"] != "verified":
         raise DriverContractError("E_FORMAT", "runtime evidence is not verified")
-    bindings = (
-        ("driver_manifest", Path(manifest_path).resolve(strict=True)),
-        ("release_authority", Path(authority_path).resolve(strict=True)),
-        ("bundle_manifest", None),
-    )
-    for prefix, expected_path in bindings:
-        relative = receipt.get(prefix + "_path")
-        digest = receipt.get(prefix + "_sha256")
+
+    expected_paths = {
+        "driver_manifest": Path(manifest_path).resolve(strict=True),
+        "release_authority": Path(authority_path).resolve(strict=True),
+    }
+    bound = {}
+    for prefix in ("driver_manifest", "release_authority", "bundle_manifest",
+                   "platform_receipt", "graph_receipt", "preflight_receipt"):
+        relative, digest = receipt[prefix + "_path"], receipt[prefix + "_sha256"]
         if not isinstance(relative, str) or not _sha256(digest):
             raise DriverContractError("E_FORMAT", prefix + " binding is invalid")
         candidate = _contained_regular_file(root, relative)
-        if expected_path is not None and candidate.resolve(strict=True) != expected_path:
+        if prefix in expected_paths and candidate.resolve(strict=True) != expected_paths[prefix]:
             raise DriverContractError("E_FORMAT", prefix + " path mismatch")
         if _contract_hash(candidate) != digest:
             raise DriverContractError("E_FORMAT", prefix + " SHA-256 mismatch")
-    evidence = {key: receipt.get(key) for key in _REQUIRED_RUNTIME_EVIDENCE}
-    if any(type(value) is not bool or value is not True for value in evidence.values()):
-        raise DriverContractError("E_FORMAT", "runtime evidence facts are not all measured true")
-    evidence["receipt_verified"] = True
-    return evidence
+        bound[prefix] = (relative, digest, candidate)
+
+    release, inventory = _release_manifest(bound["bundle_manifest"][2])
+    for prefix, (relative, digest, _candidate) in bound.items():
+        if prefix == "bundle_manifest":
+            continue
+        if inventory.get(relative) != digest:
+            raise DriverContractError("E_FORMAT", prefix + " is absent from release inventory")
+
+    manifest = load_manifest(manifest_path)
+    release_authority = load_manifest(authority_path)
+    scope = release_authority.get("release_scope") or {}
+    if (scope.get("hardware_motion_authorized") is not False
+            or scope.get("passenger_operation_authorized") is not False
+            or (release_authority.get("blocked_profiles") or {}).get(
+                "hardware_enabled", {}).get("allowed") is not False):
+        raise DriverContractError("E_FORMAT", "release authority is not fail-closed")
+    _measured_platform(
+        _strict_json(bound["platform_receipt"][2],
+                     ("schema_version", "artifact_type", "manufacturer", "model", "serial",
+                      "nuc_machine_id_sha256", "base_model_source_sha256"),
+                     "platform receipt"),
+        manifest,
+    )
+    _measured_graph(
+        _strict_json(bound["graph_receipt"][2],
+                     ("schema_version", "artifact_type", "graph_snapshot_sha256",
+                      "command_polarity_report_sha256", "timeout_report_sha256",
+                      "mode_override_report_sha256", "estop_report_sha256", "odom_tf_report_sha256"),
+                     "graph receipt"),
+        manifest,
+    )
+    preflight = _strict_json(
+        bound["preflight_receipt"][2],
+        ("schema_version", "artifact_type", "driver_manifest_sha256", "release_authority_sha256",
+         "platform_receipt_sha256", "graph_receipt_sha256", "release_binding_sha256"),
+        "preflight receipt",
+    )
+    if (preflight["schema_version"] != 1
+            or preflight["artifact_type"] != "wheelchair-driver-preflight/v1"
+            or any(preflight[key] != receipt[key] for key in (
+                "driver_manifest_sha256", "release_authority_sha256",
+                "platform_receipt_sha256", "graph_receipt_sha256"))
+            or preflight["release_binding_sha256"] != release["release_binding_sha256"]):
+        raise DriverContractError("E_FORMAT", "preflight receipt binding mismatch")
+    return {
+        "platform_matches": True,
+        "base_model_matches": True,
+        "graph_valid": True,
+        "receipt_verified": True,
+    }
 
 
 def _twist_contract_error(message, command):
@@ -256,6 +384,11 @@ def main():
         manifest_path = os.path.abspath(args.manifest)
         authority_path = os.path.abspath(args.release_authority)
         manifest = load_manifest(manifest_path)
+        if (manifest.get("adapter") or {}).get("mode") == "translated":
+            raise DriverContractError(
+                "E_ADAPTER_MODE",
+                "translated mode is unsupported without a manifest-pinned translator implementation",
+            )
         contract_sha256 = _contract_hash(manifest_path)
         authority = {}
         if args.profile == "hardware_enabled":

@@ -268,7 +268,7 @@ def _sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_hash_bound_runtime_receipt_is_required_and_contained(tmp_path):
+def test_runtime_evidence_rejects_empty_bundle_and_asserted_booleans(tmp_path):
     root = tmp_path / "bundle"
     root.mkdir()
     driver = root / "driver.yaml"
@@ -278,7 +278,7 @@ def test_hash_bound_runtime_receipt_is_required_and_contained(tmp_path):
     authority.write_bytes((ROOT / "contracts/wp0/A16-release-authority.yaml").read_bytes())
     release.write_text("{}")
     receipt = root / "runtime-evidence.json"
-    value = {
+    receipt.write_text(json.dumps({
         "schema_version": 1,
         "status": "verified",
         "driver_manifest_path": driver.name,
@@ -290,28 +290,34 @@ def test_hash_bound_runtime_receipt_is_required_and_contained(tmp_path):
         "platform_matches": True,
         "base_model_matches": True,
         "graph_valid": True,
-    }
-    receipt.write_text(json.dumps(value, sort_keys=True))
-    evidence = hardware_adapter._load_runtime_evidence(
-        root, receipt.name, _sha(receipt), driver, authority
-    )
-    assert evidence == {
-        "platform_matches": True,
-        "base_model_matches": True,
-        "graph_valid": True,
-        "receipt_verified": True,
-    }
-
-    with pytest.raises(DriverContractError):
-        hardware_adapter._load_runtime_evidence(
-            root, "../runtime-evidence.json", _sha(receipt), driver, authority
-        )
-    value["graph_valid"] = False
-    receipt.write_text(json.dumps(value, sort_keys=True))
+    }, sort_keys=True))
     with pytest.raises(DriverContractError):
         hardware_adapter._load_runtime_evidence(
             root, receipt.name, _sha(receipt), driver, authority
         )
+
+
+def test_raw_platform_and_graph_receipts_are_identity_bound():
+    manifest = fixture()
+    platform = dict(manifest["platform"])
+    platform.update({
+        "schema_version": 1,
+        "artifact_type": "wheelchair-platform-measurement/v1",
+    })
+    hardware_adapter._measured_platform(platform, manifest)
+    platform["serial"] = "forged"
+    with pytest.raises(DriverContractError):
+        hardware_adapter._measured_platform(platform, manifest)
+
+    graph = dict(manifest["evidence"])
+    graph.update({
+        "schema_version": 1,
+        "artifact_type": "wheelchair-graph-measurement/v1",
+    })
+    hardware_adapter._measured_graph(graph, manifest)
+    graph["graph_snapshot_sha256"] = "0" * 64
+    with pytest.raises(DriverContractError):
+        hardware_adapter._measured_graph(graph, manifest)
 
 
 def _twist(linear_x=0.0, angular_z=0.0, **axes):

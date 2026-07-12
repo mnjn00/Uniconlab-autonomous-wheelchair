@@ -31,6 +31,8 @@ CANONICAL_LIDAR_FIELDS = [
     ("reflectivity", 22, 2, 1), ("lidar_id", 23, 2, 1),
 ]
 GLIM_LIDAR_FIELDS = CANONICAL_LIDAR_FIELDS[:4] + [("t", 16, 6, 1)] + CANONICAL_LIDAR_FIELDS[5:]
+MAX_CDR_PAYLOAD_BYTES = 64 * 1024 * 1024
+CDR_LE = b"\x00\x01\x00\x00"
 GLIM_POINT_TIME_COMPATIBILITY_CONTRACT = {
     "schema_version": 1,
     "scope": "derived_glim_rosbag2_only",
@@ -140,7 +142,109 @@ def load_input_manifest(path):
 
 
 
+class CdrReader:
+    """Small bounded CDR reader for the two frozen ROS 2 input message ABIs."""
+
+    def __init__(self, payload):
+        self.data = memoryview(payload)
+        if len(self.data) < 4 or self.data[:4].tobytes() != CDR_LE:
+            raise ValueError("CDR encapsulation is not ROS 2 little-endian CDR")
+        self.offset = 4
+
+    def _align(self, alignment):
+        self.offset = 4 + ((self.offset - 4 + alignment - 1) & -alignment)
+
+    def primitive(self, code, alignment):
+        self._align(alignment)
+        size = struct.calcsize(code)
+        if self.offset + size > len(self.data):
+            raise ValueError("malformed CDR payload")
+        value = struct.unpack_from(code, self.data, self.offset)[0]
+        self.offset += size
+        return value
+
+    def string(self):
+        size = self.primitive("<I", 4)
+        if size == 0 or size > len(self.data) - self.offset or self.data[self.offset + size - 1] != 0:
+            raise ValueError("malformed CDR string")
+        value = self.data[self.offset:self.offset + size - 1].tobytes()
+        self.offset += size
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("malformed CDR UTF-8 string") from exc
+
+    def bytes(self):
+        size = self.primitive("<I", 4)
+        if size > len(self.data) - self.offset:
+            raise ValueError("malformed CDR byte sequence")
+        value = self.data[self.offset:self.offset + size]
+        self.offset += size
+        return value
+
+    def done(self):
+        if self.offset != len(self.data):
+            raise ValueError("malformed CDR trailing bytes")
+
+
+def cdr_header(reader):
+    sec = reader.primitive("<i", 4)
+    nanosec = reader.primitive("<I", 4)
+    frame_id = reader.string()
+    if sec < 0 or nanosec >= 1_000_000_000 or not frame_id:
+        raise ValueError("invalid CDR header/frame/time semantics")
+    return sec * 1_000_000_000 + nanosec, frame_id
+
+
+def validate_lidar_cdr(payload):
+    reader = CdrReader(payload)
+    header_time, frame_id = cdr_header(reader)
+    height, width = reader.primitive("<I", 4), reader.primitive("<I", 4)
+    field_count = reader.primitive("<I", 4)
+    if field_count != len(GLIM_LIDAR_FIELDS):
+        raise ValueError("lidar CDR PointCloud2 field ABI mismatch")
+    fields = []
+    for _ in range(field_count):
+        fields.append((reader.string(), reader.primitive("<I", 4),
+                       reader.primitive("<B", 1), reader.primitive("<I", 4)))
+    is_bigendian = reader.primitive("<?", 1)
+    point_step, row_step = reader.primitive("<I", 4), reader.primitive("<I", 4)
+    data = reader.bytes()
+    is_dense = reader.primitive("<?", 1)
+    reader.done()
+    if (tuple(fields) != tuple(GLIM_LIDAR_FIELDS) or height != 1 or width == 0
+            or is_bigendian or not is_dense or point_step != 24
+            or row_step != point_step * width or len(data) != row_step * height):
+        raise ValueError("lidar CDR PointCloud2 layout/field ABI mismatch")
+    time_min = time_max = None
+    for offset in range(0, len(data), point_step):
+        values = struct.unpack_from("<ffff", data, offset)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("lidar CDR contains nonfinite point fields")
+        point_time = struct.unpack_from("<I", data, offset + 16)[0]
+        time_min = point_time if time_min is None else min(time_min, point_time)
+        time_max = point_time if time_max is None else max(time_max, point_time)
+    if time_min is None:
+        raise ValueError("lidar CDR has no point timestamps")
+    return header_time, frame_id, time_min, time_max, width
+
+
+def validate_imu_cdr(payload):
+    reader = CdrReader(payload)
+    header_time, frame_id = cdr_header(reader)
+    values = []
+    for count in (4, 9, 3, 9, 3, 9):
+        values.extend(reader.primitive("<d", 8) for _ in range(count))
+    reader.done()
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("IMU CDR contains nonfinite vector or covariance values")
+    return header_time, frame_id
+
+
 def validate_ros2_manifest(path):
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError("derived rosbag2 manifest must not be a symlink")
     path = path.resolve(strict=True)
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -162,32 +266,61 @@ def validate_ros2_manifest(path):
         raise ValueError("derived rosbag2 storage-time extent mismatch")
     if output.get("database") != "normalized.db3":
         raise ValueError("derived rosbag2 database filename mismatch")
-    database = path.parent / "normalized.db3"
-    metadata = path.parent / "metadata.yaml"
-    if (database.parent != path.parent or metadata.parent != path.parent
-            or database.is_symlink() or metadata.is_symlink()
+    database, metadata = path.parent / "normalized.db3", path.parent / "metadata.yaml"
+    if (database.is_symlink() or metadata.is_symlink()
             or not database.is_file() or not metadata.is_file()):
         raise ValueError("derived rosbag2 files must be direct regular non-symlink files")
     if sha256_file(database) != output.get("database_sha256") or sha256_file(metadata) != output.get("metadata_sha256"):
         raise ValueError("derived rosbag2 hash mismatch")
     if metadata.read_bytes() != expected_metadata(first, last, database.name).encode():
         raise ValueError("derived rosbag2 metadata binding mismatch")
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
-    rows = connection.execute("SELECT t.name,t.type,COUNT(m.id),MIN(m.timestamp),MAX(m.timestamp) FROM topics t LEFT JOIN messages m ON m.topic_id=t.id GROUP BY t.id ORDER BY t.name").fetchall()
-    observed = {name: {"type": kind, "count": count} for name, kind, count, _, _ in rows}
-    if observed != expected or min(row[3] for row in rows) != output.get("first_storage_time_ns") or max(row[4] for row in rows) != output.get("last_storage_time_ns"):
-        connection.close()
-        raise ValueError("derived rosbag2 counts or timestamps mismatch")
+
     semantic = hashlib.sha256()
-    messages = connection.execute(
-        "SELECT t.name,m.timestamp,m.data FROM messages m JOIN topics t ON t.id=m.topic_id ORDER BY m.timestamp,m.id")
-    for topic, timestamp, payload in messages:
-        payload = bytes(payload)
-        semantic.update(struct.pack("<IQ", len(topic), timestamp))
-        semantic.update(topic.encode())
-        semantic.update(struct.pack("<I", len(payload)))
-        semantic.update(payload)
-    connection.close()
+    counts = {name: 0 for name in TOPICS}
+    storage_first = storage_last = header_first = header_last = None
+    lidar_t_min = lidar_t_max = None
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        connections = connection.execute(
+            "SELECT id,name,type,serialization_format FROM topics ORDER BY name").fetchall()
+        expected_connections = {(name, kind, "cdr") for name, (kind, _) in TOPICS.items()}
+        if {(name, kind, serialization) for _, name, kind, serialization in connections} != expected_connections:
+            raise ValueError("derived rosbag2 topic/type/CDR connection ABI mismatch")
+        if len(connections) != len(expected_connections):
+            raise ValueError("derived rosbag2 has duplicate topic connections")
+        messages = connection.execute(
+            "SELECT t.name,m.timestamp,m.data FROM messages m JOIN topics t ON t.id=m.topic_id "
+            "ORDER BY m.timestamp,m.id")
+        for topic, timestamp, payload in messages:
+            if topic not in counts or isinstance(timestamp, bool) or not isinstance(timestamp, int):
+                raise ValueError("derived rosbag2 message connection/timestamp mismatch")
+            payload = bytes(payload)
+            if len(payload) > MAX_CDR_PAYLOAD_BYTES:
+                raise ValueError("CDR payload exceeds bounded validation limit")
+            if topic == "/sensors/lidar/points":
+                header_time, _frame, point_t_min, point_t_max, _point_count = validate_lidar_cdr(payload)
+                lidar_t_min = point_t_min if lidar_t_min is None else min(lidar_t_min, point_t_min)
+                lidar_t_max = point_t_max if lidar_t_max is None else max(lidar_t_max, point_t_max)
+            else:
+                header_time, _frame = validate_imu_cdr(payload)
+            counts[topic] += 1
+            storage_first = timestamp if storage_first is None else min(storage_first, timestamp)
+            storage_last = timestamp if storage_last is None else max(storage_last, timestamp)
+            header_first = header_time if header_first is None else min(header_first, header_time)
+            header_last = header_time if header_last is None else max(header_last, header_time)
+            semantic.update(struct.pack("<IQ", len(topic), timestamp))
+            semantic.update(topic.encode())
+            semantic.update(struct.pack("<I", len(payload)))
+            semantic.update(payload)
+    finally:
+        connection.close()
+    if (counts != {name: item["count"] for name, item in expected.items()}
+            or storage_first != first or storage_last != last):
+        raise ValueError("derived rosbag2 deserialized counts or storage timestamps mismatch")
+    if header_first is None or header_last is None:
+        raise ValueError("derived rosbag2 has no deserialized header timestamps")
+    if lidar_t_min is None or lidar_t_max is None or lidar_t_min == lidar_t_max:
+        raise ValueError("lidar CDR point timestamps are missing or constant-invalid")
     expected_semantic = output.get("ros2_semantic_stream_sha256")
     if not isinstance(expected_semantic, str) or semantic.hexdigest() != expected_semantic:
         raise ValueError("derived rosbag2 semantic stream hash mismatch")

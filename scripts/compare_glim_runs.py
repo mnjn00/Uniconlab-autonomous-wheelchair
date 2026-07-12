@@ -7,6 +7,8 @@ import csv
 import hashlib
 import json
 import math
+import os
+import stat
 import sys
 from pathlib import Path
 
@@ -236,125 +238,203 @@ def write_report(path, report):
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+ROOT_RECEIPT_FIELDS = {
+    "schema_version", "artifact_id", "status", "execution_scope", "nuc_runtime_dependency",
+    "claim_label", "qualification", "image", "source_revision", "glim_ros2_revision",
+    "seed", "threads", "input_manifest_sha256", "ros2_database_sha256", "config_sha256",
+    "config_entrypoint_sha256", "runs",
+}
+RUN_RECEIPT_FIELDS = {
+    "run_id", "directory", "status", "failure", "pseudo_point_time_diagnostics",
+    "returncode", "command", "image", "source_revision", "glim_ros2_revision",
+    "seed", "threads", "elapsed_s", "artifacts",
+}
+REQUIRED_ARTIFACTS = {"trajectory.csv", "occupancy.pgm", "occupancy.yaml", "actual_output_evidence.json", "stdout.log", "stderr.log"}
+CONFIG_DESTINATIONS = {
+    "/opt/glim-config/config.json", "/opt/glim-config/config_preprocess.json",
+    "/opt/glim-config/config_odometry_cpu.json", "/opt/glim-config/config_global_mapping_cpu.json",
+}
+
+
+def require_sha256(value, name):
+    if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+        raise ValueError("%s must be a lowercase SHA-256" % name)
+
+
+def safe_path(path, name, directory=False):
+    path = Path(path).absolute()
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        try:
+            mode = os.lstat(current).st_mode
+        except OSError as error:
+            raise ValueError("%s is missing: %s" % (name, error))
+        if stat.S_ISLNK(mode):
+            raise ValueError("%s contains a symlink: %s" % (name, current))
+    if directory:
+        if not stat.S_ISDIR(mode):
+            raise ValueError("%s is not a directory" % name)
+    elif not stat.S_ISREG(mode):
+        raise ValueError("%s is not a regular file" % name)
+    return path
+
+
+def receipt_path(root, relative, name, directory=False):
+    relative = Path(relative)
+    if relative.is_absolute() or any(part in ("", ".", "..") for part in relative.parts):
+        raise ValueError("%s escapes its receipt root" % name)
+    return safe_path(root / relative, name, directory)
+
+
+def validate_artifacts(root, run_dir, artifacts):
+    if not isinstance(artifacts, dict) or not REQUIRED_ARTIFACTS.issubset(artifacts):
+        raise ValueError("run artifact receipt is skeletal")
+    actual = set()
+    for directory, dirs, files in os.walk(run_dir, followlinks=False):
+        directory = Path(directory)
+        if any((directory / child).is_symlink() for child in dirs):
+            raise ValueError("run artifact tree contains a symlink")
+        for child in files:
+            relative = (directory / child).relative_to(run_dir).as_posix()
+            if relative != "run_manifest.json":
+                actual.add(relative)
+    if set(artifacts) != actual:
+        raise ValueError("run artifact receipt does not exactly enumerate regular artifacts")
+    for relative, receipt in artifacts.items():
+        if not isinstance(receipt, dict) or set(receipt) != {"sha256", "size_bytes"}:
+            raise ValueError("artifact receipt schema is invalid: " + relative)
+        require_sha256(receipt.get("sha256"), "artifact sha256")
+        if isinstance(receipt.get("size_bytes"), bool) or not isinstance(receipt.get("size_bytes"), int) or receipt["size_bytes"] < 0:
+            raise ValueError("artifact size is invalid: " + relative)
+        artifact = receipt_path(root, Path(run_dir.name) / relative, "artifact " + relative)
+        if artifact.stat().st_size != receipt["size_bytes"] or sha256_file(artifact) != receipt["sha256"]:
+            raise ValueError("artifact hash mismatch: " + relative)
+
+
+def receipt_bindings(command, image, manifest):
+    if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
+        raise ValueError("run command receipt is invalid")
+    required = {"--network=none", "--read-only", "--security-opt=no-new-privileges", "--cap-drop=ALL",
+                "--env=OMP_NUM_THREADS=1", "--env=OPENBLAS_NUM_THREADS=1", "--env=MKL_NUM_THREADS=1",
+                "--label=wheelchair.offline-only=true"}
+    if not required.issubset(command) or image not in command:
+        raise ValueError("run command is not the required offline immutable invocation")
+    sources = {}
+    for item in command:
+        if item.startswith("--mount=type=bind,src=") and ",dst=" in item:
+            source, destination = item[len("--mount=type=bind,src="):].split(",dst=", 1)
+            destination = destination.split(",", 1)[0]
+            if destination in CONFIG_DESTINATIONS | {"/input/rosbag2"}:
+                if not source or destination in sources:
+                    raise ValueError("input/config mount receipt is invalid")
+                sources[destination] = source
+    if set(sources) != CONFIG_DESTINATIONS | {"/input/rosbag2"}:
+        raise ValueError("run command omits immutable input/config mounts")
+    input_root = safe_path(sources["/input/rosbag2"], "input mount", directory=True)
+    input_manifest = safe_path(input_root / "glim_rosbag2_manifest.json", "input manifest")
+    database = safe_path(input_root / "normalized.db3", "input database")
+    if sha256_file(input_manifest) != manifest["input_manifest_sha256"] or sha256_file(database) != manifest["ros2_database_sha256"]:
+        raise ValueError("input/database receipt does not bind to command mount")
+    config_paths = tuple(sources[name] for name in sorted(CONFIG_DESTINATIONS))
+    for source in config_paths:
+        safe_path(source, "config mount")
+    config_root = Path(config_paths[0]).parent
+    if any(Path(source).parent != config_root for source in config_paths):
+        raise ValueError("config mounts do not share one immutable bundle")
+    if (sha256_file(safe_path(config_root / "manifest.json", "config manifest")) != manifest["config_sha256"]
+            or sha256_file(safe_path(sources["/opt/glim-config/config.json"], "config entrypoint")) != manifest["config_entrypoint_sha256"]):
+        raise ValueError("config receipt does not bind to command mounts")
+    return tuple(config_paths), str(input_root)
+
+
+def validate_receipts(root):
+    manifest = json.loads(receipt_path(root, "repro_manifest.json", "reproduction receipt").read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or set(manifest) != ROOT_RECEIPT_FIELDS:
+        raise ValueError("reproduction receipt schema is invalid")
+    fixed = {"schema_version": 2, "artifact_id": "wheelchair.glim-reproduction/v2", "status": "success",
+             "execution_scope": "OFFLINE_WORKSTATION_ONLY", "nuc_runtime_dependency": False,
+             "claim_label": "REPLAY_CONSISTENCY_NOT_TRUTH", "qualification": "candidate"}
+    if any(manifest.get(key) != value for key, value in fixed.items()):
+        raise ValueError("reproduction receipt immutable contract mismatch")
+    for key in ("image", "source_revision", "glim_ros2_revision"):
+        if not isinstance(manifest[key], str) or not manifest[key]:
+            raise ValueError("reproduction receipt lacks " + key)
+    if "@sha256:" not in manifest["image"]:
+        raise ValueError("reproduction image is not digest-pinned")
+    for key in ("input_manifest_sha256", "ros2_database_sha256", "config_sha256", "config_entrypoint_sha256"):
+        require_sha256(manifest[key], key)
+    if isinstance(manifest["seed"], bool) or not isinstance(manifest["seed"], int) or isinstance(manifest["threads"], bool) or manifest["threads"] != 1:
+        raise ValueError("reproduction seed/thread receipt is invalid")
+    if not isinstance(manifest["runs"], list) or len(manifest["runs"]) != 3:
+        raise ValueError("reproduction receipt must contain exactly three runs")
+    immutable, sources, validated = ("image", "source_revision", "glim_ros2_revision", "seed", "threads"), None, []
+    for expected_id, receipt in enumerate(manifest["runs"], 1):
+        directory = "run-%02d" % expected_id
+        if not isinstance(receipt, dict) or set(receipt) != RUN_RECEIPT_FIELDS:
+            raise ValueError("run receipt schema is invalid")
+        if (receipt["run_id"] != expected_id or receipt["directory"] != directory or receipt["status"] != "success"
+                or receipt["failure"] is not None or receipt["returncode"] != 0 or receipt["pseudo_point_time_diagnostics"] != []):
+            raise ValueError("run failed or is not isolated")
+        run_dir = receipt_path(root, directory, "run directory", directory=True)
+        per_run = json.loads(receipt_path(root, directory + "/run_manifest.json", "per-run receipt").read_text(encoding="utf-8"))
+        if per_run != receipt:
+            raise ValueError("root and per-run receipts disagree")
+        if any(receipt[key] != manifest[key] for key in immutable):
+            raise ValueError("cross-run immutable receipt mismatch")
+        current_sources = receipt_bindings(receipt["command"], manifest["image"], manifest)
+        if sources is None:
+            sources = current_sources
+        elif sources != current_sources:
+            raise ValueError("cross-run immutable input/config receipt mismatch")
+        validate_artifacts(root, run_dir, receipt["artifacts"])
+        validated.append((expected_id, run_dir, receipt))
+    return validated
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repro-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--time-tolerance-s", type=float, default=TIME_TOLERANCE_S)
+    parser.add_argument("--time-tolerance-s", type=float)
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    report = {
-        "schema_version": 1,
-        "artifact_id": "wheelchair.glim-comparison/v1",
-        "claim_label": "REPLAY_CONSISTENCY_NOT_TRUTH",
-        "qualification": "candidate",
-        "hardware_localization_accuracy_qualified": False,
-        "thresholds": {
-            "pairwise_position_rms_m": POSITION_RMS_LIMIT_M,
-            "pairwise_yaw_rms_deg": YAW_RMS_LIMIT_DEG,
-            "occupancy_iou_min": OCCUPANCY_IOU_LIMIT,
-            "loop_position_report_target_m": LOOP_POSITION_TARGET_M,
-            "loop_yaw_report_target_deg": LOOP_YAW_TARGET_DEG,
-        },
-        "limitations": [
-            "Rigid SE(2) alignment removes only frame origin and heading; it does not fit scale or time shift.",
-            "Consistency between repeated estimator runs is not localization or map truth.",
-            "This report cannot authorize wheelchair, NUC, route, campus, or passenger operation.",
-        ],
-        "runs": [],
-        "pairs": [],
-        "errors": [],
-    }
-    trajectories = {}
-    grids = {}
+    report = {"schema_version": 1, "artifact_id": "wheelchair.glim-comparison/v1",
+              "claim_label": "REPLAY_CONSISTENCY_NOT_TRUTH", "qualification": "candidate",
+              "hardware_localization_accuracy_qualified": False,
+              "thresholds": {"pairwise_position_rms_m": POSITION_RMS_LIMIT_M, "pairwise_yaw_rms_deg": YAW_RMS_LIMIT_DEG,
+                             "occupancy_iou_min": OCCUPANCY_IOU_LIMIT, "loop_position_report_target_m": LOOP_POSITION_TARGET_M,
+                             "loop_yaw_report_target_deg": LOOP_YAW_TARGET_DEG, "time_tolerance_s": TIME_TOLERANCE_S},
+              "limitations": ["Rigid SE(2) alignment removes only frame origin and heading; it does not fit scale or time shift.",
+                              "Consistency between repeated estimator runs is not localization or map truth.",
+                              "This report cannot authorize wheelchair, NUC, route, campus, or passenger operation."],
+              "runs": [], "pairs": [], "errors": []}
+    trajectories, grids = {}, {}
     try:
-        root = args.repro_dir.resolve(strict=True)
-        manifest = json.loads((root / "repro_manifest.json").read_text(encoding="utf-8"))
-        runs = manifest.get("runs", [])
-        if len(runs) != 3:
-            raise ValueError("reproduction manifest must contain exactly three runs")
-        for expected_id, run in enumerate(runs, 1):
-            expected_directory = "run-%02d" % expected_id
-            run_dir = root / expected_directory
-            entry = {"run_id": expected_id, "status": run.get("status"), "directory": expected_directory}
-            if (
-                run.get("run_id") != expected_id
-                or run.get("directory") != expected_directory
-                or run.get("status") != "success"
-            ):
-                entry["error"] = "run failed or has invalid identity"
-                report["errors"].append("run-%02d is not successful and isolated" % expected_id)
-            recorded_artifacts = run.get("artifacts", {})
-            for name in ("trajectory.csv", "occupancy.pgm", "occupancy.yaml"):
-                artifact = recorded_artifacts.get(name, {})
-                artifact_path = run_dir / name
-                if not artifact_path.is_file() or artifact.get("sha256") != sha256_file(artifact_path):
-                    entry["error"] = "missing or hash-mismatched " + name
-                    report["errors"].append(
-                        "run-%02d artifact hash invalid: %s" % (expected_id, name)
-                    )
-            try:
-                trajectories[expected_id] = load_trajectory(run_dir / "trajectory.csv")
-                grids[expected_id] = load_grid(run_dir / "occupancy.pgm", run_dir / "occupancy.yaml")
-                entry["trajectory"] = gap_metrics(trajectories[expected_id])
-                entry["loop_residual"] = loop_metrics(trajectories[expected_id])
-                entry["trajectory_sha256"] = sha256_file(run_dir / "trajectory.csv")
-                entry["occupancy_sha256"] = grids[expected_id]["sha256"]
-            except (OSError, ValueError, csv.Error) as error:
-                entry["error"] = str(error)
-                report["errors"].append("run-%02d output invalid: %s" % (expected_id, error))
-            report["runs"].append(entry)
+        root = safe_path(args.repro_dir, "reproduction root", directory=True)
+        if args.time_tolerance_s is not None and args.time_tolerance_s != TIME_TOLERANCE_S:
+            raise ValueError("time tolerance is frozen at %s" % TIME_TOLERANCE_S)
+        for run_id, run_dir, receipt in validate_receipts(root):
+            trajectory_path = receipt_path(root, run_dir.name + "/trajectory.csv", "trajectory")
+            pgm_path = receipt_path(root, run_dir.name + "/occupancy.pgm", "occupancy map")
+            yaml_path = receipt_path(root, run_dir.name + "/occupancy.yaml", "occupancy metadata")
+            trajectories[run_id], grids[run_id] = load_trajectory(trajectory_path), load_grid(pgm_path, yaml_path)
+            report["runs"].append({"run_id": run_id, "status": receipt["status"], "directory": run_dir.name,
+                                   "trajectory": gap_metrics(trajectories[run_id]), "loop_residual": loop_metrics(trajectories[run_id]),
+                                   "trajectory_sha256": sha256_file(trajectory_path), "occupancy_sha256": grids[run_id]["sha256"]})
         for first_id, second_id in ((1, 2), (1, 3), (2, 3)):
-            if first_id not in trajectories or second_id not in trajectories or first_id not in grids or second_id not in grids:
-                continue
-            trajectory = compare_trajectories(trajectories[first_id], trajectories[second_id], args.time_tolerance_s)
-            grid = occupancy_iou(grids[first_id], grids[second_id])
-            passed = (
-                trajectory["position_rms_m"] <= POSITION_RMS_LIMIT_M
-                and trajectory["yaw_rms_deg"] <= YAW_RMS_LIMIT_DEG
-                and trajectory["time_coverage_pass"]
-                and grid["geometry_equal"]
-                and grid["iou"] >= OCCUPANCY_IOU_LIMIT
-            )
-            report["pairs"].append({
-                "runs": [first_id, second_id],
-                "trajectory": trajectory,
-                "occupancy": grid,
-                "ac3_repeatability_pass": passed,
-            })
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+            trajectory, grid = compare_trajectories(trajectories[first_id], trajectories[second_id], TIME_TOLERANCE_S), occupancy_iou(grids[first_id], grids[second_id])
+            passed = (trajectory["position_rms_m"] <= POSITION_RMS_LIMIT_M and trajectory["yaw_rms_deg"] <= YAW_RMS_LIMIT_DEG and trajectory["time_coverage_pass"] and grid["geometry_equal"] and grid["iou"] >= OCCUPANCY_IOU_LIMIT)
+            report["pairs"].append({"runs": [first_id, second_id], "trajectory": trajectory, "occupancy": grid, "ac3_repeatability_pass": passed})
+    except (OSError, ValueError, json.JSONDecodeError, csv.Error) as error:
         report["errors"].append(str(error))
-    report["loop_target_met_all_runs"] = (
-        len(report["runs"]) == 3
-        and all(run.get("loop_residual", {}).get("target_met", False) for run in report["runs"])
-    )
+    report["loop_target_met_all_runs"] = len(report["runs"]) == 3 and all(run.get("loop_residual", {}).get("target_met", False) for run in report["runs"])
     if not report["loop_target_met_all_runs"]:
-        report["limitations"].append(
-            "One or more loop-closure residuals exceed the diagnostic target; this does not change pairwise repeatability."
-        )
-    valid_successful_runs = (
-        len(report["runs"]) == 3
-        and all(
-            run.get("status") == "success"
-            and "error" not in run
-            and "trajectory" in run
-            and "loop_residual" in run
-            for run in report["runs"]
-        )
-    )
-    report["status"] = (
-        "pass"
-        if (
-            not report["errors"]
-            and valid_successful_runs
-            and len(report["pairs"]) == 3
-            and all(pair["ac3_repeatability_pass"] for pair in report["pairs"])
-        )
-        else "fail"
-    )
+        report["limitations"].append("One or more loop-closure residuals exceed the diagnostic target; this does not change pairwise repeatability.")
+    report["status"] = "pass" if (not report["errors"] and len(report["runs"]) == 3 and len(report["pairs"]) == 3 and all(pair["ac3_repeatability_pass"] for pair in report["pairs"])) else "fail"
     write_report(args.output, report)
     print(str(args.output))
     return 0 if report["status"] == "pass" else 1

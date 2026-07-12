@@ -209,21 +209,53 @@ class _CachedImu:
 
 
 class ImuCache:
-    """Bounded source-stamp cache; receipt time is never used for alignment."""
+    """Bounded IMU cache that accepts only monotonic, locally credible chronology."""
 
-    def __init__(self, expected_frame="imu_link", max_skew_s=0.02, capacity=256):
-        if capacity < 1 or max_skew_s < 0.0:
+    def __init__(
+        self,
+        expected_frame="imu_link",
+        max_skew_s=0.02,
+        capacity=256,
+        max_future_s=0.05,
+        max_gap_s=0.50,
+    ):
+        if capacity < 1 or min(max_skew_s, max_future_s, max_gap_s) < 0.0:
             raise ValueError("invalid IMU cache configuration")
         self.expected_frame = expected_frame
         self.max_skew_s = float(max_skew_s)
+        self.max_future_s = float(max_future_s)
+        self.max_gap_s = float(max_gap_s)
         self._samples = deque(maxlen=capacity)
         self._lock = threading.Lock()
+        self._last_source_stamp_s = None
+        self._last_receipt_s = None
+        self._source_rate_hz = None
+        self._receipt_rate_hz = None
+        self._source_gap_s = None
+        self._receipt_gap_s = None
+        self._source_gap_count = 0
+        self._receipt_gap_count = 0
+        self._invalid_samples = 0
+        self._chronology_failure = None
 
-    def add(self, message):
+    def _reject_chronology(self, code, message):
+        self._invalid_samples += 1
+        self._chronology_failure = code
+        raise PointCloudCodecError(code, message)
+
+    def add(self, message, receipt_s=None):
         frame_id = str(getattr(getattr(message, "header", None), "frame_id", ""))
         if frame_id != self.expected_frame:
             raise PointCloudCodecError("E_FRAME_MAPPING", "unexpected IMU frame")
         stamp_s = stamp_to_seconds(message.header.stamp)
+        if receipt_s is None:
+            receipt_s = stamp_s
+        try:
+            receipt_s = float(receipt_s)
+        except (TypeError, ValueError) as exc:
+            raise PointCloudCodecError("E_IMU_RECEIPT", "invalid IMU receipt time") from exc
+        if not math.isfinite(receipt_s):
+            raise PointCloudCodecError("E_IMU_RECEIPT", "non-finite IMU receipt time")
         orientation = (
             message.orientation.x,
             message.orientation.y,
@@ -251,8 +283,49 @@ class ImuCache:
             tuple(float(value) for value in angular_velocity),
         )
         with self._lock:
+            if self._last_source_stamp_s is not None and stamp_s <= self._last_source_stamp_s:
+                self._reject_chronology(
+                    "E_IMU_SOURCE_CHRONOLOGY",
+                    "IMU source stamp must strictly increase",
+                )
+            if self._last_receipt_s is not None and receipt_s <= self._last_receipt_s:
+                self._reject_chronology(
+                    "E_IMU_RECEIPT_CHRONOLOGY",
+                    "IMU receipt time must strictly increase",
+                )
+            if stamp_s > receipt_s + self.max_future_s:
+                self._reject_chronology(
+                    "E_IMU_FUTURE",
+                    "IMU source stamp exceeds receipt-time future bound",
+                )
+            if self._last_source_stamp_s is not None:
+                self._source_gap_s = stamp_s - self._last_source_stamp_s
+                self._source_rate_hz = 1.0 / self._source_gap_s
+                if self._source_gap_s > self.max_gap_s:
+                    self._source_gap_count += 1
+            if self._last_receipt_s is not None:
+                self._receipt_gap_s = receipt_s - self._last_receipt_s
+                self._receipt_rate_hz = 1.0 / self._receipt_gap_s
+                if self._receipt_gap_s > self.max_gap_s:
+                    self._receipt_gap_count += 1
+            self._last_source_stamp_s = stamp_s
+            self._last_receipt_s = receipt_s
             self._samples.append(_CachedImu(stamp_s, sample))
         return sample
+
+    def diagnostics(self):
+        with self._lock:
+            return {
+                "imu_source_rate_hz": self._source_rate_hz,
+                "imu_receipt_rate_hz": self._receipt_rate_hz,
+                "imu_source_gap_s": self._source_gap_s,
+                "imu_receipt_gap_s": self._receipt_gap_s,
+                "imu_source_gap_count": self._source_gap_count,
+                "imu_receipt_gap_count": self._receipt_gap_count,
+                "imu_invalid_samples": self._invalid_samples,
+                "imu_chronology_failure": self._chronology_failure or "",
+                "imu_future_bound_s": self.max_future_s,
+            }
 
     def aligned(self, cloud_stamp_s):
         with self._lock:
@@ -289,6 +362,8 @@ class PerceptionNode:
             expected_frame=imu_frame,
             max_skew_s=float(rospy.get_param("~imu_alignment_tolerance_s", 0.02)),
             capacity=int(rospy.get_param("~imu_cache_size", 256)),
+            max_future_s=float(rospy.get_param("~imu_max_future_s", 0.05)),
+            max_gap_s=float(rospy.get_param("~imu_max_gap_s", 0.50)),
         )
         self._core = PerceptionCore(config)
         self._obstacle_pub = rospy.Publisher(
@@ -306,24 +381,39 @@ class PerceptionNode:
 
     def _on_imu(self, message):
         try:
-            self._imu_cache.add(message)
+            self._imu_cache.add(message, receipt_s=self._rospy.Time.now().to_sec())
         except (PointCloudCodecError, TypeError, ValueError) as exc:
             self._rejected += 1
             self._rospy.logerr_throttle(1.0, "perception rejected IMU: %s", exc)
+            self._publish_diagnostics(
+                getattr(getattr(message, "header", None), "stamp", self._rospy.Time.now()),
+                None,
+                getattr(exc, "code", "E_IMU"),
+                str(exc),
+            )
 
     def _publish_diagnostics(self, stamp, health, code=None, message=None):
+        imu_diagnostics = self._imu_cache.diagnostics()
+        chronology_failure = imu_diagnostics["imu_chronology_failure"]
         status = self._DiagnosticStatus()
-        ok = bool(health is not None and health.ok and code is None)
+        ok = bool(
+            health is not None
+            and health.ok
+            and code is None
+            and not chronology_failure
+        )
         status.level = self._DiagnosticStatus.OK if ok else self._DiagnosticStatus.ERROR
         status.name = "wheelchair_perception/canonical_adapter"
         status.hardware_id = "navigation_perception"
         status.message = message or (
             (",".join(health.reasons) or health.code)
             if health is not None
-            else code or "unknown"
+            else code or chronology_failure or "unknown"
         )
         values = {
-            "code": code or (health.code if health is not None else "E_UNKNOWN"),
+            "code": code
+            or chronology_failure
+            or (health.code if health is not None else "E_UNKNOWN"),
             "rejected_messages": self._rejected,
             "source_profile": self._source_profile,
             "command_authority": "false",
@@ -336,6 +426,7 @@ class PerceptionNode:
                 or "E_CLOUD_STALE" in getattr(health, "reasons", ())
             ).lower(),
         }
+        values.update(imu_diagnostics)
         status.values = [self._KeyValue(str(key), str(value)) for key, value in values.items()]
         array = self._DiagnosticArray()
         array.header.stamp = stamp

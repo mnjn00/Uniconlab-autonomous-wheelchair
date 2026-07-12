@@ -361,6 +361,10 @@ class SensorCanonicalizerCore:
         self._imu_window_samples = imu_window_samples
         self._imu_max_gap_ns = imu_max_gap_ns
         self._imu_window: Deque[Any] = deque(maxlen=imu_window_samples)
+        self._imu_gap_count = 0
+        self._imu_chronology_failure = ""
+        self._imu_chronology_failure_count = 0
+        self._imu_recovery_pending = False
 
     def _accept_times(self, stream: str, source_ns: int, receipt_ns: int) -> None:
         if isinstance(receipt_ns, bool) or not isinstance(receipt_ns, int) or receipt_ns < 0:
@@ -387,11 +391,32 @@ class SensorCanonicalizerCore:
         return cloud
 
     def _reset_imu(self) -> None:
+        """Discard partial averaging evidence without lowering chronology high-water marks."""
         self._imu_window.clear()
-        self._last["imu"] = (None, None)
+
+    def _record_imu_failure(self, code: str) -> None:
+        self._imu_chronology_failure = code
+        self._imu_chronology_failure_count += 1
+        self._imu_recovery_pending = True
+        self._reset_imu()
+
+    def imu_diagnostics(self) -> Dict[str, Any]:
+        """Return bounded, sticky IMU chronology evidence for the ROS wrapper."""
+        with self._lock:
+            source_ns, receipt_ns = self._last["imu"]
+            return {
+                "imu_source_high_water_ns": source_ns,
+                "imu_receipt_high_water_ns": receipt_ns,
+                "imu_gap_count": self._imu_gap_count,
+                "imu_chronology_failure": self._imu_chronology_failure,
+                "imu_chronology_failure_count": self._imu_chronology_failure_count,
+                "imu_recovery_pending": self._imu_recovery_pending,
+                "imu_window_samples": len(self._imu_window),
+                "imu_window_required": self._imu_window_samples,
+            }
 
     def adapt_imu(self, message: Any, receipt_ns: int) -> Optional[Any]:
-        """Average a full consecutive Gazebo window, retaining latest pose/covariance."""
+        """Average only a complete consecutive window after any chronology failure or gap."""
         try:
             validated = validate_imu(message)
             source_ns = _stamp_ns(validated)
@@ -401,19 +426,36 @@ class SensorCanonicalizerCore:
             raise
         if isinstance(receipt_ns, bool) or not isinstance(receipt_ns, int) or receipt_ns < 0:
             with self._lock:
-                self._reset_imu()
+                self._record_imu_failure("E_RECEIPT_TIME")
             raise SensorValidationError(
                 "E_RECEIPT_TIME", "receipt time must be non-negative integer ns"
             )
         with self._lock:
             previous_source, previous_receipt = self._last["imu"]
-            discontinuous = (
+            if previous_source is not None and source_ns <= previous_source:
+                self._record_imu_failure("E_STAMP_REGRESSION")
+                raise SensorValidationError(
+                    "E_STAMP_REGRESSION",
+                    "IMU source stamp must strictly increase; chronology high-water retained",
+                )
+            if previous_receipt is not None and receipt_ns <= previous_receipt:
+                self._record_imu_failure("E_RECEIPT_REGRESSION")
+                raise SensorValidationError(
+                    "E_RECEIPT_REGRESSION",
+                    "IMU receipt clock must strictly increase; chronology high-water retained",
+                )
+            gap = (
                 previous_source is not None
-                and (source_ns <= previous_source or source_ns - previous_source > self._imu_max_gap_ns)
-            ) or (previous_receipt is not None and receipt_ns < previous_receipt)
-            if discontinuous:
+                and source_ns - previous_source > self._imu_max_gap_ns
+            ) or (
+                previous_receipt is not None
+                and receipt_ns - previous_receipt > self._imu_max_gap_ns
+            )
+            if gap:
+                self._imu_gap_count += 1
+                self._imu_recovery_pending = True
                 self._reset_imu()
-            self._accept_times("imu", source_ns, receipt_ns)
+            self._last["imu"] = (source_ns, receipt_ns)
             self._imu_window.append(validated)
             if len(self._imu_window) < self._imu_window_samples:
                 return None
@@ -428,6 +470,7 @@ class SensorCanonicalizerCore:
                         sum(getattr(getattr(sample, field), axis) for sample in self._imu_window)
                         * scale,
                     )
+            self._imu_recovery_pending = False
             return output
 
 
@@ -477,7 +520,13 @@ class SimSensorCanonicalizer:
         status.name = "wheelchair_gazebo/sim_sensor_canonicalizer/{}".format(sensor)
         status.hardware_id = "simulation"
         status.message = code
-        status.values = [self.KeyValue(key="detail", value=detail)]
+        values = [self.KeyValue(key="detail", value=detail)]
+        if sensor == "imu":
+            values.extend(
+                self.KeyValue(key=str(key), value=str(value))
+                for key, value in self.core.imu_diagnostics().items()
+            )
+        status.values = values
         array = self.DiagnosticArray()
         array.header.stamp = self.rospy.get_rostime()
         array.status = [status]
