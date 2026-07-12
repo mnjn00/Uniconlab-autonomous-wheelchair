@@ -280,7 +280,7 @@ def validate_config_bundle(path):
     expected_determinism = {
         "preprocess_random_grid": False,
         "preprocess_threads": 1,
-        "odometry_target_downsampling_rate": 1.0,
+        "odometry_target_downsampling_rate": 0.1,
         "odometry_threads": 1,
         "global_randomsampling_rate": 1.0,
     }
