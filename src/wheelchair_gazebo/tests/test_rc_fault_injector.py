@@ -5,6 +5,8 @@ import importlib.util
 import json
 import os
 import xml.etree.ElementTree as ET
+import sys
+from types import ModuleType
 
 import pytest
 
@@ -27,6 +29,168 @@ EXPECTED_FAULTS = {
     "cpu_pressure", "queue_pressure", "estop_asserted", "reset_while_asserted",
     "reset_while_moving", "reset_in_auto", "graph_bypass",
 }
+class _FakeBool:
+    def __init__(self, data=False):
+        self.data = data
+
+
+class _FakeString:
+    def __init__(self, data=""):
+        self.data = data
+
+class _FakeTwist:
+    pass
+
+
+class _FakeSafetyState:
+    pass
+
+
+
+class _FakePublisher:
+    def __init__(self, rospy, topic, fail_publish):
+        self.rospy = rospy
+        self.topic = topic
+        self.fail_publish = fail_publish
+        self.unregistered = False
+
+    def get_num_connections(self):
+        return self.rospy.estop_connections if self.topic == injector.ESTOP_TOPIC else 0
+
+    def publish(self, message):
+        if self.fail_publish and self.topic == injector.ESTOP_TOPIC:
+            raise RuntimeError("simulated publish failure")
+        self.rospy.messages.append((self.topic, message))
+
+    def unregister(self):
+        self.unregistered = True
+
+
+class _FakeRospy:
+    class Time:
+        @staticmethod
+        def now():
+            return type("Stamp", (), {"to_sec": lambda self: 1.0})()
+
+    def __init__(self, estop_connections=1, fail_publish=False):
+        self.estop_connections = estop_connections
+        self.fail_publish = fail_publish
+        self.messages = []
+        self.publishers = []
+
+    def Publisher(self, topic, _message_type, queue_size, latch=False):
+        publisher = _FakePublisher(self, topic, self.fail_publish)
+        self.publishers.append(publisher)
+        return publisher
+
+    @staticmethod
+    def Subscriber(*_args, **_kwargs):
+        return object()
+
+    @staticmethod
+    def is_shutdown():
+        return False
+
+
+def _new_fault_injector(monkeypatch, fault_id, **rospy_options):
+    std_msgs = ModuleType("std_msgs")
+    std_msgs_msg = ModuleType("std_msgs.msg")
+    std_msgs_msg.Bool = _FakeBool
+    std_msgs_msg.String = _FakeString
+    std_msgs.msg = std_msgs_msg
+    monkeypatch.setitem(sys.modules, "std_msgs", std_msgs)
+    monkeypatch.setitem(sys.modules, "std_msgs.msg", std_msgs_msg)
+    geometry_msgs = ModuleType("geometry_msgs")
+    geometry_msgs_msg = ModuleType("geometry_msgs.msg")
+    geometry_msgs_msg.Twist = _FakeTwist
+    geometry_msgs.msg = geometry_msgs_msg
+    monkeypatch.setitem(sys.modules, "geometry_msgs", geometry_msgs)
+    monkeypatch.setitem(sys.modules, "geometry_msgs.msg", geometry_msgs_msg)
+
+    wheelchair_interfaces = ModuleType("wheelchair_interfaces")
+    wheelchair_interfaces_msg = ModuleType("wheelchair_interfaces.msg")
+    wheelchair_interfaces_msg.SafetyState = _FakeSafetyState
+    wheelchair_interfaces.msg = wheelchair_interfaces_msg
+    monkeypatch.setitem(sys.modules, "wheelchair_interfaces", wheelchair_interfaces)
+    monkeypatch.setitem(sys.modules, "wheelchair_interfaces.msg", wheelchair_interfaces_msg)
+    rospy = _FakeRospy(**rospy_options)
+    return injector.FaultInjector(rospy, fault_id, timeout_s=1.0, effect_duration_s=0.1), rospy
+
+
+def _event_phases(rospy):
+    return [json.loads(message.data)["phase"] for topic, message in rospy.messages
+            if topic == injector.EVENT_TOPIC]
+
+
+def _estop_values(rospy):
+    return [message.data for topic, message in rospy.messages
+            if topic == injector.ESTOP_TOPIC]
+
+
+def test_normal_run_publishes_external_estop_clear_before_ready_without_reset_or_arm(monkeypatch):
+    machine, rospy = _new_fault_injector(monkeypatch, "normal")
+    monkeypatch.setattr(injector.time, "sleep", lambda _duration: None)
+
+    machine.run()
+
+    assert _estop_values(rospy) == [False] * injector.BASELINE_ESTOP_PUBLISH_COUNT
+    assert _event_phases(rospy) == ["ready", "completed"]
+    assert not [message for topic, message in rospy.messages
+                if topic == "/safety/estop_reset"]
+    assert machine._armed is False
+    first_ready = next(index for index, (topic, message) in enumerate(rospy.messages)
+                       if topic == injector.EVENT_TOPIC
+                       and json.loads(message.data)["phase"] == "ready")
+    assert all(index < first_ready for index, (topic, _message) in enumerate(rospy.messages)
+               if topic == injector.ESTOP_TOPIC)
+
+
+def test_estop_baseline_wait_and_publish_failures_are_bounded_and_fail_closed(monkeypatch):
+    machine, rospy = _new_fault_injector(monkeypatch, "normal", estop_connections=0)
+    ticks = iter((0.0, 0.0, 1.1))
+    monkeypatch.setattr(injector.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(injector.time, "sleep", lambda _duration: None)
+
+    with pytest.raises(injector.FaultError, match="external-estop subscriber"):
+        machine._establish_estop_baseline()
+
+    assert _estop_values(rospy) == []
+    assert rospy.publishers[-1].unregistered
+    monkeypatch.setattr(injector.time, "monotonic", lambda: 2.0)
+
+    machine, rospy = _new_fault_injector(monkeypatch, "normal", fail_publish=True)
+    with pytest.raises(injector.FaultError, match="clear evidence"):
+        machine._establish_estop_baseline()
+
+    assert _estop_values(rospy) == []
+    assert rospy.publishers[-1].unregistered
+
+
+def test_every_fault_run_establishes_the_same_initial_estop_clear(monkeypatch):
+    monkeypatch.setattr(injector.time, "sleep", lambda _duration: None)
+
+    for fault_id in EXPECTED_FAULTS:
+        machine, rospy = _new_fault_injector(monkeypatch, fault_id)
+        machine._wait_preconditions = lambda: None
+        machine.inject = lambda: "simulated effect"
+
+        machine.run()
+
+        assert _estop_values(rospy) == [False] * injector.BASELINE_ESTOP_PUBLISH_COUNT
+        assert _event_phases(rospy)[0] == "ready"
+
+
+@pytest.mark.parametrize("fault_id", ("estop_asserted", "reset_while_asserted"))
+def test_estop_faults_assert_after_baseline_then_deassert(monkeypatch, fault_id):
+    machine, rospy = _new_fault_injector(monkeypatch, fault_id)
+    monkeypatch.setattr(injector.time, "sleep", lambda _duration: None)
+    machine._sleep = lambda _duration: None
+
+    machine._establish_estop_baseline()
+    machine._bool_events()
+
+    assert _estop_values(rospy) == (
+        [False] * injector.BASELINE_ESTOP_PUBLISH_COUNT + [True, False])
 
 
 def test_allowlist_is_exact_and_unknown_faults_fail_closed():
@@ -101,7 +265,8 @@ def test_each_fault_has_a_real_bounded_dispatch_path():
     assert "rosnode.kill_nodes" in source
     assert "SwitchControllerRequest" in source
     assert 'self.rospy.Publisher("/clock"' in source or '"/clock", Clock' in source
-    assert 'self.rospy.Publisher("/safety/estop"' in source
+    assert "ESTOP_TOPIC = \"/safety/estop\"" in source
+    assert "self.rospy.Publisher(ESTOP_TOPIC, Bool, queue_size=1)" in source
     assert 'self.rospy.Publisher("/safety/estop_reset"' in source
 
 

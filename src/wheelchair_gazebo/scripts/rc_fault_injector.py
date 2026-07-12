@@ -13,6 +13,8 @@ import time
 SCHEMA = "wheelchair.sim_fault/v1"
 EVENT_TOPIC = "/simulation/fault_event"
 ACTUATOR_SINK = "/wheelchair_base_controller/cmd_vel"
+ESTOP_TOPIC = "/safety/estop"
+BASELINE_ESTOP_PUBLISH_COUNT = 3
 PHASES = frozenset(("ready", "triggered", "reset_attempted", "completed", "failed"))
 FAULT_IDS = frozenset((
     "lidar_loss", "imu_loss", "odom_loss", "tf_loss", "localizer_loss",
@@ -161,6 +163,24 @@ class FaultInjector:
                 return
             time.sleep(0.02)
         raise FaultError("bounded timeout waiting for %s" % description)
+    def _establish_estop_baseline(self):
+        """Publish explicit simulation-only external-estop clear evidence."""
+        from std_msgs.msg import Bool
+
+        estop = self.rospy.Publisher(ESTOP_TOPIC, Bool, queue_size=1, latch=False)
+        try:
+            self._wait(lambda: estop.get_num_connections() > 0,
+                       "safety-gate external-estop subscriber")
+            for _unused in range(BASELINE_ESTOP_PUBLISH_COUNT):
+                estop.publish(Bool(data=False))
+                time.sleep(0.02)
+        except FaultError:
+            raise
+        except Exception as exc:
+            raise FaultError("failed to publish external-estop clear evidence: %s" % exc)
+        finally:
+            estop.unregister()
+
 
     def _wait_preconditions(self):
         self._wait(lambda: math.isfinite(self._stamp()) and self._stamp() > 0.0,
@@ -315,7 +335,7 @@ class FaultInjector:
 
     def _bool_events(self):
         from std_msgs.msg import Bool
-        estop = self.rospy.Publisher("/safety/estop", Bool, queue_size=1)
+        estop = self.rospy.Publisher(ESTOP_TOPIC, Bool, queue_size=1)
         reset = self.rospy.Publisher("/safety/estop_reset", Bool, queue_size=1)
         try:
             if self.fault_id == "estop_asserted":
@@ -372,6 +392,7 @@ class FaultInjector:
 
     def run(self):
         mode = classify_fault(self.fault_id)
+        self._establish_estop_baseline()
         self.emit("ready", "simulation-only fault injector preflight passed")
         if mode == "normal":
             self.emit("completed", "normal scenario: no injection requested")
