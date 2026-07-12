@@ -76,6 +76,67 @@ def _slope_callback_node(policy_sha256):
     node.nav_stamp = node.safe_stamp = None
     return node
 
+def _odom_message(source):
+    return types.SimpleNamespace(
+        header=types.SimpleNamespace(stamp=types.SimpleNamespace(to_sec=lambda: source)),
+        twist=types.SimpleNamespace(
+            twist=types.SimpleNamespace(
+                linear=types.SimpleNamespace(x=0.0),
+                angular=types.SimpleNamespace(z=0.0),
+            )
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "offset,expected",
+    (
+        (cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, True),
+        (cs.CLOCK_FUTURE_TOLERANCE_S, True),
+        (cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, False),
+    ),
+)
+def test_odom_callback_allows_only_future_tolerance_source_receipt_skew(
+    monkeypatch, offset, expected
+):
+    node = _slope_callback_node("a" * 64)
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: 1.0)
+            )
+        ),
+    )
+
+    source = 1.0 + offset
+    node._odom_cb(_odom_message(source))
+
+    assert node.odom_valid is expected
+    assert node.odom_high_water == (pytest.approx(source) if expected else None)
+
+
+def test_odom_callback_invalidates_duplicate_and_regressing_source(monkeypatch):
+    node = _slope_callback_node("a" * 64)
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: 1.0)
+            )
+        ),
+    )
+
+    node._odom_cb(_odom_message(0.99))
+    assert node.odom_valid
+    node._odom_cb(_odom_message(0.99))
+    assert not node.odom_valid
+    node._odom_cb(_odom_message(0.98))
+    assert not node.odom_valid
+    assert node.odom_high_water == pytest.approx(0.99)
+
 
 @pytest.mark.parametrize(
     "source,evaluation,receipt,expected",
@@ -387,6 +448,71 @@ def test_postprocess_clock_regression_or_nonfinite_is_fail_closed(postprocess_no
     ))
     assert decision.state == cs.STOP
     assert decision.reason == "nonfinite_input"
+
+@pytest.mark.parametrize(
+    "field",
+    ("cloud_stamp_s", "odom_stamp_s", "nav_stamp_s", "safe_stamp_s", "intent_stamp_s"),
+)
+@pytest.mark.parametrize(
+    "offset,accepted",
+    (
+        (cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, True),
+        (cs.CLOCK_FUTURE_TOLERANCE_S, True),
+        (cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, False),
+    ),
+)
+def test_core_timestamp_sources_allow_only_future_tolerance(field, offset, accepted):
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        **{field: 1.0 + offset},
+    ))
+
+    if accepted:
+        assert decision.reason != "invalid_timestamp"
+    else:
+        assert decision.state == cs.STOP
+        assert decision.reason == "invalid_timestamp"
+
+
+@pytest.mark.parametrize(
+    "source,receipt,accepted",
+    (
+        (1.0, 1.0 - cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, True),
+        (1.0, 1.0 - cs.CLOCK_FUTURE_TOLERANCE_S, True),
+        (1.0, 1.0 - cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, False),
+        (0.99, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, True),
+        (0.99, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, True),
+        (0.99, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, False),
+    ),
+)
+def test_core_odom_receipt_allows_only_future_tolerance(source, receipt, accepted):
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        odom_stamp_s=source,
+        odom_receipt_s=receipt,
+    ))
+
+    if accepted:
+        assert decision.reason != "stale_or_mismatched_slope_odom"
+    else:
+        assert decision.state == cs.STOP
+        assert decision.reason == "stale_or_mismatched_slope_odom"
+
+
+def test_core_clamps_valid_future_timestamp_ages_to_zero():
+    future = 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        cloud_stamp_s=future,
+        odom_stamp_s=future,
+        odom_receipt_s=future,
+        nav_stamp_s=future,
+        safe_stamp_s=future,
+        intent_stamp_s=future,
+    ))
+
+    assert decision.reason != "invalid_timestamp"
+    assert (decision.input_age_s, decision.odom_age_s, decision.command_age_s) == (0.0, 0.0, 0.0)
 
 
 def test_slope_buffer_selects_equal_source_restrictive_latest_entry():

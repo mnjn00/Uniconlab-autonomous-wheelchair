@@ -1022,7 +1022,7 @@ class CollisionSupervisorCore:
         stamps = [i.cloud_stamp_s, i.odom_stamp_s, i.safe_stamp_s, intent_stamp]
         if i.nav_available:
             stamps.append(i.nav_stamp_s)
-        if any(stamp < 0.0 or stamp > i.now_s for stamp in stamps):
+        if any(stamp < 0.0 or not _within_future_tolerance(stamp, i.now_s) for stamp in stamps):
             return CORRUPT_DATA | COLLISION, "invalid_timestamp"
         if i.now_s - intent_stamp > self.policy.intent_ttl_s:
             self._last_intent_behavior = None
@@ -1073,7 +1073,9 @@ class CollisionSupervisorCore:
         slope_stamp = i.cloud_stamp_s if i.slope_stamp_s is None else i.slope_stamp_s
         slope_receipt = i.now_s if i.slope_receipt_s is None else i.slope_receipt_s
         if (not _finite(odom_receipt)
-                or odom_receipt < i.odom_stamp_s or odom_receipt > i.now_s
+                or odom_receipt < 0.0
+                or not _within_future_tolerance(i.odom_stamp_s, odom_receipt)
+                or not _within_future_tolerance(odom_receipt, i.now_s)
                 or not _slope_timing_valid(
                     slope_stamp, slope_receipt, i.cloud_stamp_s, i.now_s
                 )):
@@ -1099,13 +1101,18 @@ class CollisionSupervisorCore:
         if not all(_finite(value) for value in
                    (i.now_s, i.cloud_stamp_s, i.odom_stamp_s, i.safe_stamp_s, intent_stamp)):
             return -1.0, -1.0, -1.0
-        command_age = i.now_s - i.safe_stamp_s
+        command_age = _age_within_future_tolerance(i.now_s, i.safe_stamp_s)
         if i.intent_behavior != INTENT_HOLD and i.nav_available:
-            command_age = max(command_age, i.now_s - i.nav_stamp_s)
+            command_age = max(
+                command_age, _age_within_future_tolerance(i.now_s, i.nav_stamp_s)
+            )
         odom_receipt = i.odom_stamp_s if i.odom_receipt_s is None else i.odom_receipt_s
         return (
-            i.now_s - i.cloud_stamp_s,
-            max(i.now_s - i.odom_stamp_s, i.now_s - odom_receipt),
+            _age_within_future_tolerance(i.now_s, i.cloud_stamp_s),
+            max(
+                _age_within_future_tolerance(i.now_s, i.odom_stamp_s),
+                _age_within_future_tolerance(i.now_s, odom_receipt),
+            ),
             command_age,
         )
 
@@ -1399,6 +1406,16 @@ class CollisionSupervisorCore:
 def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
+
+def _within_future_tolerance(timestamp_s: float, reference_s: float) -> bool:
+    return timestamp_s <= reference_s + CLOCK_FUTURE_TOLERANCE_S
+
+
+def _age_within_future_tolerance(now_s: float, timestamp_s: float) -> float:
+    age_s = now_s - timestamp_s
+    return max(0.0, age_s) if _within_future_tolerance(timestamp_s, now_s) else age_s
+
+
 def _slope_chronology_valid(
     source_s: float,
     evaluation_s: float,
@@ -1606,7 +1623,8 @@ class CollisionSupervisorRosNode:
         with self._input_lock:
             receipt = rospy.Time.now().to_sec()
             valid = (all(_finite(value) for value in values + (source, receipt,))
-                     and 0.0 <= source <= receipt
+                     and 0.0 <= source
+                     and _within_future_tolerance(source, receipt)
                      and (self.odom_high_water is None or source > self.odom_high_water))
             self.odom = values
             self.odom_stamp = source
