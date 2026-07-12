@@ -229,9 +229,14 @@ class LocalizationGuardCore:
         self._source_stamp_high_water: Optional[float] = None
         self._last_reset_count: Optional[int] = None
         self._loss_reset_count: Optional[int] = None
+        self._recovery_epoch_reset_count: Optional[int] = None
 
     def evaluate(self, candidate: CandidateEvidence, now_s: float) -> GuardResult:
         self.sequence += 1
+        # An adapter/watchdog loss has no candidate reset count.  The first
+        # subsequent candidate establishes a STOP-only baseline; only a later
+        # explicit increment can start relocalization.
+        self.adopt_loss_reset_baseline(candidate.reset_count)
         reasons, pose_age = self._qualification_reasons(candidate, now_s)
         stationary = (
             candidate.mission_canceled
@@ -417,8 +422,24 @@ class LocalizationGuardCore:
             self._loss_reset_count = (
                 self._last_reset_count if reset_count is None else reset_count
             )
+            self._recovery_epoch_reset_count = None
         self.state = LOST
         self._reset_window()
+
+    def adopt_loss_reset_baseline(self, reset_count: int) -> None:
+        """Record the first candidate reset count observed after an input-only loss."""
+        if self.state in (LOST, RELOCALIZING) and self._loss_reset_count is None:
+            self._loss_reset_count = reset_count
+
+    def consume_recovery_epoch(self, reset_count: int, requested: bool) -> bool:
+        """Consume one explicit reset transition to begin a new input chronology."""
+        if (self.state not in (LOST, RELOCALIZING) or not requested or
+                self._loss_reset_count is None or
+                reset_count <= self._loss_reset_count or
+                self._recovery_epoch_reset_count == reset_count):
+            return False
+        self._recovery_epoch_reset_count = reset_count
+        return True
 
     def force_loss(self) -> None:
         """Fail closed for adapter failures that cannot yield CandidateEvidence."""
@@ -1128,8 +1149,7 @@ class LocalizationGuardNode:
         self.candidate_sequences = CandidateSequenceTracker()
         self.last_cloud_stamp = None
         self.last_odom_stamp = None
-        self.cloud_regressed = False
-        self.odom_regressed = False
+        self.output_sequence = 0
         rospy.Subscriber(self.CANDIDATE_TOPIC, LocalizationCandidate,
                          self._candidate_callback, queue_size=1, tcp_nodelay=True)
         rospy.Subscriber(self.CLOUD_TOPIC, PointCloud2,
@@ -1147,20 +1167,25 @@ class LocalizationGuardNode:
 
     def _cloud_callback(self, message):
         stamp = message.header.stamp.to_sec()
-        self.cloud_regressed = getattr(self, "cloud_regressed", False) or (
-            getattr(self, "last_cloud_stamp", None) is not None and
-            stamp <= self.last_cloud_stamp
-        )
+        if (not math.isfinite(stamp) or
+                (self.last_cloud_stamp is not None and stamp <= self.last_cloud_stamp)):
+            self._publish_stop(
+                self.rospy.Time.now().to_sec(),
+                REASON_LOCALIZATION | REASON_CLOCK | REASON_CORRUPT_DATA,
+            )
+            return
         self.last_cloud_stamp = stamp
         self.cloud = (message, self.rospy.Time.now().to_sec())
 
     def _odom_callback(self, message):
         now = self.rospy.Time.now().to_sec()
         stamp = message.header.stamp.to_sec()
-        self.odom_regressed = getattr(self, "odom_regressed", False) or (
-            getattr(self, "last_odom_stamp", None) is not None and
-            stamp <= self.last_odom_stamp
-        )
+        if (not math.isfinite(stamp) or
+                (self.last_odom_stamp is not None and stamp <= self.last_odom_stamp)):
+            self._publish_stop(
+                now, REASON_LOCALIZATION | REASON_CLOCK | REASON_CORRUPT_DATA,
+            )
+            return
         self.last_odom_stamp = stamp
         self.odom = (message, now)
         moving = (abs(message.twist.twist.linear.x) >= self.policy.stationary_linear_mps or
@@ -1265,6 +1290,10 @@ class LocalizationGuardNode:
                 candidate_sequence,
             )
             return
+        self.core.adopt_loss_reset_baseline(message.reset_count)
+        if self.core.consume_recovery_epoch(
+                message.reset_count, self.relocalization_requested):
+            self._begin_input_epoch()
         try:
             evidence = self._derive_evidence(message, now)
         except Exception as exc:
@@ -1283,7 +1312,14 @@ class LocalizationGuardNode:
             return
         result = self.core.evaluate(evidence, evaluation_now)
         self._clear_initialization_attempt_on_state_exit(result.state)
-        self._publish_result(result, candidate_sequence, evidence.stamp_s)
+        self._publish_result(result, evidence.stamp_s)
+
+    def _begin_input_epoch(self):
+        """Forget only per-epoch chronology after an explicit recovery transition."""
+        self.last_cloud_stamp = None
+        self.last_odom_stamp = None
+        self.cloud = None
+        self.odom = None
 
     def _derive_evidence(self, message, now):
         from sensor_msgs import point_cloud2
@@ -1298,17 +1334,16 @@ class LocalizationGuardNode:
         odom_stamp_s = odom.header.stamp.to_sec()
         cloud_age = now - cloud_stamp_s
         odom_source_age = now - odom_stamp_s
-        if (self.cloud_regressed or self.odom_regressed or
-                not -self.policy.max_future_skew_s <= cloud_age <= self.policy.max_candidate_age_s or
+        if (not -self.policy.max_future_skew_s <= cloud_age <= self.policy.max_candidate_age_s or
                 not -self.policy.max_future_skew_s <= odom_source_age <= self.policy.max_odom_age_s or
                 now - cloud_receipt > self.policy.max_candidate_age_s or
                 now - odom_receipt > self.policy.max_odom_age_s or
                 abs(cloud_stamp_s - stamp_s) > self.policy.max_candidate_age_s or
                 abs(odom_stamp_s - stamp_s) > self.policy.max_odom_age_s):
-            raise ValueError("cloud/odom stale, future, regressing, or unsynchronized")
-        if odom.header.frame_id != "odom" or odom.child_frame_id != "base_link":
+            raise ValueError("cloud/odom stale, future, or unsynchronized")
+        if odom.header.frame_id != "odom" or odom.child_frame_id != "base_footprint":
             raise ValueError("odometry frame contract is invalid")
-        sensor_tf, _ = self._lookup("base_link", cloud.header.frame_id, cloud.header.stamp)
+        sensor_tf, _ = self._lookup("base_footprint", cloud.header.frame_id, cloud.header.stamp)
         map_to_odom, transform_age = self._lookup("map", "odom", stamp)
         translation = sensor_tf.transform.translation
         rotation = sensor_tf.transform.rotation
@@ -1393,7 +1428,11 @@ class LocalizationGuardNode:
                 self.candidate_sequences.watchdog_sequence(),
             )
 
-    def _publish_result(self, result, candidate_sequence, candidate_stamp_s):
+    def _next_output_sequence(self):
+        self.output_sequence = getattr(self, "output_sequence", 0) + 1
+        return self.output_sequence
+
+    def _publish_result(self, result, candidate_stamp_s):
         status = self.LocalizationStatus()
         status.header.stamp = self.rospy.Time.from_sec(candidate_stamp_s)
         status.header.frame_id = self.policy.expected_frame
@@ -1406,7 +1445,7 @@ class LocalizationGuardNode:
                 "position_std_m", "yaw_std_rad", "scan_residual_m", "inlier_ratio",
                 "innovation_nis", "ambiguity_ratio", "position_jump_m", "yaw_jump_rad"):
             setattr(status, field, _published_diagnostic(getattr(result, field)))
-        status.sequence = candidate_sequence
+        status.sequence = self._next_output_sequence()
         status.reason_mask = result.safety_reason_mask
         status.source = "localization_guard"
         status.policy_sha256 = result.policy_sha256
@@ -1423,10 +1462,7 @@ class LocalizationGuardNode:
         self.status_pub.publish(status)
         self.signal_pub.publish(signal)
 
-    def _publish_stop(self, now, reason, candidate_sequence=None):
-        if candidate_sequence is None:
-            candidate_sequence = self.candidate_sequences.watchdog_sequence()
-        candidate_sequence = int(candidate_sequence)
+    def _publish_stop(self, now, reason, _candidate_sequence=None):
         reason |= REASON_LOCALIZATION
         self.core.force_loss()
         source_stamp_s = getattr(self, "last_candidate_source_stamp", None)
@@ -1438,7 +1474,7 @@ class LocalizationGuardNode:
         status.header.stamp = source_stamp
         status.header.frame_id = self.policy.expected_frame
         status.evaluation_stamp = evaluation_stamp
-        status.sequence = candidate_sequence
+        status.sequence = self._next_output_sequence()
         status.state = LOST
         status.reason_mask = reason
         status.source = "localization_guard"
@@ -1447,7 +1483,7 @@ class LocalizationGuardNode:
         status.transform_age_s = -1.0
         status.independent_check_passed = False
         signal = self.SafetySignal()
-        signal.header.stamp = status.header.stamp
+        signal.header.stamp = status.evaluation_stamp
         signal.header.frame_id = status.header.frame_id
         signal.sequence = status.sequence
         signal.state = SAFETY_STOP

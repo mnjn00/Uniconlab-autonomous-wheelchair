@@ -37,6 +37,7 @@ runtime_boundary:
   single_map_to_odom_authority: true
   guard_may_broadcast_map_to_odom: false
   map_to_odom_assumption: identity_simulation_only
+  odometry_child_frame: base_footprint
 simulation_guard:
   may_report_ok: true
   requires_fresh_clock: true

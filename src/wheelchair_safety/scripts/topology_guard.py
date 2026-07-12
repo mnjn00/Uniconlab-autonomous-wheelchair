@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail-closed, profile-aware ROS graph, TF, and deadline auditor."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import math
 import threading
@@ -16,12 +16,14 @@ INPUT_UNKNOWN = 1 << 31
 TOPOLOGY_POLICY_SHA256 = hashlib.sha256(b"wheelchair-topology-authority-v2").hexdigest()
 
 
-def _node_name(name: str) -> str:
-    return str(name).rstrip("/").rsplit("/", 1)[-1]
+def _caller_id(value: str) -> str:
+    """Return the canonical ROS caller ID without discarding its namespace."""
+    caller_id = str(value).strip().rstrip("/")
+    return "/" + caller_id.lstrip("/") if caller_id else ""
 
 
 def _nodes(values: Iterable[str]) -> Tuple[str, ...]:
-    return tuple(sorted({_node_name(value) for value in values if str(value).strip()}))
+    return tuple(sorted(_caller_id(value) for value in values if str(value).strip()))
 
 
 def _is_finite(value) -> bool:
@@ -76,6 +78,13 @@ class TopicAuthority:
     required_when_motion_active: bool = False
     subscriber_alternatives_optional: bool = False
     allowed_subscribers: Tuple[str, ...] = ()
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "publishers", _nodes(self.publishers))
+        object.__setattr__(self, "subscribers", _nodes(self.subscribers))
+        object.__setattr__(self, "subscriber_alternatives",
+                           _nodes(self.subscriber_alternatives))
+        object.__setattr__(self, "allowed_subscribers",
+                           _nodes(self.allowed_subscribers))
 
 
 @dataclass(frozen=True)
@@ -83,6 +92,8 @@ class TransformAuthority:
     owners: Tuple[str, ...]
     maximum_age_s: Optional[float]
     static: bool = False
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "owners", _nodes(self.owners))
 
 
 # Conservative explicit-profile boundary for importers which do not select one.
@@ -242,7 +253,6 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
         "/odom": TopicAuthority(
             odom_owners, ("collision_supervisor", "localization_guard",
                           "wheelchair_mission", "hardware_adapter")),
-        "/route/zone_policy": TopicAuthority(("wheelchair_route_safety",), ("slope_supervisor",)),
         "/initialpose": TopicAuthority(
             initialization_owners,
             ("localization_guard",), publisher_optional=True),
@@ -259,7 +269,8 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
              "localization_adapter")),
         "/safety/localization": TopicAuthority(guard_owners, ("safety_gate",)),
         "/route_safety/geofence_status": TopicAuthority(
-            ("wheelchair_route_safety",), ("safety_gate", "wheelchair_mission")),
+            ("wheelchair_route_safety",),
+            ("safety_gate", "wheelchair_mission", "slope_supervisor")),
         "/safety/geofence": TopicAuthority(("wheelchair_route_safety",), ("safety_gate",)),
         "/safety/collision_status": TopicAuthority(
             ("collision_supervisor",), ("safety_gate", "wheelchair_mission")),
@@ -306,9 +317,9 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
     deadlines = {
         input_topic: 0.30, output_topic: 0.10, "/decision/motion_intent": 0.30,
         "/sensors/lidar/points": 0.30, "/sensors/imu/data": 0.10, "/odom": 0.20,
-        "/route/zone_policy": 0.10, "/route/active": 0.75, "/route/progress": 0.50,
+        "/route/active": 0.75, "/route/progress": 0.50,
         "/localization/candidate": 0.25, "/localization/status": 0.25,
-        "/safety/localization": 0.25, "/route_safety/geofence_status": 0.25,
+        "/safety/localization": 0.25, "/route_safety/geofence_status": 0.10,
         "/safety/geofence": 0.25, "/safety/collision_status": 0.30,
         "/safety/collision": 0.30, "/safety/slope_status": 0.10,
         "/safety/slope": 0.10, "/hardware/driver_status": 0.15,
@@ -332,7 +343,7 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
 def profile_deadlines(expected: ExpectedGraph) -> Dict[str, float]:
     defaults = {topic: 0.30 for topic in expected.timed_topics}
     for topic, value in ((expected.command_topics[1], 0.10), ("/sensors/imu/data", 0.10),
-                         ("/odom", 0.20), ("/route/zone_policy", 0.10),
+                         ("/odom", 0.20), ("/route_safety/geofence_status", 0.10),
                          ("/safety/slope", 0.10), ("/safety/slope_status", 0.10),
                          ("/hardware/driver_status", 0.15), ("/safety/mode", 0.15),
                          ("/safety/driver", 0.15)):
@@ -342,7 +353,7 @@ def profile_deadlines(expected: ExpectedGraph) -> Dict[str, float]:
         if topic in defaults:
             defaults[topic] = value
     for topic in ("/localization/candidate", "/localization/status", "/safety/localization",
-                  "/safety/geofence", "/route_safety/geofence_status"):
+                  "/safety/geofence"):
         if topic in defaults:
             defaults[topic] = 0.25
     return defaults
@@ -477,7 +488,7 @@ class TopologyAuditor:
             publishers = _nodes(publisher_entries)
             subscribers = tuple(
                 n for n in _nodes(snapshot.subscribers.get(topic, ()))
-                if n not in self.expected.passive_subscribers.get(topic, ()))
+                if n not in _nodes(self.expected.passive_subscribers.get(topic, ())))
             publisher_required = not authority.publisher_optional or (
                 authority.required_when_motion_active and motion_active is True)
             publisher_ok = (not publisher_entries and not publisher_required) or \
@@ -514,7 +525,7 @@ class TopologyAuditor:
         mask |= self._audit_timing(snapshot, violations, motion_active)
         passive_grants = set()
         for grants in self.expected.passive_subscribers.values():
-            passive_grants.update(grants)
+            passive_grants.update(_nodes(grants))
         return AuditResult(not violations, mask, tuple(violations), tuple(sorted(passive_grants)))
 
     def _effective_motion_active(self, snapshot: GraphSnapshot) -> Optional[bool]:
@@ -536,7 +547,7 @@ class TopologyAuditor:
     def _passive_nodes(self, snapshot: GraphSnapshot) -> set:
         passive = set()
         for topic, grants in self.expected.passive_subscribers.items():
-            passive.update(set(_nodes(snapshot.subscribers.get(topic, ()))) & set(grants))
+            passive.update(set(_nodes(snapshot.subscribers.get(topic, ()))) & set(_nodes(grants)))
         return passive
 
     def _audit_active_edges(self, snapshot, passive, violations):
@@ -544,12 +555,14 @@ class TopologyAuditor:
         protected = set(self.expected.authorities)
         for topic in sorted(set(snapshot.publishers) | set(snapshot.subscribers)):
             subscribers = set(_nodes(snapshot.subscribers.get(topic, ()))) - \
-                set(self.expected.passive_subscribers.get(topic, ()))
+                set(_nodes(self.expected.passive_subscribers.get(topic, ())))
             active = set(_nodes(snapshot.publishers.get(topic, ()))) | subscribers
             protected_surface = (topic in self.expected.command_topics or
                                  topic.startswith("/safety/") or self._is_command_topic(topic))
             if protected_surface:
-                forbidden = tuple(sorted(active & set(FORBIDDEN_ACTIVE_NODES)))
+                forbidden = tuple(sorted(
+                    node for node in active
+                    if node.rsplit("/", 1)[-1] in FORBIDDEN_ACTIVE_NODES))
                 if forbidden:
                     violations.append("%s forbidden relay/mux/plugin nodes: %s" % (topic, forbidden))
                     mask |= GRAPH_TOPOLOGY
@@ -564,12 +577,16 @@ class TopologyAuditor:
                       for (p, c), values in snapshot.transforms.items()}
         for edge, authority in self.expected.transforms.items():
             evidence = normalized.get(edge, ())
-            converted = [item if isinstance(item, TransformObservation)
-                         else TransformObservation(str(item), now, None, authority.static)
-                         for item in evidence]
-            identities = tuple(sorted(str(item.owner).rstrip("/") for item in converted))
-            owners = tuple(_node_name(identity) for identity in identities)
-            if len(identities) != 1 or len(set(identities)) != 1 or owners[0] not in authority.owners:
+            converted = [
+                replace(item, owner=_caller_id(item.owner))
+                if isinstance(item, TransformObservation)
+                else TransformObservation(
+                    _caller_id(str(item)), now, None, authority.static)
+                for item in evidence
+            ]
+            identities = tuple(sorted(item.owner for item in converted))
+            if len(identities) != 1 or len(set(identities)) != 1 or \
+                    identities[0] not in authority.owners:
                 violations.append("%s->%s authority: expected exactly one of %s, got %s" %
                                   (edge[0], edge[1], authority.owners, identities)); mask |= TF | GRAPH_TOPOLOGY
                 continue
@@ -602,7 +619,7 @@ class TopologyAuditor:
                         len(pose[0]) != 3 or not all(_is_finite(value) for value in pose[0]):
                     violations.append("map->odom missing transform continuity evidence"); mask |= TF | INPUT_UNKNOWN
                     continue
-                prior = self._map_to_odom_pose.get(identity)
+                prior = self._map_to_odom_pose.get(edge)
                 if prior is not None:
                     distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(pose[0], prior[0])))
                     yaw_delta = abs((pose[1] - prior[1] + math.pi) % (2.0 * math.pi) - math.pi)
@@ -610,7 +627,7 @@ class TopologyAuditor:
                         if snapshot.relocalizing is not True:
                             violations.append("map->odom unapproved relocalization jump"); mask |= TF
                             continue
-                self._map_to_odom_pose[identity] = pose
+                self._map_to_odom_pose[edge] = pose
             self._tf_source_high_water[key] = item.source_stamp_s
         return mask
 

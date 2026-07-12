@@ -76,6 +76,12 @@ class SlopePolicy:
     quaternion_norm_tolerance: float = 1.0e-3
     hardware_motion_authorized: bool = False
     passenger_operation_authorized: bool = False
+    route_safety_source: str = "wheelchair_route_safety"
+    route_safety_manifest_id: str = "hanyang-route-safety-candidate-v1"
+    route_safety_manifest_sha256: str = "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc"
+    route_safety_map_id: str = "hanyang_aegimun_loop"
+    route_safety_map_sha256: str = "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"
+    route_zone_policies: Tuple[Tuple[str, str], ...] = (("zone-simulation-candidate", "normal"),)
 
     def __post_init__(self) -> None:
         if self.hardware_motion_authorized or self.passenger_operation_authorized:
@@ -86,6 +92,14 @@ class SlopePolicy:
             raise ValueError("roll thresholds are not ordered")
         if not self.policy_sha256 or not re.fullmatch(r"[0-9a-f]{64}", self.policy_sha256):
             raise ValueError("slope policy requires a supplied file SHA-256")
+        if (not self.route_safety_source or not self.route_safety_manifest_id
+                or not self.route_safety_map_id
+                or not re.fullmatch(r"[0-9a-f]{64}", self.route_safety_manifest_sha256)
+                or not re.fullmatch(r"[0-9a-f]{64}", self.route_safety_map_sha256)
+                or not self.route_zone_policies
+                or any(not zone or policy not in ("normal", "manual_only", "degraded_stop")
+                       for zone, policy in self.route_zone_policies)):
+            raise ValueError("route safety identity or zone policy is invalid")
 
 
 @dataclass(frozen=True)
@@ -238,7 +252,7 @@ def _load_slope_policy(path: str, expected_file_sha256: Optional[str]) -> SlopeP
         raise ValueError("slope policy file hash mismatch")
     import yaml
     document = yaml.safe_load(raw)
-    root = _require_mapping(document, "policy", ("schema_version", "policy_id", "policy_sha256", "qualification", "operation_mode", "authority", "frames", "input", "calibration", "gravity_estimation", "thresholds_deg", "hysteresis", "route_zones", "downhill_stopping_coupling", "fail_closed"))
+    root = _require_mapping(document, "policy", ("schema_version", "policy_id", "policy_sha256", "qualification", "operation_mode", "authority", "frames", "input", "calibration", "gravity_estimation", "thresholds_deg", "hysteresis", "route_zones", "route_safety_evidence", "downhill_stopping_coupling", "fail_closed"))
     if root["schema_version"] != 1 or root["qualification"] != "simulation_only" or root["operation_mode"] != "simulation":
         raise ValueError("policy is not qualified for simulation only")
     if not isinstance(root["policy_id"], str) or not root["policy_id"] or not re.fullmatch(r"[0-9a-f]{64}", root["policy_sha256"]):
@@ -261,11 +275,31 @@ def _load_slope_policy(path: str, expected_file_sha256: Optional[str]) -> SlopeP
     slow = _require_mapping(thresholds["slow"], "thresholds_deg.slow", ("pitch_min", "pitch_max", "absolute_roll_max"))
     hysteresis = _require_mapping(root["hysteresis"], "hysteresis", ("release_hold_s", "tighten_each_boundary_deg"))
     zones = _require_mapping(root["route_zones"], "route_zones", ("normal", "manual_only", "degraded_stop", "unknown"))
+    route_evidence = _require_mapping(root["route_safety_evidence"], "route safety evidence", ("source", "manifest_id", "manifest_sha256", "map_id", "map_sha256", "zones"))
+    if (not isinstance(route_evidence["source"], str) or not route_evidence["source"]
+            or not isinstance(route_evidence["manifest_id"], str) or not route_evidence["manifest_id"]
+            or not isinstance(route_evidence["map_id"], str) or not route_evidence["map_id"]
+            or not isinstance(route_evidence["manifest_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", route_evidence["manifest_sha256"])
+            or not isinstance(route_evidence["map_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", route_evidence["map_sha256"])
+            or not isinstance(route_evidence["zones"], dict)
+            or not route_evidence["zones"]
+            or any(not isinstance(zone_id, str) or not zone_id
+                   or zone_policy not in ("normal", "manual_only", "degraded_stop")
+                   for zone_id, zone_policy in route_evidence["zones"].items())):
+        raise ValueError("unsupported route safety evidence policy")
     coupling = _require_mapping(root["downhill_stopping_coupling"], "downhill_stopping_coupling", ("downhill_factor", "equation", "nonpositive_effective_deceleration"))
     fail_closed = _require_mapping(root["fail_closed"], "fail_closed", ("stale_uncalibrated_bad_tf_bad_time_dynamic_unknown_zone", "slow_only_lowers_speed"))
     if gravity["fallback"] != "first_order_low_pass_acceleration_vector" or zones != {"normal": "evaluate_slope_policy", "manual_only": "stop_autonomy", "degraded_stop": "stop", "unknown": "stop"} or coupling != {"downhill_factor": "sin(max(0, -pitch_rad))", "equation": "a_eff = a_policy - g * downhill_factor", "nonpositive_effective_deceleration": "stop"} or fail_closed != {"stale_uncalibrated_bad_tf_bad_time_dynamic_unknown_zone": "stop", "slow_only_lowers_speed": True}:
         raise ValueError("unsupported fail-closed policy")
     values = dict(policy_id=root["policy_id"], policy_sha256=digest, source_ttl_s=_number(inputs["source_ttl_s"], "source_ttl_s"), receipt_ttl_s=_number(inputs["receipt_ttl_s"], "receipt_ttl_s"), transform_ttl_s=_number(inputs["transform_ttl_s"], "transform_ttl_s"), route_zone_ttl_s=_number(inputs["route_zone_ttl_s"], "route_zone_ttl_s"), gravity_mps2=_number(calibration["mean_gravity_mps2"], "mean_gravity_mps2"), gravity_tolerance_mps2=_number(calibration["mean_acceleration_tolerance_mps2"], "mean_acceleration_tolerance_mps2"), fallback_gravity_tolerance_mps2=_number(gravity["fallback_acceleration_magnitude_tolerance_mps2"], "fallback tolerance"), fallback_low_pass_time_constant_s=_number(gravity["low_pass_time_constant_s"], "low pass"), calibration_duration_s=_number(calibration["stationary_duration_s"], "duration"), calibration_sample_fraction=_number(calibration["minimum_expected_sample_fraction"], "fraction"), calibration_rate_hz=_number(calibration["nominal_rate_hz"], "rate"), calibration_gyro_p95_max_rps=_number(calibration["p95_gyro_norm_max_radps"], "gyro"), calibration_angle_stddev_max_deg=_number(calibration["pitch_roll_stddev_max_deg"], "angle"), fallback_gyro_max_rps=_number(gravity["fallback_gyro_norm_max_radps"], "fallback gyro"), orientation_disagreement_max_deg=_number(gravity["orientation_gravity_agreement_max_deg"], "agreement"), dynamic_residual_max_mps2=_number(gravity["dynamic_residual_max_mps2"], "residual"), dynamic_residual_duration_s=_number(gravity["dynamic_residual_duration_s"], "residual duration"), fallback_hold_max_s=_number(gravity["fallback_hold_max_s"], "fallback hold"), downhill_stop_deg=_number(slow["pitch_min"], "slow pitch minimum", -90.0), downhill_clear_deg=_number(clear["pitch_min"], "clear pitch minimum", -90.0), uphill_clear_deg=_number(clear["pitch_max"], "clear pitch maximum", -90.0), uphill_stop_deg=_number(slow["pitch_max"], "slow pitch maximum", -90.0), roll_clear_deg=_number(clear["absolute_roll_max"], "clear roll"), roll_stop_deg=_number(slow["absolute_roll_max"], "slow roll"), slow_max_linear_mps=_number(thresholds["slow_max_linear_mps"], "slow speed"), hysteresis_hold_s=_number(hysteresis["release_hold_s"], "hold"), hysteresis_tighten_deg=_number(hysteresis["tighten_each_boundary_deg"], "tighten"))
+    values["route_safety_source"] = route_evidence["source"]
+    values["route_safety_manifest_id"] = route_evidence["manifest_id"]
+    values["route_safety_manifest_sha256"] = route_evidence["manifest_sha256"]
+    values["route_safety_map_id"] = route_evidence["map_id"]
+    values["route_safety_map_sha256"] = route_evidence["map_sha256"]
+    values["route_zone_policies"] = tuple(sorted(route_evidence["zones"].items()))
     return SlopePolicy(**values)
 def load_slope_policy(path: str, expected_file_sha256: Optional[str]) -> SlopePolicy:
     """Return only a fully parsed, hash-bound simulation policy."""
@@ -496,11 +530,12 @@ class SlopeSupervisorCore:
                 or receipt_age < 0.0
                 or receipt_stamp < source_stamp
                 or (self._last_now is not None and now < self._last_now)
-                or (self._last_source_stamp is not None and source_stamp < self._last_source_stamp)
+                or (self._last_source_stamp is not None and source_stamp <= self._last_source_stamp)
             ):
                 reason |= CLOCK | INPUT_UNKNOWN
             self._last_now = now
-            self._last_source_stamp = source_stamp
+            if self._last_source_stamp is None or source_stamp > self._last_source_stamp:
+                self._last_source_stamp = source_stamp
             if source_age > policy.source_ttl_s or receipt_age > policy.receipt_ttl_s:
                 reason |= SENSOR_STALE | IMU_STALE
             if (
@@ -687,8 +722,7 @@ class SlopeSupervisorRosNode:
         import rospy
         import tf2_ros
         from sensor_msgs.msg import Imu
-        from std_msgs.msg import String
-        from wheelchair_interfaces.msg import SafetySignal, SlopeStatus
+        from wheelchair_interfaces.msg import GeofenceStatus, SafetySignal, SlopeStatus
 
         self.rospy = rospy
         self.SlopeStatus = SlopeStatus
@@ -709,6 +743,8 @@ class SlopeSupervisorRosNode:
             raise ValueError("publish_rate_hz must be finite and in [1, 50]")
         self.publish_period_s = 1.0 / publish_rate_hz
         self.last_published_source_stamp_s = None
+        self._source_high_water_stamp_s = None
+        self._invalid_source_stop_emitted = False
         self._calibration_samples = []
         if self.calibration_enabled and self.operation_mode == "simulation":
             self.core.calibration_state = CAL_CALIBRATING
@@ -716,19 +752,54 @@ class SlopeSupervisorRosNode:
             # Precomputed hashes cannot authorize replay, hardware, or unverified input.
             self.core.calibration_state = CAL_UNCALIBRATED
             self.core.calibration_sha256 = ""
-        initial_zone = rospy.get_param("~initial_route_zone_policy", "unknown")
-        self.zone = normalize_initial_zone_policy(initial_zone, self.operation_mode)
+        self.zone = "unknown"
         self.zone_receipt_stamp_s = -math.inf
+        self._zone_sequence_high_water = None
+        self._zone_source_high_water_stamp_s = None
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(1.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.status_pub = rospy.Publisher("/safety/slope_status", SlopeStatus, queue_size=1)
         self.signal_pub = rospy.Publisher("/safety/slope", SafetySignal, queue_size=1)
         rospy.Subscriber("/sensors/imu/data", Imu, self._imu_cb, queue_size=1)
-        rospy.Subscriber("/route/zone_policy", String, self._zone_cb, queue_size=1)
+        rospy.Subscriber("/route_safety/geofence_status", GeofenceStatus, self._zone_cb, queue_size=1)
 
     def _zone_cb(self, msg):
-        self.zone = str(msg.data)
-        self.zone_receipt_stamp_s = self.rospy.Time.now().to_sec()
+        """Accept only fresh, monotonic, hash-bound GeofenceStatus evidence."""
+        receipt_stamp = self.rospy.Time.now().to_sec()
+        policy = self.core.policy
+        try:
+            source_stamp = float(msg.header.stamp.to_sec())
+            evaluation_stamp = float(msg.evaluation_stamp.to_sec())
+            sequence = int(msg.sequence)
+            if (
+                isinstance(msg.sequence, bool)
+                or not all(math.isfinite(value) for value in (source_stamp, evaluation_stamp, receipt_stamp))
+                or source_stamp <= 0.0
+                or source_stamp > evaluation_stamp
+                or evaluation_stamp > receipt_stamp
+                or receipt_stamp - evaluation_stamp > policy.route_zone_ttl_s
+                or self._zone_sequence_high_water is not None
+                and sequence <= self._zone_sequence_high_water
+                or self._zone_source_high_water_stamp_s is not None
+                and source_stamp <= self._zone_source_high_water_stamp_s
+                or int(msg.state) != 1
+                or int(msg.reason_mask) != 0
+                or msg.source != policy.route_safety_source
+                or msg.manifest_id != policy.route_safety_manifest_id
+                or msg.manifest_sha256 != policy.route_safety_manifest_sha256
+            ):
+                raise ValueError("invalid route safety chronology or identity")
+            zone_policy = dict(policy.route_zone_policies).get(msg.zone_id)
+            if zone_policy not in ("normal", "manual_only", "degraded_stop"):
+                raise ValueError("unknown route zone")
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            self.zone = "unknown"
+            self.zone_receipt_stamp_s = receipt_stamp
+            return
+        self._zone_sequence_high_water = sequence
+        self._zone_source_high_water_stamp_s = source_stamp
+        self.zone = zone_policy
+        self.zone_receipt_stamp_s = receipt_stamp
 
     def _reset_calibration_candidate(self):
         self._calibration_samples = []
@@ -850,12 +921,28 @@ class SlopeSupervisorRosNode:
                 sample, transform_valid, transform_q, transform_translation, transform_stamp
             )
         source_stamp_s = msg.header.stamp.to_sec()
-        if not publication_due(
-                self.last_published_source_stamp_s,
-                source_stamp_s,
-                self.publish_period_s):
-            return
-        self.last_published_source_stamp_s = source_stamp_s
+        try:
+            source_stamp_s = float(source_stamp_s)
+            new_source = (
+                math.isfinite(source_stamp_s)
+                and (self._source_high_water_stamp_s is None
+                     or source_stamp_s > self._source_high_water_stamp_s)
+            )
+        except (TypeError, ValueError, OverflowError):
+            new_source = False
+        if not new_source:
+            if self._invalid_source_stop_emitted:
+                return
+            self._invalid_source_stop_emitted = True
+        else:
+            self._source_high_water_stamp_s = source_stamp_s
+            self._invalid_source_stop_emitted = False
+            if not publication_due(
+                    self.last_published_source_stamp_s,
+                    source_stamp_s,
+                    self.publish_period_s):
+                return
+            self.last_published_source_stamp_s = source_stamp_s
         orientation_available = not (len(msg.orientation_covariance) and msg.orientation_covariance[0] == -1.0)
         decision = self.core.evaluate(
             quaternion=(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w),

@@ -603,21 +603,60 @@ def test_missing_stale_duplicate_or_inconsistent_evidence_is_lost_stop(changes, 
     assert result.reason_mask & reason
 
 
-def test_bad_startup_evidence_latches_loss_and_requires_reset_recovery():
+def test_startup_loss_adopts_baseline_then_requires_later_reset_increment():
     core = guard.LocalizationGuardCore(policy())
-    failed = core.evaluate(evidence(1.0, transform_age_s=-0.01), 1.0)
-    assert failed.state == guard.LOST
-    assert failed.reason_mask & guard.REASON_TF
-    assert core.evaluate(evidence(1.1), 1.1).state == guard.LOST
+    core.force_loss()
+    assert core.evaluate(evidence(1.0), 1.0).state == guard.LOST
+    assert core._loss_reset_count == 0
     for index in range(30):
         stamp = 2.0 + index * 3.0 / 29.0
         result = core.evaluate(evidence(
             stamp, reset_count=1, relocalization_requested=True,
             relocalization_jump_evidence=True, position_jump_m=1.0,
         ), stamp)
+        if index < 29:
+            assert result.safety_state == guard.SAFETY_STOP
     assert result.state == guard.OK
     assert result.consecutive_good_samples == 30
     assert result.safety_state == guard.SAFETY_CLEAR
+def test_explicit_recovery_opens_a_new_input_chronology_epoch():
+    class Message:
+        def __init__(self, stamp):
+            self.header = SimpleNamespace(stamp=SimpleNamespace(to_sec=lambda: stamp))
+
+    class Publisher:
+        def publish(self, _message):
+            pass
+
+    node = guard.LocalizationGuardNode.__new__(guard.LocalizationGuardNode)
+    node.policy = policy()
+    node.core = guard.LocalizationGuardCore(node.policy)
+    node.rospy = SimpleNamespace(
+        Time=SimpleNamespace(
+            now=lambda: SimpleNamespace(to_sec=lambda: 11.0),
+            from_sec=lambda value: value,
+        )
+    )
+    node.LocalizationStatus = lambda: SimpleNamespace(header=SimpleNamespace())
+    node.SafetySignal = lambda: SimpleNamespace(header=SimpleNamespace())
+    node.status_pub = Publisher()
+    node.signal_pub = Publisher()
+    node.last_candidate_source_stamp = None
+    node.output_sequence = 0
+    node.last_cloud_stamp = 10.0
+    node.last_odom_stamp = 10.0
+
+    node._cloud_callback(Message(10.0))
+    node._cloud_callback(Message(9.0))
+    node._cloud_callback(Message(9.1))
+    assert node.last_cloud_stamp == 10.0
+    assert node.core.state == guard.LOST
+
+    node.core.adopt_loss_reset_baseline(0)
+    assert node.core.consume_recovery_epoch(1, requested=True)
+    node._begin_input_epoch()
+    node._cloud_callback(Message(9.1))
+    assert node.last_cloud_stamp == 9.1
 
 
 def test_bad_sample_after_ok_latches_loss_and_requires_relocalization_reset():
@@ -709,7 +748,7 @@ def test_policy_parser_requires_exact_frozen_scan_selection(tmp_path):
 
 
 
-def test_candidate_watchdog_candidate_sequence_identity_recovers_without_desync():
+def test_guard_output_generations_are_strict_and_watchdog_stamps_evaluation_time():
     class Message:
         def __init__(self):
             self.header = SimpleNamespace(stamp=None, frame_id="")
@@ -729,60 +768,23 @@ def test_candidate_watchdog_candidate_sequence_identity_recovers_without_desync(
     )
     node.policy = policy()
     node.core = guard.LocalizationGuardCore(node.policy)
-    node.candidate_sequences = guard.CandidateSequenceTracker()
     node.status_pub = Publisher()
     node.signal_pub = Publisher()
+    node.output_sequence = 0
 
-    assert node.candidate_sequences.observe(1)
     first = node.core.evaluate(evidence(1.0), 1.0)
-    node._publish_result(first, 1, 1.0)
-    node._publish_stop(
-        1.3,
-        guard.REASON_LOCALIZATION | guard.REASON_SENSOR_STALE,
-        node.candidate_sequences.watchdog_sequence(),
-    )
-    assert node.candidate_sequences.observe(2)
-    second = node.core.evaluate(evidence(1.4), 1.4)
-    assert second.state == guard.LOST
-    node._publish_result(second, 2, 1.4)
-    assert node.candidate_sequences.observe(3)
-    for index in range(30):
-        stamp = 2.0 + index * 3.0 / 29.0
-        clear = node.core.evaluate(evidence(
-            stamp, reset_count=1, relocalization_requested=True,
-            relocalization_jump_evidence=True, position_jump_m=1.0,
-        ), stamp)
-    assert clear.safety_state == guard.SAFETY_CLEAR
-    node._publish_result(clear, 3, clear.evaluation_stamp_s)
-    assert node.candidate_sequences.observe(4)
-    unavailable = dataclasses.replace(clear, pose_age_s=math.nan, transform_age_s=math.inf)
-    node._publish_result(unavailable, 4, unavailable.evaluation_stamp_s)
+    node._publish_result(first, 1.0)
+    node._publish_stop(1.3, guard.REASON_SENSOR_STALE)
+    node._publish_stop(1.35, guard.REASON_SENSOR_STALE)
 
-    assert [message.sequence for message in node.status_pub.messages] == [1, 1, 2, 3, 4]
-    assert [message.sequence for message in node.signal_pub.messages] == [1, 1, 2, 3, 4]
+    assert [message.sequence for message in node.status_pub.messages] == [1, 2, 3]
+    assert [message.sequence for message in node.signal_pub.messages] == [1, 2, 3]
     for status, signal in zip(node.status_pub.messages, node.signal_pub.messages):
         assert signal.header is not status.header
-        assert signal.header.stamp == status.header.stamp
-        assert (
-            signal.sequence,
-            signal.reason_mask,
-            signal.source,
-            signal.policy_sha256,
-        ) == (
-            status.sequence,
-            status.reason_mask,
-            status.source,
-            status.policy_sha256,
-        )
-    assert node.status_pub.messages[0].header.stamp == 1.0
-    assert node.status_pub.messages[1].pose_age_s == -1.0
-    assert node.status_pub.messages[1].transform_age_s == -1.0
-    assert math.isfinite(node.status_pub.messages[1].pose_age_s)
-    assert math.isfinite(node.status_pub.messages[1].transform_age_s)
-    assert node.status_pub.messages[-1].pose_age_s == -1.0
-    assert node.status_pub.messages[-1].transform_age_s == -1.0
-    assert node.status_pub.messages[2].header.stamp == 1.4
-    assert node.signal_pub.messages[-1].state == guard.SAFETY_CLEAR
+        assert signal.header.stamp == status.evaluation_stamp
+        assert signal.sequence == status.sequence
+    assert [message.evaluation_stamp for message in node.status_pub.messages[1:]] == [1.3, 1.35]
+    assert all(message.state == guard.SAFETY_STOP for message in node.signal_pub.messages[1:])
 
 
 def test_zero_duplicate_and_regressing_candidate_sequences_are_rejected():
@@ -801,6 +803,8 @@ def test_map_to_odom_lookup_is_candidate_stamped_not_latest():
     )[0]
     assert 'self._lookup("map", "odom", stamp)' in derive_evidence
     assert 'self._lookup("map", "odom", self.rospy.Time(0))' not in derive_evidence
+    assert 'odom.child_frame_id != "base_footprint"' in derive_evidence
+    assert 'self._lookup("base_footprint", cloud.header.frame_id, cloud.header.stamp)' in derive_evidence
 
     synchronized = guard.LocalizationGuardCore(policy()).evaluate(
         evidence(transform_age_s=0.011), 1.0

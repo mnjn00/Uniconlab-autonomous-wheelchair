@@ -15,25 +15,28 @@ spec.loader.exec_module(gate)
 POLICIES = dict(gate._DEFAULT_POLICY_SHA256)
 
 
-def evidence(name, stamp=100.0, state=gate.CLEAR, reason=0, policy=None, **caps):
+def evidence(name, stamp=100.0, state=gate.CLEAR, reason=0, policy=None,
+             sequence=1, **caps):
     if policy is None:
         policy = "" if name == "motion_intent" else POLICIES[name]
     source = "topology_guard" if name == "topology" else name
-    return gate.SignalEvidence(state, stamp, stamp, reason, source, policy, 1, **caps)
+    return gate.SignalEvidence(state, stamp, stamp, reason, source, policy, sequence, **caps)
 
 
-def inputs(now=100.0, **changes):
+def inputs(now=100.0, motion_intent_sequence=1, topology_sequence=1, **changes):
     values = dict(
         cmd=gate.VelocityCommand(0.2, 0.1), now_s=now,
         cmd_source_stamp_s=now, cmd_receipt_stamp_s=now,
         motion_intent=evidence("motion_intent", now, max_linear_mps=0.5,
-                               max_angular_rps=0.8),
+                               max_angular_rps=0.8,
+                               sequence=motion_intent_sequence),
         geofence=evidence("geofence", now), collision=evidence("collision", now),
         slope=evidence("slope", now), localization=evidence("localization", now),
         mode=evidence("mode", now), driver=evidence("driver", now),
-        topology=evidence("topology", now),
+        topology=evidence("topology", now, sequence=topology_sequence),
         e_stop=False, manual_or_disarmed=True, stationary=True,
         mission_cancelled=True,
+        reset_driver_healthy=True,
     )
     values.update(changes)
     return gate.GateInputs(**values)
@@ -55,21 +58,25 @@ def test_independent_estop_sources_require_both_reports_and_or_assertions():
     assert node._combined_estop() is True
     node.driver_estop = node.external_estop = False
     assert node._combined_estop() is False
-def test_ros_request_callbacks_only_queue_rising_edges():
+def test_ros_request_callbacks_require_post_start_low_and_queue_rising_edges():
     class Bool:
         def __init__(self, data):
             self.data = data
 
     node = object.__new__(gate.SafetyGateRosNode)
-    node.arm_level = node.reset_level = False
+    node._input_lock = threading.RLock()
+    node.arm_level = node.reset_level = None
+    node.arm_low_observed = node.reset_low_observed = False
     node.arm_requested = node.reset_requested = False
-    node._arm_cb(Bool(True))
-    node.arm_requested = False  # Timer consumed the queued request.
     node._arm_cb(Bool(True))
     assert not node.arm_requested
     node._arm_cb(Bool(False))
     node._arm_cb(Bool(True))
     assert node.arm_requested
+    node.arm_requested = False
+    node._arm_cb(Bool(True))
+    assert not node.arm_requested
+    node._reset_cb(Bool(False))
     node._reset_cb(Bool(True))
     assert node.reset_requested
 
@@ -152,10 +159,12 @@ def test_first_command_activation_grace_boundaries(elapsed, armed):
         100.0, cmd=None, motion_intent=hold_intent(100.0),
         arm_request=True)).armed
 
-    transition = core.evaluate(inputs(100.01, cmd=None))
+    transition = core.evaluate(inputs(
+        100.01, cmd=None, motion_intent_sequence=2, topology_sequence=2))
     assert transition.armed
     assert transition.reason == "activation_grace"
-    decision = core.evaluate(inputs(100.01 + elapsed, cmd=None))
+    decision = core.evaluate(inputs(
+        100.01 + elapsed, cmd=None, motion_intent_sequence=3, topology_sequence=3))
     assert decision.armed is armed
     assert decision.command.values() == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     if not armed:
@@ -174,12 +183,14 @@ def test_pre_hold_command_is_not_reused_and_is_rejected_after_grace():
     assert hold.armed
     assert hold.command.is_zero()
 
-    grace = core.evaluate(inputs(100.01, **old_command))
+    grace = core.evaluate(inputs(
+        100.01, motion_intent_sequence=2, topology_sequence=2, **old_command))
     assert grace.armed
     assert grace.reason == "activation_grace"
     assert grace.command.is_zero()
 
-    rejected = core.evaluate(inputs(100.110001, **old_command))
+    rejected = core.evaluate(inputs(
+        100.110001, motion_intent_sequence=3, topology_sequence=3, **old_command))
     assert_exact_safe_zero(rejected)
     assert rejected.reason_mask & gate.STALE_CMD
 
@@ -188,19 +199,23 @@ def test_hold_transition_resets_command_activation():
     core = gate.SafetyGateCore()
     core.evaluate(inputs(100.0, cmd=None, motion_intent=hold_intent(100.0),
                          arm_request=True))
-    core.evaluate(inputs(100.01, cmd=None))
+    core.evaluate(inputs(100.01, cmd=None, motion_intent_sequence=2, topology_sequence=2))
     moving = core.evaluate(inputs(
-        100.02, cmd_source_stamp_s=100.02, cmd_receipt_stamp_s=100.02))
+        100.02, motion_intent_sequence=3, topology_sequence=3,
+        cmd_source_stamp_s=100.02, cmd_receipt_stamp_s=100.02))
     assert moving.armed
     assert not moving.command.is_zero()
 
     held = core.evaluate(inputs(
-        100.03, motion_intent=hold_intent(100.03),
-        cmd_source_stamp_s=100.02, cmd_receipt_stamp_s=100.02))
+        100.03, motion_intent=evidence(
+            "motion_intent", 100.03, state=gate.HOLD,
+            max_linear_mps=0.0, max_angular_rps=0.0, sequence=4),
+        topology_sequence=4, cmd_source_stamp_s=100.02, cmd_receipt_stamp_s=100.02))
     assert held.armed
     assert held.command.is_zero()
     released = core.evaluate(inputs(
-        100.04, cmd_source_stamp_s=100.02, cmd_receipt_stamp_s=100.02))
+        100.04, motion_intent_sequence=5, topology_sequence=5,
+        cmd_source_stamp_s=100.02, cmd_receipt_stamp_s=100.02))
     assert released.armed
     assert released.reason == "activation_grace"
     assert released.command.is_zero()
@@ -455,7 +470,7 @@ def test_fresh_latest_only_sequence_gap_is_counted_without_false_stop():
             first.driver, source_stamp_s=100.05, receipt_stamp_s=100.05,
         ),
         topology=replace(
-            first.topology, source_stamp_s=100.05, receipt_stamp_s=100.05,
+            first.topology, sequence=2, source_stamp_s=100.05, receipt_stamp_s=100.05,
         ),
         arm_request=False,
     )

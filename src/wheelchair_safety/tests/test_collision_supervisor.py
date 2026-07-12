@@ -59,6 +59,8 @@ def test_policy_is_hash_checked_and_simulation_only():
     assert loaded.passenger_operation_authorized is False
     assert loaded.policy_sha256 == "5850bb0cd84bc04f4f9cdc78cd347640a3f60f66241ad3f37c196ad63cbeba18"
     assert loaded.coverage_max_frames == 4
+    assert loaded.coverage_motion_linear_tolerance_mps == 0.05
+    assert cs.IMMUTABLE_HARD_LINEAR_SPEED_MPS == 0.55
     raw = {field.name: getattr(loaded, field.name) for field in dataclasses.fields(loaded)}
     raw["footprint_width_m"] += 0.01
     with pytest.raises(ValueError, match="SHA-256"):
@@ -75,16 +77,32 @@ def test_v1_ttc_margin_is_exact_and_cannot_be_resealed_lower():
         cs.CollisionPolicy.from_mapping(raw)
 
 
-def test_direction_disagreement_and_unmatched_slope_odom_stop():
-    core = cs.CollisionSupervisorCore(policy())
-    opposed = core.evaluate(inputs(
+def test_direction_disagreement_stops_material_opposition_but_not_tiny_noise():
+    opposed = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
         points=(static_point(10.0),),
-        odom_linear_mps=-0.2,
-        nav_linear_mps=0.3,
-        safe_linear_mps=0.3,
+        odom_linear_mps=-0.19,
+        nav_linear_mps=0.10,
+        safe_linear_mps=0.10,
     ))
     assert opposed.state == cs.STOP
     assert opposed.reason == "motion_direction_disagreement"
+
+    opposed_reverse = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        odom_linear_mps=0.10,
+        nav_linear_mps=-0.19,
+        safe_linear_mps=-0.19,
+    ))
+    assert opposed_reverse.state == cs.STOP
+    assert opposed_reverse.reason == "motion_direction_disagreement"
+
+    noise = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        odom_linear_mps=-0.049,
+        nav_linear_mps=0.049,
+        safe_linear_mps=0.0,
+    ))
+    assert noise.reason != "motion_direction_disagreement"
 
     core = cs.CollisionSupervisorCore(policy())
     stale_slope = core.evaluate(inputs(
@@ -238,7 +256,8 @@ def test_transform_age_is_measured_at_cloud_source_timestamp():
 def test_static_obstacle_inside_required_stopping_distance_stops_in_one_frame():
     core = cs.CollisionSupervisorCore(policy())
     decision = core.evaluate(inputs(points=(static_point(1.0),)))
-    expected = 0.5 * (0.01 + 0.05 + 0.09) + 0.5 ** 2 / (2.0 * 0.5) + 0.20
+    speed = cs.IMMUTABLE_HARD_LINEAR_SPEED_MPS
+    expected = speed * (0.01 + 0.05 + 0.09) + speed ** 2 / (2.0 * 0.5) + 0.20
     assert decision.required_stop_distance_m == pytest.approx(expected)
     assert decision.state == cs.STOP
     assert decision.obstacle_motion == cs.MOTION_STATIC
@@ -382,7 +401,7 @@ def test_measured_requested_and_prior_safe_angular_motion_is_conservative():
         odom_linear_mps=0.2, nav_linear_mps=0.4, safe_linear_mps=0.3,
         odom_angular_rps=0.6, nav_angular_rps=0.2, safe_angular_rps=0.4,
     ))
-    assert decision.forward_speed_mps == pytest.approx(0.4)
+    assert decision.forward_speed_mps == pytest.approx(0.55)
     assert decision.angular_speed_rps == pytest.approx(0.6)
 
     negative = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
@@ -395,6 +414,18 @@ def test_measured_requested_and_prior_safe_angular_motion_is_conservative():
         odom_angular_rps=0.3, nav_angular_rps=0.5, safe_angular_rps=0.7,
     ))
     assert prior_safe.angular_speed_rps == pytest.approx(0.7)
+def test_swept_envelope_uses_immutable_hard_cap_when_nav_can_accelerate():
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(1.28),),
+        odom_linear_mps=0.10,
+        nav_linear_mps=0.10,
+        safe_linear_mps=0.10,
+    ))
+
+    assert decision.forward_speed_mps == pytest.approx(0.55)
+    assert decision.state == cs.STOP
+    assert decision.reason == "collision_distance"
+
 
 
 

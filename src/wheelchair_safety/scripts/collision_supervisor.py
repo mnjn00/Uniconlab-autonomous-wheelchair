@@ -14,6 +14,8 @@ import threading
 from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
+IMMUTABLE_HARD_LINEAR_SPEED_MPS = 0.55
+
 UNKNOWN, CLEAR, CAUTION, STOP = 0, 1, 2, 3
 VIS_UNKNOWN, VIS_FULL, VIS_PARTIAL, VIS_BLIND = 0, 1, 2, 3
 MOTION_NONE, MOTION_STATIC, MOTION_DYNAMIC, MOTION_AMBIGUOUS = 0, 1, 2, 3
@@ -1076,7 +1078,7 @@ class CollisionSupervisorCore:
         if (_direction_disagreement(
                 (i.odom_linear_mps, i.safe_linear_mps) +
                 ((i.nav_linear_mps,) if i.nav_available else ()),
-                self.policy.static_speed_below_mps)
+                self.policy.coverage_motion_linear_tolerance_mps)
                 or _direction_disagreement(
                     (i.odom_angular_rps, i.safe_angular_rps) +
                     ((i.nav_angular_rps,) if i.nav_available else ()),
@@ -1113,8 +1115,7 @@ class CollisionSupervisorCore:
             return -1.0
         return min(i.coverage_fraction, max(0.0, i.observed_coverage_bins / float(i.expected_coverage_bins)))
 
-    @staticmethod
-    def _selected_speed(i: CollisionInputs) -> float:
+    def _selected_speed(self, i: CollisionInputs) -> float:
         values = (i.odom_linear_mps, i.safe_linear_mps)
         if not all(_finite(value) for value in values):
             return math.nan
@@ -1123,11 +1124,11 @@ class CollisionSupervisorCore:
         if not _finite(i.nav_linear_mps):
             return math.nan
         values = values + (i.nav_linear_mps,)
-        desired = i.nav_linear_mps
-        if desired > 0.0:
-            return max(0.0, *values)
-        if desired < 0.0:
-            return min(0.0, *values)
+        tolerance = self.policy.coverage_motion_linear_tolerance_mps
+        if i.nav_linear_mps > tolerance:
+            return max(IMMUTABLE_HARD_LINEAR_SPEED_MPS, *values)
+        if i.nav_linear_mps < -tolerance:
+            return min(-IMMUTABLE_HARD_LINEAR_SPEED_MPS, *values)
         return max(values, key=abs)
     @staticmethod
     def _selected_angular(i: CollisionInputs) -> float:

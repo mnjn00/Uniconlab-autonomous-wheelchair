@@ -34,7 +34,7 @@ _REQUIRED_POLICY_KEYS = frozenset(
 _DEFAULT_POLICY_SHA256 = {
     "geofence": "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc",
     "collision": "5850bb0cd84bc04f4f9cdc78cd347640a3f60f66241ad3f37c196ad63cbeba18",
-    "slope": "69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62",
+    "slope": "2ad11dc946b09b7346dc29d90172e3009518a2399646b6c48448be8993deda0f",
     "localization": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
     "mode": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
     "driver": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
@@ -382,6 +382,7 @@ class GateInputs:
     e_stop: Optional[bool] = None
     e_stop_reset: bool = False
     arm_request: bool = False
+    reset_driver_healthy: bool = False
     manual_or_disarmed: bool = False
     stationary: bool = False
     mission_cancelled: bool = False
@@ -437,6 +438,8 @@ class SafetyGateCore:
         self.activation_command_floor_s = None
         self.awaiting_first_command = False
         self._reset_level = False
+        self._state_lock = threading.RLock()
+        self.last_evidence = {}
         self._arm_level = False
 
     def reset(self) -> None:
@@ -455,14 +458,22 @@ class SafetyGateCore:
         self.activation_command_floor_s = None
         self.awaiting_first_command = False
         self._reset_level = False
+        self.last_evidence.clear()
         self._arm_level = False
 
-    def evaluate(self, inputs: GateInputs) -> GateDecision:
-        try:
-            return self._evaluate(inputs)
-        except Exception:
+    def latch_estop(self) -> None:
+        """Callback-safe latch; only guarded reset in _evaluate clears it."""
+        with self._state_lock:
+            self.e_stop_latched = True
             self.armed = False
-            return self._stop(INTERNAL_FAULT | CORRUPT_DATA | STARTUP, {})
+
+    def evaluate(self, inputs: GateInputs) -> GateDecision:
+        with self._state_lock:
+            try:
+                return self._evaluate(inputs)
+            except Exception:
+                self.armed = False
+                return self._stop(INTERNAL_FAULT | CORRUPT_DATA | STARTUP, {})
 
     def _evaluate(self, inputs: GateInputs) -> GateDecision:
         now = inputs.now_s
@@ -564,10 +575,13 @@ class SafetyGateCore:
             # motion-ready authority.  Its intentional STOP reason is excluded
             # only for reset eligibility; AUTO_READY remains required to arm.
             reset_faults = mask
-            if inputs.manual_or_disarmed:
+            if inputs.reset_driver_healthy:
+                # Only the expected manual/disarmed mode is excluded.  The
+                # independent reset-health proof rejects malformed/faulted
+                # DriverStatus evidence before this branch is reachable.
                 reset_faults &= ~(MODE | DRIVER)
             reset_ok = (self.e_stop_latched and inputs.e_stop is False and
-                        inputs.manual_or_disarmed and inputs.stationary and
+                        inputs.reset_driver_healthy and inputs.manual_or_disarmed and inputs.stationary and
                         inputs.mission_cancelled and reset_faults == 0)
             if reset_ok:
                 self.e_stop_latched = False
@@ -686,20 +700,27 @@ class SafetyGateCore:
             mask |= CORRUPT_DATA | STALE_INTENT
         if name != "motion_intent" and evidence.state == HOLD:
             mask |= CORRUPT_DATA | base_reason
-        if evidence.sequence is not None:
+        if name in ("motion_intent", "topology") and evidence.sequence is not None:
             previous = self.last_sequences.get(name)
+            fingerprint = (
+                evidence.state, evidence.source_stamp_s, evidence.receipt_stamp_s,
+                evidence.reason_mask, evidence.source, evidence.policy_sha256,
+                evidence.max_linear_mps, evidence.max_angular_rps,
+            )
             if previous is not None:
                 if evidence.sequence < previous:
                     mask |= CLOCK
+                elif evidence.sequence == previous:
+                    if self.last_evidence.get(name) != fingerprint:
+                        mask |= CLOCK | CORRUPT_DATA
                 elif evidence.sequence > previous + 1:
                     self.dropped_input_count += evidence.sequence - previous - 1
                     self.last_backpressure_input = name
                     self.last_backpressure_previous = previous
                     self.last_backpressure_current = evidence.sequence
-                    # Queue size one is intentionally latest-only. A fresh
-                    # complete sample may skip obsolete generations; stale and
-                    # deadline checks remain the fail-closed overload boundary.
-            self.last_sequences[name] = evidence.sequence
+            if previous is None or evidence.sequence > previous:
+                self.last_sequences[name] = evidence.sequence
+                self.last_evidence[name] = fingerprint
         return mask
 
     def _timestamps(self, name, source, receipt, now, ttl, stale_reason, ages):
@@ -721,12 +742,15 @@ class SafetyGateCore:
             mask |= stale_reason
         previous_source = self.last_source_stamps.get(name)
         previous_receipt = self.last_receipt_stamps.get(name)
-        if previous_source is not None and source < previous_source:
-            mask |= CLOCK
-        if previous_receipt is not None and receipt < previous_receipt:
-            mask |= CLOCK
-        self.last_source_stamps[name] = source
-        self.last_receipt_stamps[name] = receipt
+        if name in ("motion_intent", "topology"):
+            if previous_source is not None and source < previous_source:
+                mask |= CLOCK
+            if previous_receipt is not None and receipt < previous_receipt:
+                mask |= CLOCK
+            if previous_source is None or source > previous_source:
+                self.last_source_stamps[name] = source
+            if previous_receipt is None or receipt > previous_receipt:
+                self.last_receipt_stamps[name] = receipt
         return mask
 
     def _cap(self, cmd, inputs):
@@ -824,13 +848,18 @@ class SafetyGateRosNode:
         self.last_cmd = self.cmd_source = self.cmd_receipt = None
         self.driver_estop = self.external_estop = None
         self.reset_requested = self.arm_requested = False
-        self.reset_level = self.arm_level = False
-        self.manual_or_disarmed = self.stationary = self.mission_cancelled = False
+        self.reset_level = self.arm_level = None
+        self.reset_low_observed = self.arm_low_observed = False
+        self.manual_or_disarmed = self.reset_driver_healthy = self.stationary = False
+        self.mission_cancelled = False
         self.topology_evidence = None
         self.internal_fault = self.backpressure = False
         self.last_tick_wall = self.last_ros_time = self.last_ros_wall = None
-        self.last_diag_wall = None
         self.sequence = 0
+        self._input_lock = threading.RLock()
+        self._observability_lock = threading.Lock()
+        self._observability_snapshot = None
+        self._observability_stop = threading.Event()
 
         self.pub = rospy.Publisher(p("~output_cmd_topic", "/cmd_vel_safe"), Twist, queue_size=1)
         self.state_pub = rospy.Publisher(p("~state_topic", "/safety/state"), SafetyState, queue_size=1, latch=True)
@@ -864,9 +893,13 @@ class SafetyGateRosNode:
         self._wall_stop = threading.Event()
         self._wall_period_s = 1.0 / rate
         rospy.on_shutdown(self._wall_stop.set)
+        rospy.on_shutdown(self._observability_stop.set)
         self._wall_thread = threading.Thread(target=self._wall_publish_loop,
                                              name="safety-gate-publisher", daemon=True)
+        self._observability_thread = threading.Thread(
+            target=self._observability_loop, name="safety-gate-observability", daemon=True)
         self._wall_thread.start()
+        self._observability_thread.start()
 
     @staticmethod
     def _now():
@@ -874,12 +907,15 @@ class SafetyGateRosNode:
         return rospy.Time.now().to_sec()
 
     def _cmd_cb(self, msg):
-        now = self._now()
         try:
-            self.last_cmd = _twist_to_command(msg)
-            self.cmd_source = self.cmd_receipt = now
+            now = self._now()
+            command = _twist_to_command(msg)
+            with self._input_lock:
+                self.last_cmd = command
+                self.cmd_source = self.cmd_receipt = now
         except Exception:
-            self.internal_fault = True
+            with self._input_lock:
+                self.internal_fault = True
 
     def _from_signal(self, msg, receipt):
         return SignalEvidence(msg.state, msg.header.stamp.to_sec(), receipt,
@@ -956,24 +992,50 @@ class SafetyGateRosNode:
 
     def _driver_cb(self, msg):
         try:
-            self.driver_estop = bool(msg.physical_estop_asserted)
-            clear = (msg.state == msg.AUTO_READY and msg.enabled and
-                     not msg.manual_override_active and not msg.physical_estop_asserted and
+            physical_estop = bool(msg.physical_estop_asserted)
+            state, reason_mask = msg.state, int(msg.reason_mask)
+            clear = (state == msg.AUTO_READY and msg.enabled and
+                     not msg.manual_override_active and not physical_estop and
                      msg.watchdog_verified)
+            reset_driver_healthy = (
+                state in (msg.MANUAL, msg.AUTO_DISABLED) and bool(msg.enabled) and
+                bool(msg.watchdog_verified) and not bool(msg.manual_override_active) and
+                not physical_estop and reason_mask in (0, MODE | DRIVER) and
+                _finite(msg.measured_linear_mps) and _finite(msg.measured_angular_rps) and
+                isinstance(msg.sequence, int) and not isinstance(msg.sequence, bool) and
+                0 <= msg.sequence <= 0xffffffff and isinstance(msg.source, str) and
+                bool(msg.source) and _HASH_RE.fullmatch(str(msg.contract_sha256)) is not None)
             status = StructuredEvidence(
                 int(msg.sequence), bool(clear), msg.header.stamp.to_sec(),
-                msg.header.stamp.to_sec(), self._now(), int(msg.reason_mask),
+                msg.header.stamp.to_sec(), self._now(), reason_mask,
                 str(msg.source), str(msg.contract_sha256))
-            self.pairs["driver"].update_status(status)
-            self.manual_or_disarmed = msg.state in (msg.MANUAL, msg.AUTO_DISABLED)
-            self.stationary = (_finite(msg.measured_linear_mps) and _finite(msg.measured_angular_rps) and
-                               abs(msg.measured_linear_mps) < self.cfg.stationary_linear_mps and
-                               abs(msg.measured_angular_rps) < self.cfg.stationary_angular_rps)
+            with self._input_lock:
+                self.driver_estop = physical_estop
+                if physical_estop:
+                    self.core.latch_estop()
+                self.pairs["driver"].update_status(status)
+                self.manual_or_disarmed = state in (msg.MANUAL, msg.AUTO_DISABLED)
+                self.reset_driver_healthy = reset_driver_healthy
+                self.stationary = (
+                    _finite(msg.measured_linear_mps) and _finite(msg.measured_angular_rps) and
+                    abs(msg.measured_linear_mps) < self.cfg.stationary_linear_mps and
+                    abs(msg.measured_angular_rps) < self.cfg.stationary_angular_rps)
         except Exception:
-            self.pairs["driver"].reject()
+            with self._input_lock:
+                self.pairs["driver"].reject()
+                self.internal_fault = True
 
     def _estop_cb(self, msg):
-        self.external_estop = bool(msg.data)
+        try:
+            asserted = bool(msg.data)
+            with self._input_lock:
+                self.external_estop = asserted
+                if asserted:
+                    self.core.latch_estop()
+        except Exception:
+            with self._input_lock:
+                self.internal_fault = True
+
     def _combined_estop(self):
         if self.driver_estop is True or self.external_estop is True:
             return True
@@ -981,18 +1043,21 @@ class SafetyGateRosNode:
             return False
         return None
 
+    def _request_edge(self, request, level, low_observed, msg):
+        value = bool(msg.data)
+        with self._input_lock:
+            if not value:
+                setattr(self, level, False)
+                setattr(self, low_observed, True)
+            elif getattr(self, low_observed) and not getattr(self, level):
+                setattr(self, request, True)
+                setattr(self, level, True)
 
     def _reset_cb(self, msg):
-        level = bool(msg.data)
-        if level and not self.reset_level:
-            self.reset_requested = True
-        self.reset_level = level
+        self._request_edge("reset_requested", "reset_level", "reset_low_observed", msg)
 
     def _arm_cb(self, msg):
-        level = bool(msg.data)
-        if level and not self.arm_level:
-            self.arm_requested = True
-        self.arm_level = level
+        self._request_edge("arm_requested", "arm_level", "arm_low_observed", msg)
 
     def _mission_cb(self, msg):
         self.mission_cancelled = bool(msg.data)
@@ -1007,53 +1072,84 @@ class SafetyGateRosNode:
     def _wall_publish_loop(self):
         deadline = time.monotonic()
         while not self._wall_stop.is_set():
-            wall_now = time.monotonic()
-            self._timer_cb(None, wall_now)
+            try:
+                self._timer_cb(None, time.monotonic())
+            except Exception:
+                # The sole command domain retries a fail-closed exact zero.
+                with self._input_lock:
+                    self.internal_fault = True
+                self.core.latch_estop()
+                try:
+                    self.pub.publish(_command_to_twist(VelocityCommand()))
+                except Exception:
+                    pass
             deadline += self._wall_period_s
             self._wall_stop.wait(max(0.0, deadline - time.monotonic()))
 
     def _timer_cb(self, _event, wall_now=None):
+        wall_now = time.monotonic() if wall_now is None else wall_now
+        now = self._now()
+        with self._input_lock:
+            deadline = (self.last_tick_wall is not None and
+                        wall_now - self.last_tick_wall > self.cfg.deadline_limit_s)
+            self.last_tick_wall = wall_now
+            clock_fault = not _finite(now)
+            if self.last_ros_time is not None:
+                if now < self.last_ros_time:
+                    clock_fault = True
+                elif now == self.last_ros_time:
+                    clock_fault |= wall_now - self.last_ros_wall >= self._wall_period_s
+            if _finite(now) and (self.last_ros_time is None or now > self.last_ros_time):
+                self.last_ros_time, self.last_ros_wall = now, wall_now
+            reset, arm = self.reset_requested, self.arm_requested
+            self.reset_requested = self.arm_requested = False
+            paired = {name: pair.evidence(now) for name, pair in self.pairs.items()}
+            self.evidence.update({
+                "geofence": paired["geofence"], "collision": paired["collision"],
+                "slope": paired["slope"], "localization": paired["localization"],
+                "mode": paired["driver"], "driver": paired["driver"],
+            })
+            inputs = GateInputs(
+                cmd=self.last_cmd, now_s=now, cmd_source_stamp_s=self.cmd_source,
+                cmd_receipt_stamp_s=self.cmd_receipt, e_stop=self._combined_estop(),
+                e_stop_reset=reset, arm_request=arm,
+                reset_driver_healthy=self.reset_driver_healthy,
+                manual_or_disarmed=self.manual_or_disarmed, stationary=self.stationary,
+                mission_cancelled=self.mission_cancelled, topology=self.topology_evidence,
+                deadline_missed=deadline, backpressure=self.backpressure,
+                internal_fault=self.internal_fault, clock_fault=clock_fault, **self.evidence)
+            requested_command = self.last_cmd or VelocityCommand()
+        decision = self.core.evaluate(inputs)
+        self.pub.publish(_command_to_twist(decision.command))
+        with self._observability_lock:
+            self.sequence += 1
+            self._observability_snapshot = (
+                now, self.sequence, decision, requested_command,
+                self.pairs["collision"].diagnostic_snapshot())
+
+    def _observability_loop(self):
+        while not self._observability_stop.wait(1.0):
+            try:
+                self._publish_observability()
+            except Exception:
+                with self._input_lock:
+                    self.internal_fault = True
+
+    def _publish_observability(self):
         import rospy
         from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
         from wheelchair_interfaces.msg import SafetyState
-        wall_now = time.monotonic() if wall_now is None else wall_now
-        now = self._now()
-        deadline = (self.last_tick_wall is not None and
-                    wall_now - self.last_tick_wall > self.cfg.deadline_limit_s)
-        self.last_tick_wall = wall_now
-        clock_fault = not _finite(now)
-        if self.last_ros_time is not None:
-            if now < self.last_ros_time:
-                clock_fault = True
-            elif now == self.last_ros_time:
-                clock_fault |= wall_now - self.last_ros_wall >= self._wall_period_s
-        if _finite(now) and (self.last_ros_time is None or now > self.last_ros_time):
-            self.last_ros_time, self.last_ros_wall = now, wall_now
-        reset, arm = self.reset_requested, self.arm_requested
-        self.reset_requested = self.arm_requested = False
-        paired = {name: pair.evidence(now) for name, pair in self.pairs.items()}
-        self.evidence.update({
-            "geofence": paired["geofence"], "collision": paired["collision"],
-            "slope": paired["slope"], "localization": paired["localization"],
-            "mode": paired["driver"], "driver": paired["driver"],
-        })
-        estop = self._combined_estop()
-        decision = self.core.evaluate(GateInputs(
-            cmd=self.last_cmd, now_s=now, cmd_source_stamp_s=self.cmd_source,
-            cmd_receipt_stamp_s=self.cmd_receipt, e_stop=estop,
-            e_stop_reset=reset, arm_request=arm, manual_or_disarmed=self.manual_or_disarmed,
-            stationary=self.stationary, mission_cancelled=self.mission_cancelled,
-            topology=self.topology_evidence, deadline_missed=deadline,
-            backpressure=self.backpressure, internal_fault=self.internal_fault,
-            clock_fault=clock_fault, **self.evidence))
-        self.pub.publish(_command_to_twist(decision.command))
-        self.sequence += 1
+        with self._observability_lock:
+            snapshot = self._observability_snapshot
+        if snapshot is None:
+            return
+        now, sequence, decision, requested, collision_pair = snapshot
         state = SafetyState()
         state.header.stamp = rospy.Time.from_sec(now)
         state.header.frame_id = "base_footprint"
-        state.sequence, state.state, state.reason_mask = self.sequence, decision.state, decision.reason_mask
+        state.sequence, state.state, state.reason_mask = sequence, decision.state, decision.reason_mask
         state.armed, state.estop_latched = decision.armed, decision.e_stop_latched
-        state.requested_command = _command_to_twist(self.last_cmd or VelocityCommand())
+        state.requested_command = _command_to_twist(requested)
         state.output_command = _command_to_twist(decision.command)
         for attr, key in (("command_age_s", "command"), ("intent_age_s", "motion_intent"),
                           ("geofence_age_s", "geofence"), ("collision_age_s", "collision"),
@@ -1064,51 +1160,18 @@ class SafetyGateRosNode:
         state.dropped_input_count = decision.dropped_input_count
         state.release_manifest_sha256 = self.cfg.release_manifest_sha256
         self.state_pub.publish(state)
-        if (self.last_diag_wall is not None and
-                wall_now - self.last_diag_wall < 0.20):
-            return
-        self.last_diag_wall = wall_now
-        diag = DiagnosticArray()
-        diag.header.stamp = state.header.stamp
-        status = DiagnosticStatus(level=DiagnosticStatus.OK if decision.armed else DiagnosticStatus.ERROR,
-                                  name="wheelchair_safety/gate", message=decision.reason,
-                                  hardware_id="software_rc_inert")
-        collision_pair = self.pairs["collision"].diagnostic_snapshot()
+        status = DiagnosticStatus(
+            level=DiagnosticStatus.OK if decision.armed else DiagnosticStatus.ERROR,
+            name="wheelchair_safety/gate", message=decision.reason,
+            hardware_id="software_rc_inert")
         status.values = [
             KeyValue("reason_mask", str(decision.reason_mask)),
             KeyValue("armed", str(decision.armed).lower()),
-            KeyValue("last_backpressure_input", self.core.last_backpressure_input),
-            KeyValue(
-                "last_backpressure_previous",
-                "" if self.core.last_backpressure_previous is None
-                else str(self.core.last_backpressure_previous),
-            ),
-            KeyValue(
-                "last_backpressure_current",
-                "" if self.core.last_backpressure_current is None
-                else str(self.core.last_backpressure_current),
-            ),
-        ]
-        status.values.extend([
             KeyValue("collision_pair_sequence", str(collision_pair["sequence"])),
-            KeyValue("collision_pair_status", str(collision_pair["status"])),
-            KeyValue(
-                "collision_pair_signal",
-                str(collision_pair["signals"].get("collision")),
-            ),
-            KeyValue(
-                "collision_pair_committed_status",
-                str(collision_pair["committed_status"]),
-            ),
-            KeyValue(
-                "collision_pair_committed_signal",
-                str(collision_pair["committed_signals"].get("collision")),
-            ),
-            KeyValue(
-                "collision_pair_poisoned",
-                str(collision_pair["poisoned"]).lower(),
-            ),
-        ])
+            KeyValue("collision_pair_poisoned", str(collision_pair["poisoned"]).lower()),
+        ]
+        diag = DiagnosticArray()
+        diag.header.stamp = state.header.stamp
         diag.status = [status]
         self.diag_pub.publish(diag)
 

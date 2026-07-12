@@ -14,11 +14,11 @@ GateInputs = safety_gate.GateInputs
 SafetyGateCore = safety_gate.SafetyGateCore
 
 
-def clear(name, stamp=10.0, **kwargs):
+def clear(name, stamp=10.0, sequence=1, **kwargs):
     policy = "" if name == "intent" else safety_gate._DEFAULT_POLICY_SHA256[name]
     source = "topology_guard" if name == "topology" else name
     return SignalEvidence(state=safety_gate.CLEAR, source_stamp_s=stamp,
-                          receipt_stamp_s=stamp, source=source, sequence=1,
+                          receipt_stamp_s=stamp, source=source, sequence=sequence,
                           policy_sha256=policy, **kwargs)
 
 
@@ -33,6 +33,7 @@ def valid_inputs(**changes):
         e_stop=False,
         manual_or_disarmed=True, stationary=True, mission_cancelled=True,
         graph_valid=True,
+        reset_driver_healthy=True,
     )
     values.update(changes)
     return GateInputs(**values)
@@ -147,3 +148,32 @@ def test_manual_driver_reset_evidence_does_not_grant_motion_authority():
     denied = core.evaluate(valid_inputs(e_stop=False, arm_request=True, mode=mode, driver=manual))
     assert not denied.armed
     assert denied.reason_mask & safety_gate.MODE
+def test_reset_requires_separate_strict_driver_health():
+    core = SafetyGateCore()
+    core.evaluate(valid_inputs(arm_request=True))
+    core.evaluate(valid_inputs(e_stop=True, arm_request=False))
+    denied = core.evaluate(valid_inputs(
+        e_stop=False, e_stop_reset=True, arm_request=False,
+        reset_driver_healthy=False))
+    assert denied.e_stop_latched
+    assert denied.reason_mask & safety_gate.RESET_REJECTED
+
+
+def test_evidence_high_water_marks_never_regress():
+    core = SafetyGateCore()
+    core.evaluate(valid_inputs(now_s=10.0))
+    regressed = core.evaluate(valid_inputs(now_s=10.0, motion_intent=clear(
+        "intent", 9.0, sequence=2, max_linear_mps=0.5, max_angular_rps=0.8)))
+    assert regressed.reason_mask & safety_gate.CLOCK
+    still_regressed = core.evaluate(valid_inputs(now_s=10.0, motion_intent=clear(
+        "intent", 9.5, sequence=3, max_linear_mps=0.5, max_angular_rps=0.8)))
+    assert still_regressed.reason_mask & safety_gate.CLOCK
+
+
+def test_changed_same_sequence_is_rejected():
+    core = SafetyGateCore()
+    core.evaluate(valid_inputs())
+    changed = clear("topology", 10.0)
+    changed = SignalEvidence(**{**changed.__dict__, "reason_mask": safety_gate.GRAPH_TOPOLOGY})
+    decision = core.evaluate(valid_inputs(topology=changed))
+    assert decision.reason_mask & safety_gate.CORRUPT_DATA

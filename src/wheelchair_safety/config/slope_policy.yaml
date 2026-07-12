@@ -62,6 +62,14 @@ route_zones:
   manual_only: stop_autonomy
   degraded_stop: stop
   unknown: stop
+route_safety_evidence:
+  source: wheelchair_route_safety
+  manifest_id: hanyang-route-safety-candidate-v1
+  manifest_sha256: a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc
+  map_id: hanyang_aegimun_loop
+  map_sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278
+  zones:
+    zone-simulation-candidate: normal
 downhill_stopping_coupling:
   downhill_factor: sin(max(0, -pitch_rad))
   equation: a_eff = a_policy - g * downhill_factor

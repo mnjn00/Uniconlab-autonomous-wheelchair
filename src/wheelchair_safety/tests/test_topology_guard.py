@@ -59,15 +59,15 @@ def valid_snapshot(profile="sim", input_topic="/cmd_vel_nav", output_topic=None,
 
 
 @pytest.mark.parametrize(("profile", "output_topic", "safe_consumers"), (
-    ("sim", "/cmd_vel_safe", ("collision_supervisor", "simulation_controller_adapter")),
-    ("replay", "/shadow/cmd_vel_safe", ("collision_supervisor",)),
-    ("hardware_shadow", "/cmd_vel_safe", ("collision_supervisor", "hardware_shadow_adapter")),
+    ("sim", "/cmd_vel_safe", ("/collision_supervisor", "/simulation_controller_adapter")),
+    ("replay", "/shadow/cmd_vel_safe", ("/collision_supervisor",)),
+    ("hardware_shadow", "/cmd_vel_safe", ("/collision_supervisor", "/hardware_shadow_adapter")),
 ))
 def test_exact_profile_snapshot_can_clear(profile, output_topic, safe_consumers):
     expected, snapshot = valid_snapshot(profile)
     assert expected.authorities[output_topic].subscribers == safe_consumers
-    assert expected.authorities["/decision/motion_intent"].publishers == ("wheelchair_mission",)
-    assert expected.authorities["/route/progress"].publishers == ("route_manager",)
+    assert expected.authorities["/decision/motion_intent"].publishers == ("/wheelchair_mission",)
+    assert expected.authorities["/route/progress"].publishers == ("/route_manager",)
     result = topology_guard.TopologyAuditor(expected).audit(snapshot)
     assert result.ok, result.violations
     assert result.reason_mask == 0
@@ -103,6 +103,56 @@ def test_duplicate_and_rogue_publishers_and_subscribers_stop():
     publishers["/cmd_vel_nav"] = ("/primary/move_base", "/duplicate/move_base")
     assert not topology_guard.TopologyAuditor(expected).audit(
         replace(snapshot, publishers=publishers)).ok
+def test_full_caller_ids_reject_namespaced_impostors_and_accept_exact_identity():
+    expected = topology_guard.ExpectedGraph(
+        authorities={"/protected": topology_guard.TopicAuthority(
+            ("/expected_node",), ("/required_subscriber",))},
+        timed_topics=(),
+        transforms={},
+        command_topics=("/protected",),
+    )
+    valid = topology_guard.GraphSnapshot(
+        publishers={"/protected": ("/expected_node",)},
+        subscribers={"/protected": ("/required_subscriber",)},
+        master_evidence_complete=True,
+        tf_evidence_complete=True,
+        timing_evidence_complete=True,
+        captured_at_s=10.0,
+    )
+    assert topology_guard.TopologyAuditor(expected).audit(valid).ok
+    impostor = replace(valid, publishers={"/protected": ("/namespace/expected_node",)})
+    result = topology_guard.TopologyAuditor(expected).audit(impostor)
+    assert not result.ok
+    assert any("/protected publisher authority" in item for item in result.violations)
+
+
+def test_same_basename_caller_ids_remain_distinct_for_authority_cardinality():
+    expected, snapshot = valid_snapshot()
+    publishers = dict(snapshot.publishers)
+    publishers["/cmd_vel_nav"] = ("/a/move_base", "/b/move_base")
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/cmd_vel_safe"] += (
+        "/a/simulation_controller_adapter", "/b/simulation_controller_adapter")
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, publishers=publishers, subscribers=subscribers))
+    assert not result.ok
+    assert any("/cmd_vel_nav publisher authority" in item for item in result.violations)
+    assert any("/cmd_vel_safe unauthorized subscribers" in item for item in result.violations)
+
+
+def test_profile_selected_adapter_requires_exactly_one_full_identity():
+    expected, snapshot = valid_snapshot()
+    subscribers = dict(snapshot.subscribers)
+    subscribers["/localization/candidate"] = (
+        "/wheelchair_route_safety",
+        "/localization_guard",
+        "/independent_localization_guard",
+    )
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, subscribers=subscribers))
+    assert not result.ok
+    assert any("/localization/candidate requires exactly one profile-selected subscriber" in item
+               for item in result.violations)
 
 
 def test_profile_safe_command_consumers_include_collision_and_one_or_no_sink():
@@ -110,18 +160,18 @@ def test_profile_safe_command_consumers_include_collision_and_one_or_no_sink():
     replay, _ = valid_snapshot("replay")
     shadow, _ = valid_snapshot("hardware_shadow")
     assert sim.authorities["/cmd_vel_safe"].subscribers == (
-        "collision_supervisor", "simulation_controller_adapter")
+        "/collision_supervisor", "/simulation_controller_adapter")
     assert replay.authorities["/shadow/cmd_vel_safe"].subscribers == (
-        "collision_supervisor",)
+        "/collision_supervisor",)
     assert shadow.authorities["/cmd_vel_safe"].subscribers == (
-        "collision_supervisor", "hardware_shadow_adapter")
+        "/collision_supervisor", "/hardware_shadow_adapter")
 
 
 def test_topology_observers_are_passive_per_edge():
     expected, snapshot = valid_snapshot()
     result = topology_guard.TopologyAuditor(expected).audit(snapshot)
     assert result.ok
-    assert "topology_guard" in result.passive_nodes
+    assert "/topology_guard" in result.passive_nodes
     # Its authoritative publication is still required; passive classification applies to subscriptions.
     publishers = dict(snapshot.publishers)
     publishers["/safety/topology"] = ("rogue",)
@@ -137,10 +187,10 @@ def test_sim_qualification_observers_have_exact_per_topic_grants():
 
     for topic in scenario_topics:
         assert expected.authorities[topic].allowed_subscribers == (
-            "rc_scenario_driver", "rc_metrics_collector")
+            "/rc_metrics_collector", "/rc_scenario_driver")
         subscribers[topic] += ("rc_scenario_driver", "rc_metrics_collector")
     for topic in set(collector_topics) - set(scenario_topics):
-        assert expected.authorities[topic].allowed_subscribers == ("rc_metrics_collector",)
+        assert expected.authorities[topic].allowed_subscribers == ("/rc_metrics_collector",)
         subscribers[topic] += ("rc_metrics_collector",)
     snapshot = replace(snapshot, subscribers=subscribers)
     assert topology_guard.TopologyAuditor(expected).audit(snapshot).ok
@@ -153,10 +203,10 @@ def test_sim_qualification_observers_have_exact_per_topic_grants():
     assert any("/route/progress publisher authority" in item for item in result.violations)
 
     for topic in set(collector_topics) - set(scenario_topics):
-        assert "rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
+        assert "/rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
     for topic in ("/safety/localization", "/localization/candidate", "/route/active"):
-        assert "rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
-        assert "rc_metrics_collector" not in expected.authorities[topic].allowed_subscribers
+        assert "/rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
+        assert "/rc_metrics_collector" not in expected.authorities[topic].allowed_subscribers
 
 
 @pytest.mark.parametrize("profile", ("replay", "hardware_shadow", "hardware_enabled"))
@@ -240,8 +290,9 @@ def test_topology_signal_is_not_a_circular_timing_permission():
 def test_actual_aliases_and_independent_localization_identities_are_exact():
     expected, snapshot = valid_snapshot()
     assert expected.authorities["/localization/candidate"].publishers == (
-        "localization_adapter", "selected_localization_adapter", "base_model_localization_adapter")
-    assert "independent_localization_guard" in expected.authorities["/localization/status"].publishers
+        "/base_model_localization_adapter", "/localization_adapter",
+        "/selected_localization_adapter")
+    assert "/independent_localization_guard" in expected.authorities["/localization/status"].publishers
 
     publishers = dict(snapshot.publishers)
     publishers["/localization/status"] = ("independent_localization_guard",)
@@ -305,9 +356,9 @@ def test_profile_command_topic_remap_is_audited_as_selected():
         "/safe/selected_cmd", "/wheelchair_base_controller/cmd_vel",
     )
     assert expected.authorities["/nav/selected_cmd"].allowed_subscribers == (
-        "rc_metrics_collector",)
+        "/rc_metrics_collector",)
     assert expected.authorities["/safe/selected_cmd"].allowed_subscribers == (
-        "rc_metrics_collector",)
+        "/rc_metrics_collector",)
     assert expected.command_topics == (
         "/nav/selected_cmd",
         "/safe/selected_cmd",
@@ -346,9 +397,9 @@ def test_hardware_enabled_requires_explicit_boundary_and_sink_contract():
         hardware_authority_proven=True, hardware_sink_topic="/hardware/manifest/cmd_vel")
     assert expected.profile == "hardware_enabled"
     assert expected.authorities["/cmd_vel_safe"].subscribers == (
-        "collision_supervisor", "hardware_enabled_adapter")
+        "/collision_supervisor", "/hardware_enabled_adapter")
     assert expected.authorities["/hardware/manifest/cmd_vel"].publishers == (
-        "hardware_enabled_adapter",)
+        "/hardware_enabled_adapter",)
 
 
 def test_duplicate_rogue_and_stale_dynamic_tf_stop():
@@ -408,10 +459,23 @@ def test_route_active_deadline_is_a_monotonic_receipt_contract():
                            source.index("    def observe_motion_intent(")]
     assert "time.monotonic()" in observe_source
     assert "header.stamp" not in observe_source
-def test_canonical_raw_inputs_and_route_zone_have_exact_authority():
+def test_canonical_raw_inputs_and_structured_geofence_have_exact_authority():
     expected, snapshot = valid_snapshot()
-    for topic in ("/sensors/lidar/points", "/sensors/imu/data", "/odom", "/route/zone_policy"):
+    for topic in ("/sensors/lidar/points", "/sensors/imu/data", "/odom",
+                  "/route_safety/geofence_status"):
         assert topic in expected.authorities
+    assert "/route/zone_policy" not in expected.authorities
+    assert expected.authorities["/route_safety/geofence_status"].subscribers == (
+        "/safety_gate", "/slope_supervisor", "/wheelchair_mission")
+    assert topology_guard.profile_deadlines(expected)["/route_safety/geofence_status"] == 0.10
+    observations = dict(snapshot.observations)
+    observations["/route_safety/geofence_status"] = topology_guard.TopicObservation(
+        1, True, 9.899, 0.10)
+    result = topology_guard.TopologyAuditor(expected).audit(
+        replace(snapshot, observations=observations))
+    assert not result.ok
+    assert result.reason_mask & topology_guard.DEADLINE_MISS
+
     publishers = dict(snapshot.publishers)
     publishers["/sensors/lidar/points"] = ("rogue_sensor_adapter",)
     result = topology_guard.TopologyAuditor(expected).audit(
@@ -420,11 +484,12 @@ def test_canonical_raw_inputs_and_route_zone_have_exact_authority():
     assert any("/sensors/lidar/points publisher authority" in item for item in result.violations)
 
     subscribers = dict(snapshot.subscribers)
-    subscribers["/route/zone_policy"] += ("route_zone_monitor",)
+    subscribers["/route_safety/geofence_status"] += ("route_zone_monitor",)
     result = topology_guard.TopologyAuditor(expected).audit(
         replace(snapshot, subscribers=subscribers))
     assert not result.ok
-    assert any("/route/zone_policy unauthorized subscribers" in item for item in result.violations)
+    assert any("/route_safety/geofence_status unauthorized subscribers" in item
+               for item in result.violations)
 
 
 def test_disguised_command_subscriber_is_not_passive():
@@ -455,7 +520,10 @@ def test_tf_uses_full_caller_identity_and_rejects_same_basename_publishers():
 def test_tf_stamp_regression_static_stamp_and_map_jump_stop():
     expected, snapshot = valid_snapshot()
     auditor = topology_guard.TopologyAuditor(expected)
-    assert auditor.audit(snapshot).ok
+    baseline_transforms = dict(snapshot.transforms)
+    baseline_transforms[("map", "odom")] = (topology_guard.TransformObservation(
+        "localization_adapter", 9.9, 100.0, False, 0.10, (0.0, 0.0, 0.0), 0.0),)
+    assert auditor.audit(replace(snapshot, transforms=baseline_transforms)).ok
 
     transforms = dict(snapshot.transforms)
     transforms[("map", "odom")] = (topology_guard.TransformObservation(
@@ -511,6 +579,7 @@ def test_forbidden_basename_on_safety_or_command_surface_stops():
 def test_map_to_odom_jump_requires_explicit_relocalizing_evidence():
     expected, snapshot = valid_snapshot()
     auditor = topology_guard.TopologyAuditor(expected)
+    # The snapshot baseline uses the profile's first allowed owner; the jump switches alias.
     assert auditor.audit(snapshot).ok
     transforms = dict(snapshot.transforms)
     transforms[("map", "odom")] = (topology_guard.TransformObservation(

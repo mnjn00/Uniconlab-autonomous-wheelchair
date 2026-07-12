@@ -10,7 +10,7 @@
   <arg name="collision_policy" default="$(find wheelchair_safety)/config/collision_policy.yaml"/>
   <arg name="collision_policy_sha256" default="e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1"/>
   <arg name="slope_policy" default="$(find wheelchair_safety)/config/slope_policy.yaml"/>
-  <arg name="slope_policy_sha256" default="69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62"/>
+  <arg name="slope_policy_sha256" default="2ad11dc946b09b7346dc29d90172e3009518a2399646b6c48448be8993deda0f"/>
   <arg name="map_id" default="hanyang_aegimun_loop"/>
   <arg name="map_sha256" default="c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"/>
   <arg name="route_sha256" default="96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32"/>

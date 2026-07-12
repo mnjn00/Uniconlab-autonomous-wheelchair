@@ -159,6 +159,89 @@ class ZoneAndStateTests(unittest.TestCase):
         self.assertEqual(decide(valid_core(), zone="manual_only").state, slope.STOP)
         self.assertEqual(decide(valid_core(), zone="degraded_stop").state, slope.STOP)
         self.assertEqual(decide(valid_core(), zone="not_in_manifest").state, slope.STOP)
+    def test_duplicate_and_regressed_source_stamps_never_clear_or_lower_high_water(self):
+        core = valid_core()
+        self.assertEqual(decide(core, now=10.01, source_stamp_s=10.0, receipt_stamp_s=10.005).state, slope.CLEAR)
+        duplicate = decide(core, now=10.02, source_stamp_s=10.0, receipt_stamp_s=10.015)
+        self.assertEqual(duplicate.state, slope.UNKNOWN)
+        self.assertTrue(duplicate.reason_mask & slope.CLOCK)
+        regression = decide(core, now=10.03, source_stamp_s=9.0, receipt_stamp_s=10.025)
+        self.assertEqual(regression.state, slope.UNKNOWN)
+        self.assertTrue(regression.reason_mask & slope.CLOCK)
+        partial_recovery = decide(core, now=10.04, source_stamp_s=9.1, receipt_stamp_s=10.035)
+        self.assertEqual(partial_recovery.state, slope.UNKNOWN)
+        self.assertTrue(partial_recovery.reason_mask & slope.CLOCK)
+        self.assertEqual(core._last_source_stamp, 10.0)
+
+    def test_restrictive_zone_precedence(self):
+        self.assertEqual(decide(valid_core(), zone="normal", zone_age_s=0.0).state, slope.CLEAR)
+        for zone in ("manual_only", "degraded_stop"):
+            self.assertEqual(decide(valid_core(), zone=zone, zone_age_s=0.0).state, slope.STOP)
+
+
+class StructuredZoneEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def stamp(value):
+        return SimpleNamespace(to_sec=lambda: value)
+
+    def setUp(self):
+        policy = slope.SlopePolicy(route_zone_policies=(
+            ("zone-normal", "normal"),
+            ("zone-manual", "manual_only"),
+            ("zone-degraded", "degraded_stop"),
+        ))
+        self.node = slope.SlopeSupervisorRosNode.__new__(slope.SlopeSupervisorRosNode)
+        self.node.core = slope.SlopeSupervisorCore(policy)
+        self.node.core.calibration_state = slope.CAL_VALID
+        self.node.rospy = SimpleNamespace(
+            Time=SimpleNamespace(now=lambda: self.stamp(10.0))
+        )
+        self.node.zone = "unknown"
+        self.node.zone_receipt_stamp_s = -math.inf
+        self.node._zone_sequence_high_water = None
+        self.node._zone_source_high_water_stamp_s = None
+
+    def message(self, **overrides):
+        policy = self.node.core.policy
+        values = dict(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+            evaluation_stamp=self.stamp(9.98),
+            sequence=1,
+            state=1,
+            reason_mask=0,
+            source=policy.route_safety_source,
+            manifest_id=policy.route_safety_manifest_id,
+            manifest_sha256=policy.route_safety_manifest_sha256,
+            zone_id="zone-normal",
+        )
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_identity_sequence_staleness_and_replay_fail_closed(self):
+        self.node._zone_cb(self.message())
+        self.assertEqual(self.node.zone, "normal")
+        self.node._zone_cb(self.message(sequence=1, zone_id="zone-manual"))
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertEqual(self.node._zone_sequence_high_water, 1)
+        self.node._zone_cb(self.message(sequence=2, evaluation_stamp=self.stamp(9.0)))
+        self.assertEqual(self.node.zone, "unknown")
+        self.node._zone_cb(self.message(sequence=3, manifest_sha256="0" * 64))
+        self.assertEqual(self.node.zone, "unknown")
+        self.node._zone_cb(self.message(sequence=4, source="forged"))
+        self.assertEqual(self.node.zone, "unknown")
+
+    def test_restrictive_structured_policy_cannot_be_masked_by_normal_label(self):
+        self.node._zone_cb(self.message(zone_id="zone-manual"))
+        self.assertEqual(self.node.zone, "manual_only")
+        self.assertEqual(decide(self.node.core, zone=self.node.zone, zone_age_s=0.0).state, slope.STOP)
+        self.node._zone_cb(self.message(
+            sequence=2,
+            header=SimpleNamespace(stamp=self.stamp(9.96)),
+            evaluation_stamp=self.stamp(9.99),
+            zone_id="zone-degraded",
+        ))
+        self.assertEqual(self.node.zone, "degraded_stop")
+        self.assertEqual(decide(self.node.core, now=2.0, zone=self.node.zone, zone_age_s=0.0).state, slope.STOP)
 
     def test_release_hysteresis_requires_tight_clear_for_full_hold(self):
         core = valid_core()
