@@ -804,6 +804,18 @@ class SlopeSupervisorRosNode:
             ):
                 raise ValueError("invalid route safety identity")
             if (
+                source_stamp == 0.0
+                and evaluation_stamp == 0.0
+                and receipt_stamp == 0.0
+                and state == 0
+                and reason_mask == (INPUT_UNKNOWN | GEOFENCE)
+                and segment_id == ""
+                and zone_id == ""
+                and self._initial_zone_bootstrap_active
+                and self.operation_mode == "simulation"
+            ):
+                return
+            if (
                 source_stamp >= 0.0
                 and source_stamp <= evaluation_stamp
                 and state == 0
@@ -888,7 +900,8 @@ class SlopeSupervisorRosNode:
         transform_stamp = tf.header.stamp.to_sec()
         if self.transform_is_static:
             if (
-                transform_stamp != 0.0
+                transform_stamp < 0.0
+                or not math.isfinite(transform_stamp)
                 or tf.header.frame_id != "base_link"
                 or tf.child_frame_id != self.imu_frame
             ):

@@ -240,6 +240,23 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         )
         values.update(overrides)
         return SimpleNamespace(**values)
+    def zero_time_bootstrap_message(self, **overrides):
+        values = dict(
+            header=SimpleNamespace(stamp=self.stamp(0.0)),
+            evaluation_stamp=self.stamp(0.0),
+            sequence=0,
+            state=0,
+            reason_mask=slope.INPUT_UNKNOWN | slope.GEOFENCE,
+            source=self.node.core.policy.route_safety_source,
+            manifest_id=self.node.core.policy.route_safety_manifest_id,
+            manifest_sha256=self.node.core.policy.route_safety_manifest_sha256,
+            route_id="",
+            segment_id="",
+            zone_id="",
+        )
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
 
 
     def test_identity_sequence_staleness_and_replay_fail_closed(self):
@@ -294,6 +311,18 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.assertEqual(self.node.zone, "normal")
         self.assertEqual(self.node.zone_receipt_stamp_s, 10.0)
         self.assertTrue(self.node._initial_zone_bootstrap_active)
+
+    def test_zero_time_bootstrap_preserves_without_refresh(self):
+        self._enable_bootstrap()
+        self.node.zone_receipt_stamp_s = 9.0
+        self.node.rospy.Time.now = lambda: self.stamp(0.0)
+        self.node._zone_cb(self.zero_time_bootstrap_message())
+        self.assertEqual(self.node.zone, "normal")
+        self.assertEqual(self.node.zone_receipt_stamp_s, 9.0)
+        self.assertIsNone(self.node._bootstrap_zone_sequence_high_water)
+        self.node.rospy.Time.now = lambda: self.stamp(10.0)
+        self.node._zone_cb(self.zero_time_bootstrap_message(reason_mask=1))
+        self.assertEqual(self.node.zone, "unknown")
 
     def test_simulation_bootstrap_accepts_active_route_missing_localization_stop(self):
         self._enable_bootstrap()
@@ -354,7 +383,7 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
 
     def test_static_transform_lookup_is_cached_but_dynamic_is_not(self):
         transform = SimpleNamespace(
-            header=SimpleNamespace(frame_id="base_link", stamp=self.stamp(0.0)),
+            header=SimpleNamespace(frame_id="base_link", stamp=self.stamp(1.0)),
             child_frame_id="imu_link",
             transform=SimpleNamespace(
                 rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
@@ -410,6 +439,24 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
             child_frame_id="imu_link",
             transform=SimpleNamespace(
                 rotation=SimpleNamespace(x=float("nan"), y=0.0, z=0.0, w=1.0),
+                translation=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            ),
+        ))
+        self.node.imu_frame = "imu_link"
+        self.node.transform_is_static = True
+        self.node.transform_verified = True
+        self.node._static_imu_transform = None
+        with self.assertRaises(ValueError):
+            self.node._lookup_imu_transform(self.stamp(1.0), object())
+        self.assertIsNone(self.node._static_imu_transform)
+
+    def test_static_transform_negative_stamp_is_not_cached(self):
+        self.node.rospy.Duration = lambda value: value
+        self.node.tf_buffer = SimpleNamespace(lookup_transform=lambda *args: SimpleNamespace(
+            header=SimpleNamespace(frame_id="base_link", stamp=self.stamp(-0.1)),
+            child_frame_id="imu_link",
+            transform=SimpleNamespace(
+                rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
                 translation=SimpleNamespace(x=0.0, y=0.0, z=0.0),
             ),
         ))
