@@ -43,6 +43,7 @@ class EventType(str, Enum):
     MOVE_BASE_SUCCEEDED = "MOVE_BASE_SUCCEEDED"
     MOVE_BASE_ABORTED = "MOVE_BASE_ABORTED"
     MOVE_BASE_LOST = "MOVE_BASE_LOST"
+    MOVE_BASE_CANCELED = "MOVE_BASE_CANCELED"
     TICK = "TICK"
 
 
@@ -67,8 +68,14 @@ class MissionConfig:
     max_angular_rps: float = 0.65
     slow_linear_mps: float = 0.12
     slow_angular_rps: float = 0.25
-    evidence_timeout_s: float = 0.75
-    progress_timeout_s: float = 4.0
+    localization_ttl_s: float = 0.25
+    geofence_ttl_s: float = 0.25
+    collision_ttl_s: float = 0.30
+    slope_ttl_s: float = 0.10
+    mode_ttl_s: float = 0.15
+    driver_ttl_s: float = 0.15
+    evidence_timeout_s: Optional[float] = None
+    progress_timeout_s: float = 0.50
     action_timeout_s: float = 1.0
     obstacle_stop_entry_s: float = 0.20
     obstacle_clear_s: float = 1.00
@@ -79,7 +86,12 @@ class MissionConfig:
             self.max_angular_rps,
             self.slow_linear_mps,
             self.slow_angular_rps,
-            self.evidence_timeout_s,
+            self.localization_ttl_s,
+            self.geofence_ttl_s,
+            self.collision_ttl_s,
+            self.slope_ttl_s,
+            self.mode_ttl_s,
+            self.driver_ttl_s,
             self.progress_timeout_s,
             self.action_timeout_s,
             self.obstacle_stop_entry_s,
@@ -91,6 +103,9 @@ class MissionConfig:
             raise ValueError("slow linear cap must be below normal cap")
         if self.slow_angular_rps >= self.max_angular_rps:
             raise ValueError("slow angular cap must be below normal cap")
+        if self.evidence_timeout_s is not None and (
+                not math.isfinite(self.evidence_timeout_s) or self.evidence_timeout_s <= 0.0):
+            raise ValueError("legacy evidence timeout must be finite and positive")
 
 
 @dataclass(frozen=True)
@@ -113,6 +128,8 @@ class MissionOutput:
     progress: int
     max_linear_mps: float
     max_angular_rps: float
+    goal_generation: int
+    goal_state: str
 
 
 class MissionFSM:
@@ -150,6 +167,8 @@ class MissionFSM:
         self._cancel_goal = False
         self._send_waypoint: Optional[int] = None
         self._terminal_status = ""
+        self._goal_generation = 0
+        self._goal_state = "none"
         self.validate_transition_table()
 
     @classmethod
@@ -193,7 +212,9 @@ class MissionFSM:
         linear = 0.0
         angular = 0.0
         if self.state == MissionState.NAVIGATING:
-            if self._values["slope"] == "slow":
+            if self._values["collision"] != "clear":
+                intent = MotionIntent.HOLD
+            elif self._values["slope"] == "slow":
                 intent = MotionIntent.SLOW
                 linear = self.config.slow_linear_mps
                 angular = self.config.slow_angular_rps
@@ -211,6 +232,8 @@ class MissionFSM:
             progress=self._progress,
             max_linear_mps=linear,
             max_angular_rps=angular,
+            goal_generation=self._goal_generation,
+            goal_state=self._goal_state,
         )
 
     def _time(self, now: Optional[float]) -> float:
@@ -277,20 +300,25 @@ class MissionFSM:
             self._on_progress(event.value, now)
             return
         if kind == EventType.MOVE_BASE_ACTIVE:
-            self._on_action_active(now)
+            self._on_action_active(event.value, now)
             return
         if kind == EventType.MOVE_BASE_SUCCEEDED:
-            self._on_action_succeeded(now)
+            self._on_action_succeeded(event.value, now)
             return
         if kind == EventType.MOVE_BASE_ABORTED:
-            self._on_action_aborted()
+            self._on_action_aborted(event.value)
+            return
+        if kind == EventType.MOVE_BASE_CANCELED:
+            self._on_action_canceled(event.value)
             return
         if kind == EventType.PROCESS_LOST:
             if self.state not in (MissionState.DISARMED, MissionState.FAULT):
                 self._fault("required_process_lost")
             return
         if kind == EventType.MOVE_BASE_LOST:
-            if self.state == MissionState.NAVIGATING:
+            if not self._current_generation(event.value):
+                return
+            if self.state == MissionState.NAVIGATING and self._goal_state == "active":
                 self._fault("move_base_lost")
             elif self.state not in (MissionState.DISARMED, MissionState.FAULT):
                 self._impossible("move_base_lost_out_of_order")
@@ -377,23 +405,40 @@ class MissionFSM:
         self._progress = value
         self._progress_updated = now
 
-    def _on_action_active(self, now: float) -> None:
-        if self.state == MissionState.READY:
+    def _event_generation(self, value: Any) -> Optional[int]:
+        generation = value.get("generation") if isinstance(value, Mapping) else value
+        return generation if isinstance(generation, int) and not isinstance(generation, bool) else None
+
+    def _current_generation(self, value: Any) -> bool:
+        generation = self._event_generation(value)
+        return generation is None or generation == self._goal_generation
+
+    def _on_action_active(self, value: Any, now: float) -> None:
+        if not self._current_generation(value):
+            return
+        if self.state == MissionState.READY and self._goal_state == "pending":
+            if not self._readiness_ok(now):
+                self._fault("readiness_revoked")
+                return
             self.state = MissionState.NAVIGATING
             self.reason = "move_base_active"
             self._goal_active = True
+            self._goal_state = "active"
             self._action_updated = now
             self._progress_updated = now
-        elif self.state == MissionState.NAVIGATING:
+        elif self.state == MissionState.NAVIGATING and self._goal_state == "active":
             self._action_updated = now
         else:
             self._impossible("move_base_active_out_of_order")
 
-    def _on_action_succeeded(self, now: float) -> None:
-        if self.state != MissionState.NAVIGATING or not self._goal_active:
+    def _on_action_succeeded(self, value: Any, now: float) -> None:
+        if not self._current_generation(value):
+            return
+        if self.state != MissionState.NAVIGATING or self._goal_state != "active":
             self._impossible("move_base_success_out_of_order")
             return
         self._goal_active = False
+        self._goal_state = "none"
         self._action_updated = now
         self._progress += 1
         self._progress_updated = now
@@ -404,21 +449,34 @@ class MissionFSM:
         else:
             self.state = MissionState.READY
             self.reason = "waypoint_reached"
-            self._send_waypoint = self._progress
+            self._queue_waypoint(self._progress)
 
-    def _on_action_aborted(self) -> None:
-        if self.state != MissionState.NAVIGATING or not self._goal_active:
+    def _on_action_aborted(self, value: Any) -> None:
+        if not self._current_generation(value):
+            return
+        if self._goal_state == "canceling":
+            self._goal_state = "canceled"
+            self._goal_active = False
+            return
+        if self.state != MissionState.NAVIGATING or self._goal_state != "active":
             self._impossible("move_base_abort_out_of_order")
             return
         self._goal_active = False
+        self._goal_state = "none"
         self._cancel_goal = True
         self.state = MissionState.ABORTED
         self.reason = "move_base_aborted"
         self._terminal_status = "ABORTED"
 
-    def _fresh(self, key: str, now: float, timeout: Optional[float] = None) -> bool:
+    def _on_action_canceled(self, value: Any) -> None:
+        if self._current_generation(value) and self._goal_state == "canceling":
+            self._goal_state = "canceled"
+            self._goal_active = False
+
+    def _fresh(self, key: str, now: float) -> bool:
         updated = self._updated.get(key)
-        limit = self.config.evidence_timeout_s if timeout is None else timeout
+        limit = (self.config.evidence_timeout_s if self.config.evidence_timeout_s is not None
+                 else getattr(self.config, key + "_ttl_s"))
         return updated is not None and 0.0 <= now - updated <= limit
 
     def _readiness_ok(self, now: float) -> bool:
@@ -433,17 +491,19 @@ class MissionFSM:
             and all(self._fresh(key, now) for key in self._EVIDENCE)
         )
 
+    def _queue_waypoint(self, index: int) -> None:
+        self._goal_generation += 1
+        self._goal_state = "pending"
+        self._send_waypoint = index
+
     def _evaluate(self, now: float) -> None:
         if self.state == MissionState.LOCALIZING and self._readiness_ok(now):
             self.state = MissionState.READY
             self.reason = "ready"
-            self._send_waypoint = self._progress
+            self._queue_waypoint(self._progress)
         elif self.state == MissionState.READY:
-            if not self._fresh("localization", now) or not self._values["localization"]:
-                self.state = MissionState.LOCALIZING
-                self.reason = "localization_not_ready"
-            elif not self._readiness_ok(now):
-                self.reason = "readiness_not_satisfied"
+            if not self._readiness_ok(now):
+                self._fault("readiness_revoked")
         elif self.state == MissionState.NAVIGATING:
             stale = [key for key in self._EVIDENCE if not self._fresh(key, now)]
             if stale:
@@ -462,6 +522,10 @@ class MissionFSM:
                     self.reason = "obstacle_persisted"
                     self._resume_requested = False
                     self._clear_since = None
+                return
+            if not self._readiness_ok(now):
+                self._fault("readiness_revoked")
+                return
         elif self.state == MissionState.PAUSED_OBSTACLE:
             if self._values["collision"] == "estop":
                 self._fault("emergency_stop")
@@ -479,11 +543,12 @@ class MissionFSM:
                 self.state = MissionState.READY
                 self.reason = "obstacle_cleared_operator_resume"
                 self._resume_requested = False
-                self._send_waypoint = self._progress
+                self._queue_waypoint(self._progress)
 
     def _cancel_active_goal(self) -> None:
-        if self._goal_active:
+        if self._goal_state in ("pending", "active"):
             self._cancel_goal = True
+            self._goal_state = "canceling"
         self._goal_active = False
 
     def _fault(self, reason: str) -> None:
@@ -523,3 +588,5 @@ class MissionFSM:
         self._clear_since = None
         self._resume_requested = False
         self._terminal_status = ""
+        self._goal_generation += 1
+        self._goal_state = "none"

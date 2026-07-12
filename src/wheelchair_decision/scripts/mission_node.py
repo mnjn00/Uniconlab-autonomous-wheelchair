@@ -91,16 +91,20 @@ def _move_base_failure_reason(reason: Any) -> bool:
     ))
 
 
+_SPEED_ZONE_IDS = {
+    "campus-road": "road",
+    "north-sidewalk": "sidewalk",
+    "candidate-unsurveyed": "simulation_unsurveyed",
+}
+
+
 def classify_speed_zone(zone_ids: Any) -> str:
-    """Classify surveyed tags or the exact simulation-only candidate zone."""
+    """Classify only exact, surveyed zone identifiers."""
     normalized = {str(zone_id).strip().lower() for zone_id in zone_ids}
     normalized.discard("")
-    if any("road" in zone_id for zone_id in normalized):
-        return "road"
-    if any("sidewalk" in zone_id for zone_id in normalized):
-        return "sidewalk"
-    if normalized == {"candidate-unsurveyed"}:
-        return "simulation_unsurveyed"
+    classifications = {_SPEED_ZONE_IDS.get(zone_id) for zone_id in normalized}
+    if len(classifications) == 1 and None not in classifications:
+        return classifications.pop()
     raise ValueError("active zone is not speed classified")
 
 
@@ -137,8 +141,10 @@ class RouteActiveHeartbeat:
 
 
 
-def _mission_cancelled(state: Any, active_states: Any = None) -> bool:
-    """Report whether no active-motion mission owns a move_base goal."""
+def _mission_cancelled(state: Any, active_states: Any = None, goal_state: str = "none") -> bool:
+    """Report cancellation only after the current goal has no pending ownership."""
+    if goal_state in ("pending", "active", "canceling"):
+        return False
     if active_states is not None:
         return state not in active_states
     return _enum_name(state) not in ("NAVIGATING", "PAUSED_OBSTACLE")
@@ -249,15 +255,20 @@ class DeferredWaypointQueue:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._pending: Optional[int] = None
+        self._pending: Any = None
 
-    def defer(self, index: int) -> None:
-        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
-            raise ValueError("waypoint index must be a nonnegative integer")
+    def defer(self, request: Any) -> None:
+        valid_index = (isinstance(request, int) and not isinstance(request, bool)
+                       and request >= 0)
+        valid_request = (isinstance(request, tuple) and len(request) == 2
+                         and all(isinstance(value, int) and not isinstance(value, bool)
+                                 and value >= 0 for value in request))
+        if not (valid_index or valid_request):
+            raise ValueError("waypoint request must contain nonnegative integers")
         with self._lock:
-            self._pending = index
+            self._pending = request
 
-    def pop(self) -> Optional[int]:
+    def pop(self) -> Any:
         with self._lock:
             index = self._pending
             self._pending = None
@@ -604,7 +615,8 @@ def main() -> None:
                 state_code = MissionState.FAULT
                 state_reason |= int(SafetyReason.INTERNAL_FAULT)
         cancelled = _mission_cancelled(
-            state_code, (MissionState.NAVIGATING, MissionState.PAUSED_OBSTACLE))
+            state_code, (MissionState.NAVIGATING, MissionState.PAUSED_OBSTACLE),
+            str(getattr(output, "goal_state", "none")))
         signature = (state_code, state_reason, behavior, intent_reason,
                      linear_cap, angular_cap, mission_id, route_id, map_id,
                      cancelled)
@@ -685,7 +697,7 @@ def main() -> None:
         stopped.set()
         thread.join()
 
-    def send_waypoint(index: int) -> None:
+    def send_waypoint(index: int, generation: int) -> None:
         binding = runtime.binding
         if binding is None or index < 0 or index >= len(binding.route.waypoints):
             runtime.fail_closed("invalid waypoint request")
@@ -700,23 +712,26 @@ def main() -> None:
         goal.target_pose.pose.orientation.w = math.cos(waypoint.yaw_rad * 0.5)
 
         def active_cb() -> None:
-            runtime.dispatch("MOVE_BASE_ACTIVE")
+            runtime.dispatch("MOVE_BASE_ACTIVE", {"generation": generation})
 
         def done_cb(status: int, _result: Any) -> None:
-            event = {GoalStatus.SUCCEEDED: "MOVE_BASE_SUCCEEDED",
-                     GoalStatus.ABORTED: "MOVE_BASE_ABORTED",
-                     GoalStatus.REJECTED: "MOVE_BASE_ABORTED",
-                     GoalStatus.LOST: "MOVE_BASE_LOST",
-                     GoalStatus.PREEMPTED: "MOVE_BASE_LOST",
-                     GoalStatus.RECALLED: "MOVE_BASE_LOST"}.get(status, "MOVE_BASE_LOST")
+            if status == GoalStatus.SUCCEEDED:
+                event = "MOVE_BASE_SUCCEEDED"
+            elif status in (GoalStatus.PREEMPTED, GoalStatus.RECALLED):
+                event = "MOVE_BASE_CANCELED"
+            elif status in (GoalStatus.ABORTED, GoalStatus.REJECTED):
+                event = "MOVE_BASE_ABORTED"
+            else:
+                event = "MOVE_BASE_LOST"
             try:
-                apply(runtime.dispatch(event), deferred=True)
+                apply(runtime.dispatch(event, {"generation": generation}), deferred=True)
             except Exception as exc:
                 runtime.fail_closed("action callback: %s" % exc)
 
         def feedback_cb(_feedback: Any) -> None:
             try:
-                apply(runtime.dispatch("MOVE_BASE_ACTIVE"))
+                apply(runtime.dispatch(
+                    "MOVE_BASE_ACTIVE", {"generation": generation}))
             except Exception as exc:
                 runtime.fail_closed("action feedback: %s" % exc)
 
@@ -729,26 +744,29 @@ def main() -> None:
     last_sent = None
     waypoint_queue = DeferredWaypointQueue()
 
-    def send_pending_index(index: int) -> None:
+    def send_pending_index(index: int, generation: int) -> None:
         nonlocal last_sent
-        if index == last_sent:
+        request = (index, generation)
+        if request == last_sent:
             return
-        last_sent = index
-        send_waypoint(index)
+        last_sent = request
+        send_waypoint(index, generation)
 
     def apply(output: Any, deferred: bool = False) -> None:
         index = getattr(output, "send_waypoint_index", None)
-        if index is None or index == last_sent:
+        generation = int(getattr(output, "goal_generation", 0))
+        request = (index, generation)
+        if index is None or request == last_sent:
             return
         if deferred:
-            waypoint_queue.defer(int(index))
+            waypoint_queue.defer(request)
             return
-        send_pending_index(int(index))
+        send_pending_index(int(index), generation)
 
     def drain_deferred_waypoint() -> None:
-        index = waypoint_queue.pop()
-        if index is not None:
-            send_pending_index(index)
+        request = waypoint_queue.pop()
+        if request is not None:
+            send_pending_index(*request)
 
     def dispatch(kind: str, value: Any, _source_stamp: Any) -> None:
         try:
@@ -838,8 +856,12 @@ def main() -> None:
         if state_name != "NAVIGATING":
             return
         current = int(runtime.output.progress)
-        active_valid = identity_valid and msg.state != RouteProgress.INVALID
-        value = max(current, int(msg.waypoint_index)) if active_valid else -1
+        complete = msg.state == RouteProgress.COMPLETE
+        active_valid = identity_valid and msg.state in (
+            RouteProgress.ACTIVE, RouteProgress.AT_STOP, RouteProgress.COMPLETE)
+        complete_valid = (not complete or int(msg.waypoint_index)
+                          == len(runtime.binding.route.waypoints) - 1)
+        value = max(current, int(msg.waypoint_index)) if active_valid and complete_valid else -1
         dispatch("PROGRESS", value, msg.header.stamp)
     def odometry_cb(msg: Any) -> None:
         policy_inputs["odometry_speed_mps"] = abs(float(msg.twist.twist.linear.x))
