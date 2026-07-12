@@ -213,16 +213,24 @@ class MetricsCoreTest(unittest.TestCase):
         self.assertIn("footprint contact observed", result["failures"])
         self.assertIn("geofence boundary violation", result["failures"])
 
-    def test_safe_abort_does_not_require_terminal_goal_error(self):
+    def test_uncorrelated_invalid_route_cannot_authorize_safe_abort(self):
         core = self.complete_core()
         core.observe_route(1.3, 4, 0.0, 0.2)
-        core.goal_error_m = None
-        core.goal_error_yaw_deg = None
         result = core.finalize()
-        self.assertTrue(result["passed"], result["failures"])
-        self.assertEqual(result["route_outcome"], "safe_abort")
-        self.assertIsNone(result["goal_error_m"])
-        self.assertIsNone(result["goal_error_yaw_deg"])
+        self.assertFalse(result["passed"])
+        self.assertIn("unresolved safe-abort correlation", result["failures"])
+    def test_safe_abort_resolves_in_both_callback_orders(self):
+        for events in (("invalid", "stop", "zero"), ("stop", "zero", "invalid")):
+            with self.subTest(events=events):
+                core = collector.MetricsCore()
+                for event in events:
+                    if event == "invalid":
+                        core.observe_route(1.0, 4, 0.0, 0.0)
+                    elif event == "stop":
+                        core.observe_status("safety", 1.0, 3, 1, (2, 3, 4))
+                    else:
+                        self.observe_command(core, "safe_command", 1.0)
+                self.assertEqual(core.route_terminal, "safe_abort")
     def test_contacts_are_required_live_topic_evidence(self):
         core = self.complete_core()
         core.seen.remove("contacts")
@@ -337,8 +345,14 @@ class MetricsCoreTest(unittest.TestCase):
 
     def route_truth(self):
         return collector.DirectionalRouteTruth(
-            "mission", "route", "map", "a" * 64, "b" * 64, "c" * 64,
-            1, ((0.0, 0.0), (1.0, 0.0)), 0.2, 0.0)
+            mission_id="mission", route_id="route", map_id="map", map_sha256="a" * 64,
+            route_manifest_sha256="b" * 64, safety_manifest_sha256="c" * 64,
+            direction=1, points=((0.0, 0.0), (1.0, 0.0)), corridor_clearance_m=0.2,
+            terminal_yaw_rad=0.0, raw_route_asset_sha256="d" * 64,
+            navigation_manifest_sha256="e" * 64, route_safety_config_sha256="f" * 64,
+            localization_policy_sha256="c" * 64, footprint_length_m=0.97,
+            footprint_width_m=0.60, fixed_margin_m=0.0, localization_margin_m=0.0,
+            recorded_margin_m=0.2, immutable_centerline=True)
 
     def test_forged_route_progress_cannot_replace_ground_truth(self):
         core = collector.MetricsCore()
@@ -363,8 +377,15 @@ class MetricsCoreTest(unittest.TestCase):
         core = collector.MetricsCore()
         core.bind_route_truth(self.route_truth())
         core.observe_pose(1.0, 0.0, 0.0, 0.0)
-        core.observe_localization_pose(1.0, 0.3, 0.0, 0.0, "map", "a" * 64, "source")
-        core.observe_localization_pose(1.1, 0.6, 0.0, 0.0, "map", "a" * 64, "source")
+        core.observe_localization_pose(1.0, 0.3, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        core.observe_status("localization", 1.0, 2, source="source", sequence=1,
+                            evaluation_stamp=1.0, map_id="map", map_sha256="a" * 64,
+                            policy_sha256="c" * 64, reset_count=0)
+        core.observe_pose(1.1, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.1, 0.6, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        core.observe_status("localization", 1.1, 2, source="source", sequence=2,
+                            evaluation_stamp=1.1, map_id="map", map_sha256="a" * 64,
+                            policy_sha256="c" * 64, reset_count=0)
         result = core.finalize()
         self.assertFalse(result["passed"])
         self.assertIn("AC4 planar p95 exceeded", result["failures"])
@@ -372,14 +393,21 @@ class MetricsCoreTest(unittest.TestCase):
         core = collector.MetricsCore()
         core.bind_route_truth(self.route_truth())
         core.observe_pose(1.0, 0.0, 0.0, 0.0)
-        core.observe_localization_pose(1.0, 0.25, 0.0, math.radians(8.0), "map", "a" * 64, "source")
+        core.observe_localization_pose(1.0, 0.25, 0.0, math.radians(8.0), "map", "a" * 64, "source", 0)
+        core.observe_status("localization", 1.0, 2, source="source", sequence=1,
+                            evaluation_stamp=1.0, map_id="map", map_sha256="a" * 64,
+                            policy_sha256="c" * 64, reset_count=0)
         core.observe_pose(1.2, 0.0, 0.0, 0.0)
-        core.observe_localization_pose(1.2, 0.0, 0.0, 0.0, "map", "a" * 64, "source")
+        core.observe_localization_pose(1.2, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        core.observe_status("localization", 1.2, 2, source="source", sequence=2,
+                            evaluation_stamp=1.2, map_id="map", map_sha256="a" * 64,
+                            policy_sha256="c" * 64, reset_count=0)
         self.assertEqual(core.localization_invalid_intervals, 0)
         core.observe_pose(2.0, 0.0, 0.0, 0.0)
-        core.observe_localization_pose(2.0, 0.6, 0.0, 0.0, "map", "a" * 64, "source")
-        core.observe_pose(2.6, 0.0, 0.0, 0.0)
-        core.observe_localization_pose(2.6, 0.0, 0.0, 0.0, "map", "a" * 64, "source")
+        core.observe_localization_pose(2.0, 0.6, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        core.observe_status("localization", 2.0, 2, source="source", sequence=3,
+                            evaluation_stamp=2.0, map_id="map", map_sha256="a" * 64,
+                            policy_sha256="c" * 64, reset_count=0)
         self.assertEqual(core.localization_invalid_intervals, 1)
 
     def test_route_receipt_must_be_monotonic_and_fresh(self):
@@ -389,14 +417,160 @@ class MetricsCoreTest(unittest.TestCase):
         core.observe_route_evidence(1.0, 1, "mission", "route", "map", 1, 1.0, 0.0, 0.5)
         core.observe_route_evidence(1.1, 1, "mission", "route", "map", 1, 1.1, 0.0, 0.5)
         self.assertIn("non-monotonic route sequence or source stamp", core.failures)
+    def test_localization_pairing_orders_skew_ties_and_unresolved_are_blocking(self):
+        def status(core, stamp, sequence, **overrides):
+            values = {"source": "source", "map_id": "map", "map_sha256": "a" * 64,
+                      "policy_sha256": "c" * 64, "reset_count": 0}
+            values.update(overrides)
+            core.observe_status("localization", stamp, 2, sequence=sequence,
+                                evaluation_stamp=stamp, **values)
+        for order in (("candidate", "status", "pose"), ("pose", "status", "candidate")):
+            core = collector.MetricsCore()
+            core.bind_route_truth(self.route_truth())
+            for event in order:
+                if event == "candidate":
+                    core.observe_localization_pose(1.0, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+                elif event == "status":
+                    status(core, 1.0, 1)
+                else:
+                    core.observe_pose(1.0, 0.0, 0.0, 0.0)
+            self.assertEqual(len(core.localization_samples), 1)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.05, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.0, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        status(core, 1.0, 1)
+        self.assertEqual(len(core.localization_samples), 1)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.051, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.0, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        status(core, 1.0, 1)
+        self.assertIn("unresolved localization evidence pair", core.finalize()["failures"])
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(0.99, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        core.observe_localization_pose(1.01, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        status(core, 1.0, 1)
+        self.assertIn("ambiguous localization status/candidate pair", core.failures)
+
+    def test_localization_identity_gaps_jumps_dwell_and_buffers_fail_closed(self):
+        def status(core, stamp, sequence, state=2, reason=0, **overrides):
+            values = {"source": "source", "map_id": "map", "map_sha256": "a" * 64,
+                      "policy_sha256": "c" * 64, "reset_count": 0}
+            values.update(overrides)
+            core.observe_status("localization", stamp, state, reason, sequence=sequence,
+                                evaluation_stamp=stamp, **values)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        for index in range(20):
+            stamp = index * 0.11
+            core.observe_pose(stamp, 0.0, 0.0, 0.0)
+            core.observe_localization_pose(stamp, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+            status(core, stamp, index)
+        self.assertGreaterEqual(core.localization_ok_samples[-1][1] -
+                                core.localization_ok_samples[0][1], 2.0)
+        core.observe_pose(2.2, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(2.2, 0.6, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        status(core, 2.2, 20, state=4, reason=32)
+        self.assertNotIn("localization invalid truth lacks LOST/LOCALIZATION", core.failures)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.0, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        status(core, 1.0, 1, policy_sha256="d" * 64)
+        self.assertIn("localization status identity or policy mismatch", core.failures)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        for index in range(collector.EVIDENCE_BUFFER_MAX + 1):
+            core.observe_localization_pose(float(index), 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        self.assertIn("localization candidate buffer overflow", core.failures)
+
+    def test_route_and_footprint_truth_reject_unresolved_and_center_breach(self):
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_route_evidence(1.0, collector.ROUTE_COMPLETE_STATE, "mission", "route",
+                                    "map", 1, 1.0, 0.0, 1.0)
+        self.assertIn("unresolved route/Gazebo evidence", core.finalize()["failures"])
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core._validate_footprint((1.0, 0.5, 0.0, math.pi / 4.0))
+        self.assertEqual(core.failures, [])
+        core._validate_footprint((1.1, 0.5, 0.21, 0.0))
+        self.assertIn("independent center corridor clearance violated", core.failures)
+    def test_localization_status_gazebo_and_safe_abort_buffers_fail_closed(self):
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        for index in range(collector.EVIDENCE_BUFFER_MAX + 1):
+            core.observe_status("localization", float(index), 2, source="source",
+                                sequence=index, evaluation_stamp=float(index), map_id="map",
+                                map_sha256="a" * 64, policy_sha256="c" * 64, reset_count=0)
+        self.assertIn("localization status buffer overflow", core.failures)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        for index in range(collector.EVIDENCE_BUFFER_MAX + 1):
+            core.observe_pose(float(index), 0.0, 0.0, 0.0)
+        self.assertIn("localization Gazebo buffer overflow", core.failures)
+        core = collector.MetricsCore()
+        for index in range(collector.EVIDENCE_BUFFER_MAX + 1):
+            core.observe_route(float(index), 4, 0.0, 0.0)
+        self.assertIn("safe-abort INVALID buffer overflow", core.failures)
+
+    def test_localization_source_map_reset_and_jump_failures_are_blocking(self):
+        def observe(core, stamp, x, source="source", map_id="map", reset=0,
+                    state=2, reason=0):
+            core.observe_pose(stamp, 0.0, 0.0, 0.0)
+            core.observe_localization_pose(stamp, x, 0.0, 0.0, map_id, "a" * 64,
+                                           source, reset)
+            core.observe_status("localization", stamp, state, reason, source=source,
+                                sequence=int(stamp * 10), evaluation_stamp=stamp,
+                                map_id=map_id, map_sha256="a" * 64,
+                                policy_sha256="c" * 64, reset_count=reset)
+        for change in ({"source": "other"}, {"map_id": "other"}):
+            core = collector.MetricsCore()
+            core.bind_route_truth(self.route_truth())
+            observe(core, 1.0, 0.0)
+            observe(core, 1.1, 0.0, **change)
+            self.assertTrue(core.failures)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        observe(core, 1.0, 0.0)
+        observe(core, 1.1, 0.0, reset=1)
+        self.assertEqual(core.localization_reset_count, 1)
+        self.assertEqual(len(core.localization_ok_samples), 1)
+        self.assertEqual(core.failures, [])
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.0, 0.0, 0.0, 0.0, "map", "a" * 64, "source", 0)
+        core.observe_status("localization", 1.0, 2, source="source", sequence=1,
+                            evaluation_stamp=1.0, map_id="map", map_sha256="a" * 64,
+                            policy_sha256="c" * 64, reset_count=1)
+        self.assertIn("localization candidate/status identity mismatch", core.failures)
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        observe(core, 1.0, 0.0)
+        observe(core, 1.1, 0.6)
+        self.assertIn("localization jump lacks paired LOST/LOCALIZATION response",
+                      core.finalize()["failures"])
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        observe(core, 1.0, 0.0)
+        observe(core, 1.1, 0.6, state=4, reason=1)
+        self.assertIn("localization jump lacks paired LOST/LOCALIZATION response",
+                      core.finalize()["failures"])
     def test_static_truth_requires_hash_bound_references(self):
         truth = PACKAGE / "config" / "route_truth_outbound.yaml"
         loaded = collector.load_route_truth(
-            str(truth), "627d3a2e69d2601f4e69045f9be9e95179e42dde612dc91a22bb151247df947e",
+            str(truth), "ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70",
             "rc-0123456789abcdef01234567")
         self.assertEqual(loaded.mission_id, "rc-0123456789abcdef01234567")
         self.assertEqual(loaded.corridor_clearance_m, 0.2)
         self.assertEqual(loaded.direction, 1)
+        self.assertEqual(loaded.raw_route_asset_sha256, "adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672")
+        self.assertEqual(loaded.navigation_manifest_sha256, "3861e21a6360fe7e32f833f867acb7dd50dccbf45a67f17d93699cea9cbe13c6")
+        self.assertEqual(loaded.localization_policy_sha256, "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8")
     def test_derived_mission_identity_matches_driver_material(self):
         self.assertEqual(
             collector.derive_mission_id("qualification", 1701, "outbound",

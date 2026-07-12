@@ -87,6 +87,15 @@ STATUS_ENUMS = {
     "safety": {0, 1, 2, 3, 4},
 }
 MAX_REASON_MASK = sum(SAFETY_REASON_BITS)
+PAIR_SKEW_S = 0.05
+LOCALIZATION_REASON_BIT = 32
+EVIDENCE_HORIZON_S = 0.50
+EVIDENCE_BUFFER_MAX = 128
+LOCALIZATION_OK_DWELL_SAMPLES = 20
+LOCALIZATION_OK_DWELL_S = 2.0
+ROUTE_COMPLETE_STATE = 3
+ROUTE_INVALID_STATE = 4
+
 
 
 def finite(*values: float) -> bool:
@@ -118,6 +127,16 @@ class DirectionalRouteTruth:
     points: Tuple[Tuple[float, float], ...]
     corridor_clearance_m: float
     terminal_yaw_rad: float
+    raw_route_asset_sha256: str = ""
+    navigation_manifest_sha256: str = ""
+    route_safety_config_sha256: str = ""
+    localization_policy_sha256: str = ""
+    footprint_length_m: float = 0.97
+    footprint_width_m: float = 0.60
+    fixed_margin_m: float = 0.0
+    localization_margin_m: float = 0.0
+    recorded_margin_m: float = 0.0
+    immutable_centerline: bool = True
 
     def projection(self, x_m: float, y_m: float) -> Tuple[float, float]:
         best = None
@@ -208,17 +227,26 @@ def load_route_truth(path: str, expected_sha256: str, mission_id: Optional[str] 
             or safety_config.get("passenger_operation_authorized") is not False):
         raise ValueError("route truth authority or source mismatch")
     map_sha = _sha256(map_value.get("sha256"), "navigation map sha256")
+    navigation_sha = hashlib.sha256(reference_paths["navigation_manifest"].read_bytes()).hexdigest()
+    safety_config_sha = hashlib.sha256(reference_paths["route_safety_config"].read_bytes()).hexdigest()
     if (_sha256(safety_config.get("expected_map_sha256"), "safety map sha256") != map_sha
-            or _sha256(geometry.get("navigation_route_manifest_sha256"), "safety navigation sha256")
-            != hashlib.sha256(reference_paths["navigation_manifest"].read_bytes()).hexdigest()):
+            or _sha256(geometry.get("navigation_route_manifest_sha256"), "safety navigation sha256") != navigation_sha):
         raise ValueError("navigation/safety cross hash mismatch")
+    raw_route_sha = _sha256(geometry.get("route_asset_sha256"), "raw route asset sha256")
+    if (_sha256(navigation.get("provenance", {}).get("source_sha256"), "navigation raw route sha256") != raw_route_sha
+            or _sha256(navigation.get("waypoint_asset", {}).get("sha256"), "waypoint raw route sha256") != raw_route_sha):
+        raise ValueError("raw route asset cross hash mismatch")
     semantic = {"map_id": map_value.get("map_id"), "map_sha256": map_sha,
                 "route": {key: item for key, item in route.items() if key != "route_manifest_sha256"}}
     route_sha = _sha256(route.get("route_manifest_sha256"), "route semantic sha256")
     if hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest() != route_sha:
         raise ValueError("directional route semantic hash mismatch")
+    if _sha256(safety_config.get("expected_route_hashes", {}).get(route.get("route_id")),
+               "configured route semantic sha256") != route_sha:
+        raise ValueError("route safety semantic hash mismatch")
     safety_path = safety_config.get("manifest_path")
     safety_sha = _sha256(safety_config.get("expected_manifest_sha256"), "safety manifest sha256")
+    policy_sha = _sha256(safety_config.get("localization_policy_sha256"), "localization policy sha256")
     if not isinstance(safety_path, str) or Path(safety_path).is_absolute():
         raise ValueError("invalid safety manifest reference")
     safety_manifest_path = _contained_regular_path(
@@ -247,11 +275,20 @@ def load_route_truth(path: str, expected_sha256: str, mission_id: Optional[str] 
             raise ValueError("route has non-finite waypoint")
         points.append((float(waypoint["x_m"]), float(waypoint["y_m"])))
     clearance = matching[0].get("corridor_margin_m")
-    if not finite(clearance) or float(clearance) != float(geometry.get("recorded_corridor_margin_m")):
-        raise ValueError("invalid independent corridor allowance")
+    margins = (geometry.get("footprint_clearance_margin_m"),
+               geometry.get("localization_uncertainty_margin_m"),
+               geometry.get("recorded_corridor_margin_m"))
+    footprint = (safety_config.get("measured_footprint_length_m"),
+                 safety_config.get("measured_footprint_width_m"))
+    if (not finite(clearance, *margins, *footprint) or float(clearance) != float(margins[2])
+            or any(float(value) < 0.0 for value in margins) or any(float(value) <= 0.0 for value in footprint)):
+        raise ValueError("invalid immutable simulation geometry")
     return DirectionalRouteTruth(
         mission_id or "", route["route_id"], map_value["map_id"], map_sha, route_sha,
-        safety_sha, 1, tuple(points), float(clearance), float(waypoints[-1]["yaw_rad"]))
+        safety_sha, 1, tuple(points), float(clearance), float(waypoints[-1]["yaw_rad"]),
+        raw_route_sha, navigation_sha, safety_config_sha, policy_sha,
+        float(footprint[0]), float(footprint[1]), float(margins[0]),
+        float(margins[1]), float(margins[2]), True)
 def derive_mission_id(scenario: str, seed: int, direction: str, route_id: str) -> str:
     if not isinstance(scenario, str) or isinstance(seed, bool) or not isinstance(seed, int) or direction != "outbound":
         raise ValueError("invalid mission identity inputs")
@@ -346,7 +383,21 @@ class MetricsCore:
         self.reset_safety_index: Optional[int] = None
         self.reset_stamp_s: Optional[float] = None
         self.reset_had_stop = False
-        self.localization_candidates: Dict[float, Tuple[str, str, str, float, float]] = {}
+        self.pending_routes: List[Tuple[float, int, float, float, float]] = []
+        self.pairing_failures = 0
+        self.safe_abort_invalid: List[float] = []
+        self.safe_abort_stops: List[Tuple[float, int]] = []
+        self.safe_abort_zeros: List[float] = []
+        self.localization_ok_samples: List[Tuple[int, float]] = []
+        self.localization_identity: Optional[Tuple[str, str, str]] = None
+        self.localization_status_identity: Optional[Tuple[str, str, str, str]] = None
+        self.localization_reset_count: Optional[int] = None
+        self.localization_candidate_last_stamp: Optional[float] = None
+        self.localization_status_last_stamp: Optional[float] = None
+        self.pending_localization_jumps: List[float] = []
+        self.localization_candidates: List[Tuple[float, float, float, float, str, str, str, int]] = []
+        self.localization_gazebo_poses: List[Tuple[float, float, float, float]] = []
+        self.pending_localization_statuses: List[Tuple[float, int, int, str, str, str, str, int, int]] = []
         self.localization_error_start: Optional[float] = None
         self.localization_error_lost = False
         self.status_last: Dict[str, Tuple[int, float, float, str]] = {}
@@ -360,6 +411,8 @@ class MetricsCore:
         self.route_truth: Optional[DirectionalRouteTruth] = None
         self.route_last_along: Optional[float] = None
         self.route_clearances: List[float] = []
+        self.route_center_clearances: List[float] = []
+        self.route_signed_center_cross_track: List[float] = []
         self.route_last_receipt: Optional[Tuple[int, float]] = None
 
     def bind_route_truth(self, truth: DirectionalRouteTruth) -> None:
@@ -373,13 +426,13 @@ class MetricsCore:
     def observe_route_evidence(self, stamp: float, state: int, mission_id: str,
                                route_id: str, map_id: str, sequence: int, source_stamp: float,
                                claimed_cross_track_m: float, claimed_along_track_m: float,
-                               complete_state: int = 3) -> None:
+                               complete_state: int = ROUTE_COMPLETE_STATE) -> None:
         truth = self.route_truth
         if truth is None:
             self.failures.append("unbound route evidence is non-verdict")
             return
         if (not finite(stamp, source_stamp, claimed_cross_track_m, claimed_along_track_m)
-                or state not in (1, 2, 3) or isinstance(sequence, bool)
+                or state not in (1, 2, ROUTE_COMPLETE_STATE, ROUTE_INVALID_STATE) or isinstance(sequence, bool)
                 or not isinstance(sequence, int) or sequence < 0
                 or (mission_id, route_id, map_id) != (truth.mission_id, truth.route_id, truth.map_id)):
             self.failures.append("invalid route identity or evidence")
@@ -389,31 +442,92 @@ class MetricsCore:
             self.failures.append("non-monotonic route sequence or source stamp")
             return
         self.route_last_receipt = (sequence, float(source_stamp))
-        pose = min(self.poses, key=lambda item: abs(item[0] - source_stamp)) if self.poses else None
-        if pose is None or abs(pose[0] - source_stamp) > 0.50:
-            self.failures.append("route lacks time-aligned Gazebo truth")
-            return
-        cross_track, along_track = truth.projection(pose[1], pose[2])
-        terminal_error = math.hypot(pose[1] - truth.points[-1][0], pose[2] - truth.points[-1][1])
-        yaw_error = abs(math.degrees(math.atan2(math.sin(pose[3] - truth.terminal_yaw_rad),
-                                                math.cos(pose[3] - truth.terminal_yaw_rad))))
-        if self.route_last_along is not None and along_track + 1e-6 < self.route_last_along:
-            self.failures.append("non-monotonic independent route progress")
-        self.route_last_along = along_track
-        self.route_clearances.append(truth.corridor_clearance_m - cross_track)
+        self.pending_routes.append((float(source_stamp), state, float(stamp),
+                                    float(claimed_cross_track_m), float(claimed_along_track_m)))
+        self._bounded(self.pending_routes, "route evidence buffer overflow")
+        self._resolve_route_pairs()
+
+    def _bounded(self, buffer: List[object], failure: str) -> None:
+        if len(buffer) > EVIDENCE_BUFFER_MAX:
+            buffer.pop(0)
+            self.pairing_failures += 1
+            self.failures.append(failure)
+
+    def _resolve_route_pairs(self) -> None:
+        pending = []
+        for source_stamp, state, stamp, claimed_cross_track, claimed_along_track in self.pending_routes:
+            matches = [pose for pose in self.poses
+                       if abs(pose[0] - source_stamp) <= PAIR_SKEW_S + 1e-9]
+            if not matches:
+                pending.append((source_stamp, state, stamp, claimed_cross_track, claimed_along_track))
+                continue
+            distance = min(abs(pose[0] - source_stamp) for pose in matches)
+            matches = [pose for pose in matches if abs(abs(pose[0] - source_stamp) - distance) <= 1e-9]
+            if len(matches) != 1:
+                self.pairing_failures += 1
+                self.failures.append("ambiguous route/Gazebo evidence pair")
+                continue
+            pose = matches[0]
+            truth = self.route_truth
+            cross_track, along_track = truth.projection(pose[1], pose[2])
+            terminal_error = math.hypot(pose[1] - truth.points[-1][0], pose[2] - truth.points[-1][1])
+            yaw_error = abs(math.degrees(math.atan2(math.sin(pose[3] - truth.terminal_yaw_rad),
+                                                    math.cos(pose[3] - truth.terminal_yaw_rad))))
+            if self.route_last_along is not None and along_track + 1e-6 < self.route_last_along:
+                self.failures.append("non-monotonic independent route progress")
+            self.route_last_along = along_track
+            self._validate_footprint(pose)
+            if abs(claimed_cross_track - cross_track) > 1e-3 or abs(claimed_along_track - along_track) > 1e-3:
+                self.route_diagnostic_disagreements += 1
+                self.failures.append("RouteProgress disagrees with Gazebo route truth")
+            self.cross_track.append(cross_track)
+            self.goal_error_m, self.goal_error_yaw_deg = terminal_error, yaw_error
+            if state == ROUTE_COMPLETE_STATE:
+                if terminal_error > 0.30 or yaw_error > 10.0:
+                    self.failures.append("RouteProgress COMPLETE before approved terminal truth")
+                else:
+                    self.route_terminal = "completed"
+                    self.trigger_stop(stamp, "route_complete_truth")
+        self.pending_routes = pending
+
+    def _signed_cross_track(self, x_m: float, y_m: float) -> float:
+        truth = self.route_truth
+        best = None
+        for start, end in zip(truth.points, truth.points[1:]):
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length == 0.0:
+                continue
+            fraction = min(1.0, max(0.0, ((x_m - start[0]) * dx + (y_m - start[1]) * dy) / (length * length)))
+            candidate = (math.hypot(x_m - start[0] - fraction * dx,
+                                    y_m - start[1] - fraction * dy),
+                         ((x_m - start[0]) * dy - (y_m - start[1]) * dx) / length)
+            if best is None or candidate[0] < best[0]:
+                best = candidate
+        return best[1]
+
+    def _validate_footprint(self, pose: Tuple[float, float, float, float]) -> None:
+        truth = self.route_truth
+        center_cross_track = self._signed_cross_track(pose[1], pose[2])
+        tube_radius = (math.hypot(truth.footprint_length_m / 2.0, truth.footprint_width_m / 2.0)
+                       + truth.fixed_margin_m + truth.localization_margin_m
+                       + truth.recorded_margin_m)
+        expanded_margin = truth.fixed_margin_m + truth.localization_margin_m
+        worst = 0.0
+        for dx, dy in ((truth.footprint_length_m / 2.0, truth.footprint_width_m / 2.0),
+                       (truth.footprint_length_m / 2.0, -truth.footprint_width_m / 2.0),
+                       (-truth.footprint_length_m / 2.0, truth.footprint_width_m / 2.0),
+                       (-truth.footprint_length_m / 2.0, -truth.footprint_width_m / 2.0)):
+            x = pose[1] + dx * math.cos(pose[3]) - dy * math.sin(pose[3])
+            y = pose[2] + dx * math.sin(pose[3]) + dy * math.cos(pose[3])
+            worst = max(worst, abs(self._signed_cross_track(x, y)) + expanded_margin)
+        self.route_signed_center_cross_track.append(center_cross_track)
+        self.route_center_clearances.append(truth.recorded_margin_m - abs(center_cross_track))
+        self.route_clearances.append(tube_radius - worst)
+        if self.route_center_clearances[-1] < 0.0:
+            self.failures.append("independent center corridor clearance violated")
         if self.route_clearances[-1] < 0.0:
-            self.failures.append("independent corridor clearance violated")
-        if abs(claimed_cross_track_m - cross_track) > 1e-3 or abs(claimed_along_track_m - along_track) > 1e-3:
-            self.route_diagnostic_disagreements += 1
-            self.failures.append("RouteProgress disagrees with Gazebo route truth")
-        self.cross_track.append(cross_track)
-        self.goal_error_m = terminal_error
-        self.goal_error_yaw_deg = yaw_error
-        if state == complete_state and (terminal_error > 0.30 or yaw_error > 10.0):
-            self.failures.append("RouteProgress COMPLETE before approved terminal truth")
-        elif state == complete_state:
-            self.route_terminal = "completed"
-            self.trigger_stop(stamp, "route_complete_truth")
+            self.failures.append("independent oriented footprint tube clearance violated")
 
     def bind_route_identity(self, mission_id: str, route_id: str, map_id: str,
                             map_sha256: str, route_sha256: str,
@@ -431,42 +545,122 @@ class MetricsCore:
 
     def observe_localization_pose(self, stamp: float, x_m: float, y_m: float,
                                   yaw_rad: float, map_id: str, map_sha256: str,
-                                  source: str) -> None:
+                                  source: str, reset_count: Optional[int] = None) -> None:
         if (not source or not isinstance(map_id, str) or not isinstance(map_sha256, str)
                 or self._reject("localization_pose", stamp, x_m, y_m, yaw_rad)):
+            return
+        if (isinstance(reset_count, bool) or not isinstance(reset_count, int)
+                or reset_count < 0):
+            self.failures.append("invalid localization reset count")
             return
         if self.route_identity and (map_id != self.route_identity["map_id"]
                                     or map_sha256 != self.route_identity["map_sha256"]):
             self.failures.append("localization pose identity mismatch")
             return
-        truth = min(self.poses, key=lambda value: abs(value[0] - stamp)) if self.poses else None
-        if truth is None or abs(truth[0] - stamp) > self.limits.stale_s:
-            self.failures.append("localization pose lacks time-aligned ground truth")
+        identity = (source, map_id, map_sha256)
+        if self.localization_identity is None:
+            self.localization_identity = identity
+        elif identity != self.localization_identity:
+            self.failures.append("localization candidate source or map mismatch")
             return
-        planar = math.hypot(x_m - truth[1], y_m - truth[2])
-        yaw = abs(math.degrees(math.atan2(math.sin(yaw_rad - truth[3]),
-                                          math.cos(yaw_rad - truth[3]))))
-        self.localization_candidates[float(stamp)] = (source, map_id, map_sha256, planar, yaw)
-        invalid = planar > 0.50 or yaw > 15.0
-        if invalid and self.localization_error_start is None:
-            self.localization_error_start = float(stamp)
-            self.localization_error_lost = False
-        elif not invalid and self.localization_error_start is not None:
-            if stamp - self.localization_error_start > 0.50 and not self.localization_error_lost:
+        if (self.localization_candidate_last_stamp is not None
+                and stamp - self.localization_candidate_last_stamp > EVIDENCE_HORIZON_S):
+            self.localization_ok_samples = []
+            self.failures.append("localization candidate evidence gap")
+        if (self.localization_candidate_last_stamp is not None
+                and stamp <= self.localization_candidate_last_stamp):
+            self.failures.append("non-monotonic localization candidate evidence")
+            return
+        self.localization_candidate_last_stamp = float(stamp)
+        self.seen.add("localization_candidate")
+        self.counts["localization_candidate"] = self.counts.get("localization_candidate", 0) + 1
+        self.localization_candidates.append(
+            (float(stamp), float(x_m), float(y_m), float(yaw_rad), source, map_id, map_sha256,
+             reset_count))
+        self._bounded(self.localization_candidates, "localization candidate buffer overflow")
+        self._resolve_localization_pairs()
+
+    def _resolve_localization_pairs(self) -> None:
+        pending = []
+        resolved_candidates: Set[float] = set()
+        resolved_gazebo_stamps: Set[float] = set()
+        for status in self.pending_localization_statuses:
+            evaluation_stamp, state, reason_mask, source, map_id, map_sha256, policy_sha256, reset_count, sequence = status
+            candidates = [candidate for candidate in self.localization_candidates
+                          if abs(candidate[0] - evaluation_stamp) <= PAIR_SKEW_S + 1e-9]
+            if not candidates:
+                pending.append(status)
+                continue
+            distance = min(abs(candidate[0] - evaluation_stamp) for candidate in candidates)
+            candidates = [candidate for candidate in candidates
+                          if abs(abs(candidate[0] - evaluation_stamp) - distance) <= 1e-9]
+            if len(candidates) != 1:
+                self.pairing_failures += 1
+                self.failures.append("ambiguous localization status/candidate pair")
+                continue
+            candidate = candidates[0]
+            poses = [pose for pose in self.localization_gazebo_poses
+                     if abs(pose[0] - candidate[0]) <= PAIR_SKEW_S + 1e-9]
+            if not poses:
+                pending.append(status)
+                continue
+            distance = min(abs(pose[0] - candidate[0]) for pose in poses)
+            poses = [pose for pose in poses if abs(abs(pose[0] - candidate[0]) - distance) <= 1e-9]
+            if len(poses) != 1:
+                self.pairing_failures += 1
+                self.failures.append("ambiguous localization candidate/Gazebo pair")
+                continue
+            if (source, map_id, map_sha256, reset_count) != candidate[4:]:
+                self.failures.append("localization candidate/status identity mismatch")
+                continue
+            if self.localization_reset_count is not None and reset_count != self.localization_reset_count:
+                self.localization_ok_samples = []
+            self.localization_reset_count = reset_count
+            truth = self.route_truth
+            if (map_id != truth.map_id or map_sha256 != truth.map_sha256
+                    or policy_sha256 != truth.localization_policy_sha256):
+                self.failures.append("localization status identity or policy mismatch")
+                continue
+            pose = poses[0]
+            planar = math.hypot(candidate[1] - pose[1], candidate[2] - pose[2])
+            yaw = abs(math.degrees(math.atan2(math.sin(candidate[3] - pose[3]),
+                                              math.cos(candidate[3] - pose[3]))))
+            self.localization_samples.append((candidate[0], planar, yaw, 1.0))
+            invalid = planar > 0.50 or yaw > 15.0
+            if state == 2 and invalid:
+                self.localization_false_ok_windows += 1
+                self.failures.append("localization OK contradicts truth")
+            if invalid and state == 4 and reason_mask & LOCALIZATION_REASON_BIT:
+                self.localization_error_lost = True
+            elif invalid:
                 self.localization_invalid_intervals += 1
-                self.failures.append("unreported localization invalid interval")
-            self.localization_error_start = None
-            self.localization_error_lost = False
-        sample = (float(stamp), planar, yaw, 1.0)
-        if self.localization_last is not None:
-            previous = self.localization_last
-            if (math.hypot(x_m - previous[1], y_m - previous[2]) > 0.50
-                    or abs(math.degrees(math.atan2(math.sin(yaw_rad - previous[3]),
-                                                   math.cos(yaw_rad - previous[3])))) > 15.0):
-                self.localization_jumps += 1
-                self.failures.append("localization jump exceeds AC4")
-        self.localization_last = (float(stamp), float(x_m), float(y_m), float(yaw_rad))
-        self.localization_samples.append(sample)
+                self.failures.append("localization invalid truth lacks LOST/LOCALIZATION")
+            if self.localization_last is not None:
+                previous = self.localization_last
+                jumped = (math.hypot(candidate[1] - previous[1], candidate[2] - previous[2]) > 0.50
+                          or abs(math.degrees(math.atan2(math.sin(candidate[3] - previous[3]),
+                                                        math.cos(candidate[3] - previous[3])))) > 15.0)
+                if jumped:
+                    self.localization_jumps += 1
+                    if not (state == 4 and reason_mask & LOCALIZATION_REASON_BIT):
+                        self.pending_localization_jumps.append(candidate[0])
+            self.localization_last = (candidate[0], candidate[1], candidate[2], candidate[3])
+            if state == 2:
+                if (self.localization_ok_samples
+                        and sequence != self.localization_ok_samples[-1][0] + 1):
+                    self.localization_ok_samples = []
+                self.localization_ok_samples.append((sequence, evaluation_stamp))
+            else:
+                self.localization_ok_samples = []
+            resolved_candidates.add(candidate[0])
+            resolved_gazebo_stamps.add(pose[0])
+        self.pending_localization_statuses = pending
+        self.localization_candidates = [
+            candidate for candidate in self.localization_candidates
+            if candidate[0] not in resolved_candidates]
+        self.localization_gazebo_poses = [
+            pose for pose in self.localization_gazebo_poses
+            if pose[0] not in resolved_gazebo_stamps]
 
     def _reject(self, stream: str, stamp: float, *values: float) -> bool:
         if not finite(stamp, *values) or stamp < 0.0:
@@ -493,11 +687,17 @@ class MetricsCore:
 
     def observe_pose(self, stamp: float, x_m: float, y_m: float, yaw_rad: float) -> None:
         if not self._reject("ground_truth", stamp, x_m, y_m, yaw_rad):
-            self.poses.append((float(stamp), float(x_m), float(y_m), float(yaw_rad)))
+            pose = (float(stamp), float(x_m), float(y_m), float(yaw_rad))
+            self.poses.append(pose)
+            if self.route_truth is not None:
+                self.localization_gazebo_poses.append(pose)
+                self._bounded(self.localization_gazebo_poses, "localization Gazebo buffer overflow")
+                self._resolve_route_pairs()
+                self._resolve_localization_pairs()
 
     def observe_route(self, stamp: float, state: int, cross_track_m: float,
-                      distance_remaining_m: float, complete_state: int = 3,
-                      invalid_state: int = 4) -> None:
+                      distance_remaining_m: float, complete_state: int = ROUTE_COMPLETE_STATE,
+                      invalid_state: int = ROUTE_INVALID_STATE) -> None:
         if self._reject("route", stamp, cross_track_m, distance_remaining_m):
             return
         if self.route_truth is None:
@@ -520,18 +720,9 @@ class MetricsCore:
                         self.goal_error_yaw_deg = abs(math.degrees(error))
                         break
         elif state == invalid_state:
-            self.route_terminal = "safe_abort"
-            self.trigger_stop(stamp, "route_invalid")
-            if len(self.poses) >= 2:
-                terminal = self.poses[-1]
-                for previous in reversed(self.poses[:-1]):
-                    dx = terminal[1] - previous[1]
-                    dy = terminal[2] - previous[2]
-                    if math.hypot(dx, dy) > 1e-3:
-                        error = terminal[3] - math.atan2(dy, dx)
-                        error = math.atan2(math.sin(error), math.cos(error))
-                        self.goal_error_yaw_deg = abs(math.degrees(error))
-                        break
+            self.safe_abort_invalid.append(float(stamp))
+            self._bounded(self.safe_abort_invalid, "safe-abort INVALID buffer overflow")
+            self._resolve_safe_abort()
 
     def observe_fault_event(self, payload: str) -> None:
         try:
@@ -579,7 +770,9 @@ class MetricsCore:
     def observe_status(self, stream: str, stamp: float, state: int, reason_mask: int = 0,
                        stop_states: Tuple[int, ...] = (), latched: bool = False,
                        source: str = "", sequence: Optional[int] = None,
-                       evaluation_stamp: Optional[float] = None) -> None:
+                       evaluation_stamp: Optional[float] = None, map_id: str = "",
+                       map_sha256: str = "", policy_sha256: str = "",
+                       reset_count: Optional[int] = None) -> None:
         if stream not in self.status_counts:
             raise ValueError("unknown status stream: " + stream)
         if (isinstance(state, bool) or not isinstance(state, int) or state not in STATUS_ENUMS[stream]
@@ -608,14 +801,28 @@ class MetricsCore:
         key = str(state)
         self.status_counts[stream][key] = self.status_counts[stream].get(key, 0) + 1
         if stream == "localization" and self.route_truth is not None:
-            candidate = self.localization_candidates.get(float(stamp))
-            if candidate is None:
-                self.failures.append("localization status lacks exact candidate pair")
-            elif state == 2 and (candidate[3] > 0.50 or candidate[4] > 15.0):
-                self.localization_false_ok_windows += 1
-                self.failures.append("localization OK contradicts truth")
-            elif state == 4 and self.localization_error_start is not None:
-                self.localization_error_lost = True
+            if (not isinstance(map_id, str) or not isinstance(map_sha256, str)
+                    or not isinstance(policy_sha256, str) or isinstance(reset_count, bool)
+                    or not isinstance(reset_count, int) or reset_count < 0
+                    or sequence is None or evaluation_stamp is None):
+                self.failures.append("missing localization status identity")
+                return
+            identity = (source, map_id, map_sha256, policy_sha256)
+            if self.localization_status_identity is None:
+                self.localization_status_identity = identity
+            elif identity != self.localization_status_identity:
+                self.failures.append("localization status source, map, or policy mismatch")
+                return
+            if (self.localization_status_last_stamp is not None
+                    and float(evaluation_stamp) - self.localization_status_last_stamp > EVIDENCE_HORIZON_S):
+                self.localization_ok_samples = []
+                self.failures.append("localization status evidence gap")
+            self.localization_status_last_stamp = float(evaluation_stamp)
+            self.pending_localization_statuses.append(
+                (float(evaluation_stamp), state, reason_mask, source, map_id, map_sha256,
+                 policy_sha256, reset_count, sequence))
+            self._bounded(self.pending_localization_statuses, "localization status buffer overflow")
+            self._resolve_localization_pairs()
         stopped = state in stop_states
         if self.fault_run:
             self.fault_status_history.append(
@@ -630,6 +837,36 @@ class MetricsCore:
                 self.trigger_stop(stamp, stream, reason_mask)
         elif stream == "safety" and state == 1 and self.stop_trigger_s is not None:
             self.clear_after_stop = True
+        if stream == "safety" and stopped and reason_mask:
+            self.safe_abort_stops.append((float(stamp), reason_mask))
+            self._bounded(self.safe_abort_stops, "safe-abort SafetyState buffer overflow")
+            self._resolve_safe_abort()
+
+    def _resolve_safe_abort(self) -> None:
+        pending = []
+        for invalid_stamp in self.safe_abort_invalid:
+            stops = [stop for stop in self.safe_abort_stops
+                     if abs(stop[0] - invalid_stamp) <= EVIDENCE_HORIZON_S]
+            zeros = [stamp for stamp in self.safe_abort_zeros
+                     if abs(stamp - invalid_stamp) <= EVIDENCE_HORIZON_S]
+            if not stops or not zeros:
+                pending.append(invalid_stamp)
+                continue
+            nearest_stop_distance = min(abs(stop[0] - invalid_stamp) for stop in stops)
+            nearest_stops = [stop for stop in stops
+                             if abs(abs(stop[0] - invalid_stamp) - nearest_stop_distance) <= 1e-9]
+            nearest_zero_distance = min(abs(stamp - invalid_stamp) for stamp in zeros)
+            nearest_zeros = [stamp for stamp in zeros
+                             if abs(abs(stamp - invalid_stamp) - nearest_zero_distance) <= 1e-9]
+            if len(nearest_stops) != 1 or len(nearest_zeros) != 1:
+                self.pairing_failures += 1
+                self.failures.append("ambiguous safe-abort correlation")
+                continue
+            self.route_terminal = "safe_abort"
+            self.trigger_stop(invalid_stamp, "route_invalid_authoritative", nearest_stops[0][1])
+            self.safe_abort_stops.remove(nearest_stops[0])
+            self.safe_abort_zeros.remove(nearest_zeros[0])
+        self.safe_abort_invalid = pending
 
     def trigger_stop(self, stamp: float, source: str, reason_mask: int = 0) -> None:
         if self.stop_trigger_s is None:
@@ -729,6 +966,10 @@ class MetricsCore:
             return
         previous = self.safe_commands[-1] if self.safe_commands else None
         self.safe_commands.append(sample)
+        if zero:
+            self.safe_abort_zeros.append(float(stamp))
+            self._bounded(self.safe_abort_zeros, "safe-abort zero-command buffer overflow")
+            self._resolve_safe_abort()
         if previous is not None:
             dt = stamp - previous[0]
             if dt <= 0.0:
@@ -764,6 +1005,23 @@ class MetricsCore:
 
     def finalize(self, timed_out: bool = False) -> Dict[str, object]:
         failures = list(self.failures)
+        if self.pending_routes:
+            failures.append("unresolved route/Gazebo evidence")
+        if self.safe_abort_invalid:
+            failures.append("unresolved safe-abort correlation")
+        if self.pairing_failures:
+            failures.append("blocking evidence pairing failure")
+        if self.pending_localization_statuses:
+            failures.append("unresolved localization evidence pair")
+        if self.localization_candidates:
+            failures.append("unresolved localization candidate/Gazebo/status evidence")
+        if self.pending_localization_jumps:
+            failures.append("localization jump lacks paired LOST/LOCALIZATION response")
+        if self.route_truth is not None and self.localization_ok_samples:
+            if (len(self.localization_ok_samples) < LOCALIZATION_OK_DWELL_SAMPLES
+                    or self.localization_ok_samples[-1][1] - self.localization_ok_samples[0][1]
+                    < LOCALIZATION_OK_DWELL_S):
+                failures.append("localization OK dwell policy unmet")
         required_streams = set(REQUIRED_STREAMS)
         if self.fault_run:
             required_streams.update(("fault_event", "actuator_sink"))
@@ -895,8 +1153,25 @@ class MetricsCore:
                                                          "p95": percentile(absolute, 95.0), "max": max(absolute)},
             "goal_error_m": self.goal_error_m,
             "goal_error_yaw_deg": self.goal_error_yaw_deg,
+            "route_identity": None if self.route_truth is None else {
+                "mission_id": self.route_truth.mission_id, "route_id": self.route_truth.route_id,
+                "map_id": self.route_truth.map_id, "map_sha256": self.route_truth.map_sha256,
+                "raw_route_asset_sha256": self.route_truth.raw_route_asset_sha256,
+                "navigation_manifest_sha256": self.route_truth.navigation_manifest_sha256,
+                "directional_semantic_sha256": self.route_truth.route_manifest_sha256,
+                "route_safety_config_sha256": self.route_truth.route_safety_config_sha256,
+                "safety_manifest_sha256": self.route_truth.safety_manifest_sha256,
+                "localization_policy_sha256": self.route_truth.localization_policy_sha256,
+                "footprint_m": [self.route_truth.footprint_length_m, self.route_truth.footprint_width_m],
+                "immutable_centerline": self.route_truth.immutable_centerline},
+            "pairing": {"max_skew_s": PAIR_SKEW_S, "horizon_s": EVIDENCE_HORIZON_S,
+                        "max_buffer_count": EVIDENCE_BUFFER_MAX, "blocking_failures": self.pairing_failures},
             "independent_route_truth": None if self.route_truth is None else {
-                "minimum_corridor_clearance_m": min(self.route_clearances) if self.route_clearances else None,
+                "minimum_expanded_footprint_tube_clearance_m": (
+                    min(self.route_clearances) if self.route_clearances else None),
+                "minimum_signed_center_clearance_m": (
+                    min(self.route_center_clearances) if self.route_center_clearances else None),
+                "signed_center_cross_track_m": list(self.route_signed_center_cross_track),
                 "cross_track_m": None if not self.cross_track else {
                     "p95": percentile([abs(value) for value in self.cross_track], 95.0),
                     "max": max(abs(value) for value in self.cross_track),
@@ -1091,6 +1366,10 @@ class RosCollector:
             evaluation_stamp=(getattr(message, "evaluation_stamp", None).to_sec()
                               if getattr(message, "evaluation_stamp", None) is not None
                               else self._stamp(message)),
+            map_id=str(getattr(message, "map_id", "")),
+            map_sha256=str(getattr(message, "map_sha256", "")),
+            policy_sha256=str(getattr(message, "localization_policy_sha256", "")),
+            reset_count=getattr(message, "reset_count", None),
         )
 
     def _localization_pose(self, message) -> None:
@@ -1100,7 +1379,8 @@ class RosCollector:
                          1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z))
         self.core.observe_localization_pose(
             message.pose.header.stamp.to_sec(), pose.position.x, pose.position.y, yaw,
-            message.map_id, message.map_sha256, message.source)
+            message.map_id, message.map_sha256, message.source,
+            getattr(message, "reset_count", None))
 
     def _collision(self, message) -> None:
         self._status("collision", message, (3,))
@@ -1229,6 +1509,7 @@ def main() -> int:
                 ("contacts", args.contact_topic),
                 ("route", args.route_topic),
                 ("localization", args.localization_topic),
+                ("localization_candidate", args.localization_candidate_topic),
                 ("collision", args.collision_topic),
                 ("geofence", args.geofence_topic),
                 ("slope", args.slope_topic),
