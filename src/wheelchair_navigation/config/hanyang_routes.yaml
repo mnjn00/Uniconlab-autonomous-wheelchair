@@ -20,7 +20,7 @@ map:
 waypoint_asset:
   path: ../../../data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml
   sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
-safety_manifest_sha256: eb26fbbe00b5514663dd0a9fb4cf5b3ce561961e0a0d17483b5937af205f9706
+safety_manifest_sha256: a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc
 geometry_semantics:
   coordinate_frame: map
   linear_unit: m
@@ -16864,4 +16864,4 @@ return_route:
     behavior: terminal_stop
     slope_tag: candidate
     crossing_tag: unknown
-content_sha256: 7a09b9ca4db95341bf22465c89d7d78670a35a29dbfe971bf4da353ca2e0075e
+content_sha256: e7ea5bff1cf43134104305436971fe0179a8285b993c35dc2993bebbccd3184c

@@ -46,7 +46,7 @@ artifacts:
   - path: driver-verified-fixture.yaml
     sha256: 30744d2bc964433f30e705e6c92e9d61285c4b37cc9cc1f30c69be1245ad4d91
   - path: route-safety-candidate.yaml
-    sha256: eb26fbbe00b5514663dd0a9fb4cf5b3ce561961e0a0d17483b5937af205f9706
+    sha256: a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc
   - path: slope-simulation-policy.yaml
     sha256: 9eb3d7fe81b16a432cbcbcc68d6159bb3945bb3b00d23fa2ee02affe445d35af
   - path: time-alignment-schema.json

@@ -24,7 +24,7 @@ ROUTE = ROOT / "data" / "hanyang_aegimun_loop" / "hanyang_aegimun_loop.waypoints
 MAP = ROOT / "data" / "hanyang_aegimun_loop" / "map.pgm"
 METADATA = ROOT / "data" / "hanyang_aegimun_loop" / "map.metadata.json"
 NAVIGATION_ROUTES = ROOT / "src" / "wheelchair_navigation" / "config" / "hanyang_routes.yaml"
-CONFIG_SHA256 = "9aa228033d01667b34dd0927fb83cdbcd174987893bcf99ba78f65898bcd8d68"
+CONFIG_SHA256 = "596598a135ba9d4a3ceef9018dfdab37f1095b93a5610fd890570e3055446386"
 A03_FUTURE_TOLERANCE_S = 0.05
 SPEC = importlib.util.spec_from_file_location("route_safety", SCRIPT)
 route_safety = importlib.util.module_from_spec(SPEC)
@@ -99,7 +99,12 @@ def test_sim_config_dynamically_binds_exact_candidate_map_and_route_bytes():
     assert config["expected_map_sha256"] == _sha(MAP)
     assert config["simulation_geometry"]["route_asset_sha256"] == _sha(ROUTE)
     assert set(config["expected_route_hashes"]) == {route["route_id"] for route in candidate["approved_routes"]}
-    assert set(config["expected_route_hashes"].values()) == {_sha(ROUTE)}
+    candidate_hashes = {
+        route["route_id"]: route["route_manifest_sha256"]
+        for route in candidate["approved_routes"]
+    }
+    assert config["expected_route_hashes"] == candidate_hashes
+    assert len(set(candidate_hashes.values())) == 2
 
 
 def test_simulation_config_bytes_require_exact_sha256_before_policy_creation():
@@ -183,7 +188,7 @@ def test_simulation_corridor_covers_both_recorded_directions_without_widening():
     assert geometry["recorded_corridor_margin_m"] == 0.2
     assert geometry["outside_corridor_action"] == "STOP"
     assert zone["directions"] == ["outbound", "return"]
-    assert zone["policy"] == "simulation_allow"
+    assert zone["policy"] == "normal"
     assert geometry["route_bindings"]["outbound"] == {
         "route_id": "hanyang_aegimun_engineering_outbound",
         "asset_key": "outbound_route",
@@ -230,7 +235,7 @@ def _simulation_selection(policy, direction, segment_index=0):
     route = next(candidate for candidate in policy.routes if candidate.direction == direction)
     return route_safety.ActiveRouteSelection(
         route.route_id, route.route_manifest_sha256, policy.manifest_sha256,
-        policy.map_id, policy.map_sha256, route.segment_ids[segment_index], "candidate-unsurveyed",
+        policy.map_id, policy.map_sha256, route.segment_ids[segment_index], route.zone_ids[0],
     )
 
 
@@ -238,7 +243,7 @@ def test_runtime_consumes_centerline_tube_for_route_turn_endpoint_and_off_route(
     policy = route_safety.load_simulation_policy(CONFIG, CONFIG_SHA256)
     source = yaml.safe_load(ROUTE.read_text(encoding="utf-8"))
     assert policy.simulation_only
-    assert policy.zone("candidate-unsurveyed").policy == "simulation_allow"
+    assert policy.zone("zone-simulation-candidate").policy == "normal"
     for direction in ("outbound", "return"):
         route = next(candidate for candidate in policy.routes if candidate.direction == direction)
         waypoints = source[direction + "_route"]["waypoints"]
@@ -281,8 +286,9 @@ def test_simulation_direction_segment_and_hash_ambiguity_stop():
     object.__setattr__(wrong_hash, "route_manifest_sha256", "0" * 64)
     assert route_safety.evaluate(policy, pose, wrong_direction, 10.0).signal_state == route_safety.STOP
     assert route_safety.evaluate(policy, reversed_pose, outbound, 10.0).signal_state == route_safety.STOP
-    assert route_safety.evaluate(policy, pose, wrong_segment, 10.0).reason_mask & route_safety.REASON_ROUTE_STATE
-    assert route_safety.evaluate(policy, pose, cross_route_segment, 10.0).reason_mask & route_safety.REASON_ROUTE_STATE
+    # Segment IDs supplied by navigation are correlation-only and cannot select or widen safety.
+    assert route_safety.evaluate(policy, pose, wrong_segment, 10.0).clear
+    assert route_safety.evaluate(policy, pose, cross_route_segment, 10.0).clear
     assert route_safety.evaluate(policy, pose, wrong_hash, 10.0).reason_mask & route_safety.REASON_ROUTE_MANIFEST
 
 
@@ -325,7 +331,7 @@ def test_inside_clear_boundary_uncertainty_stale_and_manual_only_stop():
     selection = _selection(policy)
     inside = route_safety.evaluate(policy, _pose(), selection, 10.0, 1)
     assert inside.clear
-    assert inside.required_boundary_margin_m == pytest.approx(0.45)
+    assert inside.required_boundary_margin_m == pytest.approx(0.65)
     assert route_safety.evaluate(policy, _pose(1.5), selection, 10.0).signal_state == route_safety.STOP
     assert route_safety.evaluate(policy, _pose(sigma=1.0), selection, 10.0).signal_state == route_safety.STOP
     assert route_safety.evaluate(policy, _pose(stamp=9.0), selection, 10.0).reason_mask & route_safety.REASON_SENSOR_STALE

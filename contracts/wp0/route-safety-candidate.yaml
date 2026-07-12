@@ -21,7 +21,7 @@ footprint:
   calibration_id: UNMEASURED
   calibration_status: UNMEASURED
   localization_uncertainty_margin_m: 0.25
-  fixed_boundary_margin_m: 0.20
+  fixed_boundary_margin_m: 0.2
 geometry_semantics:
   coordinate_frame: map
   unit: m
@@ -30,54 +30,50 @@ geometry_semantics:
   exclusion_orientation: clockwise
   topology: simple_non_self_intersecting_three_unique_vertices
   unknown_or_nonfinite_action: REJECT_AND_STOP
-# Unsurveyed simulation-only placeholder intersection around the committed route origin.
-# It grants no physical motion because all route/zone speeds are zero and manual-only.
-# The regenerated route is map-aligned and explicitly bidirectional, but its 0.976 m
-# loop residual exceeds the 0.5 m target and remains a release blocker.
-global_allowed_polygon:
-  - [-0.50, -0.50]
-  - [0.50, -0.50]
-  - [0.00, 0.50]
+global_allowed_polygon: &id001
+- - -60.1
+  - -148.4
+- - 261.9
+  - -148.4
+- - 261.9
+  - 87.7
+- - -60.1
+  - 87.7
 global_exclusion_polygons: []
 approved_routes:
-  - route_id: hanyang_aegimun_engineering_outbound
-    direction: outbound
-    route_manifest_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
-    safety_manifest_binding: self_sha256_from_signed_release_bundle
-    corridor_polygon:
-      - [-0.50, -0.50]
-      - [0.50, -0.50]
-      - [0.00, 0.50]
-    corridor_margin_m: 0.0
-    segment_ids: [outbound-candidate-seg-000]
-    localization_zone_ids: [zone-manual-only-candidate]
-    max_linear_mps: 0.0
-    max_angular_rps: 0.0
-    hardware_authorized: false
-  - route_id: hanyang_engineering_aegimun_return
-    direction: return
-    route_manifest_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
-    safety_manifest_binding: self_sha256_from_signed_release_bundle
-    corridor_polygon:
-      - [-0.50, -0.50]
-      - [0.50, -0.50]
-      - [0.00, 0.50]
-    corridor_margin_m: 0.0
-    segment_ids: [return-candidate-seg-000]
-    localization_zone_ids: [zone-manual-only-candidate]
-    max_linear_mps: 0.0
-    max_angular_rps: 0.0
-    hardware_authorized: false
+- route_id: hanyang_aegimun_engineering_outbound
+  direction: outbound
+  route_manifest_sha256: eef9d2edcab8433fa69036338820d8d44880992e3cc14cbea8d2786468bbe30e
+  safety_manifest_binding: self_sha256_from_signed_release_bundle
+  corridor_polygon: *id001
+  corridor_margin_m: 0.2
+  segment_ids:
+  - outbound-candidate-seg-000
+  localization_zone_ids:
+  - zone-simulation-candidate
+  max_linear_mps: 0.25
+  max_angular_rps: 0.6
+  hardware_authorized: false
+- route_id: hanyang_engineering_aegimun_return
+  direction: return
+  route_manifest_sha256: 5135717428df1d4f6efb8025c5964e5f161f101d01bd6bbf45e8aee72311ede0
+  safety_manifest_binding: self_sha256_from_signed_release_bundle
+  corridor_polygon: *id001
+  corridor_margin_m: 0.2
+  segment_ids:
+  - return-candidate-seg-000
+  localization_zone_ids:
+  - zone-simulation-candidate
+  max_linear_mps: 0.25
+  max_angular_rps: 0.6
+  hardware_authorized: false
 localization_zones:
-  - zone_id: zone-manual-only-candidate
-    polygon:
-      - [-0.50, -0.50]
-      - [0.50, -0.50]
-      - [0.00, 0.50]
-    policy: manual_only
-    max_linear_mps: 0.0
-    max_angular_rps: 0.0
-    hardware_authorized: false
+- zone_id: zone-simulation-candidate
+  polygon: *id001
+  policy: normal
+  max_linear_mps: 0.25
+  max_angular_rps: 0.6
+  hardware_authorized: false
 authority:
   simulation_only: true
   hardware_authorized: false

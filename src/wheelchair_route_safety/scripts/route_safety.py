@@ -107,6 +107,7 @@ class ActiveRouteSelection:
     map_sha256: str
     segment_id: str
     zone_id: str
+    mission_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -300,9 +301,9 @@ def load_policy(
     footprint_length_m: float,
     footprint_width_m: float,
     expected_geometry_sha256: str,
-    pose_ttl_s: float = 0.5,
-    status_ttl_s: float = 0.5,
-    transform_ttl_s: float = 0.5,
+    pose_ttl_s: float = 0.25,
+    status_ttl_s: float = 0.25,
+    transform_ttl_s: float = 0.25,
     schema_path: Optional[os.PathLike] = None,
 ) -> RouteSafetyPolicy:
     """Load and bind A06 exactly once; returned policy exposes no mutation API."""
@@ -336,6 +337,11 @@ def load_policy(
             raise ManifestError("{} must be finite".format(path))
 
     reject_nonfinite(manifest)
+    ttl_values = (pose_ttl_s, status_ttl_s, transform_ttl_s)
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(value) or not 0.0 < float(value) <= 0.25
+           for value in ttl_values):
+        raise ManifestError("pose/status/transform TTLs must be in (0, 0.25]")
     if manifest["map"]["sha256"] != expected_map_sha256:
         raise ManifestError("map SHA-256 mismatch")
     if manifest["footprint"]["geometry_sha256"] != expected_geometry_sha256:
@@ -452,14 +458,12 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
         config.get("expected_manifest_sha256"), config.get("expected_map_sha256"),
         config.get("expected_route_hashes"), config.get("measured_footprint_length_m"),
         config.get("measured_footprint_width_m"), config.get("expected_geometry_sha256"),
-        config.get("pose_ttl_s", 0.5), config.get("status_ttl_s", 0.5),
-        config.get("transform_ttl_s", 0.5), relative_path(config.get("schema_path"), "schema_path"),
+        config.get("pose_ttl_s", 0.25), config.get("status_ttl_s", 0.25),
+        config.get("transform_ttl_s", 0.25), relative_path(config.get("schema_path"), "schema_path"),
     )
     asset_map = route_asset.get("map")
     if not isinstance(asset_map, Mapping) or (asset_map.get("map_id"), asset_map.get("sha256"), asset_map.get("frame_id")) != (base.map_id, base.map_sha256, base.frame_id):
         raise ManifestError("simulation route/map binding mismatch")
-    if any(route.route_manifest_sha256 != _sha256(route_raw) for route in base.routes):
-        raise ManifestError("approved routes are not bound to the simulation route bytes")
     navigation_map = navigation_manifest.get("map")
     waypoint_binding = navigation_manifest.get("waypoint_asset")
     if not isinstance(navigation_map, Mapping) or (
@@ -480,15 +484,16 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
         raise ManifestError("simulation margins must match the immutable safety manifest")
 
     if len(zone_values) != 1:
-        raise ManifestError("exactly one simulation_allow zone is required")
+        raise ManifestError("exactly one simulation zone binding is required")
     zone_value = zone_values[0]
+    base_zone = base.zone(zone_value.get("zone_id") if isinstance(zone_value, Mapping) else "")
     if not isinstance(zone_value, Mapping) or (
-            zone_value.get("zone_id") != "candidate-unsurveyed"
-            or zone_value.get("policy") != "simulation_allow"
+            base_zone is None or base_zone.policy != "normal"
+            or zone_value.get("policy") != "normal"
             or zone_value.get("simulation_only") is not True
             or zone_value.get("hardware_authorized") is not False
             or zone_value.get("passenger_authorized") is not False):
-        raise ManifestError("simulation_allow zone is missing or authorizes physical operation")
+        raise ManifestError("simulation zone must match one normal A06 zone and stay non-authorizing")
 
     routes_by_direction = {}
     for route in base.routes:
@@ -519,7 +524,7 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
         if not isinstance(navigation_source, Mapping) or (
                 navigation_source.get("route_id") != approved.route_id
                 or navigation_source.get("direction") != direction
-                or navigation_source.get("route_manifest_sha256") != _sha256(route_raw)):
+                or navigation_source.get("route_manifest_sha256") != approved.route_manifest_sha256):
             raise ManifestError("{} navigation route binding mismatch".format(direction))
         waypoints = source.get("waypoints")
         if not isinstance(waypoints, list) or len(waypoints) < 2:
@@ -567,8 +572,8 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
         if len(set(segment_ids)) != len(segment_ids):
             raise ManifestError("{} navigation segment IDs are ambiguous".format(direction))
         simulation_routes.append(replace(
-            approved, corridor_margin_m=recorded_margin, segment_ids=tuple(segment_ids),
-            zone_ids=("candidate-unsurveyed",), centerline=centerline,
+            approved, segment_ids=tuple(segment_ids),
+            centerline=centerline,
             tube_radius_m=tube_radius,
             segment_centerlines=tuple(
                 (centerline[index], centerline[index + 1])
@@ -576,11 +581,7 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
             ),
         ))
 
-    return replace(
-        base, routes=tuple(simulation_routes),
-        zones=(ZonePolicy("candidate-unsurveyed", (), "simulation_allow"),),
-        simulation_only=True,
-    )
+    return replace(base, routes=tuple(simulation_routes), simulation_only=True)
 
 
 def load_simulation_policy(
@@ -606,6 +607,39 @@ def load_simulation_policy(
     if not isinstance(config, Mapping):
         raise ManifestError("simulation config root must be a mapping")
     return _load_simulation_policy(config, resolved)
+
+
+def _derive_simulation_selection(route: RoutePolicy, pose: PoseSample,
+                                 selection: ActiveRouteSelection) -> Optional[ActiveRouteSelection]:
+    if (len(route.segment_centerlines) != len(route.segment_ids)
+            or len(route.zone_ids) != 1):
+        return None
+    candidates = []
+    for index, (first, second) in enumerate(route.segment_centerlines):
+        dx, dy = second[0] - first[0], second[1] - first[1]
+        length = math.hypot(dx, dy)
+        if length <= 0.0:
+            return None
+        alignment = (math.cos(pose.yaw_rad) * dx + math.sin(pose.yaw_rad) * dy) / length
+        distance = _distance_point_segment((pose.x_m, pose.y_m), first, second)
+        if alignment > 0.0 and distance <= route.corridor_margin_m + 1e-10:
+            candidates.append((distance, -alignment, index))
+    if not candidates:
+        return None
+    candidates.sort()
+    best = candidates[0]
+    if len(candidates) > 1:
+        second = candidates[1]
+        nonadjacent = abs(best[2] - second[2]) > 1
+        indistinguishable = abs(best[0] - second[0]) <= 1e-8 and abs(best[1] - second[1]) <= 1e-6
+        if nonadjacent and indistinguishable:
+            return None
+    index = best[2]
+    return replace(
+        selection,
+        segment_id=route.segment_ids[index],
+        zone_id=route.zone_ids[0],
+    )
 
 
 def _stop(policy: RouteSafetyPolicy, pose: Optional[PoseSample], selection: Optional[ActiveRouteSelection], now_s: float, sequence: int, state: int, reason: int, margin: float = 0.0, clearance: float = -1.0) -> GeofenceEvaluation:
@@ -643,36 +677,49 @@ def evaluate(policy: RouteSafetyPolicy, pose: Optional[PoseSample], selection: O
     route = policy.route(selection.route_id)
     if route is None or selection.route_manifest_sha256 != route.route_manifest_sha256:
         return _stop(policy, pose, selection, now_s, sequence, STATUS_MANIFEST_ERROR, REASON_ROUTE_MANIFEST | REASON_ROUTE_STATE)
+    simulation_clearance = None
+    if policy.simulation_only:
+        derived = _derive_simulation_selection(route, pose, selection)
+        if derived is None:
+            return _stop(policy, pose, selection, now_s, sequence, STATUS_OUTSIDE, REASON_ROUTE_STATE | REASON_GEOFENCE)
+        selection = derived
     if selection.segment_id not in route.segment_ids:
         return _stop(policy, pose, selection, now_s, sequence, STATUS_OUTSIDE, REASON_ROUTE_STATE | REASON_GEOFENCE)
     if policy.simulation_only:
-        if selection.zone_id != "candidate-unsurveyed" or route.zone_ids != ("candidate-unsurveyed",):
-            return _stop(policy, pose, selection, now_s, sequence, STATUS_OUTSIDE, REASON_ROUTE_STATE | REASON_GEOFENCE)
         zone = policy.zone(selection.zone_id)
-        if (zone is None or zone.policy != "simulation_allow" or len(route.centerline) < 2
+        if (zone is None or zone.policy != "normal" or len(route.centerline) < 2
                 or len(route.segment_centerlines) != len(route.segment_ids)):
             return _stop(policy, pose, selection, now_s, sequence, STATUS_OUTSIDE, REASON_ROUTE_STATE | REASON_GEOFENCE)
         segment_index = route.segment_ids.index(selection.segment_id)
         first, second = route.segment_centerlines[segment_index]
         center_distance = _distance_point_segment((pose.x_m, pose.y_m), first, second)
-        heading_dot = math.cos(pose.yaw_rad) * (second[0] - first[0]) + math.sin(pose.yaw_rad) * (second[1] - first[1])
-        required_margin = policy.fixed_boundary_margin_m + max(policy.configured_uncertainty_margin_m, 3.0 * pose.position_std_m)
-        expanded = transformed_footprint(
-            pose.x_m, pose.y_m, pose.yaw_rad, policy.footprint_length_m,
-            policy.footprint_width_m, required_margin,
+        required_tube_margin = policy.fixed_boundary_margin_m + max(
+            policy.configured_uncertainty_margin_m, 3.0 * pose.position_std_m
         )
-        footprint_distance = max(_nearest_centerline_segment(point, route.centerline)[0] for point in expanded)
-        clearance = route.tube_radius_m - footprint_distance
-        if (heading_dot <= 0.0 or center_distance > route.corridor_margin_m + 1e-10
+        raw_tube_footprint = transformed_footprint(
+            pose.x_m, pose.y_m, pose.yaw_rad,
+            policy.footprint_length_m, policy.footprint_width_m,
+        )
+        expanded_tube = transformed_footprint(
+            pose.x_m, pose.y_m, pose.yaw_rad, policy.footprint_length_m,
+            policy.footprint_width_m, required_tube_margin,
+        )
+        raw_footprint_distance = max(
+            _nearest_centerline_segment(point, route.centerline)[0]
+            for point in raw_tube_footprint
+        )
+        footprint_distance = max(
+            _nearest_centerline_segment(point, route.centerline)[0]
+            for point in expanded_tube
+        )
+        simulation_clearance = route.tube_radius_m - raw_footprint_distance
+        if (center_distance > route.corridor_margin_m + 1e-10
                 or footprint_distance > route.tube_radius_m + 1e-10):
             state = STATUS_MARGIN if center_distance <= route.corridor_margin_m + 1e-10 else STATUS_OUTSIDE
-            return _stop(policy, pose, selection, now_s, sequence, state, REASON_GEOFENCE, required_margin, clearance)
-        return GeofenceEvaluation(
-            sequence, now_s, pose.pose_stamp_s, policy.frame_id, STATUS_INSIDE, CLEAR, 0,
-            SOURCE, policy.manifest_id, policy.manifest_sha256, selection.route_id,
-            selection.segment_id, zone.zone_id, ages[0], ages[2], pose.position_std_m,
-            clearance, required_margin, policy.manifest_sha256,
-        )
+            return _stop(
+                policy, pose, selection, now_s, sequence, state, REASON_GEOFENCE,
+                required_tube_margin, simulation_clearance,
+            )
     if selection.zone_id:
         if selection.zone_id not in route.zone_ids:
             return _stop(policy, pose, selection, now_s, sequence, STATUS_OUTSIDE, REASON_ROUTE_STATE | REASON_GEOFENCE)
@@ -699,6 +746,8 @@ def evaluate(policy: RouteSafetyPolicy, pose: Optional[PoseSample], selection: O
     excluded = any(_polygons_overlap(expanded, exclusion) for exclusion in policy.exclusions)
     boundaries = containers + policy.exclusions
     clearance = min(_boundary_distance(raw_footprint, boundary) for boundary in boundaries) if boundaries else -1.0
+    if simulation_clearance is not None:
+        clearance = min(clearance, simulation_clearance)
     if not contained or excluded or forbidden_zone_overlap or clearance + 1e-10 < required_margin:
         state = STATUS_MARGIN if all(_polygon_strictly_inside(raw_footprint, container) for container in containers) and not any(_polygons_overlap(raw_footprint, exclusion) for exclusion in policy.exclusions) else STATUS_OUTSIDE
         return _stop(policy, pose, selection, now_s, sequence, state, REASON_GEOFENCE, required_margin, clearance)
@@ -720,6 +769,9 @@ def run_ros_node() -> None:
     status_pub = rospy.Publisher("/route_safety/geofence_status", GeofenceStatus, queue_size=1)
     signal_pub = rospy.Publisher("/safety/geofence", SafetySignal, queue_size=1)
     latest: Dict[str, Any] = {"pose": None, "status": None, "route": None, "progress": None}
+    high_water: Dict[str, Optional[float]] = {
+        "pose": None, "status": None, "route": None, "progress": None,
+    }
     sequence = [0]
 
     rospy.Subscriber("/localization/candidate", LocalizationCandidate, lambda msg: latest.__setitem__("pose", msg), queue_size=1)
@@ -730,39 +782,86 @@ def run_ros_node() -> None:
     def publish(_event: Any) -> None:
         now = rospy.Time.now()
         now_s = now.to_sec()
-        route_msg, pose_msg, localization_msg, progress_msg = latest["route"], latest["pose"], latest["status"], latest["progress"]
+        route_msg, pose_msg, localization_msg, progress_msg = (
+            latest["route"], latest["pose"], latest["status"], latest["progress"]
+        )
         selection = None
-        if (route_msg is not None and progress_msg is not None and progress_msg.route_id == route_msg.route_id
-                and progress_msg.map_id == route_msg.map_id and 0.0 <= now_s - route_msg.header.stamp.to_sec() <= 0.75
-                and 0.0 <= now_s - progress_msg.header.stamp.to_sec() <= 0.50):
-            selected_route = policy.route(route_msg.route_id)
-            zone_id = selected_route.zone_ids[0] if selected_route is not None and len(selected_route.zone_ids) == 1 else ""
-            selection = ActiveRouteSelection(
-                route_msg.route_id, route_msg.route_manifest_sha256, route_msg.safety_manifest_sha256,
-                route_msg.map_id, route_msg.map_sha256, progress_msg.segment_id, zone_id,
-            )
+        if route_msg is not None and progress_msg is not None:
+            try:
+                route_stamp = float(route_msg.header.stamp.to_sec())
+                progress_stamp = float(progress_msg.header.stamp.to_sec())
+                chronology_ok = (
+                    (high_water["route"] is None or route_stamp >= high_water["route"])
+                    and (high_water["progress"] is None or progress_stamp >= high_water["progress"])
+                )
+                progress_matches = (
+                    progress_msg.mission_id == route_msg.mission_id
+                    and progress_msg.route_id == route_msg.route_id
+                    and progress_msg.map_id == route_msg.map_id
+                    and progress_msg.state in (RouteProgress.ACTIVE, RouteProgress.AT_STOP)
+                )
+                fresh = (
+                    -FUTURE_TOLERANCE_S <= now_s - route_stamp <= 0.25
+                    and -FUTURE_TOLERANCE_S <= now_s - progress_stamp <= 0.25
+                )
+                if (chronology_ok and progress_matches and fresh
+                        and isinstance(route_msg.mission_id, str) and route_msg.mission_id):
+                    selection = ActiveRouteSelection(
+                        route_msg.route_id, route_msg.route_manifest_sha256,
+                        route_msg.safety_manifest_sha256, route_msg.map_id,
+                        route_msg.map_sha256, "", "", route_msg.mission_id,
+                    )
+                    high_water["route"] = route_stamp
+                    high_water["progress"] = progress_stamp
+            except (AttributeError, TypeError, ValueError):
+                selection = None
         sample = None
         if pose_msg is not None and localization_msg is not None:
-            pose_stamped = pose_msg.pose
-            covariance = pose_stamped.pose.covariance
-            covariance_std = math.sqrt(max(0.0, max(covariance[0], covariance[7]))) if len(covariance) == 36 else float("nan")
-            status_std = localization_msg.position_std_m
-            position_std = max(covariance_std, status_std) if math.isfinite(covariance_std) and math.isfinite(status_std) else float("nan")
-            q = pose_stamped.pose.pose.orientation
-            yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-            status_ok = (
-                localization_msg.state == LocalizationStatus.OK
-                and localization_msg.independent_check_passed
-                and localization_msg.map_id == policy.map_id
-                and localization_msg.map_sha256 == policy.map_sha256
-                and pose_msg.map_id == policy.map_id
-                and pose_msg.map_sha256 == policy.map_sha256
-            )
-            # Candidate geometry is in map; independent status supplies TF age evidence.
-            transform_stamp = now_s - localization_msg.transform_age_s if math.isfinite(localization_msg.transform_age_s) else float("nan")
-            sample = PoseSample(pose_stamped.pose.pose.position.x, pose_stamped.pose.pose.position.y, yaw, pose_stamped.header.stamp.to_sec(),
-                                localization_msg.evaluation_stamp.to_sec(), transform_stamp, position_std,
-                                "OK" if status_ok else "NOT_OK", pose_stamped.header.frame_id, pose_stamped.header.frame_id == policy.frame_id)
+            try:
+                pose_stamped = pose_msg.pose
+                pose_stamp = float(pose_stamped.header.stamp.to_sec())
+                status_source_stamp = float(localization_msg.header.stamp.to_sec())
+                status_evaluation_stamp = float(localization_msg.evaluation_stamp.to_sec())
+                covariance = pose_stamped.pose.covariance
+                covariance_std = (
+                    math.sqrt(max(0.0, max(covariance[0], covariance[7])))
+                    if len(covariance) == 36 else float("nan")
+                )
+                status_std = float(localization_msg.position_std_m)
+                position_std = max(covariance_std, status_std)
+                q = pose_stamped.pose.pose.orientation
+                yaw = math.atan2(
+                    2.0 * (q.w * q.z + q.x * q.y),
+                    1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+                )
+                paired = (
+                    abs(pose_stamp - status_source_stamp) <= 1.0e-9
+                    and pose_msg.reset_count == localization_msg.reset_count
+                    and pose_msg.map_id == localization_msg.map_id == policy.map_id
+                    and pose_msg.map_sha256 == localization_msg.map_sha256 == policy.map_sha256
+                    and pose_stamped.header.frame_id == policy.frame_id
+                    and localization_msg.state == LocalizationStatus.OK
+                    and localization_msg.independent_check_passed
+                    and pose_stamp <= status_evaluation_stamp <= now_s + FUTURE_TOLERANCE_S
+                    and (high_water["pose"] is None or pose_stamp >= high_water["pose"])
+                    and (high_water["status"] is None
+                         or status_source_stamp >= high_water["status"])
+                )
+                transform_age = float(localization_msg.transform_age_s)
+                transform_stamp = status_evaluation_stamp - transform_age
+                sample = PoseSample(
+                    float(pose_stamped.pose.pose.position.x),
+                    float(pose_stamped.pose.pose.position.y), yaw,
+                    pose_stamp, status_evaluation_stamp, transform_stamp,
+                    position_std, "OK" if paired else "NOT_OK",
+                    pose_stamped.header.frame_id,
+                    paired and math.isfinite(transform_age) and transform_age >= 0.0,
+                )
+                if paired:
+                    high_water["pose"] = pose_stamp
+                    high_water["status"] = status_source_stamp
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                sample = None
         sequence[0] += 1
         result = evaluate(policy, sample, selection, now_s, sequence[0])
         status = GeofenceStatus()
