@@ -2,5 +2,8 @@
   <!-- Observer only: this node has no velocity or safety-state output. -->
   <node pkg="wheelchair_navigation" type="control_monitor.py" name="control_monitor" output="screen" required="false">
     <rosparam command="load" file="$(find wheelchair_navigation)/config/control_monitor.yaml" />
+    <param name="route_topic" value="/route/progress" />
+    <param name="active_route_topic" value="/route/active" />
+    <param name="mission_state_topic" value="/mission/state" />
   </node>
 </launch>

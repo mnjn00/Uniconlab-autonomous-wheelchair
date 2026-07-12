@@ -24,7 +24,7 @@ ROUTE = ROOT / "data" / "hanyang_aegimun_loop" / "hanyang_aegimun_loop.waypoints
 MAP = ROOT / "data" / "hanyang_aegimun_loop" / "map.pgm"
 METADATA = ROOT / "data" / "hanyang_aegimun_loop" / "map.metadata.json"
 NAVIGATION_ROUTES = ROOT / "src" / "wheelchair_navigation" / "config" / "hanyang_routes.yaml"
-CONFIG_SHA256 = "596598a135ba9d4a3ceef9018dfdab37f1095b93a5610fd890570e3055446386"
+CONFIG_SHA256 = "e71aa4ad257c8ae94dc1de4f52c5d7223880c93daef72f8b3b9b143812c11890"
 A03_FUTURE_TOLERANCE_S = 0.05
 SPEC = importlib.util.spec_from_file_location("route_safety", SCRIPT)
 route_safety = importlib.util.module_from_spec(SPEC)
@@ -105,7 +105,10 @@ def test_sim_config_dynamically_binds_exact_candidate_map_and_route_bytes():
     }
     assert config["expected_route_hashes"] == candidate_hashes
     assert len(set(candidate_hashes.values())) == 2
-
+    assert config["active_route_ttl_s"] == route_safety.ACTIVE_ROUTE_TTL_S == 0.75
+    assert config["localization_policy_sha256"] == (
+        "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"
+    )
 
 def test_simulation_config_bytes_require_exact_sha256_before_policy_creation():
     assert _sha(CONFIG) == CONFIG_SHA256
@@ -292,7 +295,7 @@ def test_simulation_direction_segment_and_hash_ambiguity_stop():
     assert route_safety.evaluate(policy, pose, wrong_hash, 10.0).reason_mask & route_safety.REASON_ROUTE_MANIFEST
 
 
-@pytest.mark.parametrize("mutation", ["nonfinite", "widen", "route_hash", "authority"])
+@pytest.mark.parametrize("mutation", ["nonfinite", "widen", "route_hash", "authority", "active_route_ttl", "localization_policy"])
 def test_simulation_geometry_mutation_is_rejected_before_policy_creation(mutation):
     config = _config()
     if mutation == "nonfinite":
@@ -301,8 +304,12 @@ def test_simulation_geometry_mutation_is_rejected_before_policy_creation(mutatio
         config["simulation_geometry"]["widening_allowed"] = True
     elif mutation == "route_hash":
         config["simulation_geometry"]["route_asset_sha256"] = "0" * 64
-    else:
+    elif mutation == "authority":
         config["simulation_zones"][0]["hardware_authorized"] = True
+    elif mutation == "active_route_ttl":
+        config["active_route_ttl_s"] = 0.25
+    else:
+        config["localization_policy_sha256"] = "0" * 64
     with pytest.raises(route_safety.ManifestError):
         route_safety._load_simulation_policy(config, CONFIG.resolve())
 

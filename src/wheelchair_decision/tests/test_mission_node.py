@@ -92,7 +92,8 @@ def navigating(config=None):
     clock, action, sink, runtime = harness(config)
     ready = evidence(runtime)
     assert ready.send_waypoint_index == 0
-    moving = runtime.dispatch("MOVE_BASE_ACTIVE")
+    moving = runtime.dispatch(
+        "MOVE_BASE_ACTIVE", {"generation": ready.goal_generation})
     assert moving.intent.name == "PROCEED"
     runtime.dispatch("PROGRESS", 0)
     return clock, action, sink, runtime
@@ -162,19 +163,29 @@ def test_route_progress_targets_the_waypoint_after_latest_reached():
 
 
 def test_speed_zone_classification_preserves_surfaces_and_exact_candidate():
+    safety_hash = "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc"
+    map_hash = "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"
     assert node.classify_speed_zone(["campus-road"]) == "road"
     assert node.classify_speed_zone(["north-sidewalk"]) == "sidewalk"
-    assert node.classify_speed_zone(["candidate-unsurveyed", "candidate-unsurveyed"]) == (
-        "simulation_unsurveyed"
-    )
+    assert node.classify_speed_zone(
+        ["zone-simulation-candidate", "candidate-unsurveyed"],
+        safety_hash, map_hash) == "simulation_unsurveyed"
 
 
 def test_speed_zone_classification_rejects_unknown_and_mixed_candidate_tags():
-    for zone_ids in ([], ["unknown"], ["candidate-unsurveyed", "unknown"]):
+    safety_hash = "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc"
+    map_hash = "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"
+    for zone_ids, bound_safety, bound_map in (
+            ([], "", ""),
+            (["unknown"], "", ""),
+            (["candidate-unsurveyed", "candidate-unsurveyed"], safety_hash, map_hash),
+            (["zone-simulation-candidate", "candidate-unsurveyed"], "", ""),
+            (["zone-simulation-candidate", "candidate-unsurveyed"], safety_hash, "wrong"),
+            (["candidate-unsurveyed", "unknown"], safety_hash, map_hash)):
         try:
-            node.classify_speed_zone(zone_ids)
-        except ValueError as exc:
-            assert "not speed classified" in str(exc)
+            node.classify_speed_zone(zone_ids, bound_safety, bound_map)
+        except ValueError:
+            pass
         else:
             raise AssertionError("unclassified speed zone was accepted")
 
@@ -317,7 +328,8 @@ def test_blind_startup_stays_disarmed_then_requires_clear_to_authorize_motion():
     assert ready.state.name == "READY"
     assert ready.intent.name == "HOLD"
     assert ready.send_waypoint_index == 0
-    moving = runtime.dispatch("MOVE_BASE_ACTIVE")
+    moving = runtime.dispatch(
+        "MOVE_BASE_ACTIVE", {"generation": ready.goal_generation})
     assert moving.state.name == "NAVIGATING"
     assert moving.intent.name == "PROCEED"
 
@@ -327,10 +339,12 @@ def test_blind_startup_stays_disarmed_then_requires_clear_to_authorize_motion():
 
 def test_success_sends_one_waypoint_at_a_time():
     _, action, _, runtime = navigating()
-    first = runtime.dispatch("MOVE_BASE_SUCCEEDED")
+    first = runtime.dispatch(
+        "MOVE_BASE_SUCCEEDED", {"generation": runtime.output.goal_generation})
     assert first.send_waypoint_index == 1
-    runtime.dispatch("MOVE_BASE_ACTIVE")
-    complete = runtime.dispatch("MOVE_BASE_SUCCEEDED")
+    runtime.dispatch("MOVE_BASE_ACTIVE", {"generation": first.goal_generation})
+    complete = runtime.dispatch(
+        "MOVE_BASE_SUCCEEDED", {"generation": runtime.output.goal_generation})
     assert complete.terminal_status == "SUCCEEDED"
     assert complete.intent.name == "HOLD"
     assert action.cancels == 0
@@ -369,7 +383,8 @@ def test_ros_evidence_callbacks_use_serialized_receipt_time():
 
 def test_action_abort_cancels_and_latches_until_reset_and_rearm():
     _, action, _, runtime = navigating()
-    aborted = runtime.dispatch("MOVE_BASE_ABORTED")
+    aborted = runtime.dispatch(
+        "MOVE_BASE_ABORTED", {"generation": runtime.output.goal_generation})
     assert aborted.terminal_status == "ABORTED"
     assert aborted.intent.name == "HOLD"
     assert action.cancels == 1
@@ -391,6 +406,7 @@ def test_obstacle_pause_requires_hysteresis_and_explicit_resume():
     assert paused.state.name == "PAUSED_OBSTACLE"
     assert paused.intent.name == "HOLD"
     assert action.cancels == 1
+    runtime.dispatch("MOVE_BASE_CANCELED", {"generation": paused.goal_generation})
     runtime.dispatch("COLLISION", "clear")
     clock.advance(1.01)
     assert runtime.dispatch("TICK").state.name == "PAUSED_OBSTACLE"

@@ -267,12 +267,13 @@ class MissionFSM:
     def _dispatch(self, event: MissionEvent, now: float) -> None:
         kind = event.kind
         if kind == EventType.DISARM:
-            if self.state in (MissionState.FAULT, MissionState.ABORTED):
-                self._cancel_goal = True
-            else:
-                self._to_disarmed("operator_disarm")
+            if self._goal_state == "canceling":
+                return
+            self._to_disarmed("operator_disarm")
             return
         if kind == EventType.RESET:
+            if self._goal_state == "canceling":
+                return
             if self.state in (MissionState.FAULT, MissionState.ABORTED, MissionState.GOAL_REACHED):
                 self._to_disarmed("operator_reset")
             return
@@ -316,7 +317,7 @@ class MissionFSM:
                 self._fault("required_process_lost")
             return
         if kind == EventType.MOVE_BASE_LOST:
-            if not self._current_generation(event.value):
+            if not self._require_current_generation(event.value):
                 return
             if self.state == MissionState.NAVIGATING and self._goal_state == "active":
                 self._fault("move_base_lost")
@@ -326,6 +327,9 @@ class MissionFSM:
     def _on_arm(self, route: Any, now: float) -> None:
         if self.state != MissionState.DISARMED:
             self._impossible("arm_out_of_order")
+            return
+        if self._goal_state == "canceling":
+            self.reason = "cancel_ack_pending"
             return
         if not self._valid_route(route):
             self._fault("route_validation_failed")
@@ -374,7 +378,8 @@ class MissionFSM:
             else:
                 self._fault("emergency_stop")
                 return
-        if self.state == MissionState.NAVIGATING:
+        if self.state in (MissionState.READY, MissionState.NAVIGATING,
+                          MissionState.PAUSED_OBSTACLE):
             critical = {
                 "localization": normalized is False,
                 "geofence": normalized is False,
@@ -411,10 +416,16 @@ class MissionFSM:
 
     def _current_generation(self, value: Any) -> bool:
         generation = self._event_generation(value)
-        return generation is None or generation == self._goal_generation
+        return generation is not None and generation == self._goal_generation
+
+    def _require_current_generation(self, value: Any) -> bool:
+        if self._event_generation(value) is None:
+            self._fault("missing_goal_generation")
+            return False
+        return self._current_generation(value)
 
     def _on_action_active(self, value: Any, now: float) -> None:
-        if not self._current_generation(value):
+        if not self._require_current_generation(value):
             return
         if self.state == MissionState.READY and self._goal_state == "pending":
             if not self._readiness_ok(now):
@@ -432,7 +443,7 @@ class MissionFSM:
             self._impossible("move_base_active_out_of_order")
 
     def _on_action_succeeded(self, value: Any, now: float) -> None:
-        if not self._current_generation(value):
+        if not self._require_current_generation(value):
             return
         if self.state != MissionState.NAVIGATING or self._goal_state != "active":
             self._impossible("move_base_success_out_of_order")
@@ -452,7 +463,7 @@ class MissionFSM:
             self._queue_waypoint(self._progress)
 
     def _on_action_aborted(self, value: Any) -> None:
-        if not self._current_generation(value):
+        if not self._require_current_generation(value):
             return
         if self._goal_state == "canceling":
             self._goal_state = "canceled"
@@ -469,7 +480,7 @@ class MissionFSM:
         self._terminal_status = "ABORTED"
 
     def _on_action_canceled(self, value: Any) -> None:
-        if self._current_generation(value) and self._goal_state == "canceling":
+        if self._require_current_generation(value) and self._goal_state == "canceling":
             self._goal_state = "canceled"
             self._goal_active = False
 
@@ -479,15 +490,20 @@ class MissionFSM:
                  else getattr(self.config, key + "_ttl_s"))
         return updated is not None and 0.0 <= now - updated <= limit
 
-    def _readiness_ok(self, now: float) -> bool:
+    def _critical_prerequisites_ok(self) -> bool:
         return bool(
             self._route is not None
             and self._values["localization"] is True
             and self._values["geofence"] is True
-            and self._values["collision"] == "clear"
             and self._values["slope"] in ("safe", "slow")
             and self._values["mode"] is True
             and self._values["driver"] is True
+        )
+
+    def _readiness_ok(self, now: float) -> bool:
+        return bool(
+            self._critical_prerequisites_ok()
+            and self._values["collision"] == "clear"
             and all(self._fresh(key, now) for key in self._EVIDENCE)
         )
 
@@ -516,7 +532,7 @@ class MissionFSM:
                 self._fault("stale_progress")
                 return
             if self._values["collision"] == "blocked" and self._blocked_since is not None:
-                if now - self._blocked_since >= self.config.obstacle_stop_entry_s:
+                if now - self._blocked_since + 1.0e-9 >= self.config.obstacle_stop_entry_s:
                     self._cancel_active_goal()
                     self.state = MissionState.PAUSED_OBSTACLE
                     self.reason = "obstacle_persisted"
@@ -531,15 +547,21 @@ class MissionFSM:
                 self._fault("emergency_stop")
                 return
             stale = [key for key in self._EVIDENCE if not self._fresh(key, now)]
-            if stale and stale[0] != "collision":
+            if stale:
                 self._fault("stale_" + stale[0])
+                return
+            if not self._critical_prerequisites_ok():
+                self._fault("readiness_revoked")
                 return
             clear_stable = bool(
                 self._values["collision"] == "clear"
                 and self._clear_since is not None
                 and now - self._clear_since >= self.config.obstacle_clear_s
             )
-            if self._resume_requested and clear_stable and self._readiness_ok(now):
+            if self._resume_requested and clear_stable:
+                if self._goal_state == "canceling":
+                    self.reason = "cancel_ack_pending"
+                    return
                 self.state = MissionState.READY
                 self.reason = "obstacle_cleared_operator_resume"
                 self._resume_requested = False
@@ -588,5 +610,6 @@ class MissionFSM:
         self._clear_since = None
         self._resume_requested = False
         self._terminal_status = ""
-        self._goal_generation += 1
-        self._goal_state = "none"
+        if self._goal_state != "canceling":
+            self._goal_active = False
+            self._goal_state = "none"

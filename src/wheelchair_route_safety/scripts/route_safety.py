@@ -22,6 +22,8 @@ Polygon = Tuple[Point, ...]
 SHA256_LENGTH = 64
 SOURCE = "wheelchair_route_safety"
 FUTURE_TOLERANCE_S = 0.05  # Frozen A03 clock contract.
+ACTIVE_ROUTE_TTL_S = 0.75  # Frozen mission route-authorization contract.
+LOCALIZATION_POLICY_SHA256 = "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"
 
 UNKNOWN = 0
 CLEAR = 1
@@ -88,6 +90,7 @@ class RouteSafetyPolicy:
     routes: Tuple[RoutePolicy, ...]
     zones: Tuple[ZonePolicy, ...]
     simulation_only: bool = False
+    localization_policy_sha256: str = ""
 
     def route(self, route_id: str) -> Optional[RoutePolicy]:
         return next((route for route in self.routes if route.route_id == route_id), None)
@@ -494,6 +497,11 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
             or zone_value.get("hardware_authorized") is not False
             or zone_value.get("passenger_authorized") is not False):
         raise ManifestError("simulation zone must match one normal A06 zone and stay non-authorizing")
+    localization_policy_sha256 = config.get("localization_policy_sha256")
+    if localization_policy_sha256 != LOCALIZATION_POLICY_SHA256:
+        raise ManifestError("simulation localization policy SHA-256 must match the frozen policy identity")
+    if config.get("active_route_ttl_s") != ACTIVE_ROUTE_TTL_S:
+        raise ManifestError("simulation ActiveRoute TTL must be frozen at 0.75 seconds")
 
     routes_by_direction = {}
     for route in base.routes:
@@ -581,7 +589,10 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
             ),
         ))
 
-    return replace(base, routes=tuple(simulation_routes), simulation_only=True)
+    return replace(
+        base, routes=tuple(simulation_routes), simulation_only=True,
+        localization_policy_sha256=localization_policy_sha256,
+    )
 
 
 def load_simulation_policy(
@@ -759,7 +770,7 @@ def evaluate(policy: RouteSafetyPolicy, pose: Optional[PoseSample], selection: O
 def run_ros_node() -> None:
     """Lazy ROS adapter.  Parameters are snapshotted before immutable policy load."""
     import rospy
-    from wheelchair_interfaces.msg import ActiveRoute, GeofenceStatus, LocalizationCandidate, LocalizationStatus, RouteProgress, SafetySignal
+    from wheelchair_interfaces.msg import ActiveRoute, GeofenceStatus, LocalizationCandidate, LocalizationStatus, SafetySignal
     from std_msgs.msg import Header
 
     rospy.init_node("wheelchair_route_safety")
@@ -768,60 +779,66 @@ def run_ros_node() -> None:
     policy = load_simulation_policy(config_path, expected_config_sha256)
     status_pub = rospy.Publisher("/route_safety/geofence_status", GeofenceStatus, queue_size=1)
     signal_pub = rospy.Publisher("/safety/geofence", SafetySignal, queue_size=1)
-    latest: Dict[str, Any] = {"pose": None, "status": None, "route": None, "progress": None}
-    high_water: Dict[str, Optional[float]] = {
-        "pose": None, "status": None, "route": None, "progress": None,
+    latest: Dict[str, Any] = {"pose": None, "status": None, "route": None}
+    high_water: Dict[str, Any] = {
+        "pose": None, "route": None, "status": None, "status_message": None,
+        "status_message_valid": False,
     }
     sequence = [0]
+    status_message = [0]
+
+    def receive_status(msg: Any) -> None:
+        status_message[0] += 1
+        latest["status"] = (msg, rospy.Time.now().to_sec(), status_message[0])
 
     rospy.Subscriber("/localization/candidate", LocalizationCandidate, lambda msg: latest.__setitem__("pose", msg), queue_size=1)
-    rospy.Subscriber("/localization/status", LocalizationStatus, lambda msg: latest.__setitem__("status", msg), queue_size=1)
+    rospy.Subscriber("/localization/status", LocalizationStatus, receive_status, queue_size=1)
     rospy.Subscriber("/route/active", ActiveRoute, lambda msg: latest.__setitem__("route", msg), queue_size=1)
-    rospy.Subscriber("/route/progress", RouteProgress, lambda msg: latest.__setitem__("progress", msg), queue_size=1)
 
     def publish(_event: Any) -> None:
         now = rospy.Time.now()
         now_s = now.to_sec()
-        route_msg, pose_msg, localization_msg, progress_msg = (
-            latest["route"], latest["pose"], latest["status"], latest["progress"]
+        route_msg, pose_msg, status_evidence = (
+            latest["route"], latest["pose"], latest["status"]
         )
         selection = None
-        if route_msg is not None and progress_msg is not None:
+        if route_msg is not None:
             try:
                 route_stamp = float(route_msg.header.stamp.to_sec())
-                progress_stamp = float(progress_msg.header.stamp.to_sec())
-                chronology_ok = (
-                    (high_water["route"] is None or route_stamp >= high_water["route"])
-                    and (high_water["progress"] is None or progress_stamp >= high_water["progress"])
-                )
-                progress_matches = (
-                    progress_msg.mission_id == route_msg.mission_id
-                    and progress_msg.route_id == route_msg.route_id
-                    and progress_msg.map_id == route_msg.map_id
-                    and progress_msg.state in (RouteProgress.ACTIVE, RouteProgress.AT_STOP)
-                )
-                fresh = (
-                    -FUTURE_TOLERANCE_S <= now_s - route_stamp <= 0.25
-                    and -FUTURE_TOLERANCE_S <= now_s - progress_stamp <= 0.25
-                )
-                if (chronology_ok and progress_matches and fresh
-                        and isinstance(route_msg.mission_id, str) and route_msg.mission_id):
+                chronology_ok = high_water["route"] is None or route_stamp >= high_water["route"]
+                fresh = -FUTURE_TOLERANCE_S <= now_s - route_stamp <= ACTIVE_ROUTE_TTL_S
+                if chronology_ok and fresh:
                     selection = ActiveRouteSelection(
                         route_msg.route_id, route_msg.route_manifest_sha256,
                         route_msg.safety_manifest_sha256, route_msg.map_id,
                         route_msg.map_sha256, "", "", route_msg.mission_id,
                     )
                     high_water["route"] = route_stamp
-                    high_water["progress"] = progress_stamp
             except (AttributeError, TypeError, ValueError):
                 selection = None
         sample = None
-        if pose_msg is not None and localization_msg is not None:
+        if pose_msg is not None and status_evidence is not None:
             try:
+                localization_msg, receipt_stamp, status_message_id = status_evidence
                 pose_stamped = pose_msg.pose
                 pose_stamp = float(pose_stamped.header.stamp.to_sec())
                 status_source_stamp = float(localization_msg.header.stamp.to_sec())
                 status_evaluation_stamp = float(localization_msg.evaluation_stamp.to_sec())
+                receipt_stamp = float(receipt_stamp)
+                status_sequence = int(localization_msg.sequence)
+                status_high_water = (
+                    status_sequence, status_source_stamp, status_evaluation_stamp, receipt_stamp,
+                )
+                previous_status = high_water["status"]
+                is_new_status_message = status_message_id != high_water["status_message"]
+                status_is_newer = (
+                    previous_status is None
+                    or all(current > previous for current, previous in zip(status_high_water, previous_status))
+                )
+                status_is_acceptable = (
+                    (not is_new_status_message and high_water["status_message_valid"])
+                    or (is_new_status_message and status_is_newer)
+                )
                 covariance = pose_stamped.pose.covariance
                 covariance_std = (
                     math.sqrt(max(0.0, max(covariance[0], covariance[7])))
@@ -835,17 +852,19 @@ def run_ros_node() -> None:
                     1.0 - 2.0 * (q.y * q.y + q.z * q.z),
                 )
                 paired = (
-                    abs(pose_stamp - status_source_stamp) <= 1.0e-9
+                    status_sequence >= 0
+                    and status_is_acceptable
+                    and abs(pose_stamp - status_source_stamp) <= 1.0e-9
                     and pose_msg.reset_count == localization_msg.reset_count
                     and pose_msg.map_id == localization_msg.map_id == policy.map_id
                     and pose_msg.map_sha256 == localization_msg.map_sha256 == policy.map_sha256
                     and pose_stamped.header.frame_id == policy.frame_id
+                    and localization_msg.policy_sha256 == policy.localization_policy_sha256
                     and localization_msg.state == LocalizationStatus.OK
+                    and localization_msg.reason_mask == 0
                     and localization_msg.independent_check_passed
-                    and pose_stamp <= status_evaluation_stamp <= now_s + FUTURE_TOLERANCE_S
+                    and pose_stamp <= status_evaluation_stamp <= receipt_stamp + FUTURE_TOLERANCE_S
                     and (high_water["pose"] is None or pose_stamp >= high_water["pose"])
-                    and (high_water["status"] is None
-                         or status_source_stamp >= high_water["status"])
                 )
                 transform_age = float(localization_msg.transform_age_s)
                 transform_stamp = status_evaluation_stamp - transform_age
@@ -857,9 +876,15 @@ def run_ros_node() -> None:
                     pose_stamped.header.frame_id,
                     paired and math.isfinite(transform_age) and transform_age >= 0.0,
                 )
+                # Record every newer status, including restrictive or malformed-OK evidence,
+                # so it cannot be superseded by an older permissive message.
+                if is_new_status_message:
+                    if status_is_newer:
+                        high_water["status"] = status_high_water
+                    high_water["status_message"] = status_message_id
+                    high_water["status_message_valid"] = status_is_newer
                 if paired:
                     high_water["pose"] = pose_stamp
-                    high_water["status"] = status_source_stamp
             except (AttributeError, TypeError, ValueError, OverflowError):
                 sample = None
         sequence[0] += 1

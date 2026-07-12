@@ -52,8 +52,10 @@ class MissionCoreTest(unittest.TestCase):
         return output
 
     def make_navigating(self, fsm, now=0.0):
-        self.make_ready(fsm, now)
-        output = fsm.update(mission.MissionEvent(mission.EventType.MOVE_BASE_ACTIVE), now)
+        ready = self.make_ready(fsm, now)
+        output = fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_ACTIVE,
+            {"generation": ready.goal_generation}), now)
         self.assertEqual(mission.MissionState.NAVIGATING, output.state)
         return output
 
@@ -157,6 +159,9 @@ class MissionCoreTest(unittest.TestCase):
         self.assertTrue(fault.cancel_goal)
         self.assertEqual(mission.MotionIntent.HOLD, fault.intent)
         self.assertEqual(mission.MissionState.FAULT, fsm.disarm(0.15).state)
+        fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_CANCELED,
+            {"generation": fault.goal_generation}), 0.16)
 
         fsm.update(mission.MissionEvent(mission.EventType.LOCALIZATION, True), 0.2)
         fsm.update(mission.MissionEvent(mission.EventType.DRIVER, True), 0.2)
@@ -190,8 +195,11 @@ class MissionCoreTest(unittest.TestCase):
         paused = fsm.tick(0.21)
         self.assertEqual(mission.MissionState.PAUSED_OBSTACLE, paused.state)
         self.assertTrue(paused.cancel_goal)
+        fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_CANCELED,
+            {"generation": paused.goal_generation}), 0.22)
 
-        fsm.update(mission.MissionEvent(mission.EventType.COLLISION, "clear"), 0.22)
+        fsm.update(mission.MissionEvent(mission.EventType.COLLISION, "clear"), 0.23)
         self.assertEqual(mission.MissionState.PAUSED_OBSTACLE, fsm.tick(0.60).state)
         resumed = fsm.resume(0.61)
         self.assertEqual(mission.MissionState.READY, resumed.state)
@@ -207,7 +215,9 @@ class MissionCoreTest(unittest.TestCase):
 
         progress_fsm = self.make_fsm(action_timeout_s=5.0, progress_timeout_s=0.5)
         self.make_navigating(progress_fsm)
-        progress_fsm.update(mission.MissionEvent(mission.EventType.MOVE_BASE_ACTIVE), 0.4)
+        progress_fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_ACTIVE,
+            {"generation": progress_fsm.output().goal_generation}), 0.4)
         progress_fault = progress_fsm.tick(0.51)
         self.assertEqual(mission.MissionState.FAULT, progress_fault.state)
         self.assertEqual("stale_progress", progress_fault.reason)
@@ -231,11 +241,17 @@ class MissionCoreTest(unittest.TestCase):
     def test_terminal_goal_and_abort_are_stopped_and_need_reset(self):
         fsm = self.make_fsm()
         self.make_navigating(fsm)
-        first = fsm.update(mission.MissionEvent(mission.EventType.MOVE_BASE_SUCCEEDED), 0.1)
+        first = fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_SUCCEEDED,
+            {"generation": fsm.output().goal_generation}), 0.1)
         self.assertEqual(mission.MissionState.READY, first.state)
         self.assertEqual(1, first.send_waypoint_index)
-        fsm.update(mission.MissionEvent(mission.EventType.MOVE_BASE_ACTIVE), 0.2)
-        done = fsm.update(mission.MissionEvent(mission.EventType.MOVE_BASE_SUCCEEDED), 0.3)
+        fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_ACTIVE,
+            {"generation": first.goal_generation}), 0.2)
+        done = fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_SUCCEEDED,
+            {"generation": fsm.output().goal_generation}), 0.3)
         self.assertEqual(mission.MissionState.GOAL_REACHED, done.state)
         self.assertEqual("SUCCEEDED", done.terminal_status)
         self.assertEqual(mission.MotionIntent.HOLD, done.intent)
@@ -244,7 +260,9 @@ class MissionCoreTest(unittest.TestCase):
 
         aborted_fsm = self.make_fsm()
         self.make_navigating(aborted_fsm)
-        aborted = aborted_fsm.update(mission.MissionEvent(mission.EventType.MOVE_BASE_ABORTED), 0.1)
+        aborted = aborted_fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_ABORTED,
+            {"generation": aborted_fsm.output().goal_generation}), 0.1)
         self.assertEqual(mission.MissionState.ABORTED, aborted.state)
         self.assertTrue(aborted.cancel_goal)
         self.assertEqual(mission.MotionIntent.HOLD, aborted.intent)
@@ -253,7 +271,9 @@ class MissionCoreTest(unittest.TestCase):
     def test_impossible_action_order_faults_armed_mission(self):
         fsm = self.make_fsm()
         self.make_ready(fsm)
-        output = fsm.update(mission.MissionEvent(mission.EventType.MOVE_BASE_SUCCEEDED), 0.1)
+        output = fsm.update(mission.MissionEvent(
+            mission.EventType.MOVE_BASE_SUCCEEDED,
+            {"generation": fsm.output().goal_generation}), 0.1)
         self.assertEqual(mission.MissionState.FAULT, output.state)
         self.assertEqual("move_base_success_out_of_order", output.reason)
 

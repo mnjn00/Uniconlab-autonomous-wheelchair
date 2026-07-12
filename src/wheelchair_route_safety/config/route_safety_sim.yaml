@@ -14,6 +14,8 @@ measured_footprint_width_m: 0.6
 pose_ttl_s: 0.25
 status_ttl_s: 0.25
 transform_ttl_s: 0.25
+active_route_ttl_s: 0.75
+localization_policy_sha256: 5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8
 simulation_geometry:
   immutable: true
   runtime_mutation_allowed: false

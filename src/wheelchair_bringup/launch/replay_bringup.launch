@@ -4,7 +4,7 @@
   <arg name="route_policy" default="$(find wheelchair_navigation)/config/hanyang_routes.yaml"/>
   <arg name="route_policy_sha256" default="1d8ea6fc5911493b2667eae45176372c26818431b646670853e2e7b0e0cec23a"/>
   <arg name="route_safety_policy" default="$(find wheelchair_route_safety)/config/route_safety_sim.yaml"/>
-  <arg name="route_safety_policy_sha256" default="596598a135ba9d4a3ceef9018dfdab37f1095b93a5610fd890570e3055446386"/>
+  <arg name="route_safety_policy_sha256" default="e71aa4ad257c8ae94dc1de4f52c5d7223880c93daef72f8b3b9b143812c11890"/>
   <arg name="localization_policy" default="$(find wheelchair_navigation)/config/localization_confidence.yaml"/>
   <arg name="localization_policy_sha256" default="4444444444444444444444444444444444444444444444444444444444444444"/>
   <arg name="collision_policy" default="$(find wheelchair_safety)/config/collision_policy.yaml"/>

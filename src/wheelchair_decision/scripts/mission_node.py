@@ -91,20 +91,34 @@ def _move_base_failure_reason(reason: Any) -> bool:
     ))
 
 
+_A06_SIMULATION_ZONE_BINDINGS = {
+    (
+        "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc",
+        "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278",
+    ): ("zone-simulation-candidate", "candidate-unsurveyed"),
+}
 _SPEED_ZONE_IDS = {
     "campus-road": "road",
     "north-sidewalk": "sidewalk",
-    "candidate-unsurveyed": "simulation_unsurveyed",
 }
 
 
-def classify_speed_zone(zone_ids: Any) -> str:
-    """Classify only exact, surveyed zone identifiers."""
-    normalized = {str(zone_id).strip().lower() for zone_id in zone_ids}
-    normalized.discard("")
-    classifications = {_SPEED_ZONE_IDS.get(zone_id) for zone_id in normalized}
-    if len(classifications) == 1 and None not in classifications:
-        return classifications.pop()
+def classify_speed_zone(zone_ids: Any, safety_manifest_sha256: str = "",
+                        map_sha256: str = "") -> str:
+    """Classify exact zone IDs, including the frozen A06/navigation tuple."""
+    values = tuple(zone_ids)
+    if not values or any(not isinstance(zone_id, str) or not zone_id for zone_id in values):
+        raise ValueError("active zone is not speed classified")
+    unique = frozenset(values)
+    for binding, simulation_tuple in _A06_SIMULATION_ZONE_BINDINGS.items():
+        if unique == frozenset(simulation_tuple):
+            if (safety_manifest_sha256, map_sha256) != binding:
+                raise ValueError("simulation zone binding mismatch")
+            return "simulation_unsurveyed"
+    if len(unique) == 1:
+        classification = _SPEED_ZONE_IDS.get(next(iter(unique)))
+        if classification is not None:
+            return classification
     raise ValueError("active zone is not speed classified")
 
 
@@ -116,6 +130,59 @@ def next_waypoint_index(reached_index: int, waypoint_count: int) -> int:
             or reached_index >= waypoint_count):
         raise ValueError("invalid route progress index")
     return min(reached_index + 1, waypoint_count - 1)
+@dataclass
+class RouteProgressReceipt:
+    """Reject replayed, stale, or unbound progress before it reaches the FSM."""
+
+    freshness_s: float = 0.50
+    _sequence: Optional[int] = None
+    _source_stamp_s: Optional[float] = None
+    _receipt_s: Optional[float] = None
+    _invalid: bool = False
+
+    def reset(self) -> None:
+        self._sequence = None
+        self._source_stamp_s = None
+        self._receipt_s = None
+        self._invalid = False
+
+    def accept(self, message: Any, binding: Optional[RouteBinding], receipt_s: float,
+               active_states: tuple, complete_state: int,
+               complete_correlated: bool) -> bool:
+        if binding is None or not math.isfinite(receipt_s) or self._invalid:
+            return False
+        try:
+            source_stamp_s = float(message.header.stamp.to_sec())
+            sequence = int(message.sequence)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        regressed = (
+            (self._sequence is not None and sequence <= self._sequence)
+            or (self._source_stamp_s is not None and source_stamp_s <= self._source_stamp_s)
+            or (self._receipt_s is not None and receipt_s <= self._receipt_s)
+        )
+        if regressed:
+            self._invalid = True
+            return False
+        if (not math.isfinite(source_stamp_s) or source_stamp_s <= 0.0
+                or sequence < 0
+                or message.mission_id != binding.mission_id
+                or message.route_id != binding.route_id
+                or message.map_id != binding.map_id
+                or receipt_s - source_stamp_s < 0.0
+                or receipt_s - source_stamp_s > self.freshness_s):
+            return False
+        if message.state == complete_state:
+            if not complete_correlated:
+                return False
+        elif message.state not in active_states:
+            return False
+        self._sequence = sequence
+        self._source_stamp_s = source_stamp_s
+        self._receipt_s = receipt_s
+        return True
+
+
 @dataclass
 class RouteActiveHeartbeat:
     """Schedule route ownership receipts against a reset-independent clock."""
@@ -299,15 +366,18 @@ class MissionRuntime:
     def operator_arm(self) -> None:
         with self._lock:
             state = _enum_name(self.output.state if self.output is not None else self._fsm.state)
-            if state != "DISARMED":
-                raise ValueError("arm is only valid while disarmed")
+            if state != "DISARMED" or (
+                    self.output is not None
+                    and str(getattr(self.output, "goal_state", "none")) == "canceling"):
+                raise ValueError("arm is only valid after cancellation acknowledgement")
             self.armed_by_operator = True
 
     def operator_reset(self) -> Any:
         with self._lock:
             output = self.dispatch("RESET")
-            if _enum_name(output.state) != "DISARMED":
-                raise ValueError("reset is only valid after a terminal fault or result")
+            if (_enum_name(output.state) != "DISARMED"
+                    or str(getattr(output, "goal_state", "none")) == "canceling"):
+                raise ValueError("reset requires terminal cancellation acknowledgement")
             self._action.cancel_goal()
             self.fault_latched = False
             self.armed_by_operator = False
@@ -431,6 +501,7 @@ def main() -> None:
     active_lock = threading.Lock()
     sequence = 0
     publication_limiter = PublicationLimiter(intent_period)
+    progress_receipt = RouteProgressReceipt()
     policy_inputs = {
         "progress": None,
         "geofence": None,
@@ -519,11 +590,15 @@ def main() -> None:
         localization = policy_inputs["localization"]
         zone_ids = []
         if geofence is not None:
-            zone_ids.append(str(geofence.zone_id).lower())
+            zone_ids.append(geofence.zone_id)
         if localization is not None:
-            zone_ids.append(str(localization.zone_id).lower())
-        zone_ids.extend(str(zone).lower() for zone in segment.zone_ids)
-        zone = classify_speed_zone(zone_ids)
+            zone_ids.append(localization.zone_id)
+        zone_ids.extend(segment.zone_ids)
+        binding = runtime.binding
+        if binding is None:
+            raise ValueError("route binding unavailable")
+        zone = classify_speed_zone(
+            zone_ids, binding.safety_manifest_sha256, binding.map_sha256)
         if zone == "road":
             zone_cap = policy_config.road_cap_mps
         elif zone == "sidewalk":
@@ -660,6 +735,7 @@ def main() -> None:
         nonlocal activation_sequence
         with active_lock:
             if new_activation:
+                progress_receipt.reset()
                 activation_sequence += 1
             selected_sequence = activation_sequence
         message = ActiveRoute()
@@ -829,39 +905,30 @@ def main() -> None:
 
     def progress_cb(msg: Any) -> None:
         nonlocal latest_progress
+        binding = runtime.binding
+        output = runtime.output
+        state_name = (_enum_name(output.state) if output is not None else "DISARMED")
+        complete_correlated = bool(
+            output is not None
+            and str(getattr(output, "terminal_status", "")) == "SUCCEEDED"
+            and str(getattr(output, "goal_state", "")) == "none"
+        )
+        if not progress_receipt.accept(
+                msg, binding, rospy.Time.now().to_sec(),
+                (RouteProgress.ACTIVE, RouteProgress.AT_STOP),
+                RouteProgress.COMPLETE, complete_correlated):
+            return
         latest_progress = msg
         policy_inputs["progress"] = msg
         policy_inputs["arrival"]["progress"] = time.monotonic()
-        identity_valid = (
-            runtime.binding is not None
-            and msg.mission_id == runtime.binding.mission_id
-            and msg.route_id == runtime.binding.route_id
-            and msg.map_id == runtime.binding.map_id
-        )
-        state_name = (_enum_name(runtime.output.state)
-                      if runtime.output is not None else "DISARMED")
         if state_name == "LOCALIZING":
-            if msg.state == RouteProgress.INACTIVE:
-                return
-            seed_valid = identity_valid and msg.state in (
-                RouteProgress.ACTIVE, RouteProgress.AT_STOP)
-            seed = -1
-            if seed_valid:
-                seed = next_waypoint_index(
-                    int(msg.waypoint_index),
-                    len(runtime.binding.route.waypoints),
-                )
+            seed = next_waypoint_index(
+                int(msg.waypoint_index), len(binding.route.waypoints))
             dispatch("PROGRESS", seed, msg.header.stamp)
             return
-        if state_name != "NAVIGATING":
+        if state_name != "NAVIGATING" or msg.state == RouteProgress.COMPLETE:
             return
-        current = int(runtime.output.progress)
-        complete = msg.state == RouteProgress.COMPLETE
-        active_valid = identity_valid and msg.state in (
-            RouteProgress.ACTIVE, RouteProgress.AT_STOP, RouteProgress.COMPLETE)
-        complete_valid = (not complete or int(msg.waypoint_index)
-                          == len(runtime.binding.route.waypoints) - 1)
-        value = max(current, int(msg.waypoint_index)) if active_valid and complete_valid else -1
+        value = max(int(output.progress), int(msg.waypoint_index))
         dispatch("PROGRESS", value, msg.header.stamp)
     def odometry_cb(msg: Any) -> None:
         policy_inputs["odometry_speed_mps"] = abs(float(msg.twist.twist.linear.x))

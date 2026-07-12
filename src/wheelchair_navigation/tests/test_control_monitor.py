@@ -19,6 +19,21 @@ def velocity(value, stamp, angular=0.0):
     return control_monitor.TimedVelocity(value, angular, stamp, stamp)
 
 
+HASH_A = "a" * 64
+HASH_B = "b" * 64
+
+
+def active_route(stamp, activation=1, mission_id="mission-a", route_id="route-a",
+                 map_id="map-a", route_hash=HASH_A):
+    return control_monitor.ActiveRouteObservation(
+        activation, 1, mission_id, route_id, map_id, HASH_A, route_hash, HASH_B, stamp, stamp)
+
+
+def lifecycle(stamp, state=3, mission_id="mission-a", route_id="route-a", map_id="map-a"):
+    return control_monitor.MissionLifecycleObservation(
+        state, mission_id, route_id, map_id, stamp, stamp)
+
+
 def complete_inputs(now, nav=0.2, safe=0.2, actual=0.2, angular=0.0,
                     cross_track=0.0, behavior=control_monitor.PROCEED,
                     linear_cap=0.4, angular_cap=0.6, safety_state=control_monitor.CLEAR,
@@ -30,8 +45,10 @@ def complete_inputs(now, nav=0.2, safe=0.2, actual=0.2, angular=0.0,
         route=control_monitor.RouteObservation(
             now, cross_track, 10.0 - now, source, now,
             "mission-a", "route-a", "map-a", "segment-a", 0,
-            control_monitor.ACTIVE, sequence, 0, 9),
+            control_monitor.ACTIVE, sequence),
         odom=control_monitor.TimedVelocity(actual, angular, source, now),
+        active_route=active_route(source),
+        mission_lifecycle=lifecycle(source),
         nav_command=velocity(nav, now, angular),
         safe_command=velocity(safe, now, angular),
         intent=control_monitor.IntentObservation(behavior, linear_cap, angular_cap, source, now),
@@ -152,75 +169,69 @@ def test_safety_stop_and_nonfinite_time_never_create_an_authority_output():
     assert "nonfinite" in invalid_time.faults
     assert not hasattr(core, "publish_command")
     assert not hasattr(stopped, "command")
-def test_route_samples_reject_stale_regressed_identity_and_invalid_state_without_bias():
+def test_route_progress_accepts_monotonic_waypoint_and_segment_transition():
     core = control_monitor.ControlMonitorCore()
-    accepted = core.observe(complete_inputs(20.00, cross_track=0.1))
-    wrong_identity = core.observe(dataclasses.replace(
-        complete_inputs(20.05, cross_track=9.0),
-        route=dataclasses.replace(complete_inputs(20.05).route, cross_track_m=9.0,
-                                  route_id="forged-route")))
-    regressed = core.observe(dataclasses.replace(
-        complete_inputs(20.10, cross_track=8.0),
-        route=dataclasses.replace(complete_inputs(20.10).route, cross_track_m=8.0,
-                                  sequence=accepted.sequence)))
-    invalid = core.observe(dataclasses.replace(
-        complete_inputs(20.15, cross_track=7.0),
-        route=dataclasses.replace(complete_inputs(20.15).route, cross_track_m=7.0,
-                                  state=control_monitor.INACTIVE)))
-    stale = core.observe(dataclasses.replace(
-        complete_inputs(20.20, cross_track=6.0),
-        route=dataclasses.replace(complete_inputs(20.20).route, cross_track_m=6.0,
-                                  source_stamp_s=19.69)))
-    assert "route_identity_mismatch" in wrong_identity.faults
-    assert "route_sequence_regression" in regressed.faults
-    assert "route_invalid_state" in invalid.faults
-    assert "route_stale" in stale.faults
-    assert stale.route_rejected_sample_count == 4
-    assert stale.route_rejection_counts == {
-        "identity_mismatch": 1, "sequence_regression": 1, "invalid_state": 1, "stale": 1,
-    }
-    assert stale.cross_track_mean_m == accepted.cross_track_mean_m == 0.1
+    first = core.observe(dataclasses.replace(
+        complete_inputs(20.00, cross_track=0.1),
+        route=dataclasses.replace(complete_inputs(20.00).route, cross_track_m=0.1, waypoint_index=3)))
+    transitioned = core.observe(dataclasses.replace(
+        complete_inputs(20.05, cross_track=0.2),
+        route=dataclasses.replace(complete_inputs(20.05).route, cross_track_m=0.2,
+                                 segment_id="segment-b", waypoint_index=4)))
+    assert not first.route_rejection_counts
+    assert not transitioned.route_rejection_counts
+    assert math.isclose(transitioned.cross_track_mean_m, 0.15)
 
 
-def test_route_complete_requires_bound_terminal_and_independent_terminal_action_evidence():
+def test_route_progress_rejects_old_activation_replay_identity_and_stale_samples():
     core = control_monitor.ControlMonitorCore()
     core.observe(complete_inputs(21.00, cross_track=0.1))
-    forged_waypoint = core.observe(dataclasses.replace(
-        complete_inputs(21.05, cross_track=4.0),
-        route=dataclasses.replace(complete_inputs(21.05).route, cross_track_m=4.0,
-                                  state=control_monitor.COMPLETE, waypoint_index=8,
-                                  action_terminal=True)))
-    forged_action = core.observe(dataclasses.replace(
-        complete_inputs(21.10, cross_track=3.0),
-        route=dataclasses.replace(complete_inputs(21.10).route, cross_track_m=3.0,
-                                  state=control_monitor.COMPLETE, waypoint_index=9)))
-    complete = core.observe(dataclasses.replace(
-        complete_inputs(21.15, cross_track=0.2),
-        route=dataclasses.replace(complete_inputs(21.15).route, cross_track_m=0.2,
-                                  state=control_monitor.COMPLETE, waypoint_index=9,
-                                  action_terminal=True)))
-    assert "route_terminal_waypoint" in forged_waypoint.faults
-    assert "route_terminal_action" in forged_action.faults
-    assert math.isclose(complete.cross_track_mean_m, 0.15)
-    assert complete.route_rejected_sample_count == 2
+    old_activation = core.observe(dataclasses.replace(
+        complete_inputs(21.05, cross_track=9.0),
+        active_route=active_route(21.05, activation=2, route_id="route-b"),
+        route=dataclasses.replace(complete_inputs(21.05).route, cross_track_m=9.0,
+                                 route_id="route-b", source_stamp_s=21.04)))
+    replay = core.observe(dataclasses.replace(
+        complete_inputs(21.10, cross_track=8.0),
+        active_route=active_route(21.10, activation=2, route_id="route-b"),
+        route=dataclasses.replace(complete_inputs(21.10).route, cross_track_m=8.0,
+                                 route_id="route-b", sequence=1, source_stamp_s=21.04)))
+    wrong_hash = core.observe(dataclasses.replace(
+        complete_inputs(21.15, cross_track=7.0),
+        active_route=active_route(21.15, activation=2, route_id="route-b",
+                                  route_hash="c" * 64),
+        route=dataclasses.replace(complete_inputs(21.15).route, cross_track_m=7.0, route_id="route-b")))
+    stale = core.observe(dataclasses.replace(
+        complete_inputs(21.20, cross_track=6.0),
+        active_route=active_route(21.20, activation=2, route_id="route-b"),
+        route=dataclasses.replace(complete_inputs(21.20).route, cross_track_m=6.0,
+                                 route_id="route-b", source_stamp_s=20.69)))
+    assert "route_pre_activation" in old_activation.faults
+    assert "route_pre_activation" in replay.faults
+    assert "route_active_identity_mismatch" in wrong_hash.faults
+    assert "route_stale" in stale.faults
 
 
-def test_route_generation_reset_is_explicit_and_resets_only_route_monotonic_state():
+def test_activation_replacement_resets_metrics_and_complete_requires_owned_lifecycle():
     core = control_monitor.ControlMonitorCore()
     core.observe(complete_inputs(22.00, cross_track=0.1))
-    drift = core.observe(dataclasses.replace(
-        complete_inputs(22.05, cross_track=5.0),
-        route=dataclasses.replace(complete_inputs(22.05).route, cross_track_m=5.0,
-                                  route_id="route-b")))
-    same_binding = core.observe(dataclasses.replace(
-        complete_inputs(22.10, cross_track=0.2),
-        route=dataclasses.replace(complete_inputs(22.10).route, cross_track_m=0.2,
-                                  sequence=2210)))
-    new_generation = core.observe(dataclasses.replace(
-        complete_inputs(22.15, cross_track=0.3),
-        route=dataclasses.replace(complete_inputs(22.15).route, cross_track_m=0.3,
-                                  route_id="route-b", route_generation=1, sequence=1)))
-    assert "route_identity_mismatch" in drift.faults
-    assert same_binding.route_rejected_sample_count == 1
-    assert "route_generation_reset" in new_generation.events
-    assert math.isclose(new_generation.cross_track_mean_m, (0.1 + 0.2 + 0.3) / 3.0)
+    replacement = core.observe(dataclasses.replace(
+        complete_inputs(22.05, cross_track=0.3),
+        active_route=active_route(22.05, activation=2, route_id="route-b"),
+        route=dataclasses.replace(complete_inputs(22.05).route, cross_track_m=0.3, route_id="route-b")))
+    rejected_complete = core.observe(dataclasses.replace(
+        complete_inputs(22.10, cross_track=0.4),
+        active_route=active_route(22.10, activation=2, route_id="route-b"),
+        route=dataclasses.replace(complete_inputs(22.10).route, cross_track_m=0.4, route_id="route-b",
+                                 state=control_monitor.COMPLETE),
+        mission_lifecycle=lifecycle(22.10)))
+    accepted_complete = core.observe(dataclasses.replace(
+        complete_inputs(22.15, cross_track=0.5),
+        active_route=active_route(22.15, activation=2, route_id="route-b"),
+        route=dataclasses.replace(complete_inputs(22.15).route, cross_track_m=0.5, route_id="route-b",
+                                 state=control_monitor.COMPLETE),
+        mission_lifecycle=lifecycle(22.15, state=6, route_id="route-b")))
+    assert "route_activation_reset" in replacement.events
+    assert replacement.cross_track_mean_m == 0.3
+    assert "route_terminal_lifecycle" in rejected_complete.faults
+    assert math.isclose(accepted_complete.cross_track_mean_m, 0.4)
