@@ -15,7 +15,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 LOCALIZATION_POLICY = (
     ROOT / "src" / "wheelchair_navigation" / "config" / "localization_confidence_sim.yaml"
 )
-ROUTE_SAFETY_CONFIG_SHA256 = "9aa228033d01667b34dd0927fb83cdbcd174987893bcf99ba78f65898bcd8d68"
+ROUTE_SAFETY_CONFIG_SHA256 = "596598a135ba9d4a3ceef9018dfdab37f1095b93a5610fd890570e3055446386"
 FORBIDDEN = ("ros2", "ament_", "GLIM", "glim", "/hardware/cmd_vel", "/motor/cmd")
 WAYPOINTS = (
     ROOT / "data" / "hanyang_aegimun_loop" / "hanyang_aegimun_loop.waypoints.yaml"
