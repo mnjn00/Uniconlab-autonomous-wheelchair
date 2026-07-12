@@ -124,6 +124,25 @@ class FailClosedTests(unittest.TestCase):
         self.assertEqual(result.state, slope.UNKNOWN)
         self.assertTrue(result.reason_mask & slope.SENSOR_STALE)
 
+    def test_future_source_tolerance_boundary_and_time_regression(self):
+        for skew, expected_clock in (
+            (slope.FUTURE_TOLERANCE_S - 1.0e-6, False),
+            (slope.FUTURE_TOLERANCE_S, False),
+            (slope.FUTURE_TOLERANCE_S + 1.0e-6, True),
+        ):
+            result = decide(
+                valid_core(),
+                now=1.0,
+                source_stamp_s=1.0 + skew,
+                receipt_stamp_s=1.0,
+            )
+            self.assertEqual(bool(result.reason_mask & slope.CLOCK), expected_clock)
+            self.assertGreaterEqual(result.input_age_s, 0.0)
+        core = valid_core()
+        decide(core, now=1.0, source_stamp_s=0.9, receipt_stamp_s=0.95)
+        regression = decide(core, now=0.99, source_stamp_s=0.95, receipt_stamp_s=0.98)
+        self.assertTrue(regression.reason_mask & slope.CLOCK)
+
     def test_uncalibrated_stops(self):
         result = decide(slope.SlopeSupervisorCore())
         self.assertEqual(result.state, slope.UNKNOWN)
@@ -273,6 +292,17 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.node._zone_cb(self.message(sequence=4, source="forged"))
         self.assertEqual(self.node.zone, "unknown")
 
+    def test_zone_future_evaluation_tolerance_boundary(self):
+        for skew, accepted in (
+            (slope.FUTURE_TOLERANCE_S - 1.0e-6, True),
+            (slope.FUTURE_TOLERANCE_S, True),
+            (slope.FUTURE_TOLERANCE_S + 1.0e-6, False),
+        ):
+            self.setUp()
+            self.node._zone_cb(self.message(
+                evaluation_stamp=self.stamp(10.0 + skew),
+            ))
+            self.assertEqual(self.node.zone == "normal", accepted)
     def test_restrictive_structured_policy_cannot_be_masked_by_normal_label(self):
         self.node._zone_cb(self.message(zone_id="zone-manual"))
         self.assertEqual(self.node.zone, "manual_only")

@@ -38,6 +38,7 @@ INPUT_UNKNOWN = 1 << 31
 GEOFENCE = 1 << 3
 ROUTE_STATE = 1 << 32
 IMU_STALE = 1 << 34
+FUTURE_TOLERANCE_S = 0.05
 
 Vector3 = Tuple[float, float, float]
 Quaternion = Tuple[float, float, float, float]
@@ -524,12 +525,12 @@ class SlopeSupervisorCore:
             diagnostics["transform_age_s"] = transform_age
             source_age = now - source_stamp
             receipt_age = now - receipt_stamp
-            diagnostics["input_age_s"] = max(source_age, receipt_age)
+            diagnostics["input_age_s"] = max(0.0, source_age, receipt_age)
             if (
                 not time_valid
-                or source_age < 0.0
+                or source_age < -FUTURE_TOLERANCE_S - 1.0e-12
                 or receipt_age < 0.0
-                or receipt_stamp < source_stamp
+                or receipt_stamp - source_stamp < -FUTURE_TOLERANCE_S - 1.0e-12
                 or (self._last_now is not None and now < self._last_now)
                 or (self._last_source_stamp is not None and source_stamp <= self._last_source_stamp)
             ):
@@ -859,7 +860,7 @@ class SlopeSupervisorRosNode:
                 and state == 0
                 and reason_mask in (INPUT_UNKNOWN | GEOFENCE, TF | GEOFENCE)
                 and evaluation_stamp > 0.0
-                and evaluation_stamp <= receipt_stamp
+                and receipt_stamp - evaluation_stamp >= -FUTURE_TOLERANCE_S - 1.0e-12
                 and receipt_stamp - evaluation_stamp <= policy.route_zone_ttl_s
                 and segment_id == ""
                 and zone_id == ""
@@ -890,7 +891,7 @@ class SlopeSupervisorRosNode:
             if (
                 source_stamp <= 0.0
                 or source_stamp > evaluation_stamp
-                or evaluation_stamp > receipt_stamp
+                or receipt_stamp - evaluation_stamp < -FUTURE_TOLERANCE_S - 1.0e-12
                 or receipt_stamp - evaluation_stamp > policy.route_zone_ttl_s
                 or self._zone_sequence_high_water is not None
                 and sequence <= self._zone_sequence_high_water
