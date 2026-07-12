@@ -312,6 +312,17 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.assertEqual(self.node.zone_receipt_stamp_s, 10.0)
         self.assertTrue(self.node._initial_zone_bootstrap_active)
 
+    def test_simulation_bootstrap_accepts_exact_tf_reason_only(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(reason_mask=slope.TF | slope.GEOFENCE))
+        self.assertEqual(self.node.zone, "normal")
+        self.assertTrue(self.node._initial_zone_bootstrap_active)
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            reason_mask=slope.TF | slope.GEOFENCE | slope.INPUT_UNKNOWN,
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+
     def test_zero_time_bootstrap_preserves_without_refresh(self):
         self._enable_bootstrap()
         self.node.zone_receipt_stamp_s = 9.0

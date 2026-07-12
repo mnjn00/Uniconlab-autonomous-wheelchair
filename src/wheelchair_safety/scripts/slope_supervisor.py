@@ -808,7 +808,7 @@ class SlopeSupervisorRosNode:
                 and evaluation_stamp == 0.0
                 and receipt_stamp == 0.0
                 and state == 0
-                and reason_mask == (INPUT_UNKNOWN | GEOFENCE)
+                and reason_mask in (INPUT_UNKNOWN | GEOFENCE, TF | GEOFENCE)
                 and segment_id == ""
                 and zone_id == ""
                 and self._initial_zone_bootstrap_active
@@ -819,7 +819,7 @@ class SlopeSupervisorRosNode:
                 source_stamp >= 0.0
                 and source_stamp <= evaluation_stamp
                 and state == 0
-                and reason_mask == (INPUT_UNKNOWN | GEOFENCE)
+                and reason_mask in (INPUT_UNKNOWN | GEOFENCE, TF | GEOFENCE)
                 and evaluation_stamp > 0.0
                 and evaluation_stamp <= receipt_stamp
                 and receipt_stamp - evaluation_stamp <= policy.route_zone_ttl_s
