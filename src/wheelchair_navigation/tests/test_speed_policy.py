@@ -14,7 +14,8 @@ from wheelchair_navigation.speed_policy import (
 
 
 SLOPE_HASH = "171d0febf5f3a691d1500d7b7839ef8f4a04637545b79dcb95d825bead7f6d0d"
-COLLISION_HASH = "e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1"
+COLLISION_POLICY = Path(__file__).parents[2] / "wheelchair_safety" / "config" / "collision_policy.yaml"
+COLLISION_HASH = yaml.safe_load(COLLISION_POLICY.read_text(encoding="utf-8"))["policy_sha256"]
 LOCALIZATION_HASH = "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"
 
 CONFIG = Path(__file__).parents[1] / "config" / "speed_policy.yaml"
@@ -97,6 +98,11 @@ class SpeedPolicyConfigTests(unittest.TestCase):
         raw["simulation_unsurveyed_cap_mps"] = 0.21
         with self.assertRaises(SpeedPolicyError):
             SpeedPolicyConfig.from_mapping(raw)
+
+    def test_committed_policy_binds_embedded_collision_policy_identity(self):
+        speed_policy = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+        collision_policy = yaml.safe_load(COLLISION_POLICY.read_text(encoding="utf-8"))
+        self.assertEqual(speed_policy["collision_policy_sha256"], collision_policy["policy_sha256"])
 
     def test_committed_policy_allows_one_10hz_period_plus_bounded_jitter(self):
         raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))

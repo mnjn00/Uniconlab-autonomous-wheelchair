@@ -8,7 +8,7 @@
   <arg name="localization_policy" default="$(find wheelchair_navigation)/config/localization_confidence.yaml"/>
   <arg name="localization_policy_sha256" default="4444444444444444444444444444444444444444444444444444444444444444"/>
   <arg name="collision_policy" default="$(find wheelchair_safety)/config/collision_policy.yaml"/>
-  <arg name="collision_policy_sha256" default="e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1"/>
+  <arg name="collision_policy_sha256" default="5850bb0cd84bc04f4f9cdc78cd347640a3f60f66241ad3f37c196ad63cbeba18"/>
   <arg name="slope_policy" default="$(find wheelchair_safety)/config/slope_policy.yaml"/>
   <arg name="slope_policy_sha256" default="171d0febf5f3a691d1500d7b7839ef8f4a04637545b79dcb95d825bead7f6d0d"/>
   <arg name="map_id" default="hanyang_aegimun_loop"/>
