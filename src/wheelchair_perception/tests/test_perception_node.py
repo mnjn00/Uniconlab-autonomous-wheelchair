@@ -8,6 +8,7 @@ import threading
 import time
 import types
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "perception_node.py"
@@ -125,11 +126,37 @@ class ImuCacheTests(unittest.TestCase):
             equal_receipt.add(imu_message(10.1), receipt_s=10.0)
 
         future = perception_node.ImuCache(max_future_s=0.05)
-        future.add(imu_message(10.0), receipt_s=10.0)
+        future.add(imu_message(10.0), receipt_s=1.0, source_now_s=10.0)
         with self.assertRaisesRegex(ValueError, "E_IMU_FUTURE"):
-            future.add(imu_message(10.2), receipt_s=10.1)
+            future.add(imu_message(10.2), receipt_s=2.0, source_now_s=10.1)
         self.assertIsNone(future.aligned(10.2))
         self.assertEqual("E_IMU_FUTURE", future.diagnostics()["imu_chronology_failure"])
+    def test_distinct_receipts_accept_increasing_sources_at_one_source_time(self):
+        cache = perception_node.ImuCache(max_future_s=0.05)
+        first = cache.add(imu_message(10.0), receipt_s=100.0, source_now_s=10.0)
+        second = cache.add(imu_message(10.01), receipt_s=100.001, source_now_s=10.0)
+
+        self.assertIs(first, cache.aligned(10.0))
+        self.assertIs(second, cache.aligned(10.01))
+        self.assertEqual("", cache.diagnostics()["imu_chronology_failure"])
+
+    def test_adapter_uses_monotonic_receipts_when_ros_time_is_unchanged(self):
+        node = perception_node.PerceptionNode.__new__(perception_node.PerceptionNode)
+        node._imu_cache = perception_node.ImuCache(max_future_s=0.05)
+        node._rejected = 0
+        node._rospy = types.SimpleNamespace(
+            Time=types.SimpleNamespace(now=lambda: Stamp(10.0))
+        )
+
+        with mock.patch.object(
+            perception_node.time, "monotonic", side_effect=(100.0, 100.001)
+        ):
+            node._on_imu(imu_message(10.0))
+            node._on_imu(imu_message(10.01))
+
+        self.assertEqual(0, node._rejected)
+        self.assertEqual(10.01, node._imu_cache.aligned(10.01).stamp_s)
+        self.assertEqual("", node._imu_cache.diagnostics()["imu_chronology_failure"])
 
     def test_ordinary_gaps_are_recorded_without_invalidating_samples(self):
         cache = perception_node.ImuCache(max_gap_s=0.5, max_skew_s=0.01)

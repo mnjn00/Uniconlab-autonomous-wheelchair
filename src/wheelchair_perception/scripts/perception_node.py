@@ -8,6 +8,7 @@ import math
 import struct
 import threading
 import sys
+import time
 from pathlib import Path
 
 _SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
@@ -243,7 +244,7 @@ class ImuCache:
         self._chronology_failure = code
         raise PointCloudCodecError(code, message)
 
-    def add(self, message, receipt_s=None):
+    def add(self, message, receipt_s=None, source_now_s=None):
         frame_id = str(getattr(getattr(message, "header", None), "frame_id", ""))
         if frame_id != self.expected_frame:
             raise PointCloudCodecError("E_FRAME_MAPPING", "unexpected IMU frame")
@@ -256,6 +257,14 @@ class ImuCache:
             raise PointCloudCodecError("E_IMU_RECEIPT", "invalid IMU receipt time") from exc
         if not math.isfinite(receipt_s):
             raise PointCloudCodecError("E_IMU_RECEIPT", "non-finite IMU receipt time")
+        if source_now_s is None:
+            source_now_s = receipt_s
+        try:
+            source_now_s = float(source_now_s)
+        except (TypeError, ValueError) as exc:
+            raise PointCloudCodecError("E_IMU_SOURCE_NOW", "invalid IMU source-domain now") from exc
+        if not math.isfinite(source_now_s):
+            raise PointCloudCodecError("E_IMU_SOURCE_NOW", "non-finite IMU source-domain now")
         orientation = (
             message.orientation.x,
             message.orientation.y,
@@ -293,10 +302,10 @@ class ImuCache:
                     "E_IMU_RECEIPT_CHRONOLOGY",
                     "IMU receipt time must strictly increase",
                 )
-            if stamp_s > receipt_s + self.max_future_s:
+            if stamp_s > source_now_s + self.max_future_s:
                 self._reject_chronology(
                     "E_IMU_FUTURE",
-                    "IMU source stamp exceeds receipt-time future bound",
+                    "IMU source stamp exceeds source-domain future bound",
                 )
             if self._last_source_stamp_s is not None:
                 self._source_gap_s = stamp_s - self._last_source_stamp_s
@@ -381,7 +390,11 @@ class PerceptionNode:
 
     def _on_imu(self, message):
         try:
-            self._imu_cache.add(message, receipt_s=self._rospy.Time.now().to_sec())
+            self._imu_cache.add(
+                message,
+                receipt_s=time.monotonic(),
+                source_now_s=self._rospy.Time.now().to_sec(),
+            )
         except (PointCloudCodecError, TypeError, ValueError) as exc:
             self._rejected += 1
             self._rospy.logerr_throttle(1.0, "perception rejected IMU: %s", exc)
