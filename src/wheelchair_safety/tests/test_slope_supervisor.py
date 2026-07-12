@@ -198,6 +198,11 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         )
         self.node.zone = "unknown"
         self.node.zone_receipt_stamp_s = -math.inf
+        self.node._initial_zone_bootstrap_active = False
+        self.node._initial_zone_bootstrap_deadline_s = None
+        self.node._bootstrap_zone_sequence_high_water = None
+        self.node._bootstrap_zone_evaluation_high_water_stamp_s = None
+        self.node.operation_mode = "simulation"
         self.node._zone_sequence_high_water = None
         self.node._zone_source_high_water_stamp_s = None
 
@@ -213,9 +218,28 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
             manifest_id=policy.route_safety_manifest_id,
             manifest_sha256=policy.route_safety_manifest_sha256,
             zone_id="zone-normal",
+            route_id="route-a",
+            segment_id="segment-a",
         )
         values.update(overrides)
         return SimpleNamespace(**values)
+    def bootstrap_message(self, **overrides):
+        values = dict(
+            header=SimpleNamespace(stamp=self.stamp(0.0)),
+            evaluation_stamp=self.stamp(9.98),
+            sequence=1,
+            state=0,
+            reason_mask=slope.INPUT_UNKNOWN | slope.GEOFENCE,
+            source=self.node.core.policy.route_safety_source,
+            manifest_id=self.node.core.policy.route_safety_manifest_id,
+            manifest_sha256=self.node.core.policy.route_safety_manifest_sha256,
+            route_id="",
+            segment_id="",
+            zone_id="",
+        )
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
 
     def test_identity_sequence_staleness_and_replay_fail_closed(self):
         self.node._zone_cb(self.message())
@@ -242,6 +266,130 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         ))
         self.assertEqual(self.node.zone, "degraded_stop")
         self.assertEqual(decide(self.node.core, now=2.0, zone=self.node.zone, zone_age_s=0.0).state, slope.STOP)
+    def _enable_bootstrap(self):
+        self.node.zone = "normal"
+        self.node.zone_receipt_stamp_s = 10.0
+        self.node._initial_zone_bootstrap_active = True
+        self.node._initial_zone_bootstrap_deadline_s = 20.1
+        self.node._bootstrap_zone_sequence_high_water = None
+        self.node._bootstrap_zone_evaluation_high_water_stamp_s = None
+
+    def test_bootstrap_deadline_starts_at_first_valid_calibration_receipt(self):
+        self._enable_bootstrap()
+        self.node._initial_zone_bootstrap_deadline_s = None
+        self.node._start_initial_zone_bootstrap_deadline(10.0)
+        self.node._start_initial_zone_bootstrap_deadline(11.0)
+        self.assertEqual(
+            self.node._initial_zone_bootstrap_deadline_s,
+            10.0 + self.node.core.policy.calibration_duration_s
+            + self.node.core.policy.route_zone_ttl_s,
+        )
+
+    def test_simulation_pre_route_stop_preserves_bounded_bootstrap(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message())
+        self.node._refresh_initial_zone_bootstrap(20.1)
+        self.assertEqual(self.node.zone, "normal")
+        self.assertEqual(self.node.zone_receipt_stamp_s, 10.0)
+        self.assertTrue(self.node._initial_zone_bootstrap_active)
+
+    def test_simulation_bootstrap_accepts_active_route_missing_localization_stop(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(route_id="route-a"))
+        self.assertEqual(self.node.zone, "normal")
+        self.assertTrue(self.node._initial_zone_bootstrap_active)
+
+    def test_simulation_bootstrap_requires_exact_reason_and_chronology(self):
+        for message in (
+            self.bootstrap_message(reason_mask=1),
+            self.bootstrap_message(evaluation_stamp=self.stamp(9.89)),
+        ):
+            self._enable_bootstrap()
+            self.node._zone_cb(message)
+            self.assertEqual(self.node.zone, "unknown")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message())
+        self.node._zone_cb(self.bootstrap_message(sequence=2))
+        self.assertEqual(self.node.zone, "unknown")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message())
+        self.node._zone_cb(self.bootstrap_message(
+            sequence=1,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+
+    def test_simulation_bootstrap_accepts_monotonic_zero_source_evidence(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message())
+        self.node._zone_cb(self.bootstrap_message(
+            sequence=2,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.assertEqual(self.node.zone, "normal")
+        self.assertEqual(self.node._zone_source_high_water_stamp_s, None)
+
+    def test_clear_handoff_must_follow_bootstrap_chronology(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message())
+        self.node._zone_cb(self.message(
+            sequence=0,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message())
+        self.node._zone_cb(self.message(
+            sequence=1,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message())
+        self.node._zone_cb(self.message(
+            sequence=2,
+            header=SimpleNamespace(stamp=self.stamp(9.96)),
+            evaluation_stamp=self.stamp(9.98),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+
+    def test_simulation_bootstrap_expires_fail_closed(self):
+        self._enable_bootstrap()
+        self.node._refresh_initial_zone_bootstrap(20.100001)
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
+
+    def test_verified_route_evidence_replaces_simulation_bootstrap(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.message())
+        self.assertEqual(self.node.zone, "normal")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
+
+    def test_route_handoff_never_falls_back_to_bootstrap(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.message())
+        self.node._zone_cb(self.bootstrap_message(sequence=2))
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
+
+    def test_active_route_stop_revokes_simulation_bootstrap(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.message(state=3, reason_mask=1))
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
+
+    def test_malformed_evidence_revokes_simulation_bootstrap(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.message(source="forged"))
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
+
+    def test_non_simulation_bootstrap_is_denied(self):
+        self._enable_bootstrap()
+        self.node.operation_mode = "replay"
+        self.node._refresh_initial_zone_bootstrap(10.01)
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
 
     def test_release_hysteresis_requires_tight_clear_for_full_hold(self):
         core = valid_core()

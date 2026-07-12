@@ -35,6 +35,7 @@ TF = 1 << 20
 HARDWARE_UNVERIFIED = 1 << 24
 CORRUPT_DATA = 1 << 29
 INPUT_UNKNOWN = 1 << 31
+GEOFENCE = 1 << 3
 ROUTE_STATE = 1 << 32
 IMU_STALE = 1 << 34
 
@@ -752,8 +753,15 @@ class SlopeSupervisorRosNode:
             # Precomputed hashes cannot authorize replay, hardware, or unverified input.
             self.core.calibration_state = CAL_UNCALIBRATED
             self.core.calibration_sha256 = ""
-        self.zone = "unknown"
-        self.zone_receipt_stamp_s = -math.inf
+        self.zone = normalize_initial_zone_policy(
+            rospy.get_param("~initial_route_zone_policy", "unknown"),
+            self.operation_mode,
+        )
+        self._initial_zone_bootstrap_active = self.zone == "normal"
+        self._initial_zone_bootstrap_deadline_s = None
+        self.zone_receipt_stamp_s = rospy.Time.now().to_sec() if self._initial_zone_bootstrap_active else -math.inf
+        self._bootstrap_zone_sequence_high_water = None
+        self._bootstrap_zone_evaluation_high_water_stamp_s = None
         self._zone_sequence_high_water = None
         self._zone_source_high_water_stamp_s = None
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(1.0))
@@ -770,11 +778,53 @@ class SlopeSupervisorRosNode:
         try:
             source_stamp = float(msg.header.stamp.to_sec())
             evaluation_stamp = float(msg.evaluation_stamp.to_sec())
-            sequence = int(msg.sequence)
+            sequence = msg.sequence
+            state = msg.state
+            reason_mask = msg.reason_mask
+            route_id = msg.route_id
+            segment_id = msg.segment_id
+            zone_id = msg.zone_id
             if (
-                isinstance(msg.sequence, bool)
+                not isinstance(sequence, int)
+                or isinstance(sequence, bool)
+                or not isinstance(state, int)
+                or isinstance(state, bool)
+                or not isinstance(reason_mask, int)
+                or isinstance(reason_mask, bool)
+                or sequence < 0
+                or state < 0
+                or reason_mask < 0
                 or not all(math.isfinite(value) for value in (source_stamp, evaluation_stamp, receipt_stamp))
-                or source_stamp <= 0.0
+                or msg.source != policy.route_safety_source
+                or msg.manifest_id != policy.route_safety_manifest_id
+                or msg.manifest_sha256 != policy.route_safety_manifest_sha256
+                or not all(isinstance(value, str) for value in (route_id, segment_id, zone_id))
+            ):
+                raise ValueError("invalid route safety identity")
+            if (
+                source_stamp == 0.0
+                and state == 0
+                and reason_mask == (INPUT_UNKNOWN | GEOFENCE)
+                and evaluation_stamp > 0.0
+                and evaluation_stamp <= receipt_stamp
+                and receipt_stamp - evaluation_stamp <= policy.route_zone_ttl_s
+                and segment_id == ""
+                and zone_id == ""
+                and self._initial_zone_bootstrap_active
+                and self.operation_mode == "simulation"
+                and (self._initial_zone_bootstrap_deadline_s is None
+                     or receipt_stamp <= self._initial_zone_bootstrap_deadline_s)
+                and (self._bootstrap_zone_sequence_high_water is None
+                     or sequence > self._bootstrap_zone_sequence_high_water)
+                and (self._bootstrap_zone_evaluation_high_water_stamp_s is None
+                     or evaluation_stamp > self._bootstrap_zone_evaluation_high_water_stamp_s)
+            ):
+                self._bootstrap_zone_sequence_high_water = sequence
+                self._bootstrap_zone_evaluation_high_water_stamp_s = evaluation_stamp
+                self.zone_receipt_stamp_s = receipt_stamp
+                return
+            if (
+                source_stamp <= 0.0
                 or source_stamp > evaluation_stamp
                 or evaluation_stamp > receipt_stamp
                 or receipt_stamp - evaluation_stamp > policy.route_zone_ttl_s
@@ -782,24 +832,48 @@ class SlopeSupervisorRosNode:
                 and sequence <= self._zone_sequence_high_water
                 or self._zone_source_high_water_stamp_s is not None
                 and source_stamp <= self._zone_source_high_water_stamp_s
-                or int(msg.state) != 1
-                or int(msg.reason_mask) != 0
-                or msg.source != policy.route_safety_source
-                or msg.manifest_id != policy.route_safety_manifest_id
-                or msg.manifest_sha256 != policy.route_safety_manifest_sha256
+                or self._bootstrap_zone_sequence_high_water is not None
+                and sequence <= self._bootstrap_zone_sequence_high_water
+                or self._bootstrap_zone_evaluation_high_water_stamp_s is not None
+                and evaluation_stamp <= self._bootstrap_zone_evaluation_high_water_stamp_s
+                or state != 1
+                or reason_mask != 0
+                or not route_id
+                or not segment_id
             ):
-                raise ValueError("invalid route safety chronology or identity")
-            zone_policy = dict(policy.route_zone_policies).get(msg.zone_id)
+                raise ValueError("invalid route safety chronology or clear evidence")
+            zone_policy = dict(policy.route_zone_policies).get(zone_id)
             if zone_policy not in ("normal", "manual_only", "degraded_stop"):
                 raise ValueError("unknown route zone")
         except (AttributeError, TypeError, ValueError, OverflowError):
-            self.zone = "unknown"
-            self.zone_receipt_stamp_s = receipt_stamp
+            self._revoke_initial_zone_bootstrap(receipt_stamp)
             return
         self._zone_sequence_high_water = sequence
         self._zone_source_high_water_stamp_s = source_stamp
+        self._initial_zone_bootstrap_active = False
         self.zone = zone_policy
         self.zone_receipt_stamp_s = receipt_stamp
+
+    def _revoke_initial_zone_bootstrap(self, receipt_stamp):
+        self._initial_zone_bootstrap_active = False
+        self.zone = "unknown"
+        self.zone_receipt_stamp_s = receipt_stamp
+
+    def _start_initial_zone_bootstrap_deadline(self, receipt_stamp):
+        if self._initial_zone_bootstrap_active and self._initial_zone_bootstrap_deadline_s is None:
+            self._initial_zone_bootstrap_deadline_s = (
+                receipt_stamp + self.core.policy.calibration_duration_s + self.core.policy.route_zone_ttl_s
+            )
+
+    def _refresh_initial_zone_bootstrap(self, receipt_stamp):
+        if not self._initial_zone_bootstrap_active:
+            return
+        if (
+            self.operation_mode != "simulation"
+            or self._initial_zone_bootstrap_deadline_s is not None
+            and receipt_stamp > self._initial_zone_bootstrap_deadline_s
+        ):
+            self._revoke_initial_zone_bootstrap(receipt_stamp)
 
     def _reset_calibration_candidate(self):
         self._calibration_samples = []
@@ -812,7 +886,7 @@ class SlopeSupervisorRosNode:
         self, sample, transform_valid, transform_q, transform_translation, transform_stamp
     ):
         if self.core.calibration_state != CAL_CALIBRATING:
-            return
+            return False
         stamp = sample.source_stamp_s
         try:
             normalize_quaternion(sample.quaternion, self.core.policy.quaternion_norm_tolerance)
@@ -827,7 +901,7 @@ class SlopeSupervisorRosNode:
             normalize_quaternion(transform_q, self.core.policy.quaternion_norm_tolerance)
         except (AttributeError, TypeError, ValueError, OverflowError):
             self._reset_calibration_candidate()
-            return
+            return False
         if (
             not transform_valid
             or stamp is None
@@ -837,9 +911,10 @@ class SlopeSupervisorRosNode:
             or not math.isfinite(float(transform_stamp))
         ):
             self._reset_calibration_candidate()
-            return
+            return False
 
         stamp = float(stamp)
+        calibration_sample_valid = True
         if self._calibration_samples:
             previous_stamp = self._calibration_samples[-1].source_stamp_s
             if stamp <= previous_stamp:
@@ -882,6 +957,7 @@ class SlopeSupervisorRosNode:
             if not calibrated:
                 self.core.calibration_state = CAL_CALIBRATING
                 self.core.calibration_sha256 = ""
+        return calibration_sample_valid
 
     def _imu_cb(self, msg):
         rospy = self.rospy
@@ -916,11 +992,15 @@ class SlopeSupervisorRosNode:
             imu_to_base_quaternion=transform_q,
             imu_to_base_translation=transform_translation,
         )
+        calibration_sample_valid = False
         if self.calibration_enabled and self.operation_mode == "simulation":
-            self._observe_calibration_sample(
+            calibration_sample_valid = self._observe_calibration_sample(
                 sample, transform_valid, transform_q, transform_translation, transform_stamp
             )
+        if calibration_sample_valid:
+            self._start_initial_zone_bootstrap_deadline(receipt.to_sec())
         source_stamp_s = msg.header.stamp.to_sec()
+        self._refresh_initial_zone_bootstrap(receipt.to_sec())
         try:
             source_stamp_s = float(source_stamp_s)
             new_source = (
