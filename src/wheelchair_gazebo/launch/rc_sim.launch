@@ -1,0 +1,60 @@
+<launch>
+  <!-- Deterministic, software-only ROS 1 Noetic/Gazebo Classic entry point. -->
+  <arg name="world" default="$(find wheelchair_gazebo)/worlds/wheelchair_rc_scenarios.world"/>
+  <arg name="scenario" default="full_rc_matrix"/>
+  <arg name="seed" default="1701"/>
+  <arg name="gui" default="false"/>
+  <arg name="headless" default="true"/>
+  <arg name="paused" default="false"/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="route_policy" default="$(find wheelchair_navigation)/config/hanyang_routes.yaml"/>
+  <arg name="route_safety_policy" default="$(find wheelchair_route_safety)/config/route_safety_sim.yaml"/>
+  <arg name="localization_policy" default="$(find wheelchair_navigation)/config/localization_confidence.yaml"/>
+  <arg name="collision_policy" default="$(find wheelchair_safety)/config/collision_policy.yaml"/>
+  <arg name="slope_policy" default="$(find wheelchair_safety)/config/slope_policy.yaml"/>
+  <arg name="spawn_x" default="0.0"/>
+  <arg name="spawn_y" default="0.0"/>
+  <arg name="spawn_z" default="0.10"/>
+  <arg name="spawn_yaw" default="0.0"/>
+
+  <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+  <param name="/simulation_only" value="true"/>
+  <param name="/hardware_motion_authorized" value="false"/>
+  <param name="/passenger_operation_authorized" value="false"/>
+  <param name="/wheelchair_gazebo/scenario" value="$(arg scenario)"/>
+  <param name="/wheelchair_gazebo/seed" value="$(arg seed)"/>
+  <param name="/wheelchair_gazebo/policies/route" value="$(arg route_policy)"/>
+  <param name="/wheelchair_gazebo/policies/route_safety" value="$(arg route_safety_policy)"/>
+  <param name="/wheelchair_gazebo/policies/localization" value="$(arg localization_policy)"/>
+  <param name="/wheelchair_gazebo/policies/collision" value="$(arg collision_policy)"/>
+  <param name="/wheelchair_gazebo/policies/slope" value="$(arg slope_policy)"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(arg world)"/>
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="headless" value="$(arg headless)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="extra_gazebo_args" value="--seed $(arg seed)"/>
+  </include>
+
+  <!-- spawn.launch owns robot_description, robot_state_publisher, and Gazebo controllers. -->
+  <include file="$(find wheelchair_gazebo)/launch/spawn.launch">
+    <arg name="x" value="$(arg spawn_x)"/>
+    <arg name="y" value="$(arg spawn_y)"/>
+    <arg name="z" value="$(arg spawn_z)"/>
+    <arg name="yaw" value="$(arg spawn_yaw)"/>
+  </include>
+
+  <!-- Sole simulation sensor ABI boundary; it creates publishers only after
+       checking simulation/time mode and both authority-denial flags. -->
+  <node pkg="wheelchair_gazebo" type="sim_sensor_canonicalizer.py"
+        name="sim_sensor_canonicalizer" output="screen" required="true">
+    <!-- Gazebo-only 200 Hz anti-alias window: 20 samples = 0.10 s horizon. -->
+    <param name="imu_filter_window_samples" value="20"/>
+    <param name="imu_filter_max_gap_ns" value="10000000"/>
+  </node>
+  <!-- Sole simulated actuation path; fixed topics prevent reuse as a hardware boundary. -->
+  <node pkg="wheelchair_gazebo" type="simulation_controller_adapter.py"
+        name="simulation_controller_adapter" output="screen" required="true"/>
+</launch>

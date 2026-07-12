@@ -3,6 +3,8 @@
   <world name="static_dynamic_obstacles">
     <include><uri>model://sun</uri></include>
     <include><uri>model://ground_plane</uri></include>
+    <!-- PGM-derived scan-visible surface proves simulation map/route consistency only; it is not survey, hardware, or passenger evidence. -->
+    <include><uri>model://hanyang_aegimun_occupancy_walls</uri></include>
 
     <model name="sidewalk_slab">
       <static>true</static>

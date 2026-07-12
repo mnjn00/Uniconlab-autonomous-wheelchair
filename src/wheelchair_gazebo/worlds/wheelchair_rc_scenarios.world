@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="wheelchair_rc_scenarios">
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+    <!-- PGM-derived scan-visible surface proves simulation map/route consistency only; it is not survey, hardware, or passenger evidence. -->
+    <include><uri>model://hanyang_aegimun_occupancy_walls</uri></include>
+
+    <physics name="deterministic_ode" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_update_rate>1000</real_time_update_rate>
+      <real_time_factor>1.0</real_time_factor>
+      <ode><solver><type>quick</type><iters>100</iters><sor>1.0</sor></solver></ode>
+    </physics>
+
+    <!-- Narrow, marked sidewalk corridor and raised curbs. -->
+    <model name="ground_truth_narrow_sidewalk">
+      <static>true</static><pose>5 0 0.025 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>10 2.2 0.05</size></box></geometry></collision>
+        <visual name="visual"><geometry><box><size>10 2.2 0.05</size></box></geometry><material><diffuse>0.55 0.55 0.55 1</diffuse></material></visual>
+      </link>
+    </model>
+    <model name="ground_truth_sidewalk_center_marking">
+      <static>true</static><pose>5 0 0.056 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>10 0.04 0.01</size></box></geometry><material><diffuse>1 0.85 0.1 1</diffuse></material></visual></link>
+    </model>
+    <model name="ground_truth_curb_north">
+      <static>true</static><pose>5 1.18 0.10 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>10 0.16 0.20</size></box></geometry></collision><visual name="visual"><geometry><box><size>10 0.16 0.20</size></box></geometry></visual></link>
+    </model>
+    <model name="ground_truth_curb_south">
+      <static>true</static><pose>5 -1.18 0.10 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>10 0.16 0.20</size></box></geometry></collision><visual name="visual"><geometry><box><size>10 0.16 0.20</size></box></geometry></visual></link>
+    </model>
+
+    <!-- Wider road/free-space zone with lane-edge markings. -->
+    <model name="ground_truth_road_free_space">
+      <static>true</static><pose>16 0 0.015 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>12 7 0.03</size></box></geometry></collision><visual name="visual"><geometry><box><size>12 7 0.03</size></box></geometry><material><diffuse>0.18 0.18 0.20 1</diffuse></material></visual></link>
+    </model>
+    <model name="ground_truth_road_edge_north">
+      <static>true</static><pose>16 3.0 0.035 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>12 0.08 0.015</size></box></geometry><material><diffuse>1 1 1 1</diffuse></material></visual></link>
+    </model>
+    <model name="ground_truth_road_edge_south">
+      <static>true</static><pose>16 -3.0 0.035 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>12 0.08 0.015</size></box></geometry><material><diffuse>1 1 1 1</diffuse></material></visual></link>
+    </model>
+
+    <!-- Deterministic slope contexts: 10 degree ascent/descent and 7 degree cross-slope. -->
+    <model name="ground_truth_ramp_uphill_10deg">
+      <static>true</static><pose>25 0 0.435 0 0.174533 0</pose><link name="link"><collision name="collision"><geometry><box><size>5 2.4 0.10</size></box></geometry></collision><visual name="visual"><geometry><box><size>5 2.4 0.10</size></box></geometry><material><diffuse>0.45 0.50 0.55 1</diffuse></material></visual></link>
+    </model>
+    <model name="ground_truth_ramp_downhill_10deg">
+      <static>true</static><pose>30 0 0.435 0 -0.174533 0</pose><link name="link"><collision name="collision"><geometry><box><size>5 2.4 0.10</size></box></geometry></collision><visual name="visual"><geometry><box><size>5 2.4 0.10</size></box></geometry><material><diffuse>0.40 0.48 0.55 1</diffuse></material></visual></link>
+    </model>
+    <model name="ground_truth_cross_slope_7deg">
+      <static>true</static><pose>35 0 0.20 0.122173 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>5 3.2 0.10</size></box></geometry></collision><visual name="visual"><geometry><box><size>5 3.2 0.10</size></box></geometry><material><diffuse>0.50 0.45 0.40 1</diffuse></material></visual></link>
+    </model>
+
+    <model name="ground_truth_static_obstacle_box">
+      <static>true</static><pose>4.5 -0.45 0.40 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>0.65 0.55 0.80</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.65 0.55 0.80</size></box></geometry><material><diffuse>0.1 0.2 0.9 1</diffuse></material></visual></link>
+      <plugin name="ground_truth_static_obstacle_pose" filename="libgazebo_ros_p3d.so">
+        <bodyName>link</bodyName>
+        <topicName>/simulation/ground_truth/static_obstacle</topicName>
+        <frameName>world</frameName>
+        <updateRate>10.0</updateRate>
+        <gaussianNoise>0.0</gaussianNoise>
+      </plugin>
+    </model>
+    <model name="ground_truth_static_obstacle_bollard">
+      <static>true</static><pose>8.0 0.55 0.50 0 0 0</pose><link name="link"><collision name="collision"><geometry><cylinder><radius>0.18</radius><length>1.0</length></cylinder></geometry></collision><visual name="visual"><geometry><cylinder><radius>0.18</radius><length>1.0</length></cylinder></geometry><material><diffuse>1 0.45 0.05 1</diffuse></material></visual></link>
+    </model>
+
+    <!-- L-shaped wall creates a reproducible occluded approach and blind corner. -->
+    <model name="ground_truth_blind_corner_wall_x">
+      <static>true</static><pose>15 1.6 1.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>5 0.25 2</size></box></geometry></collision><visual name="visual"><geometry><box><size>5 0.25 2</size></box></geometry></visual></link>
+    </model>
+    <model name="ground_truth_blind_corner_wall_y">
+      <static>true</static><pose>17.4 2.6 1.0 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>0.25 2.2 2</size></box></geometry></collision><visual name="visual"><geometry><box><size>0.25 2.2 2</size></box></geometry></visual></link>
+    </model>
+    <model name="ground_truth_occluder_parked_van">
+      <static>true</static><pose>12.5 -1.8 0.9 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>3.2 1.5 1.8</size></box></geometry></collision><visual name="visual"><geometry><box><size>3.2 1.5 1.8</size></box></geometry><material><diffuse>0.75 0.75 0.78 1</diffuse></material></visual></link>
+    </model>
+
+    <!-- Native Gazebo actor scripts repeat from fixed poses and simulation time. -->
+    <actor name="ground_truth_crossing_pedestrian">
+      <pose>14 -3 0 0 0 0</pose>
+      <skin><filename>file://media/models/walk.dae</filename><scale>1.0</scale></skin>
+      <animation name="walking"><filename>file://media/models/walk.dae</filename><scale>1.0</scale><interpolate_x>true</interpolate_x></animation>
+      <script><loop>true</loop><delay_start>2.0</delay_start><auto_start>true</auto_start><trajectory id="0" type="walking"><waypoint><time>0</time><pose>14 -3 0 0 0 1.5708</pose></waypoint><waypoint><time>6</time><pose>14 3 0 0 0 1.5708</pose></waypoint><waypoint><time>12</time><pose>14 -3 0 0 0 -1.5708</pose></waypoint></trajectory></script>
+    </actor>
+    <actor name="ground_truth_crossing_car">
+      <pose>19 -4 0 0 0 0</pose>
+      <skin><filename>file://media/models/walk.dae</filename><scale>1.8</scale></skin>
+      <animation name="driving"><filename>file://media/models/walk.dae</filename><scale>0.2</scale><interpolate_x>true</interpolate_x></animation>
+      <script><loop>true</loop><delay_start>5.0</delay_start><auto_start>true</auto_start><trajectory id="1" type="driving"><waypoint><time>0</time><pose>19 -4 0 0 0 1.5708</pose></waypoint><waypoint><time>5</time><pose>19 4 0 0 0 1.5708</pose></waypoint><waypoint><time>10</time><pose>19 -4 0 0 0 -1.5708</pose></waypoint></trajectory></script>
+    </actor>
+
+    <!-- Collision-free ground-truth extents consumed only as scenario labels, never motion authority. -->
+    <model name="ground_truth_geofence_sidewalk"><static>true</static><pose>5 0 -0.02 0 0 0</pose><link name="label"><visual name="visual"><transparency>0.95</transparency><geometry><box><size>10 2.2 0.01</size></box></geometry></visual></link></model>
+    <model name="ground_truth_geofence_road_free_space"><static>true</static><pose>16 0 -0.02 0 0 0</pose><link name="label"><visual name="visual"><transparency>0.95</transparency><geometry><box><size>12 7 0.01</size></box></geometry></visual></link></model>
+  </world>
+</sdf>
