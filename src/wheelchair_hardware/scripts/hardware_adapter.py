@@ -27,7 +27,7 @@ from driver_contract import DriverContractError, load_manifest, preflight
 
 
 _REQUIRED_RUNTIME_EVIDENCE = ("platform_matches", "base_model_matches", "graph_valid")
-_RELEASE_MANIFEST_SCHEMA = "wheelchair-noetic-release-manifest/v1"
+_RELEASE_MANIFEST_SCHEMA = "wheelchair-noetic-release-manifest/v2"
 _RUNTIME_RECEIPT_FIELDS = (
     "schema_version", "status", "driver_manifest_path", "driver_manifest_sha256",
     "release_authority_path", "release_authority_sha256", "bundle_manifest_path",
@@ -35,6 +35,48 @@ _RUNTIME_RECEIPT_FIELDS = (
     "graph_receipt_path", "graph_receipt_sha256", "preflight_receipt_path",
     "preflight_receipt_sha256",
 )
+_RELEASE_INVENTORY_CATEGORIES = (
+    "source_build_metadata", "package_metadata", "interfaces", "python_runtime",
+    "configuration", "launch_configuration", "robot_assets", "contracts", "maps",
+    "routes", "operator_docs", "ci_tools", "qualification_tools",
+    "qualification_evidence",
+)
+_RELEASE_GATE_REPORTS = {
+    "WP0-ABI-001": "evidence/contracts/abi-v1-report.json",
+    "WP1-TOPOLOGY-001": "evidence/topology/command-graph-report.json",
+    "WP1-GEOFENCE-001": "evidence/route-safety/anti-widening-report.json",
+    "WP1-COLLISION-001": "evidence/safety/collision-ttc-report.json",
+    "WP1-SLOPE-001": "evidence/safety/slope-policy-report.json",
+    "WP1-CONTROL-001": "evidence/safety/gate-permission-matrix.json",
+    "WP2-CONVERSION-001": "evidence/conversion/determinism-and-corruption-report.json",
+    "WP3-LOCALIZATION-001": "evidence/localization/confidence-holdout-report.json",
+    "WP3-GLIM-INPUT-001": "evidence/localization/glim-offline-input-report.json",
+    "WP3-GLIM-REPRODUCTION-001": "evidence/localization/glim-offline-reproduction-report.json",
+    "WP3-GLIM-COMPARISON-001": "evidence/localization/glim-offline-comparison-report.json",
+    "WP4-MISSION-001": "evidence/mission/fsm-contract-report.json",
+    "WP6-TIMING-001": "evidence/performance/target-nuc-60min-report.json",
+    "WP6-SIMCLAIM-001": "evidence/simulation/fidelity-claim-report.json",
+    "WP6-ROLLBACK-001": "evidence/release/rollback-drill-report.json",
+    "WP0-HWGATE-NEG-001": "evidence/hardware/hardware-gate-negative-report.json",
+    "WP0-PASSENGER-NEG-001": "evidence/release/passenger-authority-negative-report.json",
+}
+_RELEASE_AUTHORITY = {
+    "software_release_candidate": True,
+    "clean_release_authority": True,
+    "hardware_motion_authorized": False,
+    "passenger_operation_authorized": False,
+    "physical_authority": False,
+    "simulation_or_replay_is_physical_evidence": False,
+}
+_RELEASE_QUALIFICATION = {
+    "target_nuc": "passed",
+    "hardware": "blocked",
+    "passenger": "blocked",
+}
+_RELEASE_RESIDUAL_BLOCKERS = [
+    "hardware_motion_unqualified",
+    "passenger_operation_unqualified",
+]
 
 
 def _bool(value):
@@ -182,49 +224,116 @@ def _strict_json(path, fields, label):
 
 
 def _release_inventory(manifest):
-    if not isinstance(manifest.get("hashes"), dict):
+    hashes = manifest.get("hashes")
+    if not isinstance(hashes, dict) or set(hashes) != set(_RELEASE_INVENTORY_CATEGORIES):
         raise DriverContractError("E_FORMAT", "release inventory is malformed")
     inventory = {}
-    for category in manifest["hashes"].values():
+    digests = {}
+    for name in _RELEASE_INVENTORY_CATEGORIES:
+        category = hashes[name]
         if not isinstance(category, dict) or set(category) != {"digest", "files"}:
             raise DriverContractError("E_FORMAT", "release inventory category is malformed")
         files = category["files"]
-        if not isinstance(files, list):
+        if not isinstance(files, list) or not files or files != sorted(
+                files, key=lambda entry: entry.get("path", "") if isinstance(entry, dict) else ""):
             raise DriverContractError("E_FORMAT", "release inventory files are malformed")
         for entry in files:
+            relative = entry.get("path") if isinstance(entry, dict) else None
+            path = Path(relative) if isinstance(relative, str) else None
             if (not isinstance(entry, dict) or set(entry) != {"path", "sha256", "executable"}
-                    or not isinstance(entry["path"], str) or not _sha256(entry["sha256"])
-                    or type(entry["executable"]) is not bool or entry["path"] in inventory):
+                    or not isinstance(relative, str) or not relative or path.is_absolute()
+                    or ".." in path.parts or not _sha256(entry["sha256"])
+                    or type(entry["executable"]) is not bool or relative in inventory):
                 raise DriverContractError("E_FORMAT", "release inventory entry is malformed")
-            inventory[entry["path"]] = entry["sha256"]
-    if not inventory:
-        raise DriverContractError("E_FORMAT", "release inventory is empty")
-    return inventory
+            inventory[relative] = entry["sha256"]
+        if not _sha256(category["digest"]) or category["digest"] != _canonical_hash(files):
+            raise DriverContractError("E_FORMAT", "release inventory digest is malformed")
+        digests[name] = category["digest"]
+    return inventory, digests
 
 
 def _release_manifest(path):
     release = _strict_json(
         path,
         ("schema", "source", "hashes", "gate_matrix", "authority", "qualification",
-         "test_reports", "known_blockers", "rollback", "release_binding_sha256"),
+         "test_reports", "residual_blockers", "rollback", "release_binding_sha256",
+         "release_signature_hmac_sha256"),
         "release manifest",
     )
-    if release["schema"] != _RELEASE_MANIFEST_SCHEMA or not _sha256(release["release_binding_sha256"]):
-        raise DriverContractError("E_FORMAT", "release manifest schema or binding is invalid")
+    if (release["schema"] != _RELEASE_MANIFEST_SCHEMA
+            or not _sha256(release["release_binding_sha256"])
+            or not _sha256(release["release_signature_hmac_sha256"])):
+        raise DriverContractError("E_FORMAT", "release manifest schema, binding, or signature is invalid")
     unsigned = dict(release)
     unsigned.pop("release_binding_sha256")
+    unsigned.pop("release_signature_hmac_sha256")
     if _canonical_hash(unsigned) != release["release_binding_sha256"]:
         raise DriverContractError("E_FORMAT", "release manifest binding mismatch")
-    source, authority = release["source"], release["authority"]
+    source = release["source"]
     if (not isinstance(source, dict) or set(source) != {"kind", "revision", "worktree_clean"}
             or source["kind"] != "git_commit" or not isinstance(source["revision"], str)
-            or len(source["revision"]) != 40 or not all(c in "0123456789abcdef" for c in source["revision"])
-            or source["worktree_clean"] is not True or not isinstance(authority, dict)
-            or authority.get("hardware_motion_authorized") is not False
-            or authority.get("passenger_operation_authorized") is not False
-            or authority.get("physical_authority") is not False):
+            or len(source["revision"]) != 40
+            or not all(c in "0123456789abcdef" for c in source["revision"])
+            or source["worktree_clean"] is not True
+            or release["authority"] != _RELEASE_AUTHORITY
+            or release["qualification"] != _RELEASE_QUALIFICATION
+            or release["residual_blockers"] != _RELEASE_RESIDUAL_BLOCKERS):
         raise DriverContractError("E_FORMAT", "release manifest authority is invalid")
-    return release, _release_inventory(release)
+    inventory, digests = _release_inventory(release)
+    expected_gates = sorted(_RELEASE_GATE_REPORTS)
+    bindings = {
+        "sourceRevision": source["revision"],
+        "configurationDigest": digests["configuration"],
+        "releaseInputDigest": _canonical_hash({
+            name: digests[name] for name in _RELEASE_INVENTORY_CATEGORIES
+            if name != "qualification_evidence"
+        }),
+    }
+    bindings["bundleDigest"] = _canonical_hash({
+        "source_revision": source["revision"],
+        "configuration_digest": bindings["configurationDigest"],
+        "release_input_digest": bindings["releaseInputDigest"],
+    })
+    matrix = release["gate_matrix"]
+    if (not isinstance(matrix, dict) or set(matrix) != {
+                "requiredGateIds", "passedGateIds", "releaseBindings"}
+            or matrix["requiredGateIds"] != expected_gates
+            or matrix["passedGateIds"] != expected_gates
+            or matrix["releaseBindings"] != bindings):
+        raise DriverContractError("E_FORMAT", "release gate matrix is incomplete or stale")
+    reports = release["test_reports"]
+    expected_paths = sorted(_RELEASE_GATE_REPORTS.values())
+    if (not isinstance(reports, list) or len(reports) != len(expected_paths)
+            or [entry.get("path") if isinstance(entry, dict) else None for entry in reports]
+            != expected_paths):
+        raise DriverContractError("E_FORMAT", "release test reports are malformed")
+    for entry in reports:
+        if (not isinstance(entry, dict) or set(entry) != {"path", "sha256", "executable"}
+                or entry["executable"] is not False or not _sha256(entry["sha256"])
+                or inventory.get(entry["path"]) != entry["sha256"]):
+            raise DriverContractError("E_FORMAT", "release test reports are not inventoried")
+    rollback = release["rollback"]
+    rollback_fields = {
+        "parentReleaseBindingSha256", "parentManifestSha256", "parentManifestPath",
+        "parentInventoryDigest", "restartReceipt",
+    }
+    if (not isinstance(rollback, dict) or set(rollback) != rollback_fields
+            or not all(isinstance(rollback[key], str) and rollback[key]
+                       for key in rollback_fields - {"restartReceipt"})
+            or not all(_sha256(rollback[key]) for key in (
+                "parentReleaseBindingSha256", "parentManifestSha256", "parentInventoryDigest"))
+            or Path(rollback["parentManifestPath"]).is_absolute()
+            or ".." in Path(rollback["parentManifestPath"]).parts):
+        raise DriverContractError("E_FORMAT", "release rollback binding is malformed")
+    restart = rollback["restartReceipt"]
+    if (not isinstance(restart, dict) or set(restart) != {
+                "path", "sha256", "parentReleaseBindingSha256", "parentInventoryDigest"}
+            or not all(isinstance(restart[key], str) and restart[key] for key in restart)
+            or not _sha256(restart["sha256"])
+            or restart["parentReleaseBindingSha256"] != rollback["parentReleaseBindingSha256"]
+            or restart["parentInventoryDigest"] != rollback["parentInventoryDigest"]):
+        raise DriverContractError("E_FORMAT", "release rollback receipt is malformed")
+    return release, inventory
 
 
 def _measured_platform(receipt, manifest):

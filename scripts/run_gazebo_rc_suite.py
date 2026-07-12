@@ -159,7 +159,7 @@ BINDING_SOURCES = {
     ),
     "route_truth": (
         "src/wheelchair_gazebo/config/route_truth_outbound.yaml",
-        "627d3a2e69d2601f4e69045f9be9e95179e42dde612dc91a22bb151247df947e",
+        "ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70",
     ),
 }
 FROZEN_BINDING_OPTIONS = {
@@ -667,6 +667,11 @@ class RosGazeboBackend:
             "fault_id:={}".format(fault_id),
             "scenario_direction:={}".format(direction),
             "world:={}".format(world_file),
+            "route_truth:={}".format(binding["route_truth"]),
+            "route_truth_sha256:={}".format(binding["route_truth_sha256"]),
+            "scenario_sha256:={}".format(binding["scenario_sha256"]),
+            "a13_sha256:={}".format(binding["a13_sha256"]),
+            "claim_tag:={}".format(CLAIM_TAG),
         ]
         descriptor, launch_log = tempfile.mkstemp(
             prefix="gazebo-rc-launch-", suffix=".log")

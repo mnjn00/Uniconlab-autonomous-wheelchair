@@ -11,7 +11,7 @@
     },
     "route_truth": {
       "path": "src/wheelchair_gazebo/config/route_truth_outbound.yaml",
-      "sha256": "627d3a2e69d2601f4e69045f9be9e95179e42dde612dc91a22bb151247df947e"
+      "sha256": "ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70"
     }
   },
   "deterministic_repetitions": 10,

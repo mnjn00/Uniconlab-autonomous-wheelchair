@@ -154,6 +154,34 @@ def test_explicit_direct_and_translated_adapter_modes():
 
     translated["adapter"]["translation_spec_sha256"] = ""
     assert "E_TRANSLATION_SPEC" in codes(translated)
+    translated = authorized_manifest()
+    translated["adapter"] = {
+        "mode": "translated",
+        "ros_package": "synthetic_adapter",
+        "executable": "synthetic_adapter_node",
+        "translation_spec_sha256": "3" * 64,
+    }
+    translated["command"].update({
+        "driver_topic": "/synthetic/driver_command",
+        "message_type": "std_msgs/Float64MultiArray",
+        "message_md5": "4" * 32,
+    })
+    evidence = {"platform_matches": True, "base_model_matches": True, "graph_valid": True}
+    decision = preflight(translated, "hardware_enabled", evidence, SCHEMA)
+    assert validate_manifest(translated, SCHEMA) == ()
+    assert "E_ADAPTER_MODE" in decision.error_codes
+    assert not decision.deployable
+    assert not decision.real_motor_path
+    assert not hardware_adapter._endpoint_authorized(
+        translated,
+        {"release_scope": {"hardware_motion_authorized": True,
+                           "passenger_operation_authorized": True},
+         "blocked_profiles": {"hardware_enabled": {"allowed": True}}},
+        decision,
+        "hardware_enabled",
+        True,
+        dict(evidence, receipt_verified=True),
+    )
 
 
 def test_nonfinite_reversed_and_nonspanning_values_fail_closed():
@@ -266,6 +294,128 @@ def test_either_false_authority_flag_rejects_adapter_boundary():
 
 def _sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def _seal_release(release):
+    unsigned = {
+        key: value for key, value in release.items()
+        if key not in {"release_binding_sha256", "release_signature_hmac_sha256"}
+    }
+    release["release_binding_sha256"] = hardware_adapter._canonical_hash(unsigned)
+    release["release_signature_hmac_sha256"] = "a" * 64
+
+def _drop_inventoried_report(release):
+    category = release["hashes"]["qualification_evidence"]
+    missing_path = release["test_reports"][0]["path"]
+    category["files"] = [
+        entry for entry in category["files"] if entry["path"] != missing_path
+    ]
+    category["digest"] = hardware_adapter._canonical_hash(category["files"])
+
+
+def _v2_release_fixture(tmp_path):
+    report_hashes = {
+        path: hashlib.sha256(path.encode("utf-8")).hexdigest()
+        for path in hardware_adapter._RELEASE_GATE_REPORTS.values()
+    }
+    hashes = {}
+    for category in hardware_adapter._RELEASE_INVENTORY_CATEGORIES:
+        files = [{
+            "path": "inventory/{}.json".format(category),
+            "sha256": hashlib.sha256(category.encode("utf-8")).hexdigest(),
+            "executable": False,
+        }]
+        if category == "qualification_evidence":
+            files.extend({
+                "path": path, "sha256": digest, "executable": False,
+            } for path, digest in report_hashes.items())
+        files.sort(key=lambda entry: entry["path"])
+        hashes[category] = {
+            "files": files,
+            "digest": hardware_adapter._canonical_hash(files),
+        }
+    source = {"kind": "git_commit", "revision": "a" * 40, "worktree_clean": True}
+    digests = {name: hashes[name]["digest"] for name in hashes}
+    release_input = hardware_adapter._canonical_hash({
+        name: digests[name] for name in hardware_adapter._RELEASE_INVENTORY_CATEGORIES
+        if name != "qualification_evidence"
+    })
+    bindings = {
+        "sourceRevision": source["revision"],
+        "configurationDigest": digests["configuration"],
+        "releaseInputDigest": release_input,
+    }
+    bindings["bundleDigest"] = hardware_adapter._canonical_hash({
+        "source_revision": source["revision"],
+        "configuration_digest": bindings["configurationDigest"],
+        "release_input_digest": release_input,
+    })
+    release = {
+        "schema": "wheelchair-noetic-release-manifest/v2",
+        "source": source,
+        "hashes": hashes,
+        "gate_matrix": {
+            "requiredGateIds": sorted(hardware_adapter._RELEASE_GATE_REPORTS),
+            "passedGateIds": sorted(hardware_adapter._RELEASE_GATE_REPORTS),
+            "releaseBindings": bindings,
+        },
+        "authority": deepcopy(hardware_adapter._RELEASE_AUTHORITY),
+        "qualification": deepcopy(hardware_adapter._RELEASE_QUALIFICATION),
+        "test_reports": [
+            {"path": path, "sha256": report_hashes[path], "executable": False}
+            for path in sorted(report_hashes)
+        ],
+        "residual_blockers": list(hardware_adapter._RELEASE_RESIDUAL_BLOCKERS),
+        "rollback": {
+            "parentReleaseBindingSha256": "b" * 64,
+            "parentManifestSha256": "c" * 64,
+            "parentManifestPath": "release/parent.json",
+            "parentInventoryDigest": "d" * 64,
+            "restartReceipt": {
+                "path": "evidence/release/restart.json",
+                "sha256": "e" * 64,
+                "parentReleaseBindingSha256": "b" * 64,
+                "parentInventoryDigest": "d" * 64,
+            },
+        },
+    }
+    _seal_release(release)
+    path = tmp_path / "release-manifest.json"
+    path.write_text(json.dumps(release, sort_keys=True))
+    return path, release
+
+
+def test_v2_release_manifest_requires_signed_software_only_structure(tmp_path):
+    path, release = _v2_release_fixture(tmp_path)
+    parsed, inventory = hardware_adapter._release_manifest(path)
+    assert parsed == release
+    assert not parsed["authority"]["hardware_motion_authorized"]
+    assert inventory[release["test_reports"][0]["path"]] == release["test_reports"][0]["sha256"]
+
+
+@pytest.mark.parametrize(
+    "mutate,reseal",
+    [
+        (lambda release: release.update(schema="wheelchair-noetic-release-manifest/v1"), False),
+        (lambda release: release.pop("release_signature_hmac_sha256"), False),
+        (lambda release: release.update(release_signature_hmac_sha256="not-a-signature"), False),
+        (lambda release: release.update(release_binding_sha256="0" * 64), False),
+        (lambda release: release.update(source={
+            "kind": "worktree", "revision": "worktree:dirty", "worktree_clean": False,
+        }), True),
+        (lambda release: release["authority"].update(hardware_motion_authorized=True), True),
+        (lambda release: release.update(residual_blockers=["hardware_motion_unqualified"]), True),
+        (_drop_inventoried_report, True),
+    ],
+)
+def test_v2_release_manifest_rejects_stale_tampered_or_authority_promoted_cases(
+        tmp_path, mutate, reseal):
+    path, release = _v2_release_fixture(tmp_path)
+    mutate(release)
+    if reseal:
+        _seal_release(release)
+    path.write_text(json.dumps(release, sort_keys=True))
+    with pytest.raises(DriverContractError):
+        hardware_adapter._release_manifest(path)
 
 
 def test_runtime_evidence_rejects_empty_bundle_and_asserted_booleans(tmp_path):

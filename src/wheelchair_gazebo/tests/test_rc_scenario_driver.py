@@ -13,6 +13,12 @@ SCRIPT = PACKAGE / "scripts" / "rc_scenario_driver.py"
 CMAKE = PACKAGE / "CMakeLists.txt"
 SIM_LAUNCH = PACKAGE.parent / "wheelchair_bringup" / "launch" / "sim_bringup.launch"
 SAFETY_LAUNCH = PACKAGE.parent / "wheelchair_safety" / "launch" / "safety.launch"
+REPOSITORY = PACKAGE.parents[1]
+ROUTE_TRUTH = REPOSITORY / "src/wheelchair_gazebo/config/route_truth_outbound.yaml"
+ROUTE_TRUTH_SHA256 = "ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70"
+A13_SHA256 = "f7984b85d8ccf7d0f481f7daa73135109440209ca8c62847c57095da47604123"
+SCENARIO_SHA256 = "d" * 64
+SUITE = REPOSITORY / "scripts/run_gazebo_rc_suite.py"
 
 spec = importlib.util.spec_from_file_location("rc_scenario_driver", str(SCRIPT))
 driver = importlib.util.module_from_spec(spec)
@@ -134,68 +140,52 @@ class FrozenClockRospy(FakeRospy):
 
 
 class ScenarioDriverTests(unittest.TestCase):
-    def setUp(self):
-        self.document = {
-            "immutable": True,
-            "map": {"map_id": "map-a", "sha256": "a" * 64},
-            "safety_manifest_sha256": "b" * 64,
-            "outbound_route": {
-                "route_id": "route-out", "direction": "outbound",
-                "route_manifest_sha256": "c" * 64,
-            },
-            "return_route": {
-                "route_id": "route-back", "direction": "return",
-                "route_manifest_sha256": "c" * 64,
-            },
-        }
-
     def binding(self, direction):
-        raw = yaml.safe_dump(self.document, sort_keys=True).encode("utf-8")
-        temporary = tempfile.NamedTemporaryFile(delete=False)
-        self.addCleanup(Path(temporary.name).unlink)
-        temporary.write(raw)
-        temporary.close()
-        return driver.load_binding(temporary.name, hashlib.sha256(raw).hexdigest(),
-                                   direction, "qualification", 1701)
+        return driver.RouteBinding(
+            mission_id="rc-unit-" + direction,
+            route_id="route-out" if direction == "outbound" else "route-back",
+            direction=driver.DIRECTION_VALUES[direction], direction_name=direction,
+            scenario="qualification", seed=1701, claim_tag="SIMULATION_ONLY",
+            map_id="map-a", map_sha256="a" * 64, raw_route_asset_sha256="b" * 64,
+            navigation_manifest_sha256="c" * 64, directional_route_sha256="d" * 64,
+            route_safety_config_sha256="e" * 64, safety_manifest_sha256="b" * 64,
+            route_truth_sha256="1" * 64, scenario_sha256="2" * 64, a13_sha256="3" * 64)
 
-    def test_binds_exact_outbound_and_return_routes(self):
-        outbound = self.binding("outbound")
-        returned = self.binding("return")
-        self.assertEqual((outbound.route_id, outbound.direction), ("route-out", 1))
-        self.assertEqual((returned.route_id, returned.direction), ("route-back", 2))
-        for binding in (outbound, returned):
-            self.assertEqual(binding.map_id, "map-a")
-            self.assertEqual(binding.map_sha256, "a" * 64)
-            self.assertEqual(binding.route_manifest_sha256, "c" * 64)
-            self.assertEqual(binding.safety_manifest_sha256, "b" * 64)
+    def test_binds_complete_distinct_outbound_identity(self):
+        binding = driver.load_binding(
+            ROUTE_TRUTH, ROUTE_TRUTH_SHA256, "outbound", "qualification", 1701,
+            SCENARIO_SHA256, A13_SHA256, "SIMULATION_ONLY")
+        self.assertEqual(binding.route_id, "hanyang_aegimun_engineering_outbound")
+        self.assertEqual(binding.raw_route_asset_sha256,
+                         "adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672")
+        self.assertEqual(binding.navigation_manifest_sha256,
+                         "3861e21a6360fe7e32f833f867acb7dd50dccbf45a67f17d93699cea9cbe13c6")
+        self.assertEqual(binding.directional_route_sha256,
+                         "7466ff78ce529d4285adad08fa48cb9b9f5ef9f74a9aa5ea98f0708e8cdde70d")
+        self.assertNotEqual(binding.raw_route_asset_sha256, binding.directional_route_sha256)
 
     def test_mission_id_is_deterministic_and_scenario_seed_bound(self):
-        first = self.binding("outbound")
-        second = self.binding("outbound")
+        first = driver.load_binding(
+            ROUTE_TRUTH, ROUTE_TRUTH_SHA256, "outbound", "qualification", 1701,
+            SCENARIO_SHA256, A13_SHA256, "SIMULATION_ONLY")
+        second = driver.load_binding(
+            ROUTE_TRUTH, ROUTE_TRUTH_SHA256, "outbound", "qualification", 1701,
+            SCENARIO_SHA256, A13_SHA256, "SIMULATION_ONLY")
+        changed = driver.load_binding(
+            ROUTE_TRUTH, ROUTE_TRUTH_SHA256, "outbound", "qualification", 1702,
+            SCENARIO_SHA256, A13_SHA256, "SIMULATION_ONLY")
         self.assertEqual(first.mission_id, second.mission_id)
-        raw = yaml.safe_dump(self.document, sort_keys=True).encode("utf-8")
-        with tempfile.NamedTemporaryFile() as temporary:
-            temporary.write(raw)
-            temporary.flush()
-            changed = driver.load_binding(temporary.name, hashlib.sha256(raw).hexdigest(),
-                                          "outbound", "qualification", 1702)
         self.assertNotEqual(first.mission_id, changed.mission_id)
 
-    def test_manifest_hash_mutability_and_direction_fail_closed(self):
+    def test_route_truth_hash_and_direction_fail_closed(self):
         with self.assertRaises(driver.ScenarioError):
-            self.binding("sideways")
-        mutable = dict(self.document)
-        mutable["immutable"] = False
-        raw = yaml.safe_dump(mutable).encode("utf-8")
-        with tempfile.NamedTemporaryFile() as temporary:
-            temporary.write(raw)
-            temporary.flush()
-            with self.assertRaises(driver.ScenarioError):
-                driver.load_binding(temporary.name, hashlib.sha256(raw).hexdigest(),
-                                    "outbound", "qualification", 1701)
-            with self.assertRaises(driver.ScenarioError):
-                driver.load_binding(temporary.name, "0" * 64,
-                                    "outbound", "qualification", 1701)
+            driver.load_binding(
+                ROUTE_TRUTH, ROUTE_TRUTH_SHA256, "sideways", "qualification", 1701,
+                SCENARIO_SHA256, A13_SHA256, "SIMULATION_ONLY")
+        with self.assertRaises(driver.ScenarioError):
+            driver.load_binding(
+                ROUTE_TRUTH, "0" * 64, "outbound", "qualification", 1701,
+                SCENARIO_SHA256, A13_SHA256, "SIMULATION_ONLY")
 
     def test_preflight_requires_false_authority_and_exact_manifest_identities(self):
         binding = self.binding("outbound")
@@ -204,15 +194,21 @@ class ScenarioDriverTests(unittest.TestCase):
             "/hardware_motion_authorized": False,
             "/passenger_operation_authorized": False,
             "/use_sim_time": True,
+            "/wheelchair_bringup/map_id": binding.map_id,
             "/wheelchair_bringup/map_sha256": binding.map_sha256,
-            "/wheelchair_bringup/route_sha256": binding.route_manifest_sha256,
-            "~map_id": binding.map_id,
-            "~safety_manifest_sha256": binding.safety_manifest_sha256,
+            "/wheelchair_bringup/route_sha256": binding.raw_route_asset_sha256,
+            "/wheelchair_bringup/policies/route_sha256": binding.navigation_manifest_sha256,
+            "/wheelchair_bringup/policies/route_safety_sha256": binding.route_safety_config_sha256,
+            "/wheelchair_bringup/safety_manifest_sha256": binding.safety_manifest_sha256,
+            "/wheelchair_bringup/route_truth_sha256": binding.route_truth_sha256,
+            "/wheelchair_bringup/scenario_sha256": binding.scenario_sha256,
+            "/wheelchair_bringup/a13_sha256": binding.a13_sha256,
+            "/wheelchair_bringup/claim_tag": binding.claim_tag,
         }
         driver.require_preflight(FakeRospy(params), binding)
-        for name in ("/hardware_motion_authorized", "/passenger_operation_authorized"):
+        for name in params:
             invalid = dict(params)
-            invalid[name] = True
+            invalid[name] = not params[name] if isinstance(params[name], bool) else "0" * 64
             with self.assertRaises(driver.ScenarioError):
                 driver.require_preflight(FakeRospy(invalid), binding)
     def test_startup_ready_rejects_margin_geofence(self):
@@ -607,6 +603,14 @@ class ScenarioDriverTests(unittest.TestCase):
                          for element in driver_node.findall("param")}
         self.assertEqual(driver_params["readiness_timeout_sec"],
                          "$(arg startup_readiness_timeout_sec)")
+        self.assertEqual(sim_args["route_truth_sha256"]["default"], ROUTE_TRUTH_SHA256)
+        for name in ("route_truth", "route_truth_sha256", "scenario_sha256",
+                     "a13_sha256", "claim_tag"):
+            self.assertEqual(driver_params[name], "$(arg %s)" % name)
+        suite_source = SUITE.read_text(encoding="utf-8")
+        for launch_argument in ("route_truth", "route_truth_sha256", "scenario_sha256",
+                                "a13_sha256", "claim_tag"):
+            self.assertIn('"{}:={{}}"'.format(launch_argument), suite_source)
 
         safety_root = ET.parse(str(SAFETY_LAUNCH)).getroot()
         guard_args = {element.attrib["name"]: element.attrib

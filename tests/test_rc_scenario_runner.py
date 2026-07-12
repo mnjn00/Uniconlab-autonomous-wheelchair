@@ -370,6 +370,11 @@ class ScenarioOrchestrationTests(unittest.TestCase):
             "seed:=7", "scenario:=empty", "fault_id:=normal",
             "scenario_direction:=outbound",
             "world:=" + expected_world,
+            "route_truth:=" + self.config["_collector_binding"]["route_truth"],
+            "route_truth_sha256:=" + self.config["_collector_binding"]["route_truth_sha256"],
+            "scenario_sha256:=" + self.config["_collector_binding"]["scenario_sha256"],
+            "a13_sha256:=" + self.config["_collector_binding"]["a13_sha256"],
+            "claim_tag:=SIMULATION_ONLY",
         ])
         collector = collector_commands.pop()
         for option, expected in {

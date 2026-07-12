@@ -11,6 +11,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from dataclasses import dataclass
 
 import yaml
@@ -29,57 +30,225 @@ class RouteBinding:
     mission_id: str
     route_id: str
     direction: int
+    direction_name: str
+    scenario: str
+    seed: int
+    claim_tag: str
     map_id: str
     map_sha256: str
-    route_manifest_sha256: str
+    raw_route_asset_sha256: str
+    navigation_manifest_sha256: str
+    directional_route_sha256: str
+    route_safety_config_sha256: str
     safety_manifest_sha256: str
+    route_truth_sha256: str
+    scenario_sha256: str
+    a13_sha256: str
 
 
 def _sha256(raw):
     return hashlib.sha256(raw).hexdigest()
+
 
 def _valid_sha256(value):
     return (isinstance(value, str) and len(value) == 64
             and all(character in "0123456789abcdef" for character in value))
 
 
+def _require_sha256(name, value):
+    if not _valid_sha256(value):
+        raise ScenarioError("%s must be a lowercase SHA-256" % name)
+    return value
 
 
-def load_binding(path, expected_file_sha256, direction, scenario, seed):
-    """Load and exactly bind one route from an immutable manifest."""
+def _load_yaml(path, description):
+    try:
+        raw = path.read_bytes()
+        document = yaml.safe_load(raw)
+    except (OSError, yaml.YAMLError) as exc:
+        raise ScenarioError("invalid %s: %s" % (description, exc))
+    if not isinstance(document, dict):
+        raise ScenarioError("%s must be a mapping" % description)
+    return raw, document
+
+
+def _contained_reference(root, base, reference, description):
+    if not isinstance(reference, str) or not reference or Path(reference).is_absolute():
+        raise ScenarioError("%s path must be relative" % description)
+    root = root.resolve()
+    unresolved = base / reference
+    candidate = unresolved.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise ScenarioError("%s path escapes repository" % description)
+    current = base
+    for component in Path(reference).parts:
+        current /= component
+        if current.is_symlink():
+            raise ScenarioError("%s path must not be symlinked" % description)
+    if not candidate.is_file():
+        raise ScenarioError("%s path is missing or not a regular file" % description)
+    return candidate
+
+
+def _binding_value(document, name):
+    value = document.get(name)
+    if not isinstance(value, str) or not value:
+        raise ScenarioError("%s is missing" % name)
+    return value
+
+
+def load_binding(route_truth_path, expected_route_truth_sha256, direction, scenario, seed,
+                 scenario_sha256, a13_sha256, claim_tag):
+    """Load the complete immutable route, map, and safety identity chain."""
     if direction not in DIRECTION_VALUES:
         raise ScenarioError("direction must be outbound or return")
-    with open(path, "rb") as stream:
-        raw = stream.read()
-    if _sha256(raw) != expected_file_sha256:
-        raise ScenarioError("route manifest SHA-256 mismatch")
+    if not isinstance(scenario, str) or not scenario:
+        raise ScenarioError("scenario is missing")
+    if isinstance(seed, bool):
+        raise ScenarioError("seed must be an integer")
     try:
-        document = yaml.safe_load(raw)
-    except yaml.YAMLError as exc:
-        raise ScenarioError("invalid route manifest: %s" % exc)
-    if not isinstance(document, dict) or document.get("immutable") is not True:
-        raise ScenarioError("route manifest is not immutable")
-    route = document.get(ROUTE_KEYS[direction])
-    map_binding = document.get("map")
-    if not isinstance(route, dict) or not isinstance(map_binding, dict):
-        raise ScenarioError("selected route/map binding is missing")
-    required = {
-        "route_id": route.get("route_id"),
-        "map_id": map_binding.get("map_id"),
-        "map_sha256": map_binding.get("sha256"),
-        "route_manifest_sha256": route.get("route_manifest_sha256"),
-        "safety_manifest_sha256": document.get("safety_manifest_sha256"),
-    }
+        seed = int(seed)
+    except (TypeError, ValueError):
+        raise ScenarioError("seed must be an integer")
+    _require_sha256("route truth SHA-256", expected_route_truth_sha256)
+    _require_sha256("scenario SHA-256", scenario_sha256)
+    _require_sha256("A13 SHA-256", a13_sha256)
+    if claim_tag != "SIMULATION_ONLY":
+        raise ScenarioError("claim tag must be SIMULATION_ONLY")
+
+    route_truth = Path(route_truth_path)
+    if route_truth.is_symlink() or not route_truth.is_file():
+        raise ScenarioError("route truth must be a non-symlink regular file")
+    root = route_truth.resolve().parents[3]
+    try:
+        route_truth.resolve().relative_to(root)
+    except ValueError:
+        raise ScenarioError("route truth path escapes repository")
+    truth_raw, truth = _load_yaml(route_truth, "route truth")
+    if _sha256(truth_raw) != expected_route_truth_sha256:
+        raise ScenarioError("route truth SHA-256 mismatch")
+    if truth.get("immutable") is not True or truth.get("direction") != direction:
+        raise ScenarioError("route truth is not immutable for selected direction")
+
+    navigation_ref = truth.get("navigation_manifest")
+    safety_ref = truth.get("route_safety_config")
+    if not isinstance(navigation_ref, dict) or not isinstance(safety_ref, dict):
+        raise ScenarioError("route truth references are missing")
+    navigation_sha256 = _require_sha256(
+        "navigation manifest SHA-256", navigation_ref.get("sha256"))
+    safety_config_sha256 = _require_sha256(
+        "route-safety config SHA-256", safety_ref.get("sha256"))
+    navigation_path = _contained_reference(
+        root, route_truth.parent, navigation_ref.get("path"), "navigation manifest")
+    safety_config_path = _contained_reference(
+        root, route_truth.parent, safety_ref.get("path"), "route-safety config")
+    navigation_raw, navigation = _load_yaml(navigation_path, "navigation manifest")
+    safety_raw, safety = _load_yaml(safety_config_path, "route-safety config")
+    if _sha256(navigation_raw) != navigation_sha256:
+        raise ScenarioError("navigation manifest SHA-256 mismatch")
+    if _sha256(safety_raw) != safety_config_sha256:
+        raise ScenarioError("route-safety config SHA-256 mismatch")
+    if navigation.get("immutable") is not True:
+        raise ScenarioError("navigation manifest is not immutable")
+
+    route = navigation.get(ROUTE_KEYS[direction])
+    map_binding = navigation.get("map")
+    waypoint_asset = navigation.get("waypoint_asset")
+    if not all(isinstance(value, dict) for value in (route, map_binding, waypoint_asset)):
+        raise ScenarioError("navigation route/map/asset binding is missing")
+    route_id = _binding_value(route, "route_id")
+    map_id = _binding_value(map_binding, "map_id")
+    map_sha256 = _require_sha256("map SHA-256", map_binding.get("sha256"))
+    raw_route_asset_sha256 = _require_sha256(
+        "raw route asset SHA-256", waypoint_asset.get("sha256"))
+    directional_route_sha256 = _require_sha256(
+        "directional route SHA-256", route.get("route_manifest_sha256"))
+    safety_manifest_sha256 = _require_sha256(
+        "safety manifest SHA-256", navigation.get("safety_manifest_sha256"))
     if route.get("direction") != direction:
-        raise ScenarioError("selected route direction mismatch")
-    if any(not isinstance(value, str) or not value for value in required.values()):
-        raise ScenarioError("route identity is incomplete")
-    if not all(_valid_sha256(required[name]) for name in (
-            "map_sha256", "route_manifest_sha256", "safety_manifest_sha256")):
-        raise ScenarioError("route identity contains an invalid SHA-256")
-    material = "%s\n%s\n%s\n%s" % (scenario, int(seed), direction, required["route_id"])
-    mission_id = "rc-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
-    return RouteBinding(mission_id=mission_id, direction=DIRECTION_VALUES[direction], **required)
+        raise ScenarioError("navigation route direction mismatch")
+    raw_asset_path = _contained_reference(
+        root, navigation_path.parent, waypoint_asset.get("path"), "raw route asset")
+    if _sha256(raw_asset_path.read_bytes()) != raw_route_asset_sha256:
+        raise ScenarioError("raw route asset SHA-256 mismatch")
+    map_path = _contained_reference(root, navigation_path.parent, map_binding.get("pgm_path"), "map")
+    if _sha256(map_path.read_bytes()) != map_sha256:
+        raise ScenarioError("map SHA-256 mismatch")
+
+    if safety.get("simulation_only") is not True:
+        raise ScenarioError("route-safety config is not simulation-only")
+    if safety.get("hardware_motion_authorized") is not False:
+        raise ScenarioError("route-safety config authorizes hardware motion")
+    if safety.get("passenger_operation_authorized") is not False:
+        raise ScenarioError("route-safety config authorizes passenger operation")
+    if _require_sha256("route-safety map SHA-256", safety.get("expected_map_sha256")) != map_sha256:
+        raise ScenarioError("route-safety map binding mismatch")
+    geometry = safety.get("simulation_geometry")
+    if not isinstance(geometry, dict):
+        raise ScenarioError("route-safety geometry binding is missing")
+    if _require_sha256("route-safety raw route SHA-256", geometry.get("route_asset_sha256")) != raw_route_asset_sha256:
+        raise ScenarioError("route-safety raw route binding mismatch")
+    if _require_sha256("route-safety navigation SHA-256", geometry.get("navigation_route_manifest_sha256")) != navigation_sha256:
+        raise ScenarioError("route-safety navigation binding mismatch")
+    if _contained_reference(root, safety_config_path.parent,
+                            geometry.get("route_asset_path"), "route-safety raw route asset") != raw_asset_path:
+        raise ScenarioError("route-safety raw route path mismatch")
+    if _contained_reference(root, safety_config_path.parent,
+                            geometry.get("navigation_route_manifest_path"),
+                            "route-safety navigation manifest") != navigation_path:
+        raise ScenarioError("route-safety navigation path mismatch")
+    if _require_sha256("route-safety safety manifest SHA-256",
+                       safety.get("expected_manifest_sha256")) != safety_manifest_sha256:
+        raise ScenarioError("route-safety safety manifest binding mismatch")
+    expected_routes = safety.get("expected_route_hashes")
+    route_bindings = geometry.get("route_bindings")
+    if (not isinstance(expected_routes, dict) or
+            _require_sha256("route-safety directional route SHA-256",
+                            expected_routes.get(route_id)) != directional_route_sha256 or
+            not isinstance(route_bindings, dict) or
+            not isinstance(route_bindings.get(direction), dict) or
+            route_bindings[direction].get("route_id") != route_id or
+            route_bindings[direction].get("asset_key") != ROUTE_KEYS[direction]):
+        raise ScenarioError("route-safety directional route binding mismatch")
+
+    safety_manifest_path = _contained_reference(
+        root, safety_config_path.parent, safety.get("manifest_path"), "safety manifest")
+    safety_manifest_raw, safety_manifest = _load_yaml(safety_manifest_path, "safety manifest")
+    if _sha256(safety_manifest_raw) != safety_manifest_sha256:
+        raise ScenarioError("safety manifest SHA-256 mismatch")
+    safety_map = safety_manifest.get("map")
+    if not isinstance(safety_map, dict) or safety_map.get("map_id") != map_id:
+        raise ScenarioError("safety manifest map identity mismatch")
+    if _require_sha256("safety manifest map SHA-256", safety_map.get("sha256")) != map_sha256:
+        raise ScenarioError("safety manifest map SHA-256 mismatch")
+    approved = safety_manifest.get("approved_routes")
+    matching = [item for item in approved if isinstance(item, dict)
+                and item.get("route_id") == route_id and item.get("direction") == direction] if isinstance(approved, list) else []
+    if len(matching) != 1 or _require_sha256(
+            "approved directional route SHA-256",
+            matching[0].get("route_manifest_sha256")) != directional_route_sha256:
+        raise ScenarioError("safety manifest approved route mismatch")
+    authority = safety_manifest.get("authority")
+    if (matching[0].get("hardware_authorized") is not False or not isinstance(authority, dict)
+            or authority.get("simulation_only") is not True
+            or authority.get("hardware_authorized") is not False
+            or authority.get("passenger_authorized") is not False):
+        raise ScenarioError("safety manifest authorizes operation")
+
+    material = "%s\n%s\n%s\n%s" % (scenario, seed, direction, route_id)
+    return RouteBinding(
+        mission_id="rc-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24],
+        route_id=route_id, direction=DIRECTION_VALUES[direction], direction_name=direction,
+        scenario=scenario, seed=seed, claim_tag=claim_tag, map_id=map_id, map_sha256=map_sha256,
+        raw_route_asset_sha256=raw_route_asset_sha256,
+        navigation_manifest_sha256=navigation_sha256,
+        directional_route_sha256=directional_route_sha256,
+        route_safety_config_sha256=safety_config_sha256,
+        safety_manifest_sha256=safety_manifest_sha256,
+        route_truth_sha256=expected_route_truth_sha256,
+        scenario_sha256=scenario_sha256, a13_sha256=a13_sha256)
 
 def positive_timeout(name, value):
     try:
@@ -157,17 +326,21 @@ def require_preflight(rospy, binding):
         "/hardware_motion_authorized": False,
         "/passenger_operation_authorized": False,
         "/use_sim_time": True,
+        "/wheelchair_bringup/map_id": binding.map_id,
         "/wheelchair_bringup/map_sha256": binding.map_sha256,
-        "/wheelchair_bringup/route_sha256": binding.route_manifest_sha256,
+        "/wheelchair_bringup/route_sha256": binding.raw_route_asset_sha256,
+        "/wheelchair_bringup/policies/route_sha256": binding.navigation_manifest_sha256,
+        "/wheelchair_bringup/policies/route_safety_sha256": binding.route_safety_config_sha256,
+        "/wheelchair_bringup/safety_manifest_sha256": binding.safety_manifest_sha256,
+        "/wheelchair_bringup/route_truth_sha256": binding.route_truth_sha256,
+        "/wheelchair_bringup/scenario_sha256": binding.scenario_sha256,
+        "/wheelchair_bringup/a13_sha256": binding.a13_sha256,
+        "/wheelchair_bringup/claim_tag": binding.claim_tag,
     }
     for name, expected in exact.items():
         value = rospy.get_param(name, None)
         if type(value) is not type(expected) or value != expected:
             raise ScenarioError("preflight parameter %s is not exactly %r" % (name, expected))
-    if rospy.get_param("~map_id", None) != binding.map_id:
-        raise ScenarioError("map identity mismatch")
-    if rospy.get_param("~safety_manifest_sha256", None) != binding.safety_manifest_sha256:
-        raise ScenarioError("safety identity mismatch")
 
 
 class Evidence:
@@ -322,7 +495,13 @@ class ScenarioDriver:
         status.name = "wheelchair_gazebo/rc_scenario_driver"
         status.hardware_id = "simulation-only"
         status.message = message
-        status.values = [self._KeyValue(key="mission_id", value=self.binding.mission_id)]
+        status.values = [
+            self._KeyValue(key=name, value=str(getattr(self.binding, name)))
+            for name in ("mission_id", "route_id", "direction_name", "scenario", "seed",
+                         "claim_tag", "map_id", "map_sha256", "raw_route_asset_sha256",
+                         "navigation_manifest_sha256", "directional_route_sha256",
+                         "route_safety_config_sha256", "safety_manifest_sha256",
+                         "route_truth_sha256", "scenario_sha256", "a13_sha256")]
         array = self._DiagnosticArray()
         array.header.stamp = self.rospy.Time.now()
         array.status = [status]
@@ -405,7 +584,7 @@ class ScenarioDriver:
         goal.direction = self.binding.direction
         goal.map_id = self.binding.map_id
         goal.map_sha256 = self.binding.map_sha256
-        goal.route_manifest_sha256 = self.binding.route_manifest_sha256
+        goal.route_manifest_sha256 = self.binding.directional_route_sha256
         goal.safety_manifest_sha256 = self.binding.safety_manifest_sha256
         self._action.send_goal(goal)
         self._goal_sent = True
@@ -442,13 +621,16 @@ def main():
     rospy.init_node("rc_scenario_driver", anonymous=False)
     try:
         direction = rospy.get_param("~direction", "outbound")
-        manifest = rospy.get_param("~route_manifest")
+        route_truth = rospy.get_param("~route_truth")
         binding = load_binding(
-            manifest,
-            rospy.get_param("~route_policy_sha256"),
+            route_truth,
+            rospy.get_param("~route_truth_sha256"),
             direction,
             rospy.get_param("~scenario"),
             rospy.get_param("~seed"),
+            rospy.get_param("~scenario_sha256"),
+            rospy.get_param("~a13_sha256"),
+            rospy.get_param("~claim_tag"),
         )
         require_preflight(rospy, binding)
         wait_for_sim_time(

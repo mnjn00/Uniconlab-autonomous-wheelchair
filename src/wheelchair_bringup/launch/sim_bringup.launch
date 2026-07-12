@@ -30,6 +30,11 @@
   <arg name="map_id" default="hanyang_aegimun_loop"/>
   <arg name="map_sha256" default="c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"/>
   <arg name="route_sha256" default="adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672"/>
+  <arg name="route_truth" default="$(find wheelchair_gazebo)/config/route_truth_outbound.yaml"/>
+  <arg name="route_truth_sha256" default="ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70"/>
+  <arg name="scenario_sha256" default=""/>
+  <arg name="a13_sha256" default="f7984b85d8ccf7d0f481f7daa73135109440209ca8c62847c57095da47604123"/>
+  <arg name="claim_tag" default="SIMULATION_ONLY"/>
 
   <param name="/use_sim_time" value="true"/>
   <param name="/wheelchair_bringup/profile" value="sim"/>
@@ -37,6 +42,7 @@
   <param name="/hardware_motion_authorized" value="false"/>
   <param name="/passenger_operation_authorized" value="false"/>
   <param name="/wheelchair_bringup/startup_mode" value="DISARMED"/>
+  <param name="/wheelchair_bringup/map_id" value="$(arg map_id)"/>
   <param name="/wheelchair_bringup/map_sha256" value="$(arg map_sha256)"/>
   <param name="/wheelchair_bringup/route_sha256" value="$(arg route_sha256)"/>
   <param name="/wheelchair_bringup/policies/route_sha256" value="$(arg route_policy_sha256)"/>
@@ -44,6 +50,11 @@
   <param name="/wheelchair_bringup/policies/localization_sha256" value="$(arg localization_policy_sha256)"/>
   <param name="/wheelchair_bringup/policies/collision_sha256" value="$(arg collision_policy_sha256)"/>
   <param name="/wheelchair_bringup/policies/slope_sha256" value="$(arg slope_policy_sha256)"/>
+  <param name="/wheelchair_bringup/safety_manifest_sha256" value="$(arg safety_manifest_sha256)"/>
+  <param name="/wheelchair_bringup/route_truth_sha256" value="$(arg route_truth_sha256)"/>
+  <param name="/wheelchair_bringup/scenario_sha256" value="$(arg scenario_sha256)"/>
+  <param name="/wheelchair_bringup/a13_sha256" value="$(arg a13_sha256)"/>
+  <param name="/wheelchair_bringup/claim_tag" value="$(arg claim_tag)"/>
   <rosparam command="load" file="$(find wheelchair_bringup)/config/params.yaml"/>
   <rosparam command="load" file="$(find wheelchair_bringup)/config/runtime_modes.yaml" ns="runtime_modes"/>
 
@@ -143,10 +154,11 @@
     <param name="scenario" value="$(arg scenario)"/>
     <param name="seed" value="$(arg seed)"/>
     <param name="direction" value="$(arg scenario_direction)"/>
-    <param name="route_manifest" value="$(arg route_policy)"/>
-    <param name="route_policy_sha256" value="$(arg route_policy_sha256)"/>
-    <param name="map_id" value="$(arg map_id)"/>
-    <param name="safety_manifest_sha256" value="$(arg safety_manifest_sha256)"/>
+    <param name="route_truth" value="$(arg route_truth)"/>
+    <param name="route_truth_sha256" value="$(arg route_truth_sha256)"/>
+    <param name="scenario_sha256" value="$(arg scenario_sha256)"/>
+    <param name="a13_sha256" value="$(arg a13_sha256)"/>
+    <param name="claim_tag" value="$(arg claim_tag)"/>
     <param name="initial_pose_x" value="$(arg spawn_x)"/>
     <param name="initial_pose_y" value="$(arg spawn_y)"/>
     <param name="initial_pose_yaw" value="$(arg spawn_yaw)"/>

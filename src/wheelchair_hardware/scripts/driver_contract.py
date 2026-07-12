@@ -222,8 +222,15 @@ def preflight(
         if evidence.get(flag) is not True:
             _append(issues, runtime_codes[flag], "$.runtime_evidence.{}".format(flag), "explicit true runtime evidence is required")
 
+    if adapter_mode == "translated":
+        _append(
+            issues,
+            "E_ADAPTER_MODE",
+            "$.adapter.mode",
+            "translated mode is unsupported without a manifest-pinned translator implementation",
+        )
     topic = command.get("driver_topic", "") if isinstance(command, dict) else ""
-    deployable = profile_known and not issues and adapter_mode in ("direct_twist", "translated") and bool(topic)
+    deployable = profile_known and not issues and adapter_mode == "direct_twist" and bool(topic)
     return HardwarePreflight(
         profile, deployable, deployable, deployable, topic if deployable else "", adapter_mode, tuple(issues)
     )
