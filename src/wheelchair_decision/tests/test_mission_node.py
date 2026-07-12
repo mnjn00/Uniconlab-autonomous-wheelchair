@@ -190,6 +190,56 @@ def test_speed_zone_classification_rejects_unknown_and_mixed_candidate_tags():
             raise AssertionError("unclassified speed zone was accepted")
 
 
+def test_empty_optional_localization_zone_preserves_simulation_binding():
+    safety_hash = "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57"
+    map_hash = "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"
+    zone_ids = node._active_speed_zone_ids(
+        SimpleNamespace(zone_id="zone-simulation-candidate"),
+        SimpleNamespace(zone_id=""),
+        SimpleNamespace(zone_ids=("candidate-unsurveyed",)),
+    )
+
+    assert zone_ids == ["zone-simulation-candidate", "candidate-unsurveyed"]
+    assert node.classify_speed_zone(
+        zone_ids, safety_hash, map_hash) == "simulation_unsurveyed"
+
+
+def test_unexpected_nonempty_localization_zone_remains_speed_blocking():
+    zone_ids = node._active_speed_zone_ids(
+        SimpleNamespace(zone_id="zone-simulation-candidate"),
+        SimpleNamespace(zone_id="unexpected-localization-zone"),
+        SimpleNamespace(zone_ids=("candidate-unsurveyed",)),
+    )
+
+    with pytest.raises(ValueError, match="active zone is not speed classified"):
+        node.classify_speed_zone(
+            zone_ids,
+            "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57",
+            "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278",
+        )
+
+
+def test_empty_geofence_and_localization_zones_do_not_classify_segment_alone():
+    zone_ids = node._active_speed_zone_ids(
+        SimpleNamespace(zone_id=""),
+        SimpleNamespace(zone_id=""),
+        SimpleNamespace(zone_ids=("candidate-unsurveyed",)),
+    )
+
+    assert zone_ids == ["candidate-unsurveyed"]
+    with pytest.raises(ValueError, match="active zone is not speed classified"):
+        node.classify_speed_zone(zone_ids)
+
+
+def test_malformed_optional_zone_remains_speed_blocking():
+    with pytest.raises(ValueError, match="active zone is not speed classified"):
+        node._active_speed_zone_ids(
+            SimpleNamespace(zone_id="zone-simulation-candidate"),
+            SimpleNamespace(zone_id=object()),
+            SimpleNamespace(zone_ids=("candidate-unsurveyed",)),
+        )
+
+
 def test_mission_cancelled_truth_table_and_sole_topic():
     for state in ("DISARMED", "LOCALIZING", "READY", "GOAL_REACHED",
                   "ABORTED", "FAULT"):

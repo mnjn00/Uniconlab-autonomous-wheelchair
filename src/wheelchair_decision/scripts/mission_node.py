@@ -122,6 +122,22 @@ def classify_speed_zone(zone_ids: Any, safety_manifest_sha256: str = "",
     raise ValueError("active zone is not speed classified")
 
 
+def _active_speed_zone_ids(geofence: Any, localization: Any, segment: Any) -> list:
+    """Collect required segment zones and populated optional evidence zones."""
+    zone_ids = []
+    for evidence in (geofence, localization):
+        if evidence is None:
+            continue
+        zone_id = evidence.zone_id
+        if zone_id == "":
+            continue
+        if not isinstance(zone_id, str):
+            raise ValueError("active zone is not speed classified")
+        zone_ids.append(zone_id)
+    zone_ids.extend(segment.zone_ids)
+    return zone_ids
+
+
 def next_waypoint_index(reached_index: int, waypoint_count: int) -> int:
     """Translate route-manager's latest-reached index into the next goal index."""
     if (isinstance(reached_index, bool) or not isinstance(reached_index, int)
@@ -588,12 +604,7 @@ def main() -> None:
         segment = active_segment()
         geofence = policy_inputs["geofence"]
         localization = policy_inputs["localization"]
-        zone_ids = []
-        if geofence is not None:
-            zone_ids.append(geofence.zone_id)
-        if localization is not None:
-            zone_ids.append(localization.zone_id)
-        zone_ids.extend(segment.zone_ids)
+        zone_ids = _active_speed_zone_ids(geofence, localization, segment)
         binding = runtime.binding
         if binding is None:
             raise ValueError("route binding unavailable")
