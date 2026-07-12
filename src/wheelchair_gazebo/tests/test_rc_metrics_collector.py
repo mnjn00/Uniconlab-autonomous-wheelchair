@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import pathlib
+from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
@@ -596,6 +597,35 @@ class CollectionLifecycleTest(unittest.TestCase):
                 settle_time=0.60, timeout=30.0),
             "timeout")
 
+
+class RosCollectorAdapterTest(unittest.TestCase):
+    def test_localization_candidate_pose_with_covariance_abi_is_forwarded(self):
+        class StubCore:
+            def __init__(self):
+                self.call = None
+
+            def observe_localization_pose(self, *args, **kwargs):
+                self.call = (args, kwargs)
+
+        message = SimpleNamespace(
+            pose=SimpleNamespace(
+                header=SimpleNamespace(stamp=SimpleNamespace(to_sec=lambda: 12.5)),
+                pose=SimpleNamespace(
+                    pose=SimpleNamespace(
+                        position=SimpleNamespace(x=1.25, y=-2.5),
+                        orientation=SimpleNamespace(
+                            x=0.0, y=0.0, z=math.sqrt(0.5), w=math.sqrt(0.5))))),
+            map_id="map", map_sha256="a" * 64, source="candidate",
+            raw_state=7, reset_count=3)
+        adapter = SimpleNamespace(core=StubCore())
+
+        collector.RosCollector._localization_pose(adapter, message)
+
+        args, kwargs = adapter.core.call
+        self.assertEqual(args[:3], (12.5, 1.25, -2.5))
+        self.assertAlmostEqual(args[3], math.pi / 2.0)
+        self.assertEqual(args[4:], ("map", "a" * 64, "candidate", 3))
+        self.assertEqual(kwargs, {"raw_state": 7})
 
 class StaticContractTest(unittest.TestCase):
     def test_ros_imports_are_lazy_and_authority_is_fixed_false(self):

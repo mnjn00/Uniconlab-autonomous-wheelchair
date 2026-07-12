@@ -545,7 +545,8 @@ class MetricsCore:
 
     def observe_localization_pose(self, stamp: float, x_m: float, y_m: float,
                                   yaw_rad: float, map_id: str, map_sha256: str,
-                                  source: str, reset_count: Optional[int] = None) -> None:
+                                  source: str, reset_count: Optional[int] = None,
+                                  raw_state: Optional[int] = None) -> None:
         if (not source or not isinstance(map_id, str) or not isinstance(map_sha256, str)
                 or self._reject("localization_pose", stamp, x_m, y_m, yaw_rad)):
             return
@@ -1373,14 +1374,15 @@ class RosCollector:
         )
 
     def _localization_pose(self, message) -> None:
-        pose = message.pose.pose
+        pose = message.pose.pose.pose
         orientation = pose.orientation
         yaw = math.atan2(2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
                          1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z))
         self.core.observe_localization_pose(
             message.pose.header.stamp.to_sec(), pose.position.x, pose.position.y, yaw,
             message.map_id, message.map_sha256, message.source,
-            getattr(message, "reset_count", None))
+            getattr(message, "reset_count", None),
+            raw_state=getattr(message, "raw_state", None))
 
     def _collision(self, message) -> None:
         self._status("collision", message, (3,))
