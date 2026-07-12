@@ -38,7 +38,19 @@ def _hash(value, omitted):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
 
 
+def _route_hash(route, map_value):
+    payload = {
+        "map_id": map_value["map_id"],
+        "map_sha256": map_value["sha256"],
+        "route": {key: item for key, item in route.items() if key != "route_manifest_sha256"},
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+
+
 def _seal(value):
+    for direction in ("outbound", "return"):
+        route = value[direction + "_route"]
+        route["route_manifest_sha256"] = _route_hash(route, value["map"])
     value["content_sha256"] = _hash(value, "content_sha256")
 
 
@@ -61,6 +73,9 @@ def test_committed_manifest_dynamically_binds_map_route_and_safety_bytes():
         "evidence_level": "simulation_only",
         "surveyed": False,
     }
+    for direction in ("outbound", "return"):
+        route = raw[direction + "_route"]
+        assert manifest.route(direction).route_manifest_sha256 == _route_hash(route, raw["map"])
 
 
 def test_both_explicit_directions_preserve_all_732_recorded_waypoints():
@@ -109,8 +124,46 @@ def test_every_segment_is_simulation_only_with_conservative_nonzero_caps():
     lambda value: value["outbound_route"]["waypoints"][-1].update({"behavior": "proceed"}),
     lambda value: value["outbound_route"]["waypoints"][0].update({"yaw_rad": float("nan")}),
     lambda value: value["outbound_route"]["segments"][0].update({"hardware_authorized": True}),
+    lambda value: value["outbound_route"]["waypoints"][1].update({
+        "x_m": value["outbound_route"]["waypoints"][0]["x_m"],
+        "y_m": value["outbound_route"]["waypoints"][0]["y_m"],
+    }),
 ])
 def test_invalid_or_widened_routes_are_rejected_even_with_resealed_hash(tmp_path, mutation):
+    value = copy.deepcopy(_raw())
+    mutation(value)
+    _seal(value)
+    with pytest.raises(route_manager.RouteValidationError):
+        route_manager.load_manifest(str(_write(tmp_path, value)), verify_assets=False)
+
+def test_directional_semantic_hashes_are_distinct_and_map_bound(tmp_path):
+    value = copy.deepcopy(_raw())
+    outbound, returning = value["outbound_route"], value["return_route"]
+    assert outbound["route_manifest_sha256"] != returning["route_manifest_sha256"]
+    value["map"]["map_id"] = "other-map"
+    value["content_sha256"] = _hash(value, "content_sha256")
+    with pytest.raises(route_manager.RouteValidationError, match="semantic hash mismatch"):
+        route_manager.load_manifest(str(_write(tmp_path, value)), verify_assets=False)
+
+
+def test_resealed_self_intersection_is_rejected(tmp_path):
+    value = copy.deepcopy(_raw())
+    points = ((0.0, 0.0, math.pi / 4.0), (2.0, 2.0, math.pi),
+              (0.0, 2.0, -math.pi / 4.0), (2.0, 0.0, 0.0))
+    for waypoint, (x_m, y_m, yaw_rad) in zip(value["outbound_route"]["waypoints"][:4], points):
+        waypoint.update(x_m=x_m, y_m=y_m, yaw_rad=yaw_rad)
+    _seal(value)
+    with pytest.raises(route_manager.RouteValidationError, match="self-intersects"):
+        route_manager.load_manifest(str(_write(tmp_path, value)), verify_assets=False)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda value: value["outbound_route"]["waypoints"][1].update({"behavior": "terminal_stop"}),
+    lambda value: value["outbound_route"]["segments"][0].update({"corridor_width_m": 0.5}),
+    lambda value: value["outbound_route"]["segments"][0].update({"max_linear_mps": 0.0}),
+    lambda value: value["outbound_route"].update({"qualification": "simulation_qualified"}),
+])
+def test_resealed_policy_and_terminal_failures_are_rejected(tmp_path, mutation):
     value = copy.deepcopy(_raw())
     mutation(value)
     _seal(value)
@@ -188,6 +241,7 @@ def test_active_route_heartbeat_preserves_progress_tracker_state():
     tracker = node._tracker
     start = manifest.route("outbound").waypoints[0]
     assert tracker.update(start.x_m, start.y_m).state == "ACTIVE"
+    assert node._activation_identity[5] == manifest.route("outbound").route_manifest_sha256
 
     node._active_callback(copy.copy(message))
 

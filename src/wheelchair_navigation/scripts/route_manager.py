@@ -67,6 +67,40 @@ def canonical_sha256(value: Mapping[str, Any], omitted_key: str) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
+def canonical_route_sha256(route: Mapping[str, Any], map_id: str, map_sha256: str) -> str:
+    """Bind one directional route's complete semantics to its runtime map."""
+    payload = {
+        "map_id": map_id,
+        "map_sha256": map_sha256,
+        "route": {key: item for key, item in route.items() if key != "route_manifest_sha256"},
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _segments_intersect(first: Waypoint, second: Waypoint, third: Waypoint, fourth: Waypoint) -> bool:
+    """Return whether two non-adjacent closed centerline segments intersect."""
+    def cross(origin: Waypoint, left: Waypoint, right: Waypoint) -> float:
+        return ((left.x_m - origin.x_m) * (right.y_m - origin.y_m)
+                - (left.y_m - origin.y_m) * (right.x_m - origin.x_m))
+
+    def between(first_point: Waypoint, point: Waypoint, second_point: Waypoint) -> bool:
+        return (min(first_point.x_m, second_point.x_m) <= point.x_m <= max(first_point.x_m, second_point.x_m)
+                and min(first_point.y_m, second_point.y_m) <= point.y_m <= max(first_point.y_m, second_point.y_m))
+
+    first_cross, second_cross = cross(first, second, third), cross(first, second, fourth)
+    third_cross, fourth_cross = cross(third, fourth, first), cross(third, fourth, second)
+    if first_cross == 0.0 and between(first, third, second):
+        return True
+    if second_cross == 0.0 and between(first, fourth, second):
+        return True
+    if third_cross == 0.0 and between(third, first, fourth):
+        return True
+    if fourth_cross == 0.0 and between(third, second, fourth):
+        return True
+    return ((first_cross > 0.0) != (second_cross > 0.0)
+            and (third_cross > 0.0) != (fourth_cross > 0.0))
+
 
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -165,8 +199,8 @@ def _validate_segment(raw: Any, name: str, waypoint_count: int) -> Segment:
     zones = value["zone_ids"]
     if not isinstance(zones, list) or not zones or len(zones) != len(set(zones)):
         raise RouteValidationError("%s.zone_ids must be a nonempty unique list" % name)
-    margin = _finite(value["corridor_margin_m"], name + ".corridor_margin_m", 0.0, 100.0)
-    width = _finite(value["corridor_width_m"], name + ".corridor_width_m", 0.01, 200.0)
+    margin = _finite(value["corridor_margin_m"], name + ".corridor_margin_m", 1e-6, 100.0)
+    width = _finite(value["corridor_width_m"], name + ".corridor_width_m", 1e-6, 200.0)
     if abs(width - 2.0 * margin) > 1e-9:
         raise RouteValidationError("%s corridor width must equal twice its margin" % name)
     if value["hardware_authorized"] is not False:
@@ -174,28 +208,32 @@ def _validate_segment(raw: Any, name: str, waypoint_count: int) -> Segment:
     behavior, slope, crossing = value["behavior"], value["slope_tag"], value["crossing_tag"]
     if behavior not in BEHAVIORS or slope not in TAGS or crossing not in TAGS:
         raise RouteValidationError("%s has unsupported behavior/tag" % name)
+    linear = _finite(value["max_linear_mps"], name + ".max_linear_mps", 0.0, 0.70)
+    angular = _finite(value["max_angular_rps"], name + ".max_angular_rps", 0.0, 1.0)
+    if linear <= 0.0 or angular <= 0.0:
+        raise RouteValidationError("%s speed policy must be active" % name)
     return Segment(_identifier(value["segment_id"], name + ".segment_id"), start, end, margin, width,
                    tuple(_identifier(z, name + ".zone_ids") for z in zones),
-                   _finite(value["max_linear_mps"], name + ".max_linear_mps", 0.0, 0.70),
-                   _finite(value["max_angular_rps"], name + ".max_angular_rps", 0.0, 1.0),
-                   False, behavior, slope, crossing)
+                   linear, angular, False, behavior, slope, crossing)
 
 
-def _validate_route(raw: Any, direction: str, expected_asset_sha256: str) -> Route:
+def _validate_route(raw: Any, direction: str, map_id: str, map_sha256: str) -> Route:
     fields = ("route_id", "direction", "route_manifest_sha256", "qualification", "waypoints", "segments")
     value = _object(raw, direction + "_route", fields, fields)
     if value["direction"] != direction:
         raise RouteValidationError("route direction mismatch")
     if value["qualification"] not in QUALIFICATIONS:
         raise RouteValidationError("unsupported route qualification")
-    if _sha(value["route_manifest_sha256"], "route_manifest_sha256") != expected_asset_sha256:
-        raise RouteValidationError("%s route asset binding mismatch" % direction)
+    if _sha(value["route_manifest_sha256"], "route_manifest_sha256") != canonical_route_sha256(value, map_id, map_sha256):
+        raise RouteValidationError("%s route semantic hash mismatch" % direction)
     raw_waypoints = value["waypoints"]
     if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
         raise RouteValidationError("%s needs at least two waypoints" % direction)
     waypoints = tuple(_validate_waypoint(w, "%s.waypoints[%d]" % (direction, i)) for i, w in enumerate(raw_waypoints))
     if len({w.waypoint_id for w in waypoints}) != len(waypoints):
         raise RouteValidationError("duplicate waypoint_id")
+    if len({(w.x_m, w.y_m) for w in waypoints}) != len(waypoints):
+        raise RouteValidationError("duplicate waypoint geometry")
     raw_segments = value["segments"]
     if not isinstance(raw_segments, list) or len(raw_segments) != len(waypoints) - 1:
         raise RouteValidationError("segments must cover every waypoint pair")
@@ -204,14 +242,28 @@ def _validate_route(raw: Any, direction: str, expected_asset_sha256: str) -> Rou
         raise RouteValidationError("segments are missing or out of order")
     if len({s.segment_id for s in segments}) != len(segments):
         raise RouteValidationError("duplicate segment_id")
-    if waypoints[-1].behavior != "terminal_stop" or segments[-1].behavior != "terminal_stop":
-        raise RouteValidationError("route must end with an explicit terminal stop")
+    if (any(w.behavior == "terminal_stop" for w in waypoints[:-1])
+            or any(s.behavior == "terminal_stop" for s in segments[:-1])
+            or waypoints[-1].behavior != "terminal_stop"
+            or segments[-1].behavior != "terminal_stop"):
+        raise RouteValidationError("route must have one explicit terminal stop")
+    if value["qualification"] != "candidate" and any(
+            tag != "none" for waypoint in waypoints for tag in
+            (waypoint.slope_tag, waypoint.crossing_tag, waypoint.visibility_tag)):
+        raise RouteValidationError("unknown route evidence requires candidate qualification")
+    if value["qualification"] != "candidate" and any(
+            tag != "none" for segment in segments for tag in (segment.slope_tag, segment.crossing_tag)):
+        raise RouteValidationError("unknown route evidence requires candidate qualification")
     cumulative = [0.0]
     for first, second in zip(waypoints, waypoints[1:]):
         distance = math.hypot(second.x_m - first.x_m, second.y_m - first.y_m)
         if distance <= 1e-6:
             raise RouteValidationError("zero-length route segment")
         cumulative.append(cumulative[-1] + distance)
+    for first_index, (first, second) in enumerate(zip(waypoints, waypoints[1:])):
+        for third, fourth in zip(waypoints[first_index + 2:], waypoints[first_index + 3:]):
+            if _segments_intersect(first, second, third, fourth):
+                raise RouteValidationError("route centerline self-intersects")
     for index, (first, second) in enumerate(zip(waypoints, waypoints[1:])):
         expected_yaw = math.atan2(second.y_m - first.y_m, second.x_m - first.x_m)
         yaw_error = math.atan2(math.sin(first.yaw_rad - expected_yaw), math.cos(first.yaw_rad - expected_yaw))
@@ -272,7 +324,13 @@ def load_manifest(path: str, verify_assets: bool = True) -> RouteManifest:
             asset = (manifest_path.parent / relative).resolve()
             if not asset.is_file() or _file_sha256(asset) != _sha(expected, label + " hash"):
                 raise RouteValidationError(label + " asset hash mismatch")
-    routes = {direction: _validate_route(value[direction + "_route"], direction, waypoint_asset["sha256"]) for direction in DIRECTIONS}
+    routes = {direction: _validate_route(value[direction + "_route"], direction,
+                                         _identifier(map_value["map_id"], "map.map_id"),
+                                         _sha(map_value["sha256"], "map.sha256"))
+              for direction in DIRECTIONS}
+    if (not provenance["surveyed"] or provenance["evidence_level"] in ("candidate", "simulation_only")) and (
+            value["status"] != "candidate" or any(route.qualification != "candidate" for route in routes.values())):
+        raise RouteValidationError("unknown route qualification evidence requires candidate status")
     if routes["outbound"].route_id == routes["return"].route_id:
         raise RouteValidationError("outbound and return route IDs must differ")
     if len(samples["outbound"]) != len(routes["outbound"].waypoints) or len(samples["return"]) != len(routes["return"].waypoints):

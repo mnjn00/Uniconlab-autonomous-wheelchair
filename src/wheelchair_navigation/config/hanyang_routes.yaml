@@ -775,7 +775,7 @@ generation:
 outbound_route:
   route_id: hanyang_aegimun_engineering_outbound
   direction: outbound
-  route_manifest_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+  route_manifest_sha256: eef9d2edcab8433fa69036338820d8d44880992e3cc14cbea8d2786468bbe30e
   qualification: candidate
   waypoints:
   - waypoint_id: out-000
@@ -8667,7 +8667,7 @@ outbound_route:
 return_route:
   route_id: hanyang_engineering_aegimun_return
   direction: return
-  route_manifest_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+  route_manifest_sha256: 5135717428df1d4f6efb8025c5964e5f161f101d01bd6bbf45e8aee72311ede0
   qualification: candidate
   waypoints:
   - waypoint_id: ret-359
@@ -16864,4 +16864,4 @@ return_route:
     behavior: terminal_stop
     slope_tag: candidate
     crossing_tag: unknown
-content_sha256: 11d89114fdfe0a87c78606242becb88e67e3aec7e5e8e5b40ced2d04600c9a3b
+content_sha256: 7a09b9ca4db95341bf22465c89d7d78670a35a29dbfe971bf4da353ca2e0075e
