@@ -11,6 +11,11 @@ on:
         required: true
         default: false
         type: boolean
+      rollback_parent:
+        description: Strict JSON parent rollback binding for a complete release only
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -56,21 +61,18 @@ jobs:
             source /opt/ros/noetic/setup.bash
             python3 -m pytest tests/test_rc_scenario_runner.py src/wheelchair_gazebo/tests/test_rc_world_static.py \
               --junitxml=reports/scenario-fixtures.xml'
-      - name: Generate and verify software-only release manifest
+      - name: Validate strict release tooling without claiming release authority
         run: |
-          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
-            python3 scripts/generate_release_manifest.py \
-              --output reports/release-manifest.json \
-              --report reports/pytest.xml \
-              --report reports/no-bypass.xml \
-              --report reports/scenario-fixtures.xml \
-              --rollback-parent "'"${{ github.event.before || 'unavailable-unarmed-parent' }}"'"
-            python3 scripts/verify_release_manifest.py reports/release-manifest.json --root /ws'
-      - name: Upload hash-bound software evidence
+          docker run --rm wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            python3 -m pytest tests/test_release_manifest.py
+            python3 scripts/generate_release_manifest.py --help
+            python3 scripts/verify_release_manifest.py --help'
+          printf '%s\n' 'INCOMPLETE SOFTWARE EVIDENCE: pytest/build reports are not AC0-AC6 release reports; no clean manifest was generated.' > reports/INCOMPLETE_SOFTWARE_EVIDENCE.txt
+      - name: Upload incomplete software evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: noetic-software-rc-${{ github.sha }}
+          name: noetic-incomplete-software-evidence-${{ github.sha }}
           path: reports/
           if-no-files-found: error
           retention-days: 30
@@ -86,12 +88,14 @@ jobs:
           test -x scripts/run_gazebo_rc_suite.py || { echo 'BLOCKED: real Gazebo scenario runner is unavailable'; exit 2; }
           source /opt/ros/noetic/setup.bash || { echo 'BLOCKED: ROS Noetic/Gazebo is unavailable'; exit 2; }
           python3 scripts/run_gazebo_rc_suite.py --config src/wheelchair_gazebo/config/scenarios.yaml --output gazebo-live-report.json
-      - uses: actions/upload-artifact@v4
+      - name: Upload Gazebo live evidence when available
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: gazebo-live-${{ github.sha }}
           path: gazebo-live-report.json
-          if-no-files-found: error
+          if-no-files-found: warn
+          retention-days: 30
 
   external-full-bag-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
@@ -123,21 +127,39 @@ jobs:
           echo 'BLOCKED: CI simulation/replay is not physical, hardware, or passenger authority.'
           exit 2
 
-  release-gate:
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.release
+  release-manifest:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: [software-rc, gazebo-live-gate, external-full-bag-gate, target-nuc-gate, hardware-passenger-gate]
     runs-on: ubuntu-20.04
     steps:
-      - name: Require every explicit release gate
+      - uses: actions/checkout@v4
+      - name: Generate only a complete strict software-only manifest
         env:
-          SOFTWARE: ${{ needs.software-rc.result }}
-          GAZEBO: ${{ needs.gazebo-live-gate.result }}
-          BAG: ${{ needs.external-full-bag-gate.result }}
-          NUC: ${{ needs.target-nuc-gate.result }}
-          HARDWARE: ${{ needs.hardware-passenger-gate.result }}
+          ROLLBACK_PARENT: ${{ inputs.rollback_parent }}
         run: |
-          test "$SOFTWARE" = success && test "$GAZEBO" = success && test "$BAG" = success \
-            && test "$NUC" = success && test "$HARDWARE" = success || {
-              echo "RELEASE BLOCKED: software=$SOFTWARE gazebo=$GAZEBO bag=$BAG nuc=$NUC hardware=$HARDWARE"
-              exit 2
-            }
+          test -n "$ROLLBACK_PARENT"
+          python3 scripts/generate_release_manifest.py --root . --output release-manifest.json \
+            --report evidence/contracts/abi-v1-report.json \
+            --report evidence/topology/command-graph-report.json \
+            --report evidence/route-safety/anti-widening-report.json \
+            --report evidence/safety/collision-ttc-report.json \
+            --report evidence/safety/slope-policy-report.json \
+            --report evidence/localization/confidence-holdout-report.json \
+            --report evidence/conversion/determinism-and-corruption-report.json \
+            --report evidence/mission/fsm-contract-report.json \
+            --report evidence/safety/gate-permission-matrix.json \
+            --report evidence/performance/target-nuc-60min-report.json \
+            --report evidence/simulation/fidelity-claim-report.json \
+            --report evidence/release/rollback-drill-report.json \
+            --report evidence/hardware/hardware-gate-negative-report.json \
+            --report evidence/release/passenger-authority-negative-report.json \
+            --rollback-parent "$ROLLBACK_PARENT" \
+            --blocker 'hardware motion qualification has not passed' \
+            --blocker 'passenger operation qualification has not passed'
+          python3 scripts/verify_release_manifest.py release-manifest.json --root .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: noetic-complete-software-only-manifest-${{ github.sha }}
+          path: release-manifest.json
+          if-no-files-found: error
+          retention-days: 30

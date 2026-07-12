@@ -119,27 +119,92 @@ Retain the incident JSON and `audit-report.json` together. A missing/truncated f
 
 ## Release install and atomic rollback
 
-First verify or create a hash-bound manifest; report paths must be real evidence inside the release root:
+Only the complete AC0-AC6 matrix can create a clean software-only manifest. Ordinary CI pytest/build JUnits are incomplete software evidence, never release reports; missing full-bag, target-NUC, live, hardware, or passenger gates produce no clean release. `hardwareMotionAuthorized` and `passengerOperationAuthorized` remain `false` in every gate report and manifest.
+
+Create one strict JSON gate report at each exact path below. Each report has exactly `artifactType`, `schemaVersion`, `gateId`, `status`, `claimTag`, `hardwareMotionAuthorized`, `passengerOperationAuthorized`, `sourceRevision`, `configurationDigest`, `bundleDigest`, `releaseInputDigest`, and `result`; its type/version is `wheelchair-ac-gate-report`/`1`, claim is `SOFTWARE_ONLY`, status is `PASS`, both authority flags are `false`, and `result` is `{"passed":true,"cases":N}` for `N > 0`.
 
 ```bash
-python3 scripts/generate_release_manifest.py --root RELEASE --output RELEASE/manifest.json --report RELEASE/evidence/report.json --rollback-parent PRIOR_RELEASE_ID
-python3 scripts/verify_release_manifest.py RELEASE/manifest.json --root RELEASE
+REPORTS=(
+  evidence/contracts/abi-v1-report.json
+  evidence/topology/command-graph-report.json
+  evidence/route-safety/anti-widening-report.json
+  evidence/safety/collision-ttc-report.json
+  evidence/safety/slope-policy-report.json
+  evidence/localization/confidence-holdout-report.json
+  evidence/conversion/determinism-and-corruption-report.json
+  evidence/mission/fsm-contract-report.json
+  evidence/safety/gate-permission-matrix.json
+  evidence/performance/target-nuc-60min-report.json
+  evidence/simulation/fidelity-claim-report.json
+  evidence/release/rollback-drill-report.json
+  evidence/hardware/hardware-gate-negative-report.json
+  evidence/release/passenger-authority-negative-report.json
+)
+```
+
+Provide a separately verifier-approved parent rollback binding in `parent-rollback.json`; free-form parent IDs and `parent_state` are rejected. It has exactly this shape (all `sha256` values are lowercase 64-hex strings, every inventory list is non-empty, sorted, and has unique paths):
+
+```json
+{
+  "parentReleaseBindingSha256": "<target-release-binding>",
+  "parentReleaseBindingReceiptSha256": "<sha256 of canonical parentReleaseBindingSha256+inventory>",
+  "inventory": {
+    "binaries": [{"path": "binaries/item", "sha256": "<sha256>"}],
+    "maps": [{"path": "maps/item", "sha256": "<sha256>"}],
+    "routes": [{"path": "routes/item", "sha256": "<sha256>"}],
+    "policies": [{"path": "policies/item", "sha256": "<sha256>"}],
+    "drivers": [{"path": "drivers/item", "sha256": "<sha256>"}]
+  },
+  "restartReceipt": {
+    "state": "DISARMED",
+    "permissions": "UNKNOWN",
+    "localizationRequired": true,
+    "missionResume": false,
+    "parentReleaseBindingSha256": "<target-release-binding>",
+    "inventoryDigest": "<sha256 of canonical inventory>"
+  }
+}
+```
+
+Generate and independently verify only after all exact reports and that receipt exist inside the release root:
+
+```bash
+python3 scripts/generate_release_manifest.py --root RELEASE --output RELEASE/release-manifest.json \
+  $(printf -- ' --report %s' "${REPORTS[@]}") \
+  --rollback-parent "$(<RELEASE/parent-rollback.json)" \
+  --blocker 'hardware motion qualification has not passed' \
+  --blocker 'passenger operation qualification has not passed'
+python3 scripts/verify_release_manifest.py RELEASE/release-manifest.json --root RELEASE
 ```
 
 Install is dry-run unless `--apply` is supplied:
 
 ```bash
-python3 scripts/install_noetic_rc.py --manifest RELEASE/manifest.json --source RELEASE --prefix /tmp/wheelchair-rc-sandbox
-python3 scripts/install_noetic_rc.py --manifest RELEASE/manifest.json --source RELEASE --prefix /tmp/wheelchair-rc-sandbox --apply
+python3 scripts/install_noetic_rc.py --manifest RELEASE/release-manifest.json --source RELEASE --prefix /tmp/wheelchair-rc-sandbox
+python3 scripts/install_noetic_rc.py --manifest RELEASE/release-manifest.json --source RELEASE --prefix /tmp/wheelchair-rc-sandbox --apply
 ```
 
-Installation requires an absolute caller-selected prefix and refuses `--apply` as root. It verifies binding, every file hash, software-only authority, false physical/passenger flags, and bundle consistency; it rejects `hardware_enabled`, traversal, tampering, or mixed map/config/route content. Apply stages `/tmp/wheelchair-rc-sandbox/releases/RELEASE_ID`, atomically changes `/tmp/wheelchair-rc-sandbox/current`, retains the prior release, and does not manage ROS/system services.
+Before a non-idempotent rollback, stop the graph and write separate current-state evidence; this is not the parent restart receipt and cannot be the string `DISARMED`:
 
-Stop the software graph and establish DISARMED independently before rollback. Preview, then apply the named prior release:
+```json
+{
+  "state": "DISARMED",
+  "permissions": "UNKNOWN",
+  "localizationRequired": true,
+  "missionResume": false,
+  "currentReleaseBindingSha256": "<current-release-binding>",
+  "targetReleaseBindingSha256": "<target-release-binding>",
+  "hardwareMotionAuthorized": false,
+  "hardwareEnabled": false,
+  "evidenceBindingSha256": "<sha256 of this object excluding evidenceBindingSha256>"
+}
+```
 
 ```bash
-python3 scripts/rollback_noetic_rc.py --prefix /tmp/wheelchair-rc-sandbox --target RELEASE_BINDING_SHA256 --disarmed-evidence DISARMED
-python3 scripts/rollback_noetic_rc.py --prefix /tmp/wheelchair-rc-sandbox --target RELEASE_BINDING_SHA256 --disarmed-evidence DISARMED --apply
+python3 scripts/rollback_noetic_rc.py --prefix /tmp/wheelchair-rc-sandbox \
+  --target TARGET_RELEASE_BINDING_SHA256 --disarmed-evidence current-state.json
+python3 scripts/rollback_noetic_rc.py --prefix /tmp/wheelchair-rc-sandbox \
+  --target TARGET_RELEASE_BINDING_SHA256 --disarmed-evidence current-state.json --apply
 ```
 
-Rollback verifies current and target manifests plus exact parent linkage, requires a 64-character target release binding and explicit `DISARMED` evidence, atomically switches `current`, and writes a receipt under `/tmp/wheelchair-rc-sandbox/receipts/`. Restart the selected software-only profile DISARMED with permissions UNKNOWN; re-qualify localization and explicitly arm. Never auto-resume a mission. Neither tool modifies drivers, ROS/system services, bag data, armed state, or paths outside the selected prefix.
+Rollback verifies both manifests, the target release ID against `parentReleaseBindingSha256`, the hash-bound inventory and receipt, and separate current-state DISARMED/UNKNOWN/no-resume evidence before changing `current`. It restarts only DISARMED with permissions UNKNOWN; localization must be re-qualified and missions never auto-resume. Neither tool modifies drivers, ROS/system services, bag data, armed state, or paths outside the selected prefix.

@@ -1,46 +1,24 @@
 #!/usr/bin/env python3
-"""Fail closed when a Noetic release manifest or its evidence is invalid."""
+"""Independently verify a deterministic, fail-closed software release manifest."""
 
 import argparse
 import json
 import re
 from pathlib import Path
-import xml.etree.ElementTree as ET
 
 from generate_release_manifest import (
-    CATEGORIES, REQUIRED_RUNTIME_ENTRYPOINTS, SCHEMA, canonical_hash, file_hash,
+    CATEGORIES, GATE_CLAIM, GATE_REPORT_SCHEMA, GENERATED_ARTIFACT_NAMES,
+    REQUIRED_GATES, REQUIRED_RUNTIME_ENTRYPOINTS, SCHEMA, canonical_hash, file_hash,
 )
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
-FALSE_AUTHORITY = (
-    "hardware_motion_authorized", "passenger_operation_authorized",
-    "physical_authority", "simulation_or_replay_is_physical_evidence",
-)
-VERIFIER_EXCLUDED_PARTS = {
-    ".git", ".gjc", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
-    ".venv", "__pycache__", "artifacts", "build", "devel", "generated",
-    "install", "logs", "log", "node_modules", "release_artifacts", "tmp", "temp",
-}
-VERIFIER_EXCLUDED_SUFFIXES = (".bag", ".db3", ".mcap", ".pyc", ".pyo", "~")
-VERIFIER_GENERATED_NAMES = {"release-manifest.json"}
-VERIFIER_REPORT_SCHEMAS = {
-    ("algorithm-adversarial-test-report", 1): 2,
-    ("simulation-test-report", 1): 2,
-    ("test-report", 1): 0,
-}
-VERIFIER_CLAIMS = {"UNIT_ONLY": 0, "REPLAY_CONSISTENCY": 1, "SIMULATION_ONLY": 2}
-VERIFIER_SURFACES = {
-    "unit": 0, "unit_only": 0, "replay": 1, "replay_consistency": 1,
-    "simulation": 2, "simulation_only": 2,
-}
 
 
 class ManifestError(ValueError):
     """The release bundle is incomplete, inconsistent, or unsafe."""
 
 
-# Compatibility for callers/tests written before the verifier API was frozen.
 VerificationError = ManifestError
 
 
@@ -49,7 +27,36 @@ def require(condition, message):
         raise ManifestError(message)
 
 
+def _root(root):
+    root = Path(root).absolute()
+    require(not root.is_symlink() and root.is_dir(), "release root must be a non-symlink directory")
+    return root
+
+
+def _safe_file(root, relative, label="file"):
+    require(isinstance(relative, str) and relative and not Path(relative).is_absolute(),
+            "invalid {} path".format(label))
+    candidate = root / relative
+    try:
+        parts = candidate.relative_to(root).parts
+    except ValueError as exc:
+        raise ManifestError("{} path escapes release root: {}".format(label, relative)) from exc
+    current = root
+    for part in parts:
+        current /= part
+        require(not current.is_symlink(), "symlink is forbidden in release path: " + relative)
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root.resolve(strict=True))
+    except (FileNotFoundError, ValueError) as exc:
+        raise ManifestError("missing {} or path escapes release root: {}".format(label, relative)) from exc
+    require(resolved.is_file(), "missing {}: {}".format(label, relative))
+    return candidate
+
+
 def _load(path):
+    path = Path(path).absolute()
+    require(not path.is_symlink(), "manifest is a symlink")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -58,17 +65,20 @@ def _load(path):
     return value
 
 
-def _verifier_excluded(relative):
+def _excluded(relative):
     candidate = Path(relative)
-    return (any(part in VERIFIER_EXCLUDED_PARTS for part in candidate.parts)
-            or candidate.name in VERIFIER_GENERATED_NAMES
-            or candidate.name.endswith(VERIFIER_EXCLUDED_SUFFIXES))
+    parts = candidate.parts
+    excluded = {".git", ".gjc", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".venv",
+                "__pycache__", "artifacts", "build", "devel", "generated", "install", "logs", "log",
+                "node_modules", "release_artifacts", "tmp", "temp"}
+    return (any(part in excluded for part in parts) or relative in GENERATED_ARTIFACT_NAMES
+            or candidate.name.endswith((".bag", ".db3", ".mcap", ".pyc", ".pyo", "~")))
 
 
-def _verifier_category(relative):
+def _category(relative):
     candidate = Path(relative)
     parts, name, suffix = candidate.parts, candidate.name, candidate.suffix.lower()
-    if not parts or _verifier_excluded(relative):
+    if not parts or _excluded(relative):
         return None
     if parts[0] == "src":
         if name in {"package.xml", "CMakeLists.txt", "setup.py", "setup.cfg"}:
@@ -98,267 +108,214 @@ def _verifier_category(relative):
         return "ci_tools"
     if parts[0] == "tests":
         return "qualification_tools"
-    if len(parts) == 1 and (
-            name in {".catkin_workspace", ".dockerignore", ".gitignore",
-                     ".gitattributes", "Dockerfile", "Makefile", "pyproject.toml",
-                     "tox.ini"}
-            or name.startswith(("requirements", "setup."))
-            or suffix in {".cfg", ".ini", ".toml", ".lock"}):
+    if len(parts) == 1 and (name in {".catkin_workspace", ".dockerignore", ".gitignore",
+                                    ".gitattributes", "Dockerfile", "Makefile", "pyproject.toml", "tox.ini"}
+                            or name.startswith(("requirements", "setup."))
+                            or suffix in {".cfg", ".ini", ".toml", ".lock"}):
         return "source_build_metadata"
     return None
 
 
 def _expected_inventory(root, report_paths):
     expected = {category: [] for category in CATEGORIES}
-    reports = set(report_paths)
+    report_paths = set(report_paths)
     for candidate in root.rglob("*"):
         relative = candidate.relative_to(root).as_posix()
-        if relative not in reports and _verifier_excluded(relative):
+        if _excluded(relative):
             continue
-        if candidate.is_symlink():
-            try:
-                candidate.resolve(strict=True).relative_to(root)
-            except (FileNotFoundError, ValueError) as exc:
-                raise ManifestError("symlink escapes release root: " + relative) from exc
+        require(not candidate.is_symlink(), "symlink is forbidden in release path: " + relative)
         if not candidate.is_file():
             continue
-        if relative in reports:
+        if relative in report_paths:
             expected["qualification_evidence"].append(relative)
-            continue
-        category = _verifier_category(relative)
-        require(category is not None, "unclassified regular file: " + relative)
-        expected[category].append(relative)
-    for category, paths in expected.items():
-        expected[category] = sorted(set(paths))
+        else:
+            category = _category(relative)
+            require(category is not None, "unclassified regular file: " + relative)
+            expected[category].append(relative)
+    for category in CATEGORIES:
+        expected[category] = sorted(set(expected[category]))
         require(expected[category], "required hash category is empty: " + category)
     return expected
 
 
-def _report_has_failure(value):
-    if isinstance(value, dict):
-        for key, child in value.items():
-            lowered = key.lower()
-            if lowered in {"failed", "failure", "failures", "errors"}:
-                if child not in (False, 0, None, "", []):
-                    return True
-            if lowered in {"passed", "pass"} and child is False:
-                return True
-            if lowered == "status" and isinstance(child, str):
-                if child.upper() in {"FAIL", "FAILED", "ERROR", "PLATFORM_UNAVAILABLE"}:
-                    return True
-            if _report_has_failure(child):
-                return True
-    elif isinstance(value, list):
-        return any(_report_has_failure(child) for child in value)
-    return False
+def _validate_inventory(root, hashes, report_paths):
+    require(isinstance(hashes, dict) and set(hashes) == set(CATEGORIES),
+            "hash category inventory differs")
+    for entrypoint in REQUIRED_RUNTIME_ENTRYPOINTS:
+        candidate = _safe_file(root, entrypoint, "required runtime entrypoint")
+        require(bool(candidate.stat().st_mode & 0o111),
+                "required runtime entrypoint is not executable: " + entrypoint)
+    expected = _expected_inventory(root, report_paths)
+    seen = set()
+    digests = {}
+    for category in CATEGORIES:
+        section = hashes[category]
+        require(isinstance(section, dict) and set(section) == {"digest", "files"},
+                "invalid hash category: " + category)
+        entries = section["files"]
+        require(isinstance(entries, list) and entries, "empty hash category: " + category)
+        require(entries == sorted(entries, key=lambda entry: entry.get("path", "") if isinstance(entry, dict) else ""),
+                "hash entries are not sorted: " + category)
+        require([entry.get("path") if isinstance(entry, dict) else None for entry in entries] == expected[category],
+                "hash scope differs: " + category)
+        for entry in entries:
+            require(isinstance(entry, dict) and set(entry) == {"path", "sha256", "executable"},
+                    "invalid hash entry: " + category)
+            relative, digest, executable = entry["path"], entry["sha256"], entry["executable"]
+            require(isinstance(digest, str) and HEX64.fullmatch(digest) and isinstance(executable, bool),
+                    "invalid hash entry: " + category)
+            require(relative.casefold() not in seen, "duplicate or colliding inventory path: " + relative)
+            seen.add(relative.casefold())
+            candidate = _safe_file(root, relative, "hashed file")
+            require(bool(candidate.stat().st_mode & 0o111) is executable,
+                    "executable mode mismatch: " + relative)
+            require(file_hash(candidate) == digest, "hash mismatch: " + relative)
+        require(section["digest"] == canonical_hash(entries), "category digest mismatch: " + category)
+        digests[category] = section["digest"]
+    for entrypoint in REQUIRED_RUNTIME_ENTRYPOINTS:
+        require(entrypoint in expected["python_runtime"],
+                "required runtime entrypoint is missing: " + entrypoint)
+    return digests
 
 
-def _verify_json_report(path, relative, revision):
+def _validate_source(source):
+    require(isinstance(source, dict) and set(source) == {"kind", "revision", "worktree_clean"},
+            "invalid source identity")
+    require(source["kind"] in {"git_commit", "worktree"} and isinstance(source["revision"], str),
+            "invalid source identity")
+    require((source["kind"] == "git_commit" and GIT_SHA.fullmatch(source["revision"]))
+            or (source["kind"] == "worktree" and source["revision"].startswith("worktree:")),
+            "invalid source revision")
+    require(source["worktree_clean"] is (source["kind"] == "git_commit"), "unclean authority/source mismatch")
+
+
+def _expected_bindings(source, digests):
+    release_input = canonical_hash({category: digests[category] for category in CATEGORIES
+                                    if category != "qualification_evidence"})
+    bundle = canonical_hash({"source_revision": source["revision"],
+                             "configuration_digest": digests["configuration"],
+                             "release_input_digest": release_input})
+    return {"sourceRevision": source["revision"], "configurationDigest": digests["configuration"],
+            "bundleDigest": bundle, "releaseInputDigest": release_input}
+
+
+def _validate_gate(path, relative, bindings):
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ManifestError("invalid JSON test report: " + relative) from exc
-    require(isinstance(document, dict), "JSON test report root must be an object: " + relative)
-    report_type = document.get("artifactType", document.get("type"))
-    version = document.get("schemaVersion", document.get("schema_version"))
-    maximum = VERIFIER_REPORT_SCHEMAS.get((report_type, version))
-    require(maximum is not None, "unallowlisted or missing JSON report type/schema: " + relative)
-    require(document.get("status") in {"PASS", "passed"},
-            "JSON test report does not record PASS: " + relative)
-    for aliases in (
-            ("hardwareMotionAuthorized", "hardware_motion_authorized"),
-            ("passengerOperationAuthorized", "passenger_operation_authorized")):
-        values = [document[key] for key in aliases if key in document]
-        require(values and all(value is False for value in values),
-                "JSON test report authority must remain false: " + relative)
-    claim = document.get("claimTag", document.get("claim_tag"))
-    require(claim in VERIFIER_CLAIMS, "JSON test report has invalid claim tag: " + relative)
-    surface = document.get("surface")
-    if surface is None:
-        surface_level = maximum
-    else:
-        surface_level = VERIFIER_SURFACES.get(str(surface).lower())
-        require(surface_level is not None, "JSON test report has invalid surface: " + relative)
-    require(VERIFIER_CLAIMS[claim] <= min(maximum, surface_level),
-            "JSON test report promotes its claim above its surface: " + relative)
-    result = document.get("result")
-    require(isinstance(result, dict) and result.get("passed") is True,
-            "JSON test report contains a failed result: " + relative)
-    require(not _report_has_failure(result),
-            "JSON test report contains a failed result: " + relative)
-    declared = document.get("source_revision", document.get("commit"))
-    require(declared in (None, revision), "mixed source hash in report: " + relative)
+        raise ManifestError("invalid gate report: " + relative) from exc
+    keys = {"artifactType", "schemaVersion", "gateId", "status", "claimTag",
+            "hardwareMotionAuthorized", "passengerOperationAuthorized", "sourceRevision",
+            "configurationDigest", "bundleDigest", "releaseInputDigest", "result"}
+    require(isinstance(report, dict) and set(report) == keys, "gate report has non-strict schema: " + relative)
+    require((report["artifactType"], report["schemaVersion"]) == GATE_REPORT_SCHEMA,
+            "gate report has invalid type/schema: " + relative)
+    require(REQUIRED_GATES.get(report["gateId"]) == relative, "gate report ID/path does not match AC matrix: " + relative)
+    require(report["status"] == "PASS" and report["claimTag"] == GATE_CLAIM,
+            "gate report is not a passing software-only claim: " + relative)
+    require(report["hardwareMotionAuthorized"] is False and report["passengerOperationAuthorized"] is False,
+            "gate report authority must remain false: " + relative)
+    require(all(report[key] == value for key, value in bindings.items()),
+            "gate report has stale or mixed release binding: " + relative)
+    result = report["result"]
+    require(isinstance(result, dict) and set(result) == {"passed", "cases"} and result["passed"] is True
+            and isinstance(result["cases"], int) and not isinstance(result["cases"], bool) and result["cases"] > 0,
+            "gate report has invalid or trivial result: " + relative)
+    return report["gateId"]
 
 
-def _verify_junit_report(path, relative):
-    try:
-        root = ET.parse(str(path)).getroot()
-    except (OSError, ET.ParseError) as exc:
-        raise ManifestError("invalid JUnit test report: " + relative) from exc
-    suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
-    require(root.tag in {"testsuite", "testsuites"} and bool(suites),
-            "test report is not JUnit XML: " + relative)
-    require(not any(element.tag.rsplit("}", 1)[-1] in {"failure", "error", "skipped"}
-                    for element in root.iter()),
-            "JUnit report contains failed or skipped test cases: " + relative)
-    total = 0
-    for suite in suites:
-        counts = {}
-        for field in ("tests", "failures", "errors", "skipped"):
-            raw = suite.get(field)
-            require(isinstance(raw, str) and raw.isdigit(),
-                    "JUnit report lacks valid {} count: {}".format(field, relative))
-            counts[field] = int(raw)
-        total += counts["tests"]
-        require(not any(counts[field] for field in ("failures", "errors", "skipped")),
-                "JUnit report is not a clean run: " + relative)
-    require(total > 0, "JUnit report contains no tests: " + relative)
-
-
-def _validate_entries(root, category, section, expected_paths, global_paths):
-    require(isinstance(section, dict), "invalid hash category: " + category)
-    entries = section.get("files")
-    require(isinstance(entries, list) and entries, "empty hash category: " + category)
-    require(all(isinstance(item, dict) for item in entries),
-            "invalid hash entry: " + category)
-    require(all(isinstance(item.get("path"), str) and item.get("path")
-                for item in entries), "invalid path: " + category)
-    require(entries == sorted(entries, key=lambda item: item.get("path", "")),
-            "hash entries are not sorted: " + category)
-    declared_paths = [entry.get("path") for entry in entries]
-    require(declared_paths == expected_paths, "hash scope differs: " + category)
-    for entry in entries:
-        require(isinstance(entry, dict) and set(entry) == {"path", "sha256", "executable"},
-                "invalid hash entry: " + category)
-        path, expected = entry.get("path"), entry.get("sha256")
-        executable = entry.get("executable")
-        require(isinstance(path, str) and path, "invalid path: " + category)
-        collision = path.casefold()
-        require(collision not in global_paths,
-                "duplicate or colliding inventory path: " + path)
-        global_paths.add(collision)
-        require(isinstance(expected, str) and HEX64.fullmatch(expected),
-                "invalid sha256: " + path)
-        require(isinstance(executable, bool), "invalid executable mode: " + path)
-        candidate = root / path
-        require(not candidate.is_symlink(), "bound file is a symlink: " + path)
-        try:
-            resolved = candidate.resolve(strict=True)
-            resolved.relative_to(root)
-        except (FileNotFoundError, ValueError) as exc:
-            raise ManifestError("missing hashed file or path escapes release root: " + path) from exc
-        require(resolved.is_file(), "missing hashed file: " + path)
-        require(bool(candidate.stat().st_mode & 0o111) is executable,
-                "executable mode mismatch: " + path)
-        require(file_hash(candidate) == expected, "hash mismatch: " + path)
-    require(section.get("digest") == canonical_hash(entries),
-            "category digest mismatch: " + category)
+def _validate_rollback(rollback):
+    keys = {"parentReleaseBindingSha256", "parentReleaseBindingReceiptSha256", "inventory", "restartReceipt"}
+    require(isinstance(rollback, dict) and set(rollback) == keys, "rollback binding has non-strict schema")
+    binding, receipt = rollback["parentReleaseBindingSha256"], rollback["restartReceipt"]
+    receipt_hash, inventory = rollback["parentReleaseBindingReceiptSha256"], rollback["inventory"]
+    require(isinstance(binding, str) and HEX64.fullmatch(binding) and isinstance(receipt_hash, str) and HEX64.fullmatch(receipt_hash),
+            "rollback parent digest/receipt is invalid")
+    kinds = {"binaries", "maps", "routes", "policies", "drivers"}
+    require(isinstance(inventory, dict) and set(inventory) == kinds, "rollback cross-hash inventory is incomplete")
+    paths = set()
+    for kind in sorted(kinds):
+        entries = inventory[kind]
+        require(isinstance(entries, list) and entries and entries == sorted(entries, key=lambda entry: entry.get("path", "") if isinstance(entry, dict) else ""),
+                "rollback cross-hash inventory is incomplete or unordered: " + kind)
+        for entry in entries:
+            require(isinstance(entry, dict) and set(entry) == {"path", "sha256"} and isinstance(entry["path"], str)
+                    and entry["path"] and isinstance(entry["sha256"], str) and HEX64.fullmatch(entry["sha256"]),
+                    "rollback cross-hash inventory entry is invalid: " + kind)
+            require(entry["path"] not in paths, "rollback cross-hash inventory duplicates a path")
+            paths.add(entry["path"])
+    # This is a deterministic hash-bound receipt, not asymmetric cryptographic signature verification.
+    require(receipt_hash == canonical_hash({"parentReleaseBindingSha256": binding, "inventory": inventory}),
+            "rollback parent hash-bound receipt does not bind inventory")
+    receipt_keys = {"state", "permissions", "localizationRequired", "missionResume", "parentReleaseBindingSha256", "inventoryDigest"}
+    require(isinstance(receipt, dict) and set(receipt) == receipt_keys, "rollback restart receipt has non-strict schema")
+    require(receipt["state"] == "DISARMED" and receipt["permissions"] == "UNKNOWN"
+            and receipt["localizationRequired"] is True and receipt["missionResume"] is False
+            and receipt["parentReleaseBindingSha256"] == binding
+            and receipt["inventoryDigest"] == canonical_hash(inventory),
+            "rollback restart receipt does not prove a disarmed matching restart")
 
 
 def verify_manifest(path, root=None):
-    path = Path(path).resolve()
-    root = Path(root).resolve() if root else path.parent.resolve()
-    manifest = _load(path)
-    require(manifest.get("schema") == SCHEMA, "unsupported manifest schema")
-    binding = manifest.get("release_binding_sha256")
+    manifest_path = Path(path).absolute()
+    root = _root(root if root else manifest_path.parent)
+    try:
+        manifest_relative = manifest_path.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise ManifestError("manifest path escapes release root") from exc
+    _safe_file(root, manifest_relative, "manifest")
+    manifest = _load(manifest_path)
+    keys = {"schema", "source", "hashes", "gate_matrix", "authority", "qualification", "test_reports",
+            "known_blockers", "rollback", "release_binding_sha256"}
+    require(set(manifest) == keys and manifest["schema"] == SCHEMA, "unsupported or non-strict manifest schema")
+    binding = manifest["release_binding_sha256"]
     require(isinstance(binding, str) and HEX64.fullmatch(binding), "invalid release binding")
     unsigned = dict(manifest)
-    unsigned.pop("release_binding_sha256", None)
+    unsigned.pop("release_binding_sha256")
     require(binding == canonical_hash(unsigned), "release binding mismatch")
+    _validate_source(manifest["source"])
 
-    source = manifest.get("source")
-    require(isinstance(source, dict), "missing source identity")
-    require(source.get("kind") in {"git_commit", "worktree"}, "invalid source kind")
-    revision = source.get("revision")
-    require(isinstance(revision, str) and (GIT_SHA.fullmatch(revision) or revision.startswith("worktree:")), "invalid source revision")
-    require(source.get("worktree_clean") is (source.get("kind") == "git_commit"), "unclean authority/source mismatch")
-
-    hashes = manifest.get("hashes")
-    require(isinstance(hashes, dict) and set(hashes) == set(CATEGORIES),
-            "hash category inventory differs")
-    reports = manifest.get("test_reports")
+    reports = manifest["test_reports"]
     require(isinstance(reports, list) and reports, "test-report evidence is missing")
-    report_paths = []
-    for report in reports:
-        require(isinstance(report, dict), "invalid test-report reference")
-        relative = report.get("path")
-        require(isinstance(relative, str) and relative, "invalid test-report reference")
-        report_paths.append(relative)
-    require(report_paths == sorted(set(report_paths)), "duplicate or unsorted test reports")
-    for relative in report_paths:
-        candidate = root / relative
-        require(not candidate.is_symlink(), "test report is a symlink: " + relative)
-        try:
-            resolved_report = candidate.resolve(strict=True)
-            resolved_report.relative_to(root)
-        except (FileNotFoundError, ValueError) as exc:
-            raise ManifestError("missing test report or path escapes release root: " + relative) from exc
-        require(resolved_report.is_file() and resolved_report.stat().st_size > 0,
-                "missing test report: " + relative)
-    for entrypoint in REQUIRED_RUNTIME_ENTRYPOINTS:
-        require((root / entrypoint).is_file(),
-                "required runtime entrypoint is missing: " + entrypoint)
-    expected_inventory = _expected_inventory(root, report_paths)
-    global_paths = set()
-    for category in CATEGORIES:
-        _validate_entries(
-            root, category, hashes[category], expected_inventory[category], global_paths)
-    for entrypoint in REQUIRED_RUNTIME_ENTRYPOINTS:
-        require(entrypoint in expected_inventory["python_runtime"],
-                "required runtime entrypoint is missing: " + entrypoint)
+    expected_paths = sorted(REQUIRED_GATES.values())
+    require(len(reports) == len(expected_paths), "AC gate matrix is incomplete")
+    require([entry.get("path") if isinstance(entry, dict) else None for entry in reports] == expected_paths,
+            "test reports do not match the AC gate matrix")
+    for entry in reports:
+        require(isinstance(entry, dict) and set(entry) == {"path", "sha256", "executable"}
+                and isinstance(entry["sha256"], str) and HEX64.fullmatch(entry["sha256"])
+                and entry["executable"] is False, "invalid test-report reference")
+        candidate = _safe_file(root, entry["path"], "test report")
+        require(candidate.stat().st_size > 0 and file_hash(candidate) == entry["sha256"],
+                "test report hash mismatch: " + entry["path"])
 
-    authority = manifest.get("authority")
-    require(isinstance(authority, dict) and authority.get("software_release_candidate") is True, "software RC authority is absent")
-    require(authority.get("clean_release_authority") is True, "unclean release authority")
-    for key in FALSE_AUTHORITY:
-        require(authority.get(key) is False, "authority escalation: " + key)
+    digests = _validate_inventory(root, manifest["hashes"], expected_paths)
+    evidence = {entry["path"]: entry for entry in manifest["hashes"]["qualification_evidence"]["files"]}
+    require(evidence == {entry["path"]: entry for entry in reports}, "test reports are not bound to qualification evidence")
+    bindings = _expected_bindings(manifest["source"], digests)
+    matrix = manifest["gate_matrix"]
+    require(isinstance(matrix, dict) and set(matrix) == {"requiredGateIds", "passedGateIds", "releaseBindings"}
+            and matrix["requiredGateIds"] == sorted(REQUIRED_GATES)
+            and matrix["passedGateIds"] == sorted(REQUIRED_GATES)
+            and matrix["releaseBindings"] == bindings, "AC gate matrix is incomplete or stale")
+    gate_ids = {_validate_gate(_safe_file(root, relative, "gate report"), relative, bindings) for relative in expected_paths}
+    require(gate_ids == set(REQUIRED_GATES), "AC gate IDs are incomplete or duplicated")
 
-    def reject_mixed_authority(value):
-        if isinstance(value, dict):
-            for key, child in value.items():
-                if (key in {"hardware_enabled", "passenger_enabled"}
-                        or key.endswith("_authorized")
-                        or (key.endswith("_authority")
-                            and key not in {"software_release_authority",
-                                           "clean_release_authority"})):
-                    require(child is False, "mixed authority: " + key)
-                reject_mixed_authority(child)
-        elif isinstance(value, list):
-            for child in value:
-                reject_mixed_authority(child)
-
-    reject_mixed_authority(manifest)
-    qualification = manifest.get("qualification")
-    require(isinstance(qualification, dict), "missing qualification status")
-    for key in ("target_nuc", "hardware", "passenger"):
-        require(qualification.get(key) == "blocked", key + " qualification must remain blocked")
-    blockers = manifest.get("known_blockers")
-    require(isinstance(blockers, list) and blockers and all(isinstance(item, str) and item for item in blockers), "known blockers are missing")
-
-    evidence_entries = hashes["qualification_evidence"]["files"]
-    evidence_by_path = {entry["path"]: entry for entry in evidence_entries}
-    for report in reports:
-        relative, expected = report.get("path"), report.get("sha256")
-        executable = report.get("executable")
-        require(isinstance(expected, str) and HEX64.fullmatch(expected)
-                and isinstance(executable, bool), "invalid test-report reference")
-        require(evidence_by_path.get(relative) == report,
-                "test report is not bound to qualification evidence: " + relative)
-        report_path = root / relative
-        require(not report_path.is_symlink(), "test report is a symlink: " + relative)
-        require(report_path.is_file() and report_path.stat().st_size > 0,
-                "missing test report: " + relative)
-        require(file_hash(report_path) == expected, "test report hash mismatch: " + relative)
-        if report_path.suffix.lower() == ".json":
-            _verify_json_report(report_path, relative, revision)
-        elif report_path.suffix.lower() == ".xml":
-            _verify_junit_report(report_path, relative)
-        else:
-            raise ManifestError("unsupported test report format: " + relative)
-
-    rollback = manifest.get("rollback")
-    require(isinstance(rollback, dict) and isinstance(rollback.get("parent"), str) and rollback["parent"], "rollback parent is missing")
-    require(rollback.get("parent_state") == "unarmed", "rollback would restore an armed state")
+    authority = manifest["authority"]
+    expected_authority = {"software_release_candidate": True, "clean_release_authority": True,
+                          "hardware_motion_authorized": False, "passenger_operation_authorized": False,
+                          "physical_authority": False, "simulation_or_replay_is_physical_evidence": False}
+    require(authority == expected_authority, "authority escalation or incomplete aggregate authority")
+    require(manifest["qualification"] == {"target_nuc": "passed", "hardware": "blocked", "passenger": "blocked"},
+            "qualification status contradicts the complete gate matrix")
+    blockers = manifest["known_blockers"]
+    require(isinstance(blockers, list) and blockers and blockers == sorted(set(blockers))
+            and all(isinstance(item, str) and item for item in blockers)
+            and "target NUC qualification has not passed" not in blockers
+            and {"hardware motion qualification has not passed",
+                 "passenger operation qualification has not passed"}.issubset(blockers),
+            "known blockers contradict qualification or authority")
+    _validate_rollback(manifest["rollback"])
     return manifest
 
 

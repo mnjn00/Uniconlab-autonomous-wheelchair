@@ -1,7 +1,8 @@
-import copy
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,11 +18,15 @@ def load_script(name):
     return module
 
 
-generate = load_script("generate_release_manifest")
-# The verifier intentionally imports the generator as a sibling CLI module.
-import sys
 sys.path.insert(0, str(ROOT / "scripts"))
+generate = load_script("generate_release_manifest")
 verify = load_script("verify_release_manifest")
+SOURCE = {"kind": "git_commit", "revision": "a" * 40, "worktree_clean": True}
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def release_tree(tmp_path):
@@ -33,300 +38,322 @@ def release_tree(tmp_path):
         "src/wheelchair_interfaces/msg/SafetyState.msg": "bool stopped\n",
         "src/example/config/settings.yaml": "enabled: true\n",
         "src/example/launch/example.launch": "<launch/>\n",
-        "src/wheelchair_description/urdf/wheelchair.urdf.xacro": "<robot name=\"wheelchair\"/>\n",
-        "src/wheelchair_gazebo/worlds/example.world": "<sdf version=\"1.6\"/>\n",
+        "src/wheelchair_description/urdf/wheelchair.urdf.xacro": "<robot name='wheelchair'/>\n",
         "contracts/wp0/contract.yaml": "authority: software_only\n",
         "data/site/map.pgm": "P2\n1 1\n255\n0\n",
-        "data/site/map.yaml": "image: map.pgm\n",
-        "data/site/map.metadata.json": "{}\n",
         "data/site/site.waypoints.yaml": "waypoints: []\n",
         "README.md": "# Operator guide\n",
         ".github/workflows/noetic-ci.yml": "name: noetic\n",
-        "tools/noetic/Dockerfile": "FROM ubuntu:20.04@sha256:" + "0" * 64 + "\n",
-        "tools/offline/requirements.lock": "pytest==6.2.5\n",
         "tests/test_qualification.py": "def test_qualification():\n    assert True\n",
-        "reports/pytest.json": json.dumps({
-            "artifactType": "algorithm-adversarial-test-report",
-            "schemaVersion": 1,
-            "status": "PASS",
-            "claimTag": "SIMULATION_ONLY",
-            "surface": "simulation",
-            "hardwareMotionAuthorized": False,
-            "passengerOperationAuthorized": False,
-            "source_revision": "a" * 40,
-            "result": {"passed": True, "summary": {"total": 1, "failed": 0}},
-        }) + "\n",
     }
-    for relative in generate.REQUIRED_RUNTIME_ENTRYPOINTS:
-        files[relative] = "#!/usr/bin/env python3\nprint('safe')\n"
+    for entrypoint in generate.REQUIRED_RUNTIME_ENTRYPOINTS:
+        files[entrypoint] = "#!/usr/bin/env python3\nprint('safe')\n"
     for relative, content in files.items():
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    for relative in generate.REQUIRED_RUNTIME_ENTRYPOINTS:
-        (tmp_path / relative).chmod(0o755)
-    source = {"kind": "git_commit", "revision": "a" * 40, "worktree_clean": True}
-    return tmp_path / "reports/pytest.json", source
+    for entrypoint in generate.REQUIRED_RUNTIME_ENTRYPOINTS:
+        (tmp_path / entrypoint).chmod(0o755)
+    for relative in generate.REQUIRED_GATES.values():
+        write_json(tmp_path / relative, {})
+    return [tmp_path / path for path in sorted(generate.REQUIRED_GATES.values())]
 
 
-def make_manifest(tmp_path):
-    report, source = release_tree(tmp_path)
-    manifest = generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
+def bindings_for(root, reports):
+    del reports
+    return generate.prepare_bindings(root, source=SOURCE)
+
+
+def gate_report(gate_id, bindings):
+    return {
+        "artifactType": "wheelchair-ac-gate-report",
+        "schemaVersion": 1,
+        "gateId": gate_id,
+        "status": "PASS",
+        "claimTag": "SOFTWARE_ONLY",
+        "hardwareMotionAuthorized": False,
+        "passengerOperationAuthorized": False,
+        **bindings,
+        "result": {"passed": True, "cases": 1},
+    }
+
+
+def rollback_binding():
+    inventory = {
+        kind: [{"path": kind + "/item", "sha256": (str(index) * 64)[:64]}]
+        for index, kind in enumerate(("binaries", "maps", "routes", "policies", "drivers"), 1)
+    }
+    binding = "b" * 64
+    return {
+        "parentReleaseBindingSha256": binding,
+        "parentReleaseBindingReceiptSha256": generate.canonical_hash({
+            "parentReleaseBindingSha256": binding, "inventory": inventory}),
+        "inventory": inventory,
+        "restartReceipt": {
+            "state": "DISARMED", "permissions": "UNKNOWN", "localizationRequired": True,
+            "missionResume": False, "parentReleaseBindingSha256": binding,
+            "inventoryDigest": generate.canonical_hash(inventory),
+        },
+    }
+
+
+def complete_fixture(tmp_path):
+    reports = release_tree(tmp_path)
+    bindings = bindings_for(tmp_path, reports)
+    for gate_id, relative in generate.REQUIRED_GATES.items():
+        write_json(tmp_path / relative, gate_report(gate_id, bindings))
+    return reports, rollback_binding(), bindings
+
+
+def test_complete_ac0_ac6_fixture_derives_software_only_clean_authority(tmp_path):
+    reports, rollback, bindings = complete_fixture(tmp_path)
+    first = generate.generate_manifest(tmp_path, reports, rollback, source=SOURCE)
+    second = generate.generate_manifest(tmp_path, reports, rollback, source=SOURCE)
+    assert first == second
+    assert first["gate_matrix"]["releaseBindings"] == bindings
+    assert first["gate_matrix"]["passedGateIds"] == sorted(generate.REQUIRED_GATES)
+    assert first["authority"] == {
+        "software_release_candidate": True, "clean_release_authority": True,
+        "hardware_motion_authorized": False, "passenger_operation_authorized": False,
+        "physical_authority": False, "simulation_or_replay_is_physical_evidence": False,
+    }
+    assert first["qualification"] == {
+        "target_nuc": "passed", "hardware": "blocked", "passenger": "blocked",
+    }
+    assert "target NUC qualification has not passed" not in first["known_blockers"]
+    assert set(generate.DEFAULT_BLOCKERS) <= set(first["known_blockers"])
+    assert generate.prepare_bindings(tmp_path, source=SOURCE) == bindings
+def test_prepare_bindings_excludes_only_generated_gate_evidence(tmp_path):
+    reports = release_tree(tmp_path)
+    before = generate.prepare_bindings(tmp_path)
+    for gate_id, relative in generate.REQUIRED_GATES.items():
+        write_json(tmp_path / relative, gate_report(gate_id, before))
+    assert generate.prepare_bindings(tmp_path) == before
+    manifest = generate.generate_manifest(tmp_path, reports, rollback_binding())
+    assert manifest["gate_matrix"]["releaseBindings"] == before
+
+    (tmp_path / "src/example/config/settings.yaml").write_text("enabled: false\n", encoding="utf-8")
+    assert generate.prepare_bindings(tmp_path) != before
+
+    unexpected = tmp_path / "evidence/unexpected.json"
+    unexpected.parent.mkdir(parents=True, exist_ok=True)
+    unexpected.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(generate.ManifestError, match="unclassified regular file"):
+        generate.prepare_bindings(tmp_path)
+
+
+def test_prepare_bindings_cli_is_canonical_and_public(tmp_path):
+    release_tree(tmp_path)
+    command = [
+        sys.executable, str(ROOT / "scripts/generate_release_manifest.py"),
+        "--root", str(tmp_path), "--prepare-bindings",
+    ]
+    result = subprocess.run(command, check=True, stdout=subprocess.PIPE, text=True)
+    bindings = json.loads(result.stdout)
+    assert result.stdout == json.dumps(
+        bindings, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
+    assert bindings == generate.prepare_bindings(tmp_path)
+def test_prepare_bindings_cli_supports_external_output(tmp_path):
+    release_tree(tmp_path)
+    output = tmp_path.parent / "bindings.json"
+    command = [
+        sys.executable, str(ROOT / "scripts/generate_release_manifest.py"),
+        "--root", str(tmp_path), "--prepare-bindings", "--bindings-output", str(output),
+    ]
+    subprocess.run(command, check=True)
+    assert json.loads(output.read_text(encoding="utf-8")) == generate.prepare_bindings(tmp_path)
+
+
+def test_excluded_artifact_symlink_is_ignored_during_prepare_and_verify(tmp_path):
+    output, manifest = manifest_fixture(tmp_path)
+    link = tmp_path / "artifacts/qa/roslog/latest"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(tmp_path.parent / "outside-release-root")
+    assert generate.prepare_bindings(tmp_path, source=SOURCE)
+    assert verify.verify_manifest(output, tmp_path) == manifest
+
+
+def test_one_report_cannot_clean_pass(tmp_path):
+    reports, rollback, _ = complete_fixture(tmp_path)
+    with pytest.raises(generate.ManifestError, match="AC gate matrix is incomplete"):
+        generate.generate_manifest(tmp_path, reports[:1], rollback, source=SOURCE)
+
+
+@pytest.mark.parametrize("mutation, message", [
+    (lambda report: report.update(sourceRevision="c" * 40), "stale or mixed"),
+    (lambda report: report.update(configurationDigest="0" * 64), "stale or mixed"),
+    (lambda report: report.update(bundleDigest="0" * 64), "stale or mixed"),
+    (lambda report: report.update(releaseInputDigest="0" * 64), "stale or mixed"),
+    (lambda report: report.update(claimTag="SIMULATION_ONLY"), "software-only"),
+    (lambda report: report["result"].update(cases=0), "trivial"),
+    (lambda report: report.update(gateId="WP7-PHYSICAL-001"), "ID/path"),
+    (lambda report: report.update(hardwareMotionAuthorized=True), "authority must remain false"),
+    (lambda report: report.update(extra="not allowed"), "non-strict schema"),
+])
+def test_gate_report_fail_closed_boundaries(tmp_path, mutation, message):
+    reports, rollback, _ = complete_fixture(tmp_path)
+    target = reports[0]
+    document = json.loads(target.read_text(encoding="utf-8"))
+    mutation(document)
+    write_json(target, document)
+    with pytest.raises(generate.ManifestError, match=message):
+        generate.generate_manifest(tmp_path, reports, rollback, source=SOURCE)
+
+
+def test_rejects_symlink_in_report_directory_ancestor(tmp_path):
+    reports, rollback, _ = complete_fixture(tmp_path)
+    evidence = tmp_path / "evidence"
+    outside = tmp_path / "outside"
+    evidence.rename(outside)
+    evidence.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(generate.ManifestError, match="symlink is forbidden"):
+        generate.generate_manifest(tmp_path, reports, rollback, source=SOURCE)
+
+
+@pytest.mark.parametrize("mutation, message", [
+    (lambda value: value["inventory"].pop("drivers"), "inventory is incomplete"),
+    (lambda value: value.update(parentReleaseBindingReceiptSha256="0" * 64), "receipt does not bind"),
+    (lambda value: value["restartReceipt"].update(state="ARMED"), "disarmed matching restart"),
+    (lambda value: value["restartReceipt"].update(permissions="CLEAR"), "disarmed matching restart"),
+    (lambda value: value["restartReceipt"].update(missionResume=True), "disarmed matching restart"),
+])
+def test_rollback_requires_signed_complete_disarmed_binding(tmp_path, mutation, message):
+    reports, rollback, _ = complete_fixture(tmp_path)
+    mutation(rollback)
+    with pytest.raises(generate.ManifestError, match=message):
+        generate.generate_manifest(tmp_path, reports, rollback, source=SOURCE)
+
+
+def test_atomic_write_is_canonical(tmp_path):
+    reports, rollback, _ = complete_fixture(tmp_path)
+    manifest = generate.generate_manifest(tmp_path, reports, rollback, source=SOURCE)
+    output = tmp_path / "release-manifest.json"
+    generate.atomic_write(output, manifest)
+    assert output.read_text(encoding="utf-8") == json.dumps(
+        manifest, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
+def manifest_fixture(tmp_path):
+    reports, rollback, _ = complete_fixture(tmp_path)
+    manifest = generate.generate_manifest(tmp_path, reports, rollback, source=SOURCE)
     output = tmp_path / "release-manifest.json"
     generate.atomic_write(output, manifest)
     return output, manifest
 
 
-def write_report(path, document):
-    if isinstance(document, str):
-        path.write_text(document, encoding="utf-8")
-    else:
-        path.write_text(json.dumps(document) + "\n", encoding="utf-8")
-
-
-def test_manifest_is_deterministic_and_verifiable(tmp_path):
-    report, source = release_tree(tmp_path)
-    first = generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-    second = generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-    assert first == second
-    output = tmp_path / "release-manifest.json"
-    generate.atomic_write(output, first)
-    assert verify.verify_manifest(output, tmp_path) == first
-    third = generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-    assert third == first
-
-
-def test_excluded_runtime_symlink_is_ignored_by_generation_and_verification(tmp_path):
-    report, source = release_tree(tmp_path)
-    runtime_link = tmp_path / "artifacts/qa/roslog-startup-final/latest"
-    runtime_link.parent.mkdir(parents=True)
-    runtime_link.symlink_to(tmp_path.parent / "outside-release-root")
-
-    manifest = generate.generate_manifest(
-        tmp_path, [report], "parent-unarmed", source=source)
-    output = tmp_path / "release-manifest.json"
-    generate.atomic_write(output, manifest)
-
-    assert verify.verify_manifest(output, tmp_path) == manifest
-
-
-def test_nonexcluded_escaping_symlink_is_rejected_by_generation_and_verification(tmp_path):
-    report, source = release_tree(tmp_path)
-    escaping = tmp_path / "docs/escaping-link"
-    escaping.parent.mkdir()
-    escaping.symlink_to(tmp_path.parent / "outside-release-root")
-
-    with pytest.raises(generate.ManifestError, match="symlink escapes release root"):
-        generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-
-    escaping.unlink()
-    output, _ = make_manifest(tmp_path)
-    escaping.symlink_to(tmp_path.parent / "outside-release-root")
-    with pytest.raises(verify.ManifestError, match="symlink escapes release root"):
-        verify.verify_manifest(output, tmp_path)
-
-
-def test_explicit_report_symlinks_are_rejected(tmp_path):
-    report, source = release_tree(tmp_path)
-    report.unlink()
-    report.symlink_to(tmp_path / "reports/replacement.json")
-
-    with pytest.raises(generate.ManifestError, match="inventory entry is a symlink"):
-        generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-
-    report.unlink()
-    write_report(report, clean_simulation_report())
-    manifest = generate.generate_manifest(
-        tmp_path, [report], "parent-unarmed", source=source)
-    output = tmp_path / "release-manifest.json"
-    generate.atomic_write(output, manifest)
-    replacement = tmp_path / "reports/replacement.json"
-    write_report(replacement, clean_simulation_report())
-    report.unlink()
-    report.symlink_to(replacement)
-
-    with pytest.raises(verify.ManifestError, match="test report is a symlink"):
-        verify.verify_manifest(output, tmp_path)
-
-
-
-def test_manifest_includes_representative_clean_target_assets(tmp_path):
-    _, manifest = make_manifest(tmp_path)
-    by_category = {
-        category: {entry["path"] for entry in section["files"]}
-        for category, section in manifest["hashes"].items()
-    }
-    assert "src/example/CMakeLists.txt" in by_category["package_metadata"]
-    assert "src/wheelchair_interfaces/msg/SafetyState.msg" in by_category["interfaces"]
-    assert "src/example/config/settings.yaml" in by_category["configuration"]
-    assert "data/site/map.yaml" in by_category["maps"]
-    assert "data/site/site.waypoints.yaml" in by_category["routes"]
-    assert "src/example/launch/example.launch" in by_category["launch_configuration"]
-    assert "src/wheelchair_description/urdf/wheelchair.urdf.xacro" in by_category["robot_assets"]
-    assert "README.md" in by_category["operator_docs"]
-    assert ".github/workflows/noetic-ci.yml" in by_category["ci_tools"]
-    assert set(generate.REQUIRED_RUNTIME_ENTRYPOINTS) <= by_category["python_runtime"]
-    assert ".dockerignore" in by_category["source_build_metadata"]
-
-
-@pytest.mark.parametrize("entrypoint", generate.REQUIRED_RUNTIME_ENTRYPOINTS)
-def test_missing_required_runtime_entrypoint_is_rejected(tmp_path, entrypoint):
-    output, _ = make_manifest(tmp_path)
-    (tmp_path / entrypoint).unlink()
-    with pytest.raises(verify.VerificationError, match="runtime entrypoint|required hash category"):
-        verify.verify_manifest(output, tmp_path)
-
-
-@pytest.mark.parametrize("entrypoint", generate.REQUIRED_RUNTIME_ENTRYPOINTS)
-def test_tampered_required_runtime_entrypoint_is_rejected(tmp_path, entrypoint):
-    output, _ = make_manifest(tmp_path)
-    (tmp_path / entrypoint).write_text("#!/usr/bin/env python3\nprint('tampered')\n",
-                                       encoding="utf-8")
-    with pytest.raises(verify.VerificationError, match="hash mismatch"):
-        verify.verify_manifest(output, tmp_path)
-
-
-def test_required_runtime_executable_mode_tamper_is_rejected(tmp_path):
-    output, _ = make_manifest(tmp_path)
-    entrypoint = tmp_path / generate.REQUIRED_RUNTIME_ENTRYPOINTS[0]
-    entrypoint.chmod(0o644)
-    with pytest.raises(verify.VerificationError, match="not executable|executable mode"):
-        verify.verify_manifest(output, tmp_path)
-
-
-def test_new_unbound_deployable_file_is_rejected(tmp_path):
-    output, _ = make_manifest(tmp_path)
-    (tmp_path / "src/example/config/unbound.yaml").write_text("unsafe: true\n", encoding="utf-8")
-    with pytest.raises(verify.VerificationError, match="hash scope differs"):
-        verify.verify_manifest(output, tmp_path)
-
-
-def test_generation_rejects_unknown_regular_file(tmp_path):
-    report, source = release_tree(tmp_path)
-    (tmp_path / "unclassified.future").write_text("must not be omitted\n", encoding="utf-8")
-    with pytest.raises(generate.ManifestError, match="unclassified regular file: unclassified.future"):
-        generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-
-
-def test_verifier_independently_rejects_unknown_regular_file(tmp_path):
-    output, _ = make_manifest(tmp_path)
-    (tmp_path / "unclassified.future").write_text("must not be omitted\n", encoding="utf-8")
-    with pytest.raises(verify.VerificationError, match="unclassified regular file"):
-        verify.verify_manifest(output, tmp_path)
-
-
-def test_clean_junit_report_is_accepted(tmp_path):
-    report, source = release_tree(tmp_path)
-    xml_report = tmp_path / "reports/junit.xml"
-    report.unlink()
-    write_report(xml_report, '<testsuite tests="2" failures="0" errors="0" skipped="0"/>')
-    manifest = generate.generate_manifest(
-        tmp_path, [xml_report], "parent-unarmed", source=source)
-    output = tmp_path / "release-manifest.json"
-    generate.atomic_write(output, manifest)
-    assert verify.verify_manifest(output, tmp_path) == manifest
-
-
-@pytest.mark.parametrize("field", ["failures", "errors", "skipped"])
-def test_unclean_junit_report_is_rejected(tmp_path, field):
-    report, source = release_tree(tmp_path)
-    report.unlink()
-    xml_report = tmp_path / "reports/junit.xml"
-    counts = {"tests": 2, "failures": 0, "errors": 0, "skipped": 0}
-    counts[field] = 1
-    write_report(xml_report, (
-        '<testsuite tests="{tests}" failures="{failures}" errors="{errors}" '
-        'skipped="{skipped}"/>').format(**counts))
-    with pytest.raises(generate.ManifestError, match="not a clean run"):
-        generate.generate_manifest(
-            tmp_path, [xml_report], "parent-unarmed", source=source)
-
-
-def clean_simulation_report():
-    return {
-        "artifactType": "algorithm-adversarial-test-report",
-        "schemaVersion": 1,
-        "status": "PASS",
-        "claimTag": "SIMULATION_ONLY",
-        "surface": "simulation",
-        "hardwareMotionAuthorized": False,
-        "passengerOperationAuthorized": False,
-        "source_revision": "a" * 40,
-        "result": {"passed": True, "summary": {"total": 4, "failed": 0}},
-    }
-
-
-def test_clean_simulation_json_is_accepted(tmp_path):
-    report, source = release_tree(tmp_path)
-    write_report(report, clean_simulation_report())
-    manifest = generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-    output = tmp_path / "release-manifest.json"
-    generate.atomic_write(output, manifest)
-    assert verify.verify_manifest(output, tmp_path) == manifest
-
-
-@pytest.mark.parametrize(
-    "mutation",
-    [
-        lambda value: value.update(status="PLATFORM_UNAVAILABLE"),
-        lambda value: value.update(status="FAIL"),
-        lambda value: value["result"].update(passed=False),
-        lambda value: value.update(surface="unit"),
-        lambda value: value.pop("artifactType"),
-        lambda value: value.pop("schemaVersion"),
-        lambda value: value.update(hardwareMotionAuthorized=True),
-        lambda value: value.update(passengerOperationAuthorized=True),
-    ],
-)
-def test_unavailable_failed_promoted_or_malformed_json_is_rejected(tmp_path, mutation):
-    report, source = release_tree(tmp_path)
-    document = clean_simulation_report()
-    mutation(document)
-    write_report(report, document)
-    with pytest.raises(generate.ManifestError):
-        generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
-
-
-def test_semantically_tampered_report_is_rejected_even_when_manifest_is_rebound(tmp_path):
-    output, manifest = make_manifest(tmp_path)
-    report = tmp_path / "reports/pytest.json"
-    document = clean_simulation_report()
-    document["result"]["passed"] = False
-    write_report(report, document)
-    entry = manifest["hashes"]["qualification_evidence"]["files"][0]
-    entry["sha256"] = generate.file_hash(report)
-    manifest["test_reports"][0]["sha256"] = entry["sha256"]
-    entries = manifest["hashes"]["qualification_evidence"]["files"]
-    manifest["hashes"]["qualification_evidence"]["digest"] = generate.canonical_hash(entries)
+def rebind(manifest):
     manifest.pop("release_binding_sha256")
     manifest["release_binding_sha256"] = generate.canonical_hash(manifest)
-    generate.atomic_write(output, manifest)
-    with pytest.raises(verify.VerificationError, match="failed result"):
+    return manifest
+
+
+def test_generator_verifier_round_trip_and_representative_inventory(tmp_path):
+    output, manifest = manifest_fixture(tmp_path)
+    assert verify.verify_manifest(output, tmp_path) == manifest
+    inventory = {category: {entry["path"] for entry in section["files"]}
+                 for category, section in manifest["hashes"].items()}
+    assert "src/example/CMakeLists.txt" in inventory["package_metadata"]
+    assert "src/wheelchair_interfaces/msg/SafetyState.msg" in inventory["interfaces"]
+    assert "src/example/config/settings.yaml" in inventory["configuration"]
+    assert "data/site/map.pgm" in inventory["maps"]
+    assert "data/site/site.waypoints.yaml" in inventory["routes"]
+    assert "README.md" in inventory["operator_docs"]
+    assert set(generate.REQUIRED_GATES.values()) == inventory["qualification_evidence"]
+
+
+@pytest.mark.parametrize("entrypoint", generate.REQUIRED_RUNTIME_ENTRYPOINTS)
+def test_verifier_rejects_missing_tampered_or_nonexecutable_runtime_entrypoint(tmp_path, entrypoint):
+    output, _ = manifest_fixture(tmp_path)
+    (tmp_path / entrypoint).unlink()
+    with pytest.raises(verify.ManifestError, match="missing|required runtime"):
+        verify.verify_manifest(output, tmp_path)
+
+    output, _ = manifest_fixture(tmp_path)
+    candidate = tmp_path / entrypoint
+    candidate.write_text("#!/usr/bin/env python3\nprint('tampered')\n", encoding="utf-8")
+    with pytest.raises(verify.ManifestError, match="hash mismatch"):
+        verify.verify_manifest(output, tmp_path)
+
+    output, _ = manifest_fixture(tmp_path)
+    (tmp_path / entrypoint).chmod(0o644)
+    with pytest.raises(verify.ManifestError, match="executable mode|required runtime"):
         verify.verify_manifest(output, tmp_path)
 
 
-def test_tamper_is_rejected(tmp_path):
-    output, _ = make_manifest(tmp_path)
-    (tmp_path / "src/example/config/settings.yaml").write_text("enabled: false\n", encoding="utf-8")
-    with pytest.raises(verify.VerificationError, match="hash mismatch"):
+@pytest.mark.parametrize("relative", ["src/example/config/unbound.yaml", "unclassified.future"])
+def test_verifier_rejects_unbound_or_unclassified_files(tmp_path, relative):
+    output, _ = manifest_fixture(tmp_path)
+    candidate = tmp_path / relative
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("unsafe: true\n", encoding="utf-8")
+    with pytest.raises(verify.ManifestError, match="hash scope differs|unclassified regular file"):
         verify.verify_manifest(output, tmp_path)
 
 
-def test_missing_report_is_rejected(tmp_path):
-    output, _ = make_manifest(tmp_path)
-    (tmp_path / "reports/pytest.json").unlink()
-    with pytest.raises(verify.VerificationError, match="missing test report|missing or escapes"):
+def test_verifier_rejects_missing_semantic_and_authority_rebound_tamper(tmp_path):
+    output, manifest = manifest_fixture(tmp_path)
+    (tmp_path / next(iter(generate.REQUIRED_GATES.values()))).unlink()
+    with pytest.raises(verify.ManifestError, match="missing test report|missing gate report"):
+        verify.verify_manifest(output, tmp_path)
+
+    output, manifest = manifest_fixture(tmp_path)
+    report_path = tmp_path / next(iter(generate.REQUIRED_GATES.values()))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["result"]["passed"] = False
+    write_json(report_path, report)
+    for entry in manifest["test_reports"] + manifest["hashes"]["qualification_evidence"]["files"]:
+        if entry["path"] == report_path.relative_to(tmp_path).as_posix():
+            entry["sha256"] = generate.file_hash(report_path)
+    entries = manifest["hashes"]["qualification_evidence"]["files"]
+    manifest["hashes"]["qualification_evidence"]["digest"] = generate.canonical_hash(entries)
+    generate.atomic_write(output, rebind(manifest))
+    with pytest.raises(verify.ManifestError, match="invalid or trivial result"):
+        verify.verify_manifest(output, tmp_path)
+
+    output, manifest = manifest_fixture(tmp_path)
+    manifest["qualification"]["target_nuc"] = "blocked"
+    manifest["known_blockers"].append("target NUC qualification has not passed")
+    manifest["known_blockers"].sort()
+    generate.atomic_write(output, rebind(manifest))
+    with pytest.raises(verify.ManifestError, match="qualification status contradicts"):
+        verify.verify_manifest(output, tmp_path)
+    output, manifest = manifest_fixture(tmp_path)
+    manifest["authority"]["hardware_motion_authorized"] = True
+    generate.atomic_write(output, rebind(manifest))
+    with pytest.raises(verify.ManifestError, match="authority escalation"):
         verify.verify_manifest(output, tmp_path)
 
 
-def test_authority_escalation_is_rejected_even_with_rebound_manifest(tmp_path):
-    output, manifest = make_manifest(tmp_path)
-    escalated = copy.deepcopy(manifest)
-    escalated["authority"]["hardware_motion_authorized"] = True
-    escalated.pop("release_binding_sha256")
-    escalated["release_binding_sha256"] = generate.canonical_hash(escalated)
-    generate.atomic_write(output, escalated)
-    with pytest.raises(verify.VerificationError, match="authority escalation"):
+def test_verifier_rejects_matrix_and_rollback_rebinding_tamper(tmp_path):
+    output, manifest = manifest_fixture(tmp_path)
+    manifest["gate_matrix"]["releaseBindings"]["bundleDigest"] = "0" * 64
+    generate.atomic_write(output, rebind(manifest))
+    with pytest.raises(verify.ManifestError, match="matrix is incomplete or stale"):
+        verify.verify_manifest(output, tmp_path)
+
+    output, manifest = manifest_fixture(tmp_path)
+    manifest["rollback"]["restartReceipt"]["state"] = "ARMED"
+    generate.atomic_write(output, rebind(manifest))
+    with pytest.raises(verify.ManifestError, match="disarmed matching restart"):
+        verify.verify_manifest(output, tmp_path)
+
+
+def test_verifier_rejects_symlink_file_and_directory_ancestor(tmp_path):
+    output, _ = manifest_fixture(tmp_path)
+    report = tmp_path / next(iter(generate.REQUIRED_GATES.values()))
+    replacement = tmp_path / "replacement.json"
+    replacement.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+    report.unlink()
+    report.symlink_to(replacement)
+    with pytest.raises(verify.ManifestError, match="symlink is forbidden"):
+        verify.verify_manifest(output, tmp_path)
+    report.unlink()
+    replacement.unlink()
+
+    output, _ = manifest_fixture(tmp_path)
+    evidence = tmp_path / "evidence"
+    outside = tmp_path / "outside"
+    evidence.rename(outside)
+    evidence.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(verify.ManifestError, match="symlink is forbidden"):
         verify.verify_manifest(output, tmp_path)
 
 
@@ -342,14 +369,3 @@ def test_atomic_write_preserves_previous_manifest_on_replace_failure(tmp_path, m
         generate.atomic_write(output, {"new": True})
     assert output.read_text(encoding="utf-8") == "previous\n"
     assert list(tmp_path.glob(".release-manifest.json.*")) == []
-
-
-def test_rollback_to_armed_state_is_rejected(tmp_path):
-    output, manifest = make_manifest(tmp_path)
-    armed = copy.deepcopy(manifest)
-    armed["rollback"]["parent_state"] = "armed"
-    armed.pop("release_binding_sha256")
-    armed["release_binding_sha256"] = generate.canonical_hash(armed)
-    generate.atomic_write(output, armed)
-    with pytest.raises(verify.VerificationError, match="armed state"):
-        verify.verify_manifest(output, tmp_path)
