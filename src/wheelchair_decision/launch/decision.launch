@@ -1,0 +1,11 @@
+<launch>
+  <arg name="route_manifest" />
+  <arg name="intent_period_sec" default="0.1" />
+  <arg name="move_base_action" default="move_base" />
+
+  <node pkg="wheelchair_decision" type="mission_node.py" name="wheelchair_mission" output="screen" required="true">
+    <param name="route_manifest" value="$(arg route_manifest)" />
+    <param name="intent_period_sec" value="$(arg intent_period_sec)" />
+    <remap from="move_base" to="$(arg move_base_action)" />
+  </node>
+</launch>

@@ -49,7 +49,7 @@
       <geometry><box size="${base_box_length} ${base_box_width} ${base_box_height}"/></geometry>
       <material name="frame_black"/>
     </visual>
-    <collision>
+    <collision name="base_link_collision">
       <origin xyz="0 0 0.065" rpy="0 0 0"/>
       <geometry><box size="${base_box_length} ${base_box_width} ${base_box_height}"/></geometry>
     </collision>
@@ -131,6 +131,16 @@
     <child link="lidar_link"/>
     <origin xyz="0.22 0 ${wheelchair_height - rear_wheel_radius - lidar_height / 2.0}" rpy="0 0 0"/>
   </joint>
+  <!-- REP-103 simulation frame: +x forward, +y left, +z up. This fixed
+       extrinsic is simulation-only and is not measured hardware calibration. -->
+  <link name="imu_link"/>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="${imu_mount_x} ${imu_mount_y} ${imu_mount_z}" rpy="0 0 0"/>
+  </joint>
+
 
   <link name="rear_left_wheel_link">
     <visual>
@@ -240,6 +250,19 @@
     <material>Gazebo/Black</material>
     <mu1>0.8</mu1>
     <mu2>0.8</mu2>
+    <!-- Simulation-only physical contact evidence. It is consumed by the
+         qualification collector and never grants command authority. -->
+    <sensor type="contact" name="simulation_wheelchair_contact">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <contact>
+        <collision>base_link_collision</collision>
+      </contact>
+      <plugin name="gazebo_ros_simulation_contact" filename="libgazebo_ros_bumper.so">
+        <bumperTopicName>/simulation/contacts</bumperTopicName>
+        <frameName>base_footprint</frameName>
+      </plugin>
+    </sensor>
   </gazebo>
   <gazebo reference="rear_left_wheel_link">
     <material>Gazebo/Black</material>
@@ -262,17 +285,59 @@
     <mu2>0.02</mu2>
   </gazebo>
   <gazebo reference="lidar_link">
-    <sensor type="ray" name="lidar_3d_placeholder">
+    <!-- Explicitly non-physical simulation-only ray grid. Empty-world Gazebo
+         evidence comes from the ground plane, so every vertical ray points
+         downward within 40 m of that plane. Both policy elevation bands receive
+         free-space returns. The horizontal grid provides two nominal rays per
+         each of the 36 forward azimuth bins at all four vertical layers,
+         reducing bin-boundary jitter; this is not Livox fidelity and does not
+         reproduce Livox scan pattern, timing, returns, or noise. -->
+    <sensor type="ray" name="simulation_mid360_like_block_laser">
       <always_on>true</always_on>
-      <update_rate>10</update_rate>
+      <update_rate>${simulation_lidar_rate}</update_rate>
       <visualize>true</visualize>
       <ray>
-        <scan><horizontal><samples>64</samples><resolution>1</resolution><min_angle>-3.14159</min_angle><max_angle>3.14159</max_angle></horizontal></scan>
-        <range><min>0.10</min><max>30.0</max><resolution>0.02</resolution></range>
+        <scan>
+          <horizontal>
+            <samples>144</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159265359</min_angle>
+            <max_angle>3.14159265359</max_angle>
+          </horizontal>
+          <vertical>
+            <samples>4</samples>
+            <resolution>1</resolution>
+            <min_angle>-0.10</min_angle>
+            <max_angle>-0.02</max_angle>
+          </vertical>
+        </scan>
+        <range>
+          <min>${simulation_lidar_min_range}</min>
+          <max>${simulation_lidar_max_range}</max>
+          <resolution>0.02</resolution>
+        </range>
       </ray>
-      <plugin name="gazebo_ros_lidar_points" filename="libgazebo_ros_laser.so">
-        <topicName>/scan</topicName>
+      <!-- gazebo_ros_block_laser emits ordinary x/y/z[/intensity] fields.
+           The required simulation-only adapter owns the canonical perception topic. -->
+      <plugin name="gazebo_ros_simulation_lidar_points" filename="libgazebo_ros_block_laser.so">
+        <topicName>/simulation/sensors/lidar/raw</topicName>
         <frameName>lidar_link</frameName>
+        <gaussianNoise>0.01</gaussianNoise>
+        <hokuyoMinIntensity>0</hokuyoMinIntensity>
+      </plugin>
+    </sensor>
+  </gazebo>
+  <gazebo reference="imu_link">
+    <!-- Simulation evidence only; this generic model is not a hardware IMU claim. -->
+    <sensor type="imu" name="simulation_rep103_imu">
+      <always_on>true</always_on>
+      <update_rate>${simulation_imu_rate}</update_rate>
+      <visualize>false</visualize>
+      <plugin name="gazebo_ros_simulation_imu" filename="libgazebo_ros_imu_sensor.so">
+        <topicName>/simulation/sensors/imu/raw</topicName>
+        <frameName>imu_link</frameName>
+        <updateRateHZ>${simulation_imu_rate}</updateRateHZ>
+        <gaussianNoise>${simulation_imu_noise}</gaussianNoise>
       </plugin>
     </sensor>
   </gazebo>

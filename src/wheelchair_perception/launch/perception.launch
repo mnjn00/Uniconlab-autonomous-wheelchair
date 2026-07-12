@@ -1,0 +1,59 @@
+<launch>
+  <!-- Selects exactly one ROS 1 canonical source adapter. Hardware defaults are inert. -->
+  <arg name="source_profile" default="replay" doc="simulation, replay, or hardware_shadow"/>
+  <arg name="simulation_cloud_topic" default="/simulation/sensors/lidar/points"/>
+  <arg name="simulation_imu_topic" default="/simulation/sensors/imu/data"/>
+  <arg name="replay_cloud_topic" default="/sensors/lidar/points"/>
+  <arg name="replay_imu_topic" default="/sensors/imu/data"/>
+  <arg name="hardware_cloud_topic" default="/hardware/unconfigured/lidar/points"/>
+  <arg name="hardware_imu_topic" default="/hardware/unconfigured/imu/data"/>
+  <arg name="lidar_frame" default="lidar_link"/>
+  <arg name="imu_frame" default="imu_link"/>
+  <arg name="max_cloud_age_s" default="0.30"/>
+  <arg name="imu_alignment_tolerance_s" default="0.02"/>
+
+  <group if="$(eval arg('source_profile') == 'simulation')">
+    <node pkg="wheelchair_perception" type="perception_node.py" name="perception_node" output="screen" required="true">
+      <rosparam command="load" file="$(find wheelchair_perception)/config/perception.yaml" param="core"/>
+      <remap from="input_cloud" to="$(arg simulation_cloud_topic)"/>
+      <remap from="input_imu" to="$(arg simulation_imu_topic)"/>
+      <param name="input_queue_size" value="1" type="int"/>
+      <param name="source_profile" value="simulation"/>
+      <param name="lidar_frame" value="$(arg lidar_frame)"/>
+      <param name="imu_frame" value="$(arg imu_frame)"/>
+      <param name="max_cloud_age_s" value="$(arg max_cloud_age_s)"/>
+      <param name="imu_alignment_tolerance_s" value="$(arg imu_alignment_tolerance_s)"/>
+      <param name="imu_cache_size" value="256" type="int"/>
+    </node>
+  </group>
+
+  <group if="$(eval arg('source_profile') == 'replay')">
+    <node pkg="wheelchair_perception" type="perception_node.py" name="perception_node" output="screen" required="true">
+      <rosparam command="load" file="$(find wheelchair_perception)/config/perception.yaml" param="core"/>
+      <remap from="input_cloud" to="$(arg replay_cloud_topic)"/>
+      <remap from="input_imu" to="$(arg replay_imu_topic)"/>
+      <param name="input_queue_size" value="1" type="int"/>
+      <param name="source_profile" value="replay"/>
+      <param name="lidar_frame" value="$(arg lidar_frame)"/>
+      <param name="imu_frame" value="$(arg imu_frame)"/>
+      <param name="max_cloud_age_s" value="$(arg max_cloud_age_s)"/>
+      <param name="imu_alignment_tolerance_s" value="$(arg imu_alignment_tolerance_s)"/>
+      <param name="imu_cache_size" value="256" type="int"/>
+    </node>
+  </group>
+
+  <group if="$(eval arg('source_profile') == 'hardware_shadow')">
+    <node pkg="wheelchair_perception" type="perception_node.py" name="perception_node" output="screen" required="true">
+      <rosparam command="load" file="$(find wheelchair_perception)/config/perception.yaml" param="core"/>
+      <remap from="input_cloud" to="$(arg hardware_cloud_topic)"/>
+      <remap from="input_imu" to="$(arg hardware_imu_topic)"/>
+      <param name="input_queue_size" value="1" type="int"/>
+      <param name="source_profile" value="hardware_shadow"/>
+      <param name="lidar_frame" value="$(arg lidar_frame)"/>
+      <param name="imu_frame" value="$(arg imu_frame)"/>
+      <param name="max_cloud_age_s" value="$(arg max_cloud_age_s)"/>
+      <param name="imu_alignment_tolerance_s" value="$(arg imu_alignment_tolerance_s)"/>
+      <param name="imu_cache_size" value="256" type="int"/>
+    </node>
+  </group>
+</launch>

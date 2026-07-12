@@ -1,0 +1,13 @@
+<launch>
+  <arg name="manifest" default="$(find wheelchair_navigation)/config/hanyang_routes.yaml" />
+  <arg name="active_route_topic" default="/route/active" />
+  <arg name="progress_topic" default="/route/progress" />
+  <arg name="localization_pose_topic" default="/localization/pose" />
+
+  <node pkg="wheelchair_navigation" type="route_manager.py" name="route_manager" output="screen" required="true">
+    <param name="manifest" value="$(arg manifest)" />
+    <remap from="/route/active" to="$(arg active_route_topic)" />
+    <remap from="/route/progress" to="$(arg progress_topic)" />
+    <remap from="/localization/pose" to="$(arg localization_pose_topic)" />
+  </node>
+</launch>

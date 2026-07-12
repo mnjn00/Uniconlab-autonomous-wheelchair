@@ -1,0 +1,115 @@
+schema_version: 1
+policy_id: hanyang_aegimun_loop
+owner: Uniconlab.simulation
+reviewer:
+  name: Uniconlab.safety
+  status: simulation_approved
+  reviewed_at: "2026-07-11T00:00:00Z"
+status: approved_software_rc
+qualification: software_rc
+qualification_scope: gazebo_synthetic_ground_truth_calibration_only
+provenance:
+  source: Gazebo Classic 11 synthetic odometry under identity map_to_odom
+  stage: software_in_loop
+  evidence_level: simulation_only
+hashes:
+  schema_sha256: {value: "4ec086ec6b996ccd6127d7e4a44bfd192f1d6c7c357834f603e0103a48968f8c", status: verified, scope: simulation policy schema}
+  policy_sha256: {value: "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8", status: verified, scope: simulation policy identity}
+  map_sha256: {value: "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278", status: verified, scope: committed Hanyang Aegimun map alignment in Gazebo}
+  localizer_sha256: {value: "790d903d9c86ac51b402c2e037f9ecaca9b2770e4d4889b068e407ccac75a41f", status: verified, scope: sim evidence bridge}
+  localizer_config_sha256: {value: "21155d8701c0e1b850894078fd217482e78a40d5053486c44e42f40a085aab6b", status: verified, scope: Gazebo controller configuration}
+  calibration_dataset_sha256: {value: "fd6971ee990f9cf1584c43f605ada82f56ddea991b7c76867a38f1bf4d094b6e", status: verified, scope: synthetic Gazebo ground truth only}
+  holdout_dataset_sha256: {value: "a5819a2ebf253b9dc54ab12dd325d19f7df5cf664d54f61be2bfef7437665850", status: verified, scope: synthetic scenario-disjoint holdout only}
+  threshold_tool_sha256: {value: "397145783e0f95e026dc8e502b63d016ff25918da7a1f9e4b9b51552a875e1e5", status: verified, scope: deterministic synthetic calibration}
+authority:
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  transferable_to_replay: false
+  transferable_to_hardware: false
+  permits_grounded_actuation: false
+  hardware_policy_requirement: separate_measured_signed_policy
+runtime_boundary:
+  runtime_option: gazebo_identity_map_to_odom
+  candidate_is_untrusted: true
+  candidate_may_publish_safety: false
+  independent_guard_is_sole_safety_publisher: true
+  map_frame: map
+  single_map_to_odom_authority: true
+  guard_may_broadcast_map_to_odom: false
+  map_to_odom_assumption: identity_simulation_only
+simulation_guard:
+  may_report_ok: true
+  requires_fresh_clock: true
+  requires_fresh_odom: true
+  requires_running_gazebo_controller: true
+  scope: gazebo_simulation_only
+calibration:
+  method: synthetic_gazebo_ground_truth
+  calibration_fraction: 0.70
+  holdout_fraction: 0.30
+  scenario_disjoint: true
+  thresholds_frozen_before_holdout: true
+  required_truth: synthetic_Gazebo_only
+  scan_residual_m: 0.03
+  inlier_ratio: 0.98
+  innovation_nis: 0.50
+  ambiguity_ratio: 2.50
+holdout:
+  minimum_decorrelated_windows: 10000
+  maximum_false_ok_windows: 0
+  claim_limit: software_evidence_not_hardware_probability
+thresholds:
+  candidate_age_max_s: 0.25
+  tf_age_max_s: 0.25
+  reported_planar_stddev_max_m: 0.20
+  reported_yaw_stddev_max_deg: 5.0
+  odom_innovation_nis_max: 12.84
+  scan_selection:
+    candidate_samples: 1024
+    minimum_selected_points: 16
+    maximum_selected_points: 128
+    planar_range_min_m: 0.5
+    planar_range_max_m: 20.0
+    base_z_min_m: 0.15
+    base_z_max_m: 2.0
+  scan_map_residual:
+    software_rc_ceiling_m: 0.20
+  inlier_fraction:
+    software_rc_floor: 0.65
+  ambiguity_ratio_min: 1.50
+  continuity_planar_max_m: 0.25
+  continuity_yaw_max_deg: 10.0
+ok_gate:
+  all_thresholds_required: true
+  independent_scan_map_check_required: true
+  consecutive_samples: 20
+  minimum_span_s: 2.0
+  fresh_required_odom_missing_result: LOST_STOP
+initialization:
+  stationary_linear_speed_below_mps: 0.01
+  stationary_angular_speed_below_radps: 0.02
+  stationary_hold_s: 2.0
+  passing_samples: 20
+  passing_span_s: 2.0
+  success_state: READY_DISARMED
+  automatic_motion_resume: false
+relocalization:
+  stationary_required: true
+  explicit_operator_request_required: true
+  passing_samples: 30
+  minimum_span_s: 3.0
+  success_state: READY_DISARMED
+  old_goal_resume: false
+degraded_zones:
+  DEGRADED: STOP
+  degraded_stop: STOP
+  manual_only: STOP_AUTONOMY
+fail_closed:
+  clear_requires_calibrated_independent_consistent_fresh_evidence: true
+  missing_stale_malformed_uncalibrated_result: LOST_STOP
+  map_or_policy_hash_mismatch_result: LOST_STOP
+  automatic_resume_after_lost: false
+limitations:
+  - Not an absolute real-map localization qualification.
+  - Not valid for replay, shadow hardware, HIL, or passenger operation.
+  - A separate measured and signed hardware policy is required.

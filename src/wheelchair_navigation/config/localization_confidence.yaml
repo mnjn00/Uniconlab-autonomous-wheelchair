@@ -1,0 +1,131 @@
+schema_version: 1
+policy_id: hanyang_aegimun_loop
+owner: Uniconlab.localization
+reviewer:
+  name: Uniconlab.safety
+  status: pending
+  reviewed_at: null
+status: candidate
+qualification: simulation_only
+provenance:
+  source: WP3.localization_confidence
+  stage: Stage-2
+  generated_at: "2026-07-11T00:00:00Z"
+  evidence_level: contract_only
+hashes:
+  schema_sha256: {value: null, status: blocked_unknown, scope: WP0.A09}
+  policy_sha256: {value: "4444444444444444444444444444444444444444444444444444444444444444", status: candidate, scope: software-RC policy identity}
+  map_sha256: {value: "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278", status: candidate, scope: hanyang_aegimun_loop map artifact}
+  localizer_sha256: {value: null, status: blocked_unknown, scope: selected native Noetic localizer}
+  localizer_config_sha256: {value: null, status: blocked_unknown, scope: selected localizer configuration}
+  calibration_dataset_sha256: {value: null, status: blocked_unknown, scope: scenario-disjoint 70 percent calibration dataset}
+  holdout_dataset_sha256: {value: null, status: blocked_unknown, scope: scenario-disjoint 30 percent holdout dataset}
+  threshold_tool_sha256: {value: null, status: blocked_unknown, scope: threshold calibration tool}
+authority:
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  transferable_to_hardware: false
+  hardware_policy_requirement: separate_WP7_measured_signed_policy
+runtime_boundary:
+  runtime_option: offline_ROS2_GLIM_native_Noetic_runtime
+  candidate_is_untrusted: true
+  candidate_may_publish_safety: false
+  independent_guard_is_sole_safety_publisher: true
+  guard_inputs: [candidate_pose_covariance, canonical_cloud, immutable_map_hash, odom_prediction, tf_graph, independent_scan_map_consistency]
+  map_frame: map
+  single_map_to_odom_authority: true
+  guard_may_broadcast_map_to_odom: false
+calibration:
+  method: calibration_holdout_split
+  calibration_fraction: 0.70
+  holdout_fraction: 0.30
+  scenario_disjoint: true
+  thresholds_frozen_before_holdout: true
+  map_resolution_m: 0.10
+  tool_version: localization-confidence-calibrator/1.0.0
+  author: Uniconlab.localization
+  required_truth: true
+  uncalibrated_result: LOST_STOP
+holdout:
+  minimum_decorrelated_windows: 10000
+  window_duration_s: 1.0
+  maximum_false_ok_windows: 0
+  false_ok_planar_error_above_m: 0.50
+  false_ok_yaw_error_above_deg: 15
+  claim_limit: software_evidence_not_hardware_probability
+thresholds:
+  candidate_age_max_s: 0.25
+  tf_age_max_s: 0.25
+  planar_covariance: finite_positive_definite
+  reported_planar_stddev_max_m: 0.20
+  reported_yaw_stddev_max_deg: 5.0
+  odom_innovation_nis_max: 12.84
+  odom_nis_dof: 3
+  odom_nis_probability: 0.995
+  scan_selection:
+    candidate_samples: 1024
+    minimum_selected_points: 16
+    maximum_selected_points: 128
+    planar_range_min_m: 0.5
+    planar_range_max_m: 20.0
+    base_z_min_m: 0.15
+    base_z_max_m: 2.0
+  scan_map_residual:
+    statistic: robust_median_point_to_nearest_occupied_map
+    threshold_rule: min(calibrated_p99_good, software_rc_ceiling_m)
+    software_rc_ceiling_m: 0.20
+  inlier_fraction:
+    distance_m: 0.20
+    threshold_rule: max(calibrated_p1_good, software_rc_floor)
+    software_rc_floor: 0.65
+  ambiguity_ratio_min: 1.50
+  continuity_planar_max_m: 0.25
+  continuity_yaw_max_deg: 10.0
+  continuity_jump_exception: explicit_RELOCALIZING_only
+  map_identity: exact_map_id_and_sha256
+  reset_count: monotonic
+  frozen_pose_detection: pose_must_not_remain_frozen_while_odom_moves
+ok_gate:
+  all_thresholds_required: true
+  independent_scan_map_check_required: true
+  fresh_required_odom_missing_result: LOST_STOP
+  one_tf_authority_required: true
+  consecutive_samples: 20
+  minimum_span_s: 2.0
+  any_unknown_invalid_or_mismatch_result: LOST_STOP
+initialization:
+  operator_pose_allowed: true
+  mission_must_be_canceled: true
+  stationary_linear_speed_below_mps: 0.01
+  stationary_angular_speed_below_radps: 0.02
+  stationary_hold_s: 2.0
+  passing_samples: 20
+  passing_span_s: 2.0
+  success_state: READY_DISARMED
+  automatic_motion_resume: false
+relocalization:
+  stationary_required: true
+  explicit_operator_request_required: true
+  reset_count_increment_required: true
+  passing_samples: 30
+  minimum_span_s: 3.0
+  no_ambiguity_required: true
+  success_state: READY_DISARMED
+  old_goal_resume: false
+degraded_zones:
+  DEGRADED: STOP
+  degraded_stop: STOP
+  manual_only: STOP_AUTONOMY
+  unknown_zone: STOP
+  future_low_speed_policy_requirement: new_safety_ADR_and_hardware_evidence
+plausible_wrong_rejections:
+  required_fixtures: [map_shift_1m_tiny_covariance, yaw_alias_20deg_symmetric_corridor, frozen_pose_while_odom_moves, wrong_map_id_or_hash, zero_or_singular_covariance, good_raw_score_poor_scan_residual, stale_tf_fresh_pose, duplicate_map_to_odom, relocalization_jump]
+  raw_ok_or_tiny_covariance_may_override_guard: false
+  every_fixture_result: LOST_STOP
+fail_closed:
+  clear_requires_calibrated_independent_consistent_fresh_evidence: true
+  missing_stale_malformed_uncalibrated_result: LOST_STOP
+  map_or_policy_hash_mismatch_result: LOST_STOP
+  lost_action: cancel_move_base
+  lost_requires_zero: true
+  automatic_resume_after_lost: false

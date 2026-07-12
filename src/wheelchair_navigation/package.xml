@@ -2,18 +2,29 @@
 <package format="2">
   <name>wheelchair_navigation</name>
   <version>0.1.0</version>
-  <description>ROS1 Noetic move_base, costmap_2d, DWA, geofence, and waypoint configuration for the wheelchair scaffold.</description>
+  <description>ROS1 Noetic navigation with an untrusted native-localizer candidate and guard-authorized TF adapter.</description>
   <maintainer email="maintainer@example.com">GJC Scaffold Maintainer</maintainer>
   <license>GPL-2.0-only</license>
 
   <buildtool_depend>catkin</buildtool_depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>wheelchair_interfaces</depend>
+
 
   <exec_depend>move_base</exec_depend>
+  <exec_depend>map_server</exec_depend>
   <exec_depend>costmap_2d</exec_depend>
   <exec_depend>dwa_local_planner</exec_depend>
   <exec_depend>navfn</exec_depend>
   <exec_depend>clear_costmap_recovery</exec_depend>
   <exec_depend>rotate_recovery</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <export>
     <architecture_independent/>

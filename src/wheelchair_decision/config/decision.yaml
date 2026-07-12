@@ -1,0 +1,10 @@
+# Pure mission policy; the ROS adapter owns topic/action wiring only.
+max_linear_mps: 0.35
+max_angular_rps: 0.65
+slow_linear_mps: 0.12
+slow_angular_rps: 0.25
+evidence_timeout_s: 0.75
+progress_timeout_s: 4.0
+action_timeout_s: 1.0
+obstacle_stop_entry_s: 0.20
+obstacle_clear_s: 1.00

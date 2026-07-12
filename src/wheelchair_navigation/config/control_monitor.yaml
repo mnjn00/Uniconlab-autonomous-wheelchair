@@ -1,0 +1,21 @@
+# Diagnostics-only observer. These topics confer no command or safety authority.
+route_topic: /route/progress
+odom_topic: /odom
+nav_command_topic: /cmd_vel_nav
+safe_command_topic: /cmd_vel_safe
+intent_topic: /decision/motion_intent
+safety_topic: /safety/state
+diagnostics_topic: /diagnostics
+events_topic: /navigation/control_events
+publish_rate_hz: 20.0
+command_ttl_s: 0.30
+intent_ttl_s: 0.30
+odom_ttl_s: 0.25
+route_ttl_s: 0.30
+safety_ttl_s: 0.15
+deadline_limit_s: 0.05
+stop_persistence_s: 0.05
+statistics_window: 200
+event_history: 100
+hardware_motion_authorized: false
+passenger_operation_authorized: false

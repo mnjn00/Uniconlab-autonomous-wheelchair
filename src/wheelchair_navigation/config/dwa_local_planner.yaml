@@ -1,28 +1,36 @@
 DWAPlannerROS:
-  max_vel_x: 0.70
+  max_vel_x: 0.55
   min_vel_x: 0.00
   max_vel_y: 0.00
   min_vel_y: 0.00
-  max_vel_trans: 0.70
-  min_vel_trans: 0.05
-  max_vel_theta: 1.00
-  min_vel_theta: 0.10
-  acc_lim_x: 0.60
+  holonomic_robot: false
+  max_vel_trans: 0.55
+  min_vel_trans: 0.00
+  max_vel_theta: 0.85
+  min_vel_theta: 0.00
+  acc_lim_x: 0.45
   acc_lim_y: 0.00
-  acc_lim_theta: 1.20
-  yaw_goal_tolerance: 0.12
-  xy_goal_tolerance: 0.15
+  acc_lim_theta: 0.45
+  acc_lim_trans: 0.45
+  trans_stopped_vel: 0.05
+  theta_stopped_vel: 0.08
+  yaw_goal_tolerance: 0.10
+  xy_goal_tolerance: 0.12
   latch_xy_goal_tolerance: true
-  sim_time: 2.0
+  sim_time: 2.5
   sim_granularity: 0.025
-  angular_sim_granularity: 0.05
-  vx_samples: 12
+  angular_sim_granularity: 0.04
+  vx_samples: 20
   vy_samples: 1
-  vtheta_samples: 20
-  path_distance_bias: 32.0
+  vtheta_samples: 40
+  path_distance_bias: 48.0
   goal_distance_bias: 20.0
-  occdist_scale: 0.04
-  forward_point_distance: 0.35
-  stop_time_buffer: 0.35
-  scaling_speed: 0.25
-  max_scaling_factor: 0.20
+  occdist_scale: 0.10
+  forward_point_distance: 0.45
+  stop_time_buffer: 0.50
+  scaling_speed: 0.20
+  max_scaling_factor: 0.30
+  penalize_negative_x: true
+  prune_plan: true
+  oscillation_reset_dist: 0.15
+  oscillation_reset_angle: 0.20

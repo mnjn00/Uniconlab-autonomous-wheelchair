@@ -85,6 +85,7 @@ def test_urdf_xacro_xml_and_required_links_are_present():
         "backrest_link",
         "nuc_link",
         "lidar_link",
+        "imu_link",
         "rear_left_wheel_link",
         "rear_right_wheel_link",
         "front_left_caster_link",
@@ -96,6 +97,7 @@ def test_urdf_xacro_xml_and_required_links_are_present():
         "front_left_caster_joint",
         "front_right_caster_joint",
         "lidar_joint",
+        "imu_joint",
     }
     assert required_links.issubset(links)
     assert required_joints.issubset(joints)
@@ -104,6 +106,23 @@ def test_urdf_xacro_xml_and_required_links_are_present():
     assert "gazebo_ros_control" in text
     assert "hardware_interface/VelocityJointInterface" in text
     assert re.search(r"<axis\s+xyz=\"0 1 0\"", text)
+
+    assert '<joint name="imu_joint" type="fixed">' in text
+    assert 'rpy="0 0 0"' in text
+
+
+def test_command_path_remains_ros_control_only():
+    text = (DESC / "urdf" / "wheelchair.urdf.xacro").read_text()
+    assert text.count("libgazebo_ros_control.so") == 1
+    assert text.count("hardware_interface/VelocityJointInterface") == 4
+    assert text.count("<transmission name=") == 2
+    for bypass in (
+        "libgazebo_ros_diff_drive.so",
+        "libgazebo_ros_skid_steer_drive.so",
+        "<commandTopic>",
+        "/cmd_vel",
+    ):
+        assert bypass not in text
 
 
 def test_description_sources_do_not_reference_ros2_or_gazebo_sim_stack():

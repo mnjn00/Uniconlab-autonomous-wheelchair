@@ -31,4 +31,14 @@
   <xacro:property name="nuc_height" value="0.045"/>
   <xacro:property name="lidar_radius" value="0.045"/>
   <xacro:property name="lidar_height" value="0.070"/>
+  <!-- Simulation-only sensor extrinsics and characteristics. These values are
+       not measured calibration and do not describe physical sensor fidelity. -->
+  <xacro:property name="imu_mount_x" value="0.100"/>
+  <xacro:property name="imu_mount_y" value="0.000"/>
+  <xacro:property name="imu_mount_z" value="0.570"/>
+  <xacro:property name="simulation_lidar_rate" value="10.0"/>
+  <xacro:property name="simulation_lidar_min_range" value="0.10"/>
+  <xacro:property name="simulation_lidar_max_range" value="40.0"/>
+  <xacro:property name="simulation_imu_rate" value="200.0"/>
+  <xacro:property name="simulation_imu_noise" value="0.0002"/>
 </robot>

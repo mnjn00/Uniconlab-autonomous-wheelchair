@@ -1,0 +1,6 @@
+<launch>
+  <!-- Observer only: this node has no velocity or safety-state output. -->
+  <node pkg="wheelchair_navigation" type="control_monitor.py" name="control_monitor" output="screen" required="false">
+    <rosparam command="load" file="$(find wheelchair_navigation)/config/control_monitor.yaml" />
+  </node>
+</launch>
