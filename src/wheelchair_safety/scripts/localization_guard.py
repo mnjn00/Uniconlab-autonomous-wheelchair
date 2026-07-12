@@ -1464,7 +1464,12 @@ class LocalizationGuardNode:
 
     def _publish_stop(self, now, reason, _candidate_sequence=None):
         reason |= REASON_LOCALIZATION
-        self.core.force_loss()
+        cold_start = (
+            self.core.sequence == 0 and
+            self.core.state in (UNINITIALIZED, INITIALIZING)
+        )
+        if not cold_start:
+            self.core.force_loss()
         source_stamp_s = getattr(self, "last_candidate_source_stamp", None)
         if source_stamp_s is None or not math.isfinite(source_stamp_s):
             source_stamp_s = 0.0
@@ -1475,7 +1480,7 @@ class LocalizationGuardNode:
         status.header.frame_id = self.policy.expected_frame
         status.evaluation_stamp = evaluation_stamp
         status.sequence = self._next_output_sequence()
-        status.state = LOST
+        status.state = self.core.state
         status.reason_mask = reason
         status.source = "localization_guard"
         status.policy_sha256 = self.policy.policy_sha256

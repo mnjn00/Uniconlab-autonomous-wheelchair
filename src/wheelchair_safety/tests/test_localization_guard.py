@@ -643,6 +643,8 @@ def test_explicit_recovery_opens_a_new_input_chronology_epoch():
     node.signal_pub = Publisher()
     node.last_candidate_source_stamp = None
     node.output_sequence = 0
+    startup = node.core.evaluate(evidence(1.0), 1.0)
+    assert startup.state == guard.INITIALIZING
     node.last_cloud_stamp = 10.0
     node.last_odom_stamp = 10.0
 
@@ -748,7 +750,7 @@ def test_policy_parser_requires_exact_frozen_scan_selection(tmp_path):
 
 
 
-def test_guard_output_generations_are_strict_and_watchdog_stamps_evaluation_time():
+def test_cold_start_stop_preserves_startup_state_and_output_generations():
     class Message:
         def __init__(self):
             self.header = SimpleNamespace(stamp=None, frame_id="")
@@ -772,19 +774,31 @@ def test_guard_output_generations_are_strict_and_watchdog_stamps_evaluation_time
     node.signal_pub = Publisher()
     node.output_sequence = 0
 
+    node._publish_stop(0.5, guard.REASON_SENSOR_STALE)
+    assert node.core.state == guard.UNINITIALIZED
+    assert node.status_pub.messages[-1].state == guard.UNINITIALIZED
+    assert node.status_pub.messages[-1].reason_mask & guard.REASON_SENSOR_STALE
+    assert node.signal_pub.messages[-1].state == guard.SAFETY_STOP
+
     first = node.core.evaluate(evidence(1.0), 1.0)
     node._publish_result(first, 1.0)
     node._publish_stop(1.3, guard.REASON_SENSOR_STALE)
     node._publish_stop(1.35, guard.REASON_SENSOR_STALE)
 
-    assert [message.sequence for message in node.status_pub.messages] == [1, 2, 3]
-    assert [message.sequence for message in node.signal_pub.messages] == [1, 2, 3]
+    assert node.core.state == guard.LOST
+    assert [message.sequence for message in node.status_pub.messages] == [1, 2, 3, 4]
+    assert [message.sequence for message in node.signal_pub.messages] == [1, 2, 3, 4]
     for status, signal in zip(node.status_pub.messages, node.signal_pub.messages):
         assert signal.header is not status.header
         assert signal.header.stamp == status.evaluation_stamp
         assert signal.sequence == status.sequence
-    assert [message.evaluation_stamp for message in node.status_pub.messages[1:]] == [1.3, 1.35]
-    assert all(message.state == guard.SAFETY_STOP for message in node.signal_pub.messages[1:])
+    assert [message.evaluation_stamp for message in node.status_pub.messages] == [
+        0.5, first.evaluation_stamp_s, 1.3, 1.35
+    ]
+    assert [message.state for message in node.status_pub.messages] == [
+        guard.UNINITIALIZED, first.state, guard.LOST, guard.LOST
+    ]
+    assert all(message.state == guard.SAFETY_STOP for message in node.signal_pub.messages)
 
 
 def test_zero_duplicate_and_regressing_candidate_sequences_are_rejected():
