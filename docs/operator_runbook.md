@@ -119,9 +119,47 @@ Retain the incident JSON and `audit-report.json` together. A missing/truncated f
 
 ## Release install and atomic rollback
 
-Only the complete AC0-AC6 matrix can create a clean software-only manifest. Ordinary CI pytest/build JUnits are incomplete software evidence, never release reports; missing full-bag, target-NUC, live, hardware, or passenger gates produce no clean release. `hardwareMotionAuthorized` and `passengerOperationAuthorized` remain `false` in every gate report and manifest.
+Only the complete AC0-AC6 matrix can create an authoritative software-only manifest. Ordinary CI pytest/build JUnits are incomplete software evidence, never gate reports. Simulation, replay, CI, and generated evidence do not grant hardware-motion or passenger-operation authority; missing external full-bag, live Gazebo, target-NUC, hardware, or passenger qualification fails closed.
 
-Create one strict JSON gate report at each exact path below. Each report has exactly `artifactType`, `schemaVersion`, `gateId`, `status`, `claimTag`, `hardwareMotionAuthorized`, `passengerOperationAuthorized`, `sourceRevision`, `configurationDigest`, `bundleDigest`, `releaseInputDigest`, and `result`; its type/version is `wheelchair-ac-gate-report`/`1`, claim is `SOFTWARE_ONLY`, status is `PASS`, both authority flags are `false`, and `result` is `{"passed":true,"cases":N}` for `N > 0`.
+Every gate report is a strict `wheelchair-ac-gate-report` schema version `2` object with exactly these top-level keys:
+
+```json
+{
+  "artifactType": "wheelchair-ac-gate-report",
+  "schemaVersion": 2,
+  "gateId": "WP0-ABI-001",
+  "status": "PASS",
+  "claimTag": "SOFTWARE_ONLY",
+  "hardwareMotionAuthorized": false,
+  "passengerOperationAuthorized": false,
+  "sourceRevision": "<prepared sourceRevision>",
+  "configurationDigest": "<prepared configurationDigest>",
+  "bundleDigest": "<prepared bundleDigest>",
+  "releaseInputDigest": "<prepared releaseInputDigest>",
+  "result": {
+    "passed": true,
+    "executedCommands": ["<non-empty command actually run>"],
+    "environment": {"os": "<non-empty OS>", "architecture": "<non-empty architecture>"},
+    "tool": {"name": "<non-empty tool name>", "version": "<non-empty tool version>"},
+    "durationSeconds": 1,
+    "metrics": {"interfacesChecked": 1},
+    "invariants": {"abiCompatible": true},
+    "artifacts": [{"path": "evidence/raw/abi-output.txt", "sha256": "<lowercase-64-hex>"}]
+  }
+}
+```
+
+`durationSeconds` and the sole gate metric must be positive. `executedCommands` and `artifacts` must be non-empty; artifact references are `{path, sha256}`, hash-verified against files below the release root, unique, and sorted lexicographically by `path`. For each report, replace the example metric and invariant with that gate's exact pair below; no extra result fields are allowed.
+
+Before generating reports, prepare the bindings from the release root. Keep `BINDINGS` outside `RELEASE`; report generators copy its four values exactly into every report.
+
+```bash
+umask 077
+BINDINGS="$(mktemp "${TMPDIR:-/tmp}/wheelchair-release-bindings.XXXXXX")"
+python3 scripts/generate_release_manifest.py --root RELEASE --prepare-bindings --bindings-output "$BINDINGS"
+```
+
+`evidence/**` is excluded only from Git source-dirtiness detection and the release-input digest to avoid release-input circularity. It is still hashed in `qualification_evidence`, and every required report and every referenced artifact remains hash-bound qualification evidence in the manifest. Do not use a JUnit as a substitute for one of these reports.
 
 ```bash
 REPORTS=(
@@ -130,10 +168,13 @@ REPORTS=(
   evidence/route-safety/anti-widening-report.json
   evidence/safety/collision-ttc-report.json
   evidence/safety/slope-policy-report.json
-  evidence/localization/confidence-holdout-report.json
-  evidence/conversion/determinism-and-corruption-report.json
-  evidence/mission/fsm-contract-report.json
   evidence/safety/gate-permission-matrix.json
+  evidence/conversion/determinism-and-corruption-report.json
+  evidence/localization/confidence-holdout-report.json
+  evidence/localization/glim-offline-input-report.json
+  evidence/localization/glim-offline-reproduction-report.json
+  evidence/localization/glim-offline-comparison-report.json
+  evidence/mission/fsm-contract-report.json
   evidence/performance/target-nuc-60min-report.json
   evidence/simulation/fidelity-claim-report.json
   evidence/release/rollback-drill-report.json
@@ -142,49 +183,84 @@ REPORTS=(
 )
 ```
 
-Provide a separately verifier-approved parent rollback binding in `parent-rollback.json`; free-form parent IDs and `parent_state` are rejected. It has exactly this shape (all `sha256` values are lowercase 64-hex strings, every inventory list is non-empty, sorted, and has unique paths):
+| Gate | Metric | Invariant |
+| --- | --- | --- |
+| `WP0-ABI-001` | `interfacesChecked` | `abiCompatible` |
+| `WP1-TOPOLOGY-001` | `commandPathsChecked` | `singleCommandPath` |
+| `WP1-GEOFENCE-001` | `routeBoundsChecked` | `routeNotWidened` |
+| `WP1-COLLISION-001` | `collisionScenarios` | `ttcStopsEnforced` |
+| `WP1-SLOPE-001` | `slopeScenarios` | `slopePolicyEnforced` |
+| `WP1-CONTROL-001` | `permissionCases` | `unauthorizedCommandsDenied` |
+| `WP2-CONVERSION-001` | `conversionCases` | `deterministicAndCorruptionSafe` |
+| `WP3-LOCALIZATION-001` | `holdoutFrames` | `lowConfidenceHeld` |
+| `WP3-GLIM-INPUT-001` | `offlineInputFrames` | `offlineInputPinned` |
+| `WP3-GLIM-REPRODUCTION-001` | `reproductionRuns` | `offlineReproducible` |
+| `WP3-GLIM-COMPARISON-001` | `comparisonFrames` | `offlineComparisonWithinTolerance` |
+| `WP4-MISSION-001` | `fsmTransitions` | `missionContractEnforced` |
+| `WP6-TIMING-001` | `measuredSeconds` | `targetNucDurationMet` |
+| `WP6-SIMCLAIM-001` | `simulationCases` | `simulationClaimBounded` |
+| `WP6-ROLLBACK-001` | `rollbackDrills` | `rollbackDisarmed` |
+| `WP0-HWGATE-NEG-001` | `deniedHardwareRequests` | `hardwareMotionDenied` |
+| `WP0-PASSENGER-NEG-001` | `deniedPassengerRequests` | `passengerOperationDenied` |
+
+The parent rollback argument is a strict reference, not an inline inventory. All hashes are lowercase 64-hex. `parentManifestPath` is a non-empty safe relative path (not absolute and containing no `..`) below the installed parent release root. `parentInventoryDigest` is the canonical digest of the parent's complete manifest `hashes` object.
 
 ```json
 {
-  "parentReleaseBindingSha256": "<target-release-binding>",
-  "parentReleaseBindingReceiptSha256": "<sha256 of canonical parentReleaseBindingSha256+inventory>",
-  "inventory": {
-    "binaries": [{"path": "binaries/item", "sha256": "<sha256>"}],
-    "maps": [{"path": "maps/item", "sha256": "<sha256>"}],
-    "routes": [{"path": "routes/item", "sha256": "<sha256>"}],
-    "policies": [{"path": "policies/item", "sha256": "<sha256>"}],
-    "drivers": [{"path": "drivers/item", "sha256": "<sha256>"}]
-  },
+  "parentReleaseBindingSha256": "<parent-release-binding>",
+  "parentManifestSha256": "<sha256 of parent manifest file>",
+  "parentManifestPath": "release-manifest.json",
+  "parentInventoryDigest": "<canonical sha256 of parent manifest hashes>",
   "restartReceipt": {
-    "state": "DISARMED",
-    "permissions": "UNKNOWN",
-    "localizationRequired": true,
-    "missionResume": false,
-    "parentReleaseBindingSha256": "<target-release-binding>",
-    "inventoryDigest": "<sha256 of canonical inventory>"
+    "path": "receipts/restart-disarmed.json",
+    "sha256": "<sha256 of referenced receipt file>",
+    "parentReleaseBindingSha256": "<parent-release-binding>",
+    "parentInventoryDigest": "<same parent inventory digest>"
   }
 }
 ```
 
-Generate and independently verify only after all exact reports and that receipt exist inside the release root:
+The referenced restart receipt exists under that parent root, hashes to `restartReceipt.sha256`, and has exactly this fail-closed shape:
+
+```json
+{
+  "state": "DISARMED",
+  "permissions": "UNKNOWN",
+  "localizationRequired": true,
+  "missionResume": false,
+  "parentReleaseBindingSha256": "<parent-release-binding>",
+  "parentInventoryDigest": "<parent inventory digest>",
+  "hardwareMotionAuthorized": false,
+  "passengerOperationAuthorized": false
+}
+```
+
+An authoritative manifest requires a clean Git source revision of exactly 40 lowercase hexadecimal characters and an explicit non-empty HMAC signing-key file outside `RELEASE`. The key file is required for generation, independent verification, install dry-run and apply, and rollback dry-run and apply. A missing, empty, or wrong key is a hard refusal. Never put the key or its contents in artifacts, logs, or the repository.
 
 ```bash
+umask 077
+KEY_FILE="$(mktemp "${TMPDIR:-/tmp}/wheelchair-release-key.XXXXXX")"
+trap 'rm -f "$KEY_FILE" "$BINDINGS"' EXIT
+# Write the non-empty key from the approved secret manager without echoing it.
+# The key file must remain outside RELEASE and mode 0600.
+
 python3 scripts/generate_release_manifest.py --root RELEASE --output RELEASE/release-manifest.json \
   $(printf -- ' --report %s' "${REPORTS[@]}") \
   --rollback-parent "$(<RELEASE/parent-rollback.json)" \
-  --blocker 'hardware motion qualification has not passed' \
-  --blocker 'passenger operation qualification has not passed'
-python3 scripts/verify_release_manifest.py RELEASE/release-manifest.json --root RELEASE
+  --blocker hardware_motion_unqualified \
+  --blocker passenger_operation_unqualified \
+  --release-signing-key "$KEY_FILE"
+
+python3 scripts/verify_release_manifest.py RELEASE/release-manifest.json --root RELEASE \
+  --release-signing-key "$KEY_FILE"
+
+python3 scripts/install_noetic_rc.py --manifest RELEASE/release-manifest.json --source RELEASE \
+  --prefix /tmp/wheelchair-rc-sandbox --release-signing-key "$KEY_FILE"
+python3 scripts/install_noetic_rc.py --manifest RELEASE/release-manifest.json --source RELEASE \
+  --prefix /tmp/wheelchair-rc-sandbox --release-signing-key "$KEY_FILE" --apply
 ```
 
-Install is dry-run unless `--apply` is supplied:
-
-```bash
-python3 scripts/install_noetic_rc.py --manifest RELEASE/release-manifest.json --source RELEASE --prefix /tmp/wheelchair-rc-sandbox
-python3 scripts/install_noetic_rc.py --manifest RELEASE/release-manifest.json --source RELEASE --prefix /tmp/wheelchair-rc-sandbox --apply
-```
-
-Before a non-idempotent rollback, stop the graph and write separate current-state evidence; this is not the parent restart receipt and cannot be the string `DISARMED`:
+Before a non-idempotent rollback, stop the graph and write separate current-state evidence; it is not the parent restart receipt and cannot be the string `DISARMED`:
 
 ```json
 {
@@ -202,9 +278,11 @@ Before a non-idempotent rollback, stop the graph and write separate current-stat
 
 ```bash
 python3 scripts/rollback_noetic_rc.py --prefix /tmp/wheelchair-rc-sandbox \
-  --target TARGET_RELEASE_BINDING_SHA256 --disarmed-evidence current-state.json
+  --target TARGET_RELEASE_BINDING_SHA256 --disarmed-evidence current-state.json \
+  --release-signing-key "$KEY_FILE"
 python3 scripts/rollback_noetic_rc.py --prefix /tmp/wheelchair-rc-sandbox \
-  --target TARGET_RELEASE_BINDING_SHA256 --disarmed-evidence current-state.json --apply
+  --target TARGET_RELEASE_BINDING_SHA256 --disarmed-evidence current-state.json \
+  --release-signing-key "$KEY_FILE" --apply
 ```
 
-Rollback verifies both manifests, the target release ID against `parentReleaseBindingSha256`, the hash-bound inventory and receipt, and separate current-state DISARMED/UNKNOWN/no-resume evidence before changing `current`. It restarts only DISARMED with permissions UNKNOWN; localization must be re-qualified and missions never auto-resume. Neither tool modifies drivers, ROS/system services, bag data, armed state, or paths outside the selected prefix.
+Rollback independently verifies both signed manifests, the target binding, safe parent-manifest reference and hash, parent inventory digest, restart receipt reference/hash/bindings, and separate current-state DISARMED/UNKNOWN/no-resume evidence before changing `current`. It restarts only DISARMED with permissions UNKNOWN; localization must be re-qualified and missions never auto-resume. Neither tool modifies drivers, ROS/system services, bag data, armed state, or paths outside the selected prefix.
