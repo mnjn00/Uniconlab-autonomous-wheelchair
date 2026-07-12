@@ -206,6 +206,7 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.node.operation_mode = "simulation"
         self.node._zone_sequence_high_water = None
         self.node._zone_source_high_water_stamp_s = None
+        self.node._zone_evaluation_high_water_stamp_s = None
 
     def message(self, **overrides):
         policy = self.node.core.policy
@@ -371,13 +372,23 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.assertEqual(self.node.zone, "normal")
         self.assertEqual(self.node._zone_source_high_water_stamp_s, None)
 
-    def test_positive_source_bootstrap_requires_monotonic_source_chronology(self):
+    def test_positive_source_bootstrap_accepts_heartbeats_and_rejects_regression(self):
         self._enable_bootstrap()
         self.node._zone_cb(self.bootstrap_message(
             header=SimpleNamespace(stamp=self.stamp(9.95)),
         ))
         self.node._zone_cb(self.bootstrap_message(
             sequence=2,
+            evaluation_stamp=self.stamp(9.99),
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.assertEqual(self.node.zone, "normal")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.node._zone_cb(self.bootstrap_message(
+            sequence=1,
             evaluation_stamp=self.stamp(9.99),
             header=SimpleNamespace(stamp=self.stamp(9.95)),
         ))
@@ -388,7 +399,17 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         ))
         self.node._zone_cb(self.bootstrap_message(
             sequence=2,
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.node._zone_cb(self.bootstrap_message(
+            sequence=2,
             evaluation_stamp=self.stamp(9.99),
+            header=SimpleNamespace(stamp=self.stamp(9.94)),
         ))
         self.assertEqual(self.node.zone, "unknown")
 
@@ -500,6 +521,40 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
             sequence=2,
             header=SimpleNamespace(stamp=self.stamp(9.96)),
             evaluation_stamp=self.stamp(9.98),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+
+    def test_clear_handoff_accepts_source_heartbeat_but_rejects_stale_chronology(self):
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.node._zone_cb(self.message(
+            sequence=2,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.node._zone_cb(self.message(
+            sequence=3,
+            evaluation_stamp=self.stamp(10.0),
+        ))
+        self.assertEqual(self.node.zone, "normal")
+        self.node.rospy.Time.now = lambda: self.stamp(10.02)
+        self.node._zone_cb(self.message(
+            sequence=3,
+            evaluation_stamp=self.stamp(10.01),
+        ))
+        self.assertEqual(self.node.zone, "unknown")
+        self._enable_bootstrap()
+        self.node._zone_cb(self.bootstrap_message(
+            header=SimpleNamespace(stamp=self.stamp(9.95)),
+        ))
+        self.node._zone_cb(self.message(
+            sequence=2,
+            evaluation_stamp=self.stamp(9.99),
+        ))
+        self.node._zone_cb(self.message(
+            sequence=3,
+            evaluation_stamp=self.stamp(9.99),
         ))
         self.assertEqual(self.node.zone, "unknown")
 

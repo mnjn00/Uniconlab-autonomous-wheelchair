@@ -765,6 +765,7 @@ class SlopeSupervisorRosNode:
         self._bootstrap_zone_source_high_water_stamp_s = None
         self._zone_sequence_high_water = None
         self._zone_source_high_water_stamp_s = None
+        self._zone_evaluation_high_water_stamp_s = None
         self._static_imu_transform = None
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(1.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -839,7 +840,7 @@ class SlopeSupervisorRosNode:
                     or source_stamp > 0.0
                     and (
                         self._bootstrap_zone_source_high_water_stamp_s is None
-                        or source_stamp > self._bootstrap_zone_source_high_water_stamp_s
+                        or source_stamp >= self._bootstrap_zone_source_high_water_stamp_s
                     )
                 )
             ):
@@ -857,13 +858,15 @@ class SlopeSupervisorRosNode:
                 or self._zone_sequence_high_water is not None
                 and sequence <= self._zone_sequence_high_water
                 or self._zone_source_high_water_stamp_s is not None
-                and source_stamp <= self._zone_source_high_water_stamp_s
+                and source_stamp < self._zone_source_high_water_stamp_s
+                or self._zone_evaluation_high_water_stamp_s is not None
+                and evaluation_stamp <= self._zone_evaluation_high_water_stamp_s
                 or self._bootstrap_zone_sequence_high_water is not None
                 and sequence <= self._bootstrap_zone_sequence_high_water
                 or self._bootstrap_zone_evaluation_high_water_stamp_s is not None
                 and evaluation_stamp <= self._bootstrap_zone_evaluation_high_water_stamp_s
                 or self._bootstrap_zone_source_high_water_stamp_s is not None
-                and source_stamp <= self._bootstrap_zone_source_high_water_stamp_s
+                and source_stamp < self._bootstrap_zone_source_high_water_stamp_s
                 or state != 1
                 or reason_mask != 0
                 or not route_id
@@ -878,6 +881,7 @@ class SlopeSupervisorRosNode:
             return
         self._zone_sequence_high_water = sequence
         self._zone_source_high_water_stamp_s = source_stamp
+        self._zone_evaluation_high_water_stamp_s = evaluation_stamp
         self._initial_zone_bootstrap_active = False
         self.zone = zone_policy
         self.zone_receipt_stamp_s = receipt_stamp
