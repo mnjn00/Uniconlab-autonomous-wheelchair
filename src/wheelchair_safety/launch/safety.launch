@@ -4,6 +4,7 @@
   <arg name="profile"/>
   <arg name="collision_policy" default="$(find wheelchair_safety)/config/collision_policy.yaml"/>
   <arg name="slope_policy" default="$(find wheelchair_safety)/config/slope_policy.yaml"/>
+  <arg name="slope_policy_file_sha256" default="0bcda18ba75366c3fdf7f06afea978e5feb48e4f2780a9c05b7fcbf0cedb9387"/>
   <arg name="collision_transform_lookup_timeout_s" default="0.05"/>
   <arg name="collision_max_transform_age_s" default="0.10"/>
   <arg name="slope_operation_mode" default="simulation"/>
@@ -43,6 +44,7 @@
 
   <node pkg="wheelchair_safety" type="slope_supervisor.py" name="slope_supervisor" output="screen" required="true">
     <param name="policy" value="$(arg slope_policy)"/>
+    <param name="expected_policy_file_sha256" value="$(arg slope_policy_file_sha256)"/>
     <param name="status_topic" value="/safety/slope_status"/>
     <param name="signal_topic" value="/safety/slope"/>
     <param name="operation_mode" value="$(arg slope_operation_mode)"/>

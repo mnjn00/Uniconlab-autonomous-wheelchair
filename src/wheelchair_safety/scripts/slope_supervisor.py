@@ -11,13 +11,17 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
-from typing import Iterable, Optional, Sequence, Tuple
+import re
+from typing import Any, Iterable, Optional, Sequence, Tuple
 
 
 UNKNOWN = 0
 CLEAR = 1
 SLOW = 2
 STOP = 3
+SAFETY_UNKNOWN = 0
+SAFETY_CLEAR = 1
+SAFETY_STOP = 2
 CAL_UNCALIBRATED = 0
 CAL_CALIBRATING = 1
 CAL_VALID = 2
@@ -41,9 +45,11 @@ Quaternion = Tuple[float, float, float, float]
 @dataclass(frozen=True)
 class SlopePolicy:
     policy_id: str = "slope-sim-v1"
+    policy_sha256: str = "0000000000000000000000000000000000000000000000000000000000000000"
     source_ttl_s: float = 0.10
     receipt_ttl_s: float = 0.10
     transform_ttl_s: float = 0.10
+    route_zone_ttl_s: float = 0.10
     gravity_mps2: float = 9.80665
     gravity_tolerance_mps2: float = 0.15
     fallback_gravity_tolerance_mps2: float = 0.25
@@ -78,11 +84,8 @@ class SlopePolicy:
             raise ValueError("pitch thresholds are not ordered")
         if not (0.0 <= self.roll_clear_deg < self.roll_stop_deg):
             raise ValueError("roll thresholds are not ordered")
-
-    @property
-    def policy_sha256(self) -> str:
-        # Approved WP0 slope-simulation-policy canonical hash.
-        return "69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62"
+        if not self.policy_sha256 or not re.fullmatch(r"[0-9a-f]{64}", self.policy_sha256):
+            raise ValueError("slope policy requires a supplied file SHA-256")
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,7 @@ class CalibrationSample:
     angular_velocity: Vector3
     source_stamp_s: Optional[float] = None
     imu_to_base_quaternion: Optional[Quaternion] = None
+    imu_to_base_translation: Optional[Vector3] = None
 
 
 def _components(value: Sequence[float], count: int) -> Tuple[float, ...]:
@@ -208,6 +212,70 @@ def normalize_initial_zone_policy(zone: str, operation_mode: str) -> str:
 
 
 
+def _require_mapping(value: Any, name: str, keys: Sequence[str]) -> dict:
+    if not isinstance(value, dict) or set(value) != set(keys):
+        raise ValueError("%s keys are unsupported or incomplete" % name)
+    return value
+
+
+def _number(value: Any, name: str, minimum: float = 0.0) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("%s must be numeric" % name)
+    value = float(value)
+    if not math.isfinite(value) or value < minimum:
+        raise ValueError("%s is outside supported bounds" % name)
+    return value
+
+
+def _load_slope_policy(path: str, expected_file_sha256: Optional[str]) -> SlopePolicy:
+    """Load the immutable simulation policy and bind it to the launch-supplied hash."""
+    if not isinstance(expected_file_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_file_sha256):
+        raise ValueError("slope policy SHA-256 must be supplied by launch")
+    with open(path, "rb") as stream:
+        raw = stream.read()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != expected_file_sha256:
+        raise ValueError("slope policy file hash mismatch")
+    import yaml
+    document = yaml.safe_load(raw)
+    root = _require_mapping(document, "policy", ("schema_version", "policy_id", "policy_sha256", "qualification", "operation_mode", "authority", "frames", "input", "calibration", "gravity_estimation", "thresholds_deg", "hysteresis", "route_zones", "downhill_stopping_coupling", "fail_closed"))
+    if root["schema_version"] != 1 or root["qualification"] != "simulation_only" or root["operation_mode"] != "simulation":
+        raise ValueError("policy is not qualified for simulation only")
+    if not isinstance(root["policy_id"], str) or not root["policy_id"] or not re.fullmatch(r"[0-9a-f]{64}", root["policy_sha256"]):
+        raise ValueError("invalid policy identity")
+    authority = _require_mapping(root["authority"], "authority", ("hardware_motion_authorized", "passenger_operation_authorized", "transferable_to_hardware"))
+    if any(authority[key] is not False for key in authority):
+        raise ValueError("policy cannot authorize hardware or passengers")
+    frames = _require_mapping(root["frames"], "frames", ("output", "input", "transform", "transform_provenance_allowed", "measured_transform_required_for_hardware", "convention"))
+    if (frames["output"], frames["input"], frames["transform"], frames["convention"]) != ("base_link", "imu_link", "base_link_to_imu_link", "REP-103") or frames["transform_provenance_allowed"] != ["measured", "simulation"] or frames["measured_transform_required_for_hardware"] is not True:
+        raise ValueError("unsupported frame policy")
+    inputs = _require_mapping(root["input"], "input", ("source_ttl_s", "receipt_ttl_s", "transform_ttl_s", "route_zone_ttl_s", "verified_time_required"))
+    if inputs["verified_time_required"] is not True:
+        raise ValueError("verified time is required")
+    calibration = _require_mapping(root["calibration"], "calibration", ("output_during_calibration", "input_provenance_required", "stationary_duration_s", "nominal_rate_hz", "minimum_expected_sample_fraction", "p95_gyro_norm_max_radps", "mean_gravity_mps2", "mean_acceleration_tolerance_mps2", "pitch_roll_stddev_max_deg", "verified_extrinsic_required", "verified_time_alignment_required", "zero_stamp_transform_allowed_only_when_explicitly_static", "hash_fields", "replay_hardware_unverified_result"))
+    if (calibration["output_during_calibration"], calibration["replay_hardware_unverified_result"]) != ("unknown_stop", "uncalibrated_stop") or any(calibration[key] is not True for key in ("input_provenance_required", "verified_extrinsic_required", "verified_time_alignment_required", "zero_stamp_transform_allowed_only_when_explicitly_static")) or calibration["hash_fields"] != ["derived_acceleration_bias", "derived_gyro_bias", "verified_extrinsic", "input_provenance", "sample_count", "window"]:
+        raise ValueError("unsupported calibration policy")
+    gravity = _require_mapping(root["gravity_estimation"], "gravity_estimation", ("fallback", "low_pass_time_constant_s", "fallback_acceleration_magnitude_tolerance_mps2", "fallback_gyro_norm_max_radps", "orientation_gravity_agreement_max_deg", "dynamic_residual_max_mps2", "dynamic_residual_duration_s", "fallback_hold_max_s"))
+    thresholds = _require_mapping(root["thresholds_deg"], "thresholds_deg", ("clear", "slow", "slow_max_linear_mps"))
+    clear = _require_mapping(thresholds["clear"], "thresholds_deg.clear", ("pitch_min", "pitch_max", "absolute_roll_max"))
+    slow = _require_mapping(thresholds["slow"], "thresholds_deg.slow", ("pitch_min", "pitch_max", "absolute_roll_max"))
+    hysteresis = _require_mapping(root["hysteresis"], "hysteresis", ("release_hold_s", "tighten_each_boundary_deg"))
+    zones = _require_mapping(root["route_zones"], "route_zones", ("normal", "manual_only", "degraded_stop", "unknown"))
+    coupling = _require_mapping(root["downhill_stopping_coupling"], "downhill_stopping_coupling", ("downhill_factor", "equation", "nonpositive_effective_deceleration"))
+    fail_closed = _require_mapping(root["fail_closed"], "fail_closed", ("stale_uncalibrated_bad_tf_bad_time_dynamic_unknown_zone", "slow_only_lowers_speed"))
+    if gravity["fallback"] != "first_order_low_pass_acceleration_vector" or zones != {"normal": "evaluate_slope_policy", "manual_only": "stop_autonomy", "degraded_stop": "stop", "unknown": "stop"} or coupling != {"downhill_factor": "sin(max(0, -pitch_rad))", "equation": "a_eff = a_policy - g * downhill_factor", "nonpositive_effective_deceleration": "stop"} or fail_closed != {"stale_uncalibrated_bad_tf_bad_time_dynamic_unknown_zone": "stop", "slow_only_lowers_speed": True}:
+        raise ValueError("unsupported fail-closed policy")
+    values = dict(policy_id=root["policy_id"], policy_sha256=digest, source_ttl_s=_number(inputs["source_ttl_s"], "source_ttl_s"), receipt_ttl_s=_number(inputs["receipt_ttl_s"], "receipt_ttl_s"), transform_ttl_s=_number(inputs["transform_ttl_s"], "transform_ttl_s"), route_zone_ttl_s=_number(inputs["route_zone_ttl_s"], "route_zone_ttl_s"), gravity_mps2=_number(calibration["mean_gravity_mps2"], "mean_gravity_mps2"), gravity_tolerance_mps2=_number(calibration["mean_acceleration_tolerance_mps2"], "mean_acceleration_tolerance_mps2"), fallback_gravity_tolerance_mps2=_number(gravity["fallback_acceleration_magnitude_tolerance_mps2"], "fallback tolerance"), fallback_low_pass_time_constant_s=_number(gravity["low_pass_time_constant_s"], "low pass"), calibration_duration_s=_number(calibration["stationary_duration_s"], "duration"), calibration_sample_fraction=_number(calibration["minimum_expected_sample_fraction"], "fraction"), calibration_rate_hz=_number(calibration["nominal_rate_hz"], "rate"), calibration_gyro_p95_max_rps=_number(calibration["p95_gyro_norm_max_radps"], "gyro"), calibration_angle_stddev_max_deg=_number(calibration["pitch_roll_stddev_max_deg"], "angle"), fallback_gyro_max_rps=_number(gravity["fallback_gyro_norm_max_radps"], "fallback gyro"), orientation_disagreement_max_deg=_number(gravity["orientation_gravity_agreement_max_deg"], "agreement"), dynamic_residual_max_mps2=_number(gravity["dynamic_residual_max_mps2"], "residual"), dynamic_residual_duration_s=_number(gravity["dynamic_residual_duration_s"], "residual duration"), fallback_hold_max_s=_number(gravity["fallback_hold_max_s"], "fallback hold"), downhill_stop_deg=_number(slow["pitch_min"], "slow pitch minimum", -90.0), downhill_clear_deg=_number(clear["pitch_min"], "clear pitch minimum", -90.0), uphill_clear_deg=_number(clear["pitch_max"], "clear pitch maximum", -90.0), uphill_stop_deg=_number(slow["pitch_max"], "slow pitch maximum", -90.0), roll_clear_deg=_number(clear["absolute_roll_max"], "clear roll"), roll_stop_deg=_number(slow["absolute_roll_max"], "slow roll"), slow_max_linear_mps=_number(thresholds["slow_max_linear_mps"], "slow speed"), hysteresis_hold_s=_number(hysteresis["release_hold_s"], "hold"), hysteresis_tighten_deg=_number(hysteresis["tighten_each_boundary_deg"], "tighten"))
+    return SlopePolicy(**values)
+def load_slope_policy(path: str, expected_file_sha256: Optional[str]) -> SlopePolicy:
+    """Return only a fully parsed, hash-bound simulation policy."""
+    try:
+        return _load_slope_policy(path, expected_file_sha256)
+    except Exception as exc:
+        raise ValueError("invalid slope policy") from exc
+
+
+
 def publication_due(last_stamp_s: Optional[float], stamp_s: float,
                     period_s: float) -> bool:
     """Bound publications to the safety-gate consumption rate without hiding bad time."""
@@ -234,11 +302,15 @@ class SlopeSupervisorCore:
         self._filter_stamp: Optional[float] = None
         self._last_now: Optional[float] = None
         self._last_source_stamp: Optional[float] = None
+        self._sealed_transform: Optional[Tuple[Vector3, Quaternion]] = None
+        self._sealed_transform_label = ""
+        self._sealed_input_provenance = ""
 
     def calibrate(
         self,
         samples: Iterable[CalibrationSample],
         imu_to_base_quaternion: Sequence[float] = (0.0, 0.0, 0.0, 1.0),
+        imu_to_base_translation: Sequence[float] = (0.0, 0.0, 0.0),
         transform_verified: bool = False,
         time_verified: bool = False,
         transform_label: str = "unknown",
@@ -259,6 +331,7 @@ class SlopeSupervisorCore:
                 * self.policy.calibration_sample_fraction
             )
             transform = normalize_quaternion(imu_to_base_quaternion, self.policy.quaternion_norm_tolerance)
+            translation = _components(imu_to_base_translation, 3)
             if operation_mode != "simulation":
                 raise ValueError("calibration is restricted to simulation")
             if not isinstance(input_provenance, str) or not input_provenance.strip():
@@ -296,7 +369,8 @@ class SlopeSupervisorCore:
                     sample.imu_to_base_quaternion, self.policy.quaternion_norm_tolerance
                 )
                 equivalent_inverse_sign = tuple(-component for component in transform)
-                if observed_transform != transform and observed_transform != equivalent_inverse_sign:
+                observed_translation = _components(sample.imu_to_base_translation or (0.0, 0.0, 0.0), 3)
+                if (observed_transform != transform and observed_transform != equivalent_inverse_sign) or observed_translation != translation:
                     raise ValueError("sample transform does not exactly match extrinsic evidence")
                 acceleration = rotate_vector(sample.acceleration, transform)
                 gyro = rotate_vector(sample.angular_velocity, transform)
@@ -337,6 +411,7 @@ class SlopeSupervisorCore:
                     "bias": {"acceleration": acceleration_bias, "gyro": mean_gyro},
                     "extrinsic": {
                         "imu_to_base_quaternion": transform,
+                        "imu_to_base_translation": translation,
                         "label": transform_label,
                         "static": bool(transform_is_static),
                         "stamp_s": float(transform_stamp_s),
@@ -351,6 +426,9 @@ class SlopeSupervisorCore:
                 allow_nan=False,
             )
             self.calibration_sha256 = hashlib.sha256(evidence.encode("utf-8")).hexdigest()
+            self._sealed_transform = (translation, transform)
+            self._sealed_transform_label = transform_label
+            self._sealed_input_provenance = input_provenance.strip()
             self.calibration_state = CAL_VALID
             return True
         except (AttributeError, TypeError, ValueError, OverflowError):
@@ -377,7 +455,10 @@ class SlopeSupervisorCore:
         transform_verified: bool = True,
         transform_label: str = "simulation",
         imu_to_base_quaternion: Sequence[float] = (0.0, 0.0, 0.0, 1.0),
+        imu_to_base_translation: Sequence[float] = (0.0, 0.0, 0.0),
+        input_provenance: str = "",
         zone: str = "normal",
+        zone_age_s: float = math.inf,
         orientation_available: bool = True,
         calibrated: Optional[bool] = None,
     ) -> SlopeDecision:
@@ -432,6 +513,19 @@ class SlopeSupervisorCore:
                 reason |= TF
 
             transform = normalize_quaternion(imu_to_base_quaternion, policy.quaternion_norm_tolerance)
+            translation = _components(imu_to_base_translation, 3)
+            if self._sealed_transform is not None:
+                sealed_translation, sealed_rotation = self._sealed_transform
+                sign_equivalent = tuple(-component for component in sealed_rotation)
+                if (translation != sealed_translation or
+                        (transform != sealed_rotation and transform != sign_equivalent) or
+                        transform_label != self._sealed_transform_label or
+                        input_provenance.strip() != self._sealed_input_provenance):
+                    self.calibration_state = CAL_INVALID
+                    self.calibration_sha256 = ""
+                    effective_calibrated = False
+                    calibration_state = CAL_INVALID
+                    reason |= TF | IMU_UNCALIBRATED
             acceleration_base = rotate_vector(acceleration, transform)
             gyro_base = rotate_vector(angular_velocity, transform)
             gravity_norm = _norm(acceleration_base)
@@ -503,7 +597,9 @@ class SlopeSupervisorCore:
 
         if not effective_calibrated:
             reason |= IMU_UNCALIBRATED
-        if zone not in ("normal", "manual_only", "degraded_stop"):
+        if (not math.isfinite(float(zone_age_s)) or float(zone_age_s) < 0.0 or
+                float(zone_age_s) > policy.route_zone_ttl_s or
+                zone not in ("normal", "manual_only", "degraded_stop")):
             reason |= ROUTE_STATE
         elif zone in ("manual_only", "degraded_stop"):
             reason |= ROUTE_STATE
@@ -522,7 +618,7 @@ class SlopeSupervisorCore:
         self._last_state = state
 
         recommended = policy.slow_max_linear_mps if state == SLOW else (0.0 if state in (UNKNOWN, STOP) else -1.0)
-        signal = UNKNOWN if state == UNKNOWN else STOP if state == STOP else CLEAR
+        signal = SAFETY_UNKNOWN if state == UNKNOWN else SAFETY_STOP if state == STOP else SAFETY_CLEAR
         downhill_factor = max(0.0, math.sin(max(0.0, -diagnostics["pitch_rad"])))
         return SlopeDecision(
             sequence=self.sequence,
@@ -597,7 +693,10 @@ class SlopeSupervisorRosNode:
         self.rospy = rospy
         self.SlopeStatus = SlopeStatus
         self.SafetySignal = SafetySignal
-        self.core = SlopeSupervisorCore()
+        self.core = SlopeSupervisorCore(load_slope_policy(
+            str(rospy.get_param("~policy")),
+            str(rospy.get_param("~expected_policy_file_sha256")),
+        ))
         self.operation_mode = str(rospy.get_param("~operation_mode", "unverified"))
         self.calibration_enabled = bool(rospy.get_param("~stationary_calibration_enabled", False))
         self.transform_label = str(rospy.get_param("~transform_label", "unknown"))
@@ -605,9 +704,9 @@ class SlopeSupervisorRosNode:
         self.transform_is_static = bool(rospy.get_param("~transform_is_static", False))
         self.input_provenance = str(rospy.get_param("~input_provenance", ""))
         self.imu_frame = str(rospy.get_param("~imu_frame", "imu_link"))
-        publish_rate_hz = float(rospy.get_param("~publish_rate_hz", 20.0))
-        if not math.isfinite(publish_rate_hz) or not 1.0 <= publish_rate_hz <= 25.0:
-            raise ValueError("publish_rate_hz must be finite and in [1, 25]")
+        publish_rate_hz = float(rospy.get_param("~publish_rate_hz", 50.0))
+        if not math.isfinite(publish_rate_hz) or not 1.0 <= publish_rate_hz <= 50.0:
+            raise ValueError("publish_rate_hz must be finite and in [1, 50]")
         self.publish_period_s = 1.0 / publish_rate_hz
         self.last_published_source_stamp_s = None
         self._calibration_samples = []
@@ -619,6 +718,7 @@ class SlopeSupervisorRosNode:
             self.core.calibration_sha256 = ""
         initial_zone = rospy.get_param("~initial_route_zone_policy", "unknown")
         self.zone = normalize_initial_zone_policy(initial_zone, self.operation_mode)
+        self.zone_receipt_stamp_s = -math.inf
         self.tf_buffer = tf2_ros.Buffer(cache_time=rospy.Duration(1.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
         self.status_pub = rospy.Publisher("/safety/slope_status", SlopeStatus, queue_size=1)
@@ -628,6 +728,7 @@ class SlopeSupervisorRosNode:
 
     def _zone_cb(self, msg):
         self.zone = str(msg.data)
+        self.zone_receipt_stamp_s = self.rospy.Time.now().to_sec()
 
     def _reset_calibration_candidate(self):
         self._calibration_samples = []
@@ -637,7 +738,7 @@ class SlopeSupervisorRosNode:
 
 
     def _observe_calibration_sample(
-        self, sample, transform_valid, transform_q, transform_stamp
+        self, sample, transform_valid, transform_q, transform_translation, transform_stamp
     ):
         if self.core.calibration_state != CAL_CALIBRATING:
             return
@@ -646,6 +747,8 @@ class SlopeSupervisorRosNode:
             normalize_quaternion(sample.quaternion, self.core.policy.quaternion_norm_tolerance)
             _components(sample.acceleration, 3)
             _components(sample.angular_velocity, 3)
+            _components(sample.imu_to_base_translation, 3)
+            _components(transform_translation, 3)
             normalize_quaternion(
                 sample.imu_to_base_quaternion,
                 self.core.policy.quaternion_norm_tolerance,
@@ -695,6 +798,7 @@ class SlopeSupervisorRosNode:
             calibrated = self.core.calibrate(
                 self._calibration_samples,
                 imu_to_base_quaternion=transform_q,
+                imu_to_base_translation=transform_translation,
                 transform_verified=self.transform_verified,
                 time_verified=True,
                 transform_label=self.transform_label,
@@ -715,19 +819,22 @@ class SlopeSupervisorRosNode:
         transform_age = math.inf
         transform_stamp = None
         transform_q = (0.0, 0.0, 0.0, 1.0)
+        transform_translation = (0.0, 0.0, 0.0)
         try:
             if not transform_valid:
                 raise ValueError("unexpected IMU frame")
             tf = self.tf_buffer.lookup_transform("base_link", self.imu_frame, msg.header.stamp, rospy.Duration(0.01))
             q = tf.transform.rotation
             transform_q = (q.x, q.y, q.z, q.w)
+            translation = tf.transform.translation
+            transform_translation = (translation.x, translation.y, translation.z)
             transform_stamp = tf.header.stamp.to_sec()
             if transform_stamp == 0.0:
                 if not self.transform_is_static:
                     raise ValueError("zero-stamp TF was not identified as static")
                 transform_age = 0.0
             else:
-                transform_age = max(0.0, (receipt - tf.header.stamp).to_sec())
+                transform_age = (receipt - tf.header.stamp).to_sec()
         except Exception:
             transform_valid = False
         sample = CalibrationSample(
@@ -736,10 +843,11 @@ class SlopeSupervisorRosNode:
             angular_velocity=(msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z),
             source_stamp_s=msg.header.stamp.to_sec(),
             imu_to_base_quaternion=transform_q,
+            imu_to_base_translation=transform_translation,
         )
         if self.calibration_enabled and self.operation_mode == "simulation":
             self._observe_calibration_sample(
-                sample, transform_valid, transform_q, transform_stamp
+                sample, transform_valid, transform_q, transform_translation, transform_stamp
             )
         source_stamp_s = msg.header.stamp.to_sec()
         if not publication_due(
@@ -761,7 +869,10 @@ class SlopeSupervisorRosNode:
             transform_verified=self.transform_verified,
             transform_label=self.transform_label,
             imu_to_base_quaternion=transform_q,
+            imu_to_base_translation=transform_translation,
+            input_provenance=self.input_provenance,
             zone=self.zone,
+            zone_age_s=receipt.to_sec() - self.zone_receipt_stamp_s,
             orientation_available=orientation_available,
         )
         self._publish_decision(decision, msg.header.stamp, receipt)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import importlib.util
 import math
 from pathlib import Path
@@ -57,6 +58,8 @@ def decide(core, pitch=0.0, roll=0.0, now=1.0, **overrides):
         transform_verified=True,
         transform_label="simulation",
         zone="normal",
+        input_provenance="gazebo:/sensors/imu/data:imu_link",
+        zone_age_s=0.0,
     )
     values.update(overrides)
     return core.decide(**values)
@@ -418,11 +421,13 @@ class CalibrationTests(unittest.TestCase):
             angular_velocity=(gyro, 0.0, 0.0),
             source_stamp_s=stamp,
             imu_to_base_quaternion=(0.0, 0.0, 0.0, 1.0),
+            imu_to_base_translation=(0.0, 0.0, 0.0),
         )
         node._observe_calibration_sample(
             sample,
             True,
             (0.0, 0.0, 0.0, 1.0),
+            (0.0, 0.0, 0.0),
             0.0,
         )
 
@@ -435,9 +440,10 @@ class CalibrationTests(unittest.TestCase):
             angular_velocity=(0.0, 0.0, 0.0),
             source_stamp_s=1.005,
             imu_to_base_quaternion=(0.0, 0.0, 0.0, 1.0),
+            imu_to_base_translation=(0.0, 0.0, 0.0),
         )
         node._observe_calibration_sample(
-            malformed, True, (0.0, 0.0, 0.0, 1.0), 0.0
+            malformed, True, (0.0, 0.0, 0.0, 1.0), (0.0, 0.0, 0.0), 0.0
         )
         self.assertEqual(node._calibration_samples, [])
         self.assertEqual(node.core.calibration_state, slope.CAL_CALIBRATING)
@@ -597,6 +603,35 @@ class PublicationPairingTests(unittest.TestCase):
         self.assert_paired(1.9, 2.0)
         self.assertEqual(self.node.status_pub.messages[-1].transform_age_s, -1.0)
         self.assertEqual(self.node.status_pub.messages[-1].input_age_s, -1.0)
+
+class TrustSealTests(unittest.TestCase):
+    def test_policy_requires_current_launch_hash(self):
+        policy_path = Path(__file__).parents[1] / "config" / "slope_policy.yaml"
+        digest = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+        policy = slope.load_slope_policy(str(policy_path), digest)
+        self.assertEqual(policy.policy_sha256, digest)
+        with self.assertRaises(ValueError):
+            slope.load_slope_policy(str(policy_path), "0" * 64)
+        with self.assertRaises(ValueError):
+            slope.load_slope_policy("/definitely/missing/slope_policy.yaml", digest)
+
+    def test_future_tf_and_stale_zone_stop(self):
+        self.assertEqual(decide(valid_core(), transform_age_s=-0.001).state, slope.UNKNOWN)
+        self.assertEqual(decide(valid_core(), zone_age_s=0.100001).state, slope.STOP)
+
+    def test_sealed_extrinsic_translation_and_provenance_must_match(self):
+        core = slope.SlopeSupervisorCore()
+        helper = CalibrationTests()
+        self.assertTrue(helper.calibrate(core, helper.make_samples()))
+        self.assertEqual(decide(core, imu_to_base_quaternion=(0.0, 0.0, 0.0, -1.0)).state, slope.CLEAR)
+        self.assertEqual(decide(core, imu_to_base_translation=(0.001, 0.0, 0.0)).state, slope.UNKNOWN)
+        self.assertEqual(decide(core, input_provenance="gazebo:/other:imu_link").state, slope.UNKNOWN)
+
+
+class PublicationRateTests(unittest.TestCase):
+    def test_fifty_hz_publication_period(self):
+        self.assertTrue(slope.publication_due(1.0, 1.02, 0.02))
+        self.assertFalse(slope.publication_due(1.0, 1.019, 0.02))
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,7 @@ input:
   source_ttl_s: 0.10
   receipt_ttl_s: 0.10
   transform_ttl_s: 0.10
+  route_zone_ttl_s: 0.10
   verified_time_required: true
 calibration:
   output_during_calibration: unknown_stop
