@@ -252,18 +252,76 @@ def inside_container(argv):
     return 0
 
 
+DETERMINISTIC_CONFIG_FILES = (
+    "config.json",
+    "config_preprocess.json",
+    "config_odometry_cpu.json",
+    "config_global_mapping_cpu.json",
+)
+
+
+def validate_config_bundle(path):
+    path = Path(path)
+    if path.is_file() and not path.is_symlink():
+        resolved = path.resolve(strict=True)
+        json.loads(resolved.read_text(encoding="utf-8"))
+        return resolved, ((resolved, "config.json"),), sha256_file(resolved)
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError("GLIM config must be a regular file or deterministic bundle directory")
+    root = path.resolve(strict=True)
+    manifest_path = root / "manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError("deterministic GLIM config manifest is absent or unsafe")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected_keys = {
+        "schema_version", "artifact_id", "glim_revision", "glim_ros2_revision",
+        "determinism", "files",
+    }
+    expected_determinism = {
+        "preprocess_random_grid": False,
+        "preprocess_threads": 1,
+        "odometry_target_downsampling_rate": 1.0,
+        "odometry_threads": 1,
+        "global_randomsampling_rate": 1.0,
+    }
+    if (not isinstance(manifest, dict) or set(manifest) != expected_keys
+            or manifest.get("schema_version") != 1
+            or manifest.get("artifact_id") != "wheelchair.glim-deterministic-config/v1"
+            or manifest.get("glim_revision") != GLIM_REVISION
+            or manifest.get("glim_ros2_revision") != GLIM_ROS2_REVISION
+            or manifest.get("determinism") != expected_determinism
+            or set(manifest.get("files", {})) != set(DETERMINISTIC_CONFIG_FILES)):
+        raise ValueError("deterministic GLIM config contract mismatch")
+    mounts = []
+    for name in DETERMINISTIC_CONFIG_FILES:
+        candidate = root / name
+        digest = manifest["files"].get(name)
+        if (candidate.is_symlink() or not candidate.is_file()
+                or not isinstance(digest, str) or sha256_file(candidate) != digest):
+            raise ValueError("deterministic GLIM config file/hash mismatch: " + name)
+        mounts.append((candidate.resolve(strict=True), name))
+    json.loads((root / "config.json").read_text(encoding="utf-8"))
+    return root / "config.json", tuple(mounts), sha256_file(manifest_path)
+
+
 def container_command(args, bag_dir, run_dir):
-    return [args.container_engine, "run", "--rm", "--network=none", "--read-only",
-            "--security-opt=no-new-privileges", "--cap-drop=ALL",
-            f"--user={os.getuid()}:{os.getgid()}",
-            "--tmpfs=/tmp:rw,nosuid,nodev,size=1g",
-            f"--mount=type=bind,src={bag_dir},dst=/input/rosbag2,readonly",
-            f"--mount=type=bind,src={args.config.resolve()},dst=/opt/glim-config/config.json,readonly",
-            f"--mount=type=bind,src={run_dir},dst=/output",
-            "--env=HOME=/tmp", "--env=OMP_NUM_THREADS=1",
-            "--env=OPENBLAS_NUM_THREADS=1", "--env=MKL_NUM_THREADS=1",
-            f"--env=GLIM_REPRO_SEED={SEED}", "--label=wheelchair.offline-only=true", args.image,
-            "--bag", "/input/rosbag2", "--config-dir", "/opt/glim-config", "--output", "/output"]
+    command = [args.container_engine, "run", "--rm", "--network=none", "--read-only",
+               "--security-opt=no-new-privileges", "--cap-drop=ALL",
+               f"--user={os.getuid()}:{os.getgid()}",
+               "--tmpfs=/tmp:rw,nosuid,nodev,size=1g",
+               f"--mount=type=bind,src={bag_dir},dst=/input/rosbag2,readonly"]
+    for source, name in args.config_mounts:
+        command.append(
+            f"--mount=type=bind,src={source},dst=/opt/glim-config/{name},readonly"
+        )
+    command += [f"--mount=type=bind,src={run_dir},dst=/output",
+                "--env=HOME=/tmp", "--env=OMP_NUM_THREADS=1",
+                "--env=OPENBLAS_NUM_THREADS=1", "--env=MKL_NUM_THREADS=1",
+                f"--env=GLIM_REPRO_SEED={SEED}",
+                "--label=wheelchair.offline-only=true", args.image,
+                "--bag", "/input/rosbag2", "--config-dir", "/opt/glim-config",
+                "--output", "/output"]
+    return command
 
 
 def artifacts(root):
@@ -288,7 +346,8 @@ def main(argv=None):
         if args.output_dir.exists(): raise ValueError("output directory already exists")
         if args.source_revision != GLIM_REVISION or args.glim_ros2_revision != GLIM_ROS2_REVISION: raise ValueError("source revision differs from image pins")
         if "@sha256:" not in args.image or len(args.image.rsplit("@sha256:", 1)[1]) != 64: raise ValueError("image must use an immutable digest")
-        config = args.config.resolve(strict=True); json.loads(config.read_text(encoding="utf-8"))
+        config, config_mounts, config_digest = validate_config_bundle(args.config)
+        args.config_mounts = config_mounts
         source, bag_dir, database = validate_ros2_manifest(args.ros2_manifest)
     except (OSError, ValueError, json.JSONDecodeError, sqlite3.DatabaseError) as exc:
         print(f"E_GLIM_REPRO_INPUT: {exc}", file=sys.stderr); return 2
@@ -298,7 +357,8 @@ def main(argv=None):
               "claim_label": "REPLAY_CONSISTENCY_NOT_TRUTH", "qualification": "candidate",
               "image": args.image, "source_revision": GLIM_REVISION, "glim_ros2_revision": GLIM_ROS2_REVISION,
               "seed": SEED, "threads": THREADS, "input_manifest_sha256": sha256_file(args.ros2_manifest),
-              "ros2_database_sha256": sha256_file(database), "config_sha256": sha256_file(config), "runs": []}
+              "ros2_database_sha256": sha256_file(database), "config_sha256": config_digest,
+              "config_entrypoint_sha256": sha256_file(config), "runs": []}
     success = True
     for index in range(1, 4):
         run_dir = args.output_dir / f"run-{index:02d}"; run_dir.mkdir()

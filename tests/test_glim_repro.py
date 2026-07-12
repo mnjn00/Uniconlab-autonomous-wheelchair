@@ -15,6 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "tools/offline/Dockerfile.glim"
 CONFIG = ROOT / "tools/offline/glim-config.json"
+DETERMINISTIC_CONFIG = ROOT / "tools/offline/glim-deterministic"
 RUNNER_PATH = ROOT / "scripts/run_glim_repro.py"
 CONVERTER_PATH = ROOT / "scripts/export_glim_rosbag2.py"
 
@@ -47,6 +48,29 @@ class GlimStaticContracts(unittest.TestCase):
         self.assertEqual(value["global"]["config_odometry"], "config_odometry_cpu.json")
         self.assertEqual(value["glim_ros"]["playback_speed"], 0.0)
 
+    def test_deterministic_config_bundle_disables_random_sampling_and_threads(self):
+        entrypoint, mounts, digest = runner.validate_config_bundle(DETERMINISTIC_CONFIG)
+        self.assertEqual(entrypoint, DETERMINISTIC_CONFIG / "config.json")
+        self.assertEqual({name for _, name in mounts}, set(runner.DETERMINISTIC_CONFIG_FILES))
+        self.assertEqual(len(digest), 64)
+        manifest = json.loads((DETERMINISTIC_CONFIG / "manifest.json").read_text())
+        self.assertEqual(manifest["determinism"], {
+            "preprocess_random_grid": False,
+            "preprocess_threads": 1,
+            "odometry_target_downsampling_rate": 1.0,
+            "odometry_threads": 1,
+            "global_randomsampling_rate": 1.0,
+        })
+
+    def test_deterministic_config_bundle_rejects_tamper(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for source in DETERMINISTIC_CONFIG.iterdir():
+                (root / source.name).write_bytes(source.read_bytes())
+            (root / "config_preprocess.json").write_text("tampered")
+            with self.assertRaisesRegex(ValueError, "file/hash mismatch"):
+                runner.validate_config_bundle(root)
+
     def test_real_glim_rosbag_api_is_positional_and_ros_parameters(self):
         command = runner.actual_glim_command(Path("/input/rosbag2"), Path("/opt/glim-config"), Path("/output/glim-dump"))
         self.assertEqual(command[0:2], [runner.GLIM_ROSBAG_EXECUTABLE, "/input/rosbag2"])
@@ -58,7 +82,11 @@ class GlimStaticContracts(unittest.TestCase):
             self.assertNotIn(fictional, command)
 
     def test_container_is_networkless_read_only_and_has_no_noetic_runtime(self):
-        args = type("Args", (), {"container_engine": "docker", "config": CONFIG, "image": "glim@sha256:" + "a" * 64})()
+        _, mounts, _ = runner.validate_config_bundle(DETERMINISTIC_CONFIG)
+        args = type("Args", (), {
+            "container_engine": "docker", "config": DETERMINISTIC_CONFIG,
+            "config_mounts": mounts, "image": "glim@sha256:" + "a" * 64,
+        })()
         command = runner.container_command(args, Path("/derived"), Path("/run"))
         self.assertIn("--network=none", command); self.assertIn("--read-only", command)
         self.assertIn("--cap-drop=ALL", command)
