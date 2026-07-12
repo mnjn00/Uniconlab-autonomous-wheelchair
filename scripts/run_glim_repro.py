@@ -282,7 +282,8 @@ def validate_config_bundle(path):
         "preprocess_threads": 1,
         "odometry_target_downsampling_rate": 0.1,
         "odometry_threads": 1,
-        "global_randomsampling_rate": 1.0,
+        "global_randomsampling_determinism": "fixed-seed/default-constructed-std::mt19937",
+        "global_randomsampling_rate": 0.2,
     }
     if (not isinstance(manifest, dict) or set(manifest) != expected_keys
             or manifest.get("schema_version") != 1

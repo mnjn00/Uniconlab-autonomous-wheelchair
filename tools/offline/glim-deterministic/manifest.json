@@ -1,7 +1,8 @@
 {
   "artifact_id": "wheelchair.glim-deterministic-config/v1",
   "determinism": {
-    "global_randomsampling_rate": 1.0,
+    "global_randomsampling_determinism": "fixed-seed/default-constructed-std::mt19937",
+    "global_randomsampling_rate": 0.2,
     "odometry_target_downsampling_rate": 0.1,
     "odometry_threads": 1,
     "preprocess_random_grid": false,
@@ -9,7 +10,7 @@
   },
   "files": {
     "config.json": "97a2e0007ab1e0958a169a950f395eefa8e5f4f14a700c5f84ca3806eaa08515",
-    "config_global_mapping_cpu.json": "e4d6a87af6086f04e5cc646d2f885c57d3074bbde5d884d5f919e90fa21a981f",
+    "config_global_mapping_cpu.json": "1c01083275bd75b131ce3b856bd4e1dde2a18c35276c61352ad4956d06f90c06",
     "config_odometry_cpu.json": "9eb83c8684afb4e1dbfb5845591f088137739bef99cde103bd29dafcbeea97ea",
     "config_preprocess.json": "4f50e01d1366008115005194557f1e2fcf97ce19d7edc3cda9b326b470f742f3"
   },

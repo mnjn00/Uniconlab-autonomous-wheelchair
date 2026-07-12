@@ -48,7 +48,7 @@ class GlimStaticContracts(unittest.TestCase):
         self.assertEqual(value["global"]["config_odometry"], "config_odometry_cpu.json")
         self.assertEqual(value["glim_ros"]["playback_speed"], 0.0)
 
-    def test_deterministic_config_bundle_disables_random_sampling_and_threads(self):
+    def test_deterministic_config_bundle_uses_fixed_seed_sampled_global_mapping_and_single_threads(self):
         entrypoint, mounts, digest = runner.validate_config_bundle(DETERMINISTIC_CONFIG)
         self.assertEqual(entrypoint, DETERMINISTIC_CONFIG / "config.json")
         self.assertEqual({name for _, name in mounts}, set(runner.DETERMINISTIC_CONFIG_FILES))
@@ -59,7 +59,8 @@ class GlimStaticContracts(unittest.TestCase):
             "preprocess_threads": 1,
             "odometry_target_downsampling_rate": 0.1,
             "odometry_threads": 1,
-            "global_randomsampling_rate": 1.0,
+            "global_randomsampling_determinism": "fixed-seed/default-constructed-std::mt19937",
+            "global_randomsampling_rate": 0.2,
         })
 
     def test_deterministic_config_bundle_rejects_tamper(self):
