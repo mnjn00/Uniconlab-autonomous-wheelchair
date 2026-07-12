@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import math
 import re
 import threading
+import time
 from typing import Dict, Optional, Tuple
 
 UNKNOWN, CLEAR, STOP, HOLD = 0, 1, 2, 3
@@ -120,6 +121,17 @@ class EvidencePairBuffer:
         self.committed_status = None
         self.committed_signals = {name: None for name in self.signal_names}
         self._lock = threading.RLock()
+        self._last_stamps = {
+            "status_source": None,
+            "status_evaluation": None,
+            "status_receipt": None,
+        }
+        self._last_stamps.update({
+            "%s_stamp" % name: None for name in self.signal_names
+        })
+        self._last_stamps.update({
+            "%s_receipt" % name: None for name in self.signal_names
+        })
 
     @staticmethod
     def _sequence(value):
@@ -148,8 +160,8 @@ class EvidencePairBuffer:
         else:
             self.signals[stream] = value
         if self.sequence is None or sequence > self.sequence:
-            self.sequence = sequence
             self.poisoned = False
+            self.sequence = sequence
         return not self.poisoned
 
     def reject(self):
@@ -215,7 +227,7 @@ class EvidencePairBuffer:
     def _evidence_unlocked(self, now_s):
         status = self.status
         signals = tuple(self.signals.values())
-        pending_complete = (
+        complete = (
             status is not None
             and status.sequence == self.sequence
             and all(
@@ -224,33 +236,11 @@ class EvidencePairBuffer:
             )
         )
         if self.poisoned:
-            receipts = (
-                [status.receipt_stamp_s] if status is not None else []
-            ) + [
-                signal.receipt_stamp_s
-                for signal in signals
-                if signal is not None
-            ]
-            return self._unknown(min(receipts) if receipts else None)
-        using_pending = pending_complete
-        if not pending_complete:
-            committed_status = self.committed_status
-            committed_signals = tuple(self.committed_signals.values())
-            committed_complete = (
-                committed_status is not None
-                and all(signal is not None for signal in committed_signals)
-            )
-            if not committed_complete:
-                receipts = (
-                    [status.receipt_stamp_s] if status is not None else []
-                ) + [
-                    signal.receipt_stamp_s
-                    for signal in signals
-                    if signal is not None
-                ]
-                return self._unknown(min(receipts) if receipts else None)
-            status = committed_status
-            signals = committed_signals
+            return self._unknown()
+        # Once a stream advances, its older committed CLEAR cannot cross that
+        # generation boundary.  Incomplete generations are therefore unknown.
+        if not complete:
+            return self._unknown()
         try:
             numeric = (now_s, status.source_stamp_s, status.evaluation_stamp_s,
                        status.receipt_stamp_s, status.reason_mask)
@@ -266,9 +256,12 @@ class EvidencePairBuffer:
             expected_stamp = (status.evaluation_stamp_s if self.stamp_semantics == "evaluation"
                               else status.source_stamp_s)
             expected_state = CLEAR if status.clear else STOP
-            receipts = [status.receipt_stamp_s]
-            for signal in signals:
-                receipts.append(signal.receipt_stamp_s)
+            timestamps = {
+                "status_source": status.source_stamp_s,
+                "status_evaluation": status.evaluation_stamp_s,
+                "status_receipt": status.receipt_stamp_s,
+            }
+            for name, signal in zip(self.signal_names, signals):
                 if (signal.sequence != status.sequence or
                         signal.state != expected_state or
                         signal.reason_mask != status.reason_mask or
@@ -280,31 +273,32 @@ class EvidencePairBuffer:
                         signal.stamp_s <= 0.0 or signal.receipt_stamp_s <= 0.0):
                     self.reject()
                     return self._unknown()
-            oldest_receipt = min(receipts)
-            if (not _finite(now_s) or
-                    now_s - status.evaluation_stamp_s > self.ttl_s + 1e-12 or
-                    now_s - expected_stamp > self.ttl_s + 1e-12 or
-                    now_s - oldest_receipt > self.ttl_s + 1e-12 or
-                    status.evaluation_stamp_s - now_s >
-                    self.future_tolerance_s + 1e-12 or
-                    expected_stamp - now_s > self.future_tolerance_s + 1e-12 or
-                    oldest_receipt - now_s > self.future_tolerance_s + 1e-12):
+                timestamps["%s_stamp" % name] = signal.stamp_s
+                timestamps["%s_receipt" % name] = signal.receipt_stamp_s
+            if not _finite(now_s):
                 self.reject()
                 return self._unknown()
+            for key, stamp in timestamps.items():
+                if (now_s - stamp > self.ttl_s + 1e-12 or
+                        stamp - now_s > self.future_tolerance_s + 1e-12 or
+                        (self._last_stamps[key] is not None and
+                         stamp < self._last_stamps[key])):
+                    self.reject()
+                    return self._unknown()
             for cap in (status.max_linear_mps, status.max_angular_rps):
                 if cap is not None and (not _finite(cap) or cap < 0.0):
                     self.reject()
                     return self._unknown()
+            self._last_stamps.update(timestamps)
             result = SignalEvidence(
-                expected_state, expected_stamp, oldest_receipt,
+                expected_state, expected_stamp, min(timestamps[key] for key in timestamps
+                                                    if key.endswith("receipt")),
                 status.reason_mask, status.source, status.policy_sha256,
                 status.sequence, status.max_linear_mps, status.max_angular_rps)
-            if using_pending:
-                self.committed_status = status
-                self.committed_signals = {
-                    name: signal
-                    for name, signal in zip(self.signal_names, signals)
-                }
+            self.committed_status = status
+            self.committed_signals = {
+                name: signal for name, signal in zip(self.signal_names, signals)
+            }
             return result
         except Exception:
             self.reject()
@@ -395,6 +389,7 @@ class GateInputs:
     deadline_missed: bool = False
     backpressure: bool = False
     internal_fault: bool = False
+    clock_fault: bool = False
     # Removed permissive Bool API names remain accepted only as explicit STOP evidence.
     geofence_ok: Optional[bool] = None
     mode_allowed: Optional[bool] = None
@@ -441,6 +436,8 @@ class SafetyGateCore:
         self.activation_started_s = None
         self.activation_command_floor_s = None
         self.awaiting_first_command = False
+        self._reset_level = False
+        self._arm_level = False
 
     def reset(self) -> None:
         """Administrative test reset; runtime reset must use guarded GateInputs."""
@@ -457,6 +454,8 @@ class SafetyGateCore:
         self.activation_started_s = None
         self.activation_command_floor_s = None
         self.awaiting_first_command = False
+        self._reset_level = False
+        self._arm_level = False
 
     def evaluate(self, inputs: GateInputs) -> GateDecision:
         try:
@@ -480,6 +479,8 @@ class SafetyGateCore:
             self.armed = False
         elif inputs.e_stop is None:
             mask |= ESTOP | INPUT_UNKNOWN
+        if inputs.clock_fault:
+            mask |= CLOCK
 
         if inputs.internal_fault:
             mask |= INTERNAL_FAULT
@@ -554,12 +555,20 @@ class SafetyGateCore:
         if mask & ~DEFINED_REASON_MASK:
             mask = (mask & DEFINED_REASON_MASK) | INTERNAL_FAULT
 
-        all_clear = mask == 0
-        reset_requested = bool(inputs.e_stop_reset)
+        reset_requested = bool(inputs.e_stop_reset) and not self._reset_level
+        arm_requested = bool(inputs.arm_request) and not self._arm_level
+        self._reset_level = bool(inputs.e_stop_reset)
+        self._arm_level = bool(inputs.arm_request)
         if reset_requested:
+            # A healthy manual/AUTO_DISABLED driver pair is reset evidence, not
+            # motion-ready authority.  Its intentional STOP reason is excluded
+            # only for reset eligibility; AUTO_READY remains required to arm.
+            reset_faults = mask
+            if inputs.manual_or_disarmed:
+                reset_faults &= ~(MODE | DRIVER)
             reset_ok = (self.e_stop_latched and inputs.e_stop is False and
                         inputs.manual_or_disarmed and inputs.stationary and
-                        inputs.mission_cancelled and all_clear)
+                        inputs.mission_cancelled and reset_faults == 0)
             if reset_ok:
                 self.e_stop_latched = False
                 self.armed = False
@@ -569,8 +578,9 @@ class SafetyGateCore:
         if self.e_stop_latched:
             mask |= ESTOP
 
-        # Reset and arm are intentionally distinct evaluations.
-        if inputs.arm_request and not reset_requested and mask == 0:
+        # Reset and arm are intentionally distinct evaluations and requests are
+        # one-shot rising edges, so a latched publisher cannot replay either.
+        if arm_requested and not reset_requested and mask == 0:
             self.armed = True
         elif mask != 0:
             self.armed = False
@@ -812,12 +822,14 @@ class SafetyGateRosNode:
                                          cfg.future_tolerance_s, "source"),
         }
         self.last_cmd = self.cmd_source = self.cmd_receipt = None
-        self.estop = None
+        self.driver_estop = self.external_estop = None
         self.reset_requested = self.arm_requested = False
+        self.reset_level = self.arm_level = False
         self.manual_or_disarmed = self.stationary = self.mission_cancelled = False
         self.topology_evidence = None
         self.internal_fault = self.backpressure = False
-        self.last_tick = None
+        self.last_tick_wall = self.last_ros_time = self.last_ros_wall = None
+        self.last_diag_wall = None
         self.sequence = 0
 
         self.pub = rospy.Publisher(p("~output_cmd_topic", "/cmd_vel_safe"), Twist, queue_size=1)
@@ -849,7 +861,12 @@ class SafetyGateRosNode:
         rate = float(p("~publish_rate_hz", 50.0))
         if rate < 50.0:
             raise ValueError("safety gate publication must be at least 50 Hz")
-        rospy.Timer(rospy.Duration(1.0 / rate), self._timer_cb)
+        self._wall_stop = threading.Event()
+        self._wall_period_s = 1.0 / rate
+        rospy.on_shutdown(self._wall_stop.set)
+        self._wall_thread = threading.Thread(target=self._wall_publish_loop,
+                                             name="safety-gate-publisher", daemon=True)
+        self._wall_thread.start()
 
     @staticmethod
     def _now():
@@ -939,6 +956,7 @@ class SafetyGateRosNode:
 
     def _driver_cb(self, msg):
         try:
+            self.driver_estop = bool(msg.physical_estop_asserted)
             clear = (msg.state == msg.AUTO_READY and msg.enabled and
                      not msg.manual_override_active and not msg.physical_estop_asserted and
                      msg.watchdog_verified)
@@ -947,7 +965,6 @@ class SafetyGateRosNode:
                 msg.header.stamp.to_sec(), self._now(), int(msg.reason_mask),
                 str(msg.source), str(msg.contract_sha256))
             self.pairs["driver"].update_status(status)
-            self.estop = bool(msg.physical_estop_asserted)
             self.manual_or_disarmed = msg.state in (msg.MANUAL, msg.AUTO_DISABLED)
             self.stationary = (_finite(msg.measured_linear_mps) and _finite(msg.measured_angular_rps) and
                                abs(msg.measured_linear_mps) < self.cfg.stationary_linear_mps and
@@ -956,13 +973,26 @@ class SafetyGateRosNode:
             self.pairs["driver"].reject()
 
     def _estop_cb(self, msg):
-        self.estop = bool(msg.data)
+        self.external_estop = bool(msg.data)
+    def _combined_estop(self):
+        if self.driver_estop is True or self.external_estop is True:
+            return True
+        if self.driver_estop is False and self.external_estop is False:
+            return False
+        return None
+
 
     def _reset_cb(self, msg):
-        self.reset_requested |= bool(msg.data)
+        level = bool(msg.data)
+        if level and not self.reset_level:
+            self.reset_requested = True
+        self.reset_level = level
 
     def _arm_cb(self, msg):
-        self.arm_requested |= bool(msg.data)
+        level = bool(msg.data)
+        if level and not self.arm_level:
+            self.arm_requested = True
+        self.arm_level = level
 
     def _mission_cb(self, msg):
         self.mission_cancelled = bool(msg.data)
@@ -974,13 +1004,31 @@ class SafetyGateRosNode:
             self.topology_evidence = None
             self.internal_fault = True
 
-    def _timer_cb(self, _event):
+    def _wall_publish_loop(self):
+        deadline = time.monotonic()
+        while not self._wall_stop.is_set():
+            wall_now = time.monotonic()
+            self._timer_cb(None, wall_now)
+            deadline += self._wall_period_s
+            self._wall_stop.wait(max(0.0, deadline - time.monotonic()))
+
+    def _timer_cb(self, _event, wall_now=None):
         import rospy
         from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
         from wheelchair_interfaces.msg import SafetyState
+        wall_now = time.monotonic() if wall_now is None else wall_now
         now = self._now()
-        deadline = self.last_tick is not None and now - self.last_tick > self.cfg.deadline_limit_s
-        self.last_tick = now
+        deadline = (self.last_tick_wall is not None and
+                    wall_now - self.last_tick_wall > self.cfg.deadline_limit_s)
+        self.last_tick_wall = wall_now
+        clock_fault = not _finite(now)
+        if self.last_ros_time is not None:
+            if now < self.last_ros_time:
+                clock_fault = True
+            elif now == self.last_ros_time:
+                clock_fault |= wall_now - self.last_ros_wall >= self._wall_period_s
+        if _finite(now) and (self.last_ros_time is None or now > self.last_ros_time):
+            self.last_ros_time, self.last_ros_wall = now, wall_now
         reset, arm = self.reset_requested, self.arm_requested
         self.reset_requested = self.arm_requested = False
         paired = {name: pair.evidence(now) for name, pair in self.pairs.items()}
@@ -989,14 +1037,15 @@ class SafetyGateRosNode:
             "slope": paired["slope"], "localization": paired["localization"],
             "mode": paired["driver"], "driver": paired["driver"],
         })
+        estop = self._combined_estop()
         decision = self.core.evaluate(GateInputs(
             cmd=self.last_cmd, now_s=now, cmd_source_stamp_s=self.cmd_source,
-            cmd_receipt_stamp_s=self.cmd_receipt, e_stop=self.estop,
+            cmd_receipt_stamp_s=self.cmd_receipt, e_stop=estop,
             e_stop_reset=reset, arm_request=arm, manual_or_disarmed=self.manual_or_disarmed,
             stationary=self.stationary, mission_cancelled=self.mission_cancelled,
             topology=self.topology_evidence, deadline_missed=deadline,
             backpressure=self.backpressure, internal_fault=self.internal_fault,
-            **self.evidence))
+            clock_fault=clock_fault, **self.evidence))
         self.pub.publish(_command_to_twist(decision.command))
         self.sequence += 1
         state = SafetyState()
@@ -1015,6 +1064,10 @@ class SafetyGateRosNode:
         state.dropped_input_count = decision.dropped_input_count
         state.release_manifest_sha256 = self.cfg.release_manifest_sha256
         self.state_pub.publish(state)
+        if (self.last_diag_wall is not None and
+                wall_now - self.last_diag_wall < 0.20):
+            return
+        self.last_diag_wall = wall_now
         diag = DiagnosticArray()
         diag.header.stamp = state.header.stamp
         status = DiagnosticStatus(level=DiagnosticStatus.OK if decision.armed else DiagnosticStatus.ERROR,

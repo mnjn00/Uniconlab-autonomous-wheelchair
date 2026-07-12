@@ -61,11 +61,13 @@ def test_e_stop_reset_is_guarded_and_never_rearms():
     rejected = core.evaluate(valid_inputs(e_stop=False, e_stop_reset=True, stationary=False))
     assert rejected.reason_mask & safety_gate.RESET_REJECTED
     assert rejected.e_stop_latched
+    core.evaluate(valid_inputs(e_stop=False, e_stop_reset=False))
 
     reset = core.evaluate(valid_inputs(e_stop=False, e_stop_reset=True))
     assert reset.command.is_zero()
     assert not reset.e_stop_latched and not reset.armed
     assert reset.reason_mask == safety_gate.STARTUP
+    core.evaluate(valid_inputs(e_stop=False, e_stop_reset=False))
 
     rearmed = core.evaluate(valid_inputs(arm_request=True))
     assert rearmed.armed and rearmed.command == VelocityCommand(0.2, 0.1)
@@ -109,3 +111,39 @@ def test_legacy_boole_do_not_supply_missing_permissions():
         e_stop=False, graph_valid=True, arm_request=True))
     assert decision.command.is_zero()
     assert decision.reason_mask & safety_gate.INPUT_UNKNOWN
+
+
+def test_arm_and_reset_levels_are_single_use_edges():
+    core = SafetyGateCore()
+    assert core.evaluate(valid_inputs(arm_request=True)).armed
+    faulted = core.evaluate(valid_inputs(e_stop=True, arm_request=True))
+    assert faulted.e_stop_latched and not faulted.armed
+
+    # A held arm level cannot rearm after a later fault or reset.
+    reset = core.evaluate(valid_inputs(e_stop=False, e_stop_reset=True, arm_request=True))
+    assert not reset.e_stop_latched and not reset.armed
+    assert not core.evaluate(valid_inputs(e_stop=False, arm_request=True)).armed
+
+    core.evaluate(valid_inputs(e_stop=False, arm_request=False))
+    assert core.evaluate(valid_inputs(e_stop=False, arm_request=True)).armed
+
+
+def test_manual_driver_reset_evidence_does_not_grant_motion_authority():
+    core = SafetyGateCore()
+    assert core.evaluate(valid_inputs(arm_request=True)).armed
+    core.evaluate(valid_inputs(e_stop=True, arm_request=False))
+    manual = SignalEvidence(
+        state=safety_gate.STOP, source_stamp_s=10.0, receipt_stamp_s=10.0,
+        source="driver", policy_sha256=safety_gate._DEFAULT_POLICY_SHA256["driver"],
+        sequence=1)
+    mode = SignalEvidence(
+        state=safety_gate.STOP, source_stamp_s=10.0, receipt_stamp_s=10.0,
+        source="mode", policy_sha256=safety_gate._DEFAULT_POLICY_SHA256["mode"],
+        sequence=1)
+    reset = core.evaluate(valid_inputs(
+        e_stop=False, e_stop_reset=True, arm_request=False, mode=mode, driver=manual))
+    assert not reset.e_stop_latched and not reset.armed
+    core.evaluate(valid_inputs(e_stop=False, e_stop_reset=False, mode=mode, driver=manual))
+    denied = core.evaluate(valid_inputs(e_stop=False, arm_request=True, mode=mode, driver=manual))
+    assert not denied.armed
+    assert denied.reason_mask & safety_gate.MODE

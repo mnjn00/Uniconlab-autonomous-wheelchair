@@ -44,6 +44,41 @@ def assert_exact_safe_zero(decision):
     assert all(math.isfinite(v) for v in decision.command.values())
     assert not decision.armed
 
+
+def test_independent_estop_sources_require_both_reports_and_or_assertions():
+    node = object.__new__(gate.SafetyGateRosNode)
+    node.driver_estop, node.external_estop = None, False
+    assert node._combined_estop() is None
+    node.driver_estop, node.external_estop = True, False
+    assert node._combined_estop() is True
+    node.driver_estop, node.external_estop = False, True
+    assert node._combined_estop() is True
+    node.driver_estop = node.external_estop = False
+    assert node._combined_estop() is False
+def test_ros_request_callbacks_only_queue_rising_edges():
+    class Bool:
+        def __init__(self, data):
+            self.data = data
+
+    node = object.__new__(gate.SafetyGateRosNode)
+    node.arm_level = node.reset_level = False
+    node.arm_requested = node.reset_requested = False
+    node._arm_cb(Bool(True))
+    node.arm_requested = False  # Timer consumed the queued request.
+    node._arm_cb(Bool(True))
+    assert not node.arm_requested
+    node._arm_cb(Bool(False))
+    node._arm_cb(Bool(True))
+    assert node.arm_requested
+    node._reset_cb(Bool(True))
+    assert node.reset_requested
+
+
+def test_clock_fault_is_an_immediate_exact_zero():
+    decision = gate.SafetyGateCore().evaluate(inputs(arm_request=True, clock_fault=True))
+    assert_exact_safe_zero(decision)
+    assert decision.reason_mask & gate.CLOCK
+
 def test_clean_unarmed_evidence_is_disarmed_startup():
     decision = gate.SafetyGateCore().evaluate(inputs())
     assert_exact_safe_zero(decision)
@@ -482,7 +517,7 @@ def test_pair_reconciles_only_complete_matching_sequence_in_both_arrival_orders(
 
 
 
-def test_complete_pair_remains_fresh_while_next_sequence_is_assembling():
+def test_newer_partial_generation_invalidates_prior_clear_immediately():
     pair = pair_buffer(("mode", "driver"), "source")
     pair.update_status(pair_status())
     pair.update_signal("mode", pair_signal())
@@ -496,8 +531,8 @@ def test_complete_pair_remains_fresh_while_next_sequence_is_assembling():
         receipt=100.05,
     ))
     first_partial = pair.evidence(100.05)
-    assert first_partial.state == gate.CLEAR
-    assert first_partial.sequence == 7
+    assert first_partial.state == gate.UNKNOWN
+    assert first_partial.reason_mask & gate.INPUT_UNKNOWN
 
     pair.update_signal("mode", pair_signal(
         sequence=8,
@@ -505,8 +540,7 @@ def test_complete_pair_remains_fresh_while_next_sequence_is_assembling():
         receipt=100.05,
     ))
     second_partial = pair.evidence(100.05)
-    assert second_partial.state == gate.CLEAR
-    assert second_partial.sequence == 7
+    assert second_partial.state == gate.UNKNOWN
 
     pair.update_signal("driver", pair_signal(
         sequence=8,
@@ -559,8 +593,8 @@ def test_pair_updates_and_reads_are_serialized_across_ros_callback_threads():
 
     assert not writer.is_alive()
     assert not reader.is_alive()
-    assert observed[0].state == gate.CLEAR
-    assert observed[0].sequence == 7
+    assert observed[0].state == gate.UNKNOWN
+    assert observed[0].reason_mask & gate.INPUT_UNKNOWN
 
 
 def test_incomplete_generation_cannot_outlive_committed_pair_ttl():
@@ -612,6 +646,10 @@ def test_localization_pair_uses_evaluation_stamp_not_source_stamp():
 @pytest.mark.parametrize(
     "status,signal,now",
     [
+        (pair_status(source_stamp=99.74), pair_signal(), 100.0),
+        (pair_status(receipt=99.74), pair_signal(receipt=99.74), 100.0),
+        (pair_status(source_stamp=100.051), pair_signal(), 100.0),
+        (pair_status(receipt=100.051), pair_signal(receipt=100.051), 100.0),
         (pair_status(evaluation_stamp=99.74), pair_signal(stamp=99.74), 100.0),
         (pair_status(evaluation_stamp=100.051), pair_signal(stamp=100.051), 100.0),
         (pair_status(evaluation_stamp=float("nan")), pair_signal(stamp=float("nan")), 100.0),
@@ -631,6 +669,32 @@ def test_stale_future_and_malformed_pairs_are_unknown(status, signal, now):
     pair.update_status(pair_status(sequence=8))
     pair.update_signal("permission", pair_signal(sequence=8))
     assert pair.evidence(100.0).state == gate.CLEAR
+
+
+@pytest.mark.parametrize(
+    "status,signal",
+    [
+        (pair_status(sequence=8, source_stamp=99.99, evaluation_stamp=100.1,
+                     receipt=100.1),
+         pair_signal(sequence=8, stamp=100.1, receipt=100.1)),
+        (pair_status(sequence=8, source_stamp=100.1, evaluation_stamp=100.1,
+                     receipt=99.99),
+         pair_signal(sequence=8, stamp=100.1, receipt=100.1)),
+        (pair_status(sequence=8, source_stamp=100.1, evaluation_stamp=100.1,
+                     receipt=100.1),
+         pair_signal(sequence=8, stamp=100.1, receipt=99.99)),
+    ],
+)
+def test_pair_independent_timestamp_regressions_poison_authority(status, signal):
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    assert pair.evidence(100.0).state == gate.CLEAR
+    pair.update_status(status)
+    pair.update_signal("permission", signal)
+    result = pair.evidence(100.1)
+    assert result.state == gate.UNKNOWN
+    assert result.reason_mask & gate.CORRUPT_DATA
 
 
 def test_regression_or_conflicting_duplicate_poison_until_fresh_complete_higher_pair():
