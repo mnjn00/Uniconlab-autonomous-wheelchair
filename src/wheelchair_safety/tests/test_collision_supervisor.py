@@ -57,12 +57,66 @@ def test_policy_is_hash_checked_and_simulation_only():
     assert loaded.qualification == "simulation_only"
     assert loaded.hardware_motion_authorized is False
     assert loaded.passenger_operation_authorized is False
-    assert loaded.policy_sha256 == "e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1"
+    assert loaded.policy_sha256 == "5850bb0cd84bc04f4f9cdc78cd347640a3f60f66241ad3f37c196ad63cbeba18"
     assert loaded.coverage_max_frames == 4
     raw = {field.name: getattr(loaded, field.name) for field in dataclasses.fields(loaded)}
     raw["footprint_width_m"] += 0.01
     with pytest.raises(ValueError, match="SHA-256"):
         cs.CollisionPolicy.from_mapping(raw)
+
+
+def test_v1_ttc_margin_is_exact_and_cannot_be_resealed_lower():
+    loaded = policy()
+    assert loaded.stop_ttc_margin_s == 0.50
+    raw = {field.name: getattr(loaded, field.name) for field in dataclasses.fields(loaded)}
+    raw["stop_ttc_margin_s"] = 0.499999
+    raw["policy_sha256"] = cs.CollisionPolicy.hash_mapping(raw)
+    with pytest.raises(ValueError, match="exactly 0.50"):
+        cs.CollisionPolicy.from_mapping(raw)
+
+
+def test_direction_disagreement_and_unmatched_slope_odom_stop():
+    core = cs.CollisionSupervisorCore(policy())
+    opposed = core.evaluate(inputs(
+        points=(static_point(10.0),),
+        odom_linear_mps=-0.2,
+        nav_linear_mps=0.3,
+        safe_linear_mps=0.3,
+    ))
+    assert opposed.state == cs.STOP
+    assert opposed.reason == "motion_direction_disagreement"
+
+    core = cs.CollisionSupervisorCore(policy())
+    stale_slope = core.evaluate(inputs(
+        points=(static_point(10.0),),
+        slope_stamp_s=0.7,
+        slope_receipt_s=0.7,
+    ))
+    assert stale_slope.state == cs.STOP
+    assert stale_slope.reason == "stale_or_mismatched_slope_odom"
+
+    core = cs.CollisionSupervisorCore(policy())
+    stale_receipt = core.evaluate(inputs(
+        points=(static_point(10.0),),
+        odom_receipt_s=0.7,
+    ))
+    assert stale_receipt.state == cs.STOP
+    assert stale_receipt.reason == "stale_odom"
+
+    core = cs.CollisionSupervisorCore(policy())
+    missing_slope = core.evaluate(inputs(
+        points=(static_point(10.0),),
+        slope_valid=False,
+    ))
+    assert missing_slope.state == cs.STOP
+    assert missing_slope.reason == "invalid_slope_evidence"
+
+
+def test_watchdog_retains_last_real_cloud_source_stamp():
+    watchdog = cs.CollisionWatchdogState(policy().cloud_ttl_s)
+    assert watchdog.observe_cloud(2.0, 2.01)
+    assert watchdog.last_cloud_stamp_s == 2.0
+    assert watchdog.stale_age(2.0 + policy().cloud_ttl_s + 1.0e-9) is not None
 
 
 def test_cloud_transform_applies_rotation_translation_and_velocity():

@@ -151,6 +151,8 @@ class CollisionPolicy:
             raise ValueError("coverage threshold must be in (0, 1]")
         if not self.coverage_min_elevation_rad < self.coverage_max_elevation_rad:
             raise ValueError("coverage elevation band must be ordered")
+        if self.stop_ttc_margin_s != 0.50:
+            raise ValueError("schema v1 stop_ttc_margin_s must be exactly 0.50")
         if (self.simulation_min_deceleration_mps2 <= 0.0 or self.voxel_size_m <= 0.0
                 or self.cluster_tolerance_m <= 0.0 or self.association_max_age_s <= 0.0
                 or self.association_max_displacement_m <= 0.0 or self.intent_ttl_s <= 0.0
@@ -753,6 +755,10 @@ class CollisionInputs:
     odom_angular_rps: float = 0.0
     nav_angular_rps: float = 0.0
     safe_angular_rps: float = 0.0
+    odom_receipt_s: Optional[float] = None
+    slope_stamp_s: Optional[float] = None
+    slope_receipt_s: Optional[float] = None
+    slope_valid: bool = True
 
 
 @dataclass(frozen=True)
@@ -1056,6 +1062,26 @@ class CollisionSupervisorCore:
             return CORRUPT_DATA | COLLISION, "invalid_raw_point_count"
         if i.expected_coverage_bins <= 0 or not 0.0 <= i.coverage_fraction <= 1.0:
             return CORRUPT_DATA | COLLISION, "invalid_coverage"
+        if not i.slope_valid:
+            return INPUT_UNKNOWN | COLLISION, "invalid_slope_evidence"
+        odom_receipt = i.odom_stamp_s if i.odom_receipt_s is None else i.odom_receipt_s
+        slope_stamp = i.cloud_stamp_s if i.slope_stamp_s is None else i.slope_stamp_s
+        slope_receipt = i.now_s if i.slope_receipt_s is None else i.slope_receipt_s
+        if (not all(_finite(value) for value in (odom_receipt, slope_stamp, slope_receipt))
+                or odom_receipt < i.odom_stamp_s or odom_receipt > i.now_s
+                or slope_stamp > i.cloud_stamp_s + 0.05 or slope_stamp > slope_receipt
+                or slope_receipt > i.now_s
+                or i.now_s - slope_stamp > 0.10 or i.now_s - slope_receipt > 0.10):
+            return SENSOR_STALE | INPUT_UNKNOWN | COLLISION, "stale_or_mismatched_slope_odom"
+        if (_direction_disagreement(
+                (i.odom_linear_mps, i.safe_linear_mps) +
+                ((i.nav_linear_mps,) if i.nav_available else ()),
+                self.policy.static_speed_below_mps)
+                or _direction_disagreement(
+                    (i.odom_angular_rps, i.safe_angular_rps) +
+                    ((i.nav_angular_rps,) if i.nav_available else ()),
+                    self.policy.coverage_motion_angular_tolerance_rps)):
+            return CORRUPT_DATA | COLLISION, "motion_direction_disagreement"
         self._last_intent_behavior = i.intent_behavior
         if i.intent_behavior != INTENT_HOLD and i.nav_available:
             self._activation_started_s = None
@@ -1071,7 +1097,12 @@ class CollisionSupervisorCore:
         command_age = i.now_s - i.safe_stamp_s
         if i.intent_behavior != INTENT_HOLD and i.nav_available:
             command_age = max(command_age, i.now_s - i.nav_stamp_s)
-        return i.now_s - i.cloud_stamp_s, i.now_s - i.odom_stamp_s, command_age
+        odom_receipt = i.odom_stamp_s if i.odom_receipt_s is None else i.odom_receipt_s
+        return (
+            i.now_s - i.cloud_stamp_s,
+            max(i.now_s - i.odom_stamp_s, i.now_s - odom_receipt),
+            command_age,
+        )
 
     @staticmethod
     def _coverage(i: CollisionInputs) -> float:
@@ -1365,6 +1396,11 @@ def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
+def _direction_disagreement(values: Sequence[float], tolerance: float) -> bool:
+    material = [float(value) for value in values if _finite(value) and abs(float(value)) >= tolerance]
+    return bool(material) and min(material) < 0.0 < max(material)
+
+
 class CollisionSupervisorRosNode:
     """Thin ROS1 adapter that transforms lidar_link clouds into the policy frame."""
 
@@ -1375,7 +1411,9 @@ class CollisionSupervisorRosNode:
         from geometry_msgs.msg import Twist
         from nav_msgs.msg import Odometry
         from sensor_msgs.msg import PointCloud2
-        from wheelchair_interfaces.msg import CollisionStatus, MotionIntent, SafetySignal
+        from wheelchair_interfaces.msg import (
+            CollisionStatus, MotionIntent, SafetySignal, SlopeStatus
+        )
 
         policy_path = rospy.get_param(
             "~policy_file", os.path.join(os.path.dirname(__file__), "..", "config", "collision_policy.yaml")
@@ -1387,7 +1425,13 @@ class CollisionSupervisorRosNode:
         self.cloud_deadline_timer = None
         self.sequence = 0
         self.odom = self.nav = self.safe = None
-        self.odom_stamp = self.nav_stamp = self.safe_stamp = None
+        self.odom_stamp = self.odom_receipt = None
+        self.odom_high_water = None
+        self.odom_valid = False
+        self.nav_stamp = self.safe_stamp = None
+        self.slope = None
+        self.slope_high_water = None
+        self.slope_policy_sha256 = str(rospy.get_param("~slope_policy_sha256", ""))
         self.intent = None
         self.transform_lookup_timeout_s = float(rospy.get_param("~transform_lookup_timeout_s", 0.05))
         self.max_transform_age_s = float(rospy.get_param("~max_transform_age_s", 0.10))
@@ -1408,12 +1452,17 @@ class CollisionSupervisorRosNode:
         safe_topic = rospy.get_param("~safe_topic", "/cmd_vel_safe")
         cloud_topic = rospy.get_param("~cloud_topic", "/sensors/lidar/points")
         intent_topic = rospy.get_param("~intent_topic", "/decision/motion_intent")
+        slope_topic = rospy.get_param("~slope_topic", "/safety/slope_status")
+        if (len(self.slope_policy_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in self.slope_policy_sha256)):
+            raise ValueError("collision supervisor requires exact slope policy SHA-256")
         self.status_pub = rospy.Publisher(status_topic, CollisionStatus, queue_size=1)
         self.signal_pub = rospy.Publisher(signal_topic, SafetySignal, queue_size=1)
         rospy.Subscriber(odom_topic, Odometry, self._odom_cb, queue_size=1)
         rospy.Subscriber(nav_topic, Twist, self._nav_cb, queue_size=1)
         rospy.Subscriber(intent_topic, MotionIntent, self._intent_cb, queue_size=1)
         rospy.Subscriber(safe_topic, Twist, self._safe_cb, queue_size=1)
+        rospy.Subscriber(slope_topic, SlopeStatus, self._slope_cb, queue_size=1)
         rospy.Subscriber(cloud_topic, PointCloud2, self._cloud_cb, queue_size=1)
         self._watchdog_cb(None)
         self.watchdog_timer = rospy.Timer(
@@ -1422,12 +1471,25 @@ class CollisionSupervisorRosNode:
 
     def _odom_cb(self, msg):
         import rospy
-        with self._lock:
-            self.odom = (
+        receipt = rospy.Time.now().to_sec()
+        try:
+            source = float(msg.header.stamp.to_sec())
+            values = (
                 float(msg.twist.twist.linear.x),
                 float(msg.twist.twist.angular.z),
             )
-            self.odom_stamp = rospy.Time.now().to_sec()
+            valid = (all(_finite(value) for value in values + (source, receipt,))
+                     and 0.0 <= source <= receipt
+                     and (self.odom_high_water is None or source > self.odom_high_water))
+        except (AttributeError, TypeError, ValueError):
+            source, values, valid = math.nan, (math.nan, math.nan), False
+        with self._lock:
+            self.odom = values
+            self.odom_stamp = source
+            self.odom_receipt = receipt
+            self.odom_valid = valid
+            if valid:
+                self.odom_high_water = source
 
     def _nav_cb(self, msg):
         import rospy
@@ -1448,6 +1510,31 @@ class CollisionSupervisorRosNode:
             if behavior == INTENT_HOLD and linear_cap == 0.0 and angular_cap == 0.0:
                 # A later PROCEED/SLOW must receive a command newer than this HOLD.
                 self.nav = self.nav_stamp = None
+
+    def _slope_cb(self, msg):
+        import rospy
+        receipt = rospy.Time.now().to_sec()
+        try:
+            source = float(msg.header.stamp.to_sec())
+            evaluation = float(msg.evaluation_stamp.to_sec())
+            pitch = float(msg.pitch_rad)
+            policy = str(msg.policy_sha256)
+            state = int(msg.state)
+            valid = (
+                all(_finite(value) for value in (source, evaluation, receipt, pitch))
+                and 0.0 <= source <= evaluation <= receipt
+                and state in (CLEAR, CAUTION)
+                and policy == self.slope_policy_sha256
+                and (self.slope_high_water is None or source > self.slope_high_water)
+            )
+        except (AttributeError, TypeError, ValueError):
+            source, evaluation, pitch, policy, state, valid = (
+                math.nan, math.nan, math.nan, "", UNKNOWN, False
+            )
+        with self._lock:
+            self.slope = (source, evaluation, receipt, pitch, policy, valid)
+            if valid:
+                self.slope_high_water = source
 
     def _safe_cb(self, msg):
         import rospy
@@ -1501,9 +1588,19 @@ class CollisionSupervisorRosNode:
             (), 0, self.core.policy.coverage_bins * self.core.policy.coverage_elevation_bins,
             0, 0.0, False, result.reason
         )
-        odom_linear, odom_angular = self.odom or (0.0, 0.0)
+        odom_linear, odom_angular = self.odom or (math.nan, math.nan)
         nav_linear, nav_angular = self.nav or (0.0, 0.0)
         safe_linear, safe_angular = self.safe or (0.0, 0.0)
+        slope_source, slope_evaluation, slope_receipt, pitch, slope_policy, slope_valid = (
+            self.slope if self.slope is not None
+            else (math.nan, math.nan, math.nan, math.nan, "", False)
+        )
+        slope_valid = bool(
+            slope_valid
+            and slope_policy == self.slope_policy_sha256
+            and slope_source <= stamp + 0.05
+            and slope_evaluation <= now
+        )
         intent_behavior = self.intent[1] if self.intent is not None else -1
         coverage_linear = self._conservative_component(
             odom_linear, nav_linear, safe_linear, self.nav is not None, intent_behavior
@@ -1532,9 +1629,12 @@ class CollisionSupervisorRosNode:
             self.intent if self.intent is not None else (0.0, -1, math.nan, math.nan)
         )
         inputs = CollisionInputs(
-            now, self.sequence, stamp, self.odom_stamp or 0.0, self.nav_stamp or 0.0,
+            now, self.sequence, stamp,
+            self.odom_stamp if self.odom_valid else math.nan,
+            self.nav_stamp or 0.0,
             self.safe_stamp or 0.0, points, odom_linear, nav_linear,
             safe_linear, frame_id=result.frame_id,
+            pitch_downhill_rad=pitch,
             coverage_fraction=processing.coverage_fraction,
             expected_coverage_bins=processing.expected_coverage_bins,
             observed_coverage_bins=processing.observed_coverage_bins,
@@ -1546,6 +1646,10 @@ class CollisionSupervisorRosNode:
             intent_max_angular_rps=angular_cap, nav_available=self.nav is not None,
             odom_angular_rps=odom_angular, nav_angular_rps=nav_angular,
             safe_angular_rps=safe_angular,
+            odom_receipt_s=self.odom_receipt,
+            slope_stamp_s=slope_source,
+            slope_receipt_s=slope_receipt,
+            slope_valid=slope_valid,
         )
         decision = self.core.evaluate(inputs)
         if decision.reason_mask:
@@ -1580,7 +1684,11 @@ class CollisionSupervisorRosNode:
             decision = self.core.stale_cloud_decision(
                 self._next_sequence(), now, cloud_age
             )
-            header = Header(stamp=rospy.Time.from_sec(now))
+            source_stamp = self.watchdog.last_cloud_stamp_s
+            header = Header(
+                stamp=(rospy.Time.from_sec(source_stamp)
+                       if source_stamp is not None else rospy.Time())
+            )
             self._publish(decision, header)
 
 

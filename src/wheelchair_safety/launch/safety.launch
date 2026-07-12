@@ -40,6 +40,8 @@
     <param name="intent_topic" value="/decision/motion_intent"/>
     <param name="nav_topic" value="/cmd_vel_nav"/>
     <param name="safe_topic" value="/cmd_vel_safe"/>
+    <param name="slope_topic" value="/safety/slope_status"/>
+    <param name="slope_policy_sha256" value="$(arg slope_policy_file_sha256)"/>
   </node>
 
   <node pkg="wheelchair_safety" type="slope_supervisor.py" name="slope_supervisor" output="screen" required="true">

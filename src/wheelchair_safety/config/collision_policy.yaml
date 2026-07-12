@@ -47,9 +47,9 @@ required_forward_coverage_fraction: 0.95
 caution_ttc_s: 3.0
 caution_clearance_margin_m: 0.25
 caution_max_linear_mps: 0.10
-stop_ttc_margin_s: 0.25
+stop_ttc_margin_s: 0.50
 clear_consecutive_frames: 5
 clear_hold_s: 0.50
 clearance_strictly_above_margin_m: 0.25
 ttc_strictly_above_s: 3.0
-policy_sha256: e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1
+policy_sha256: 5850bb0cd84bc04f4f9cdc78cd347640a3f60f66241ad3f37c196ad63cbeba18
