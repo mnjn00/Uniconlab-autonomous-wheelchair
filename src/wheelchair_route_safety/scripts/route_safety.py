@@ -12,7 +12,8 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from threading import Lock
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import jsonschema
 import yaml
@@ -24,6 +25,7 @@ SOURCE = "wheelchair_route_safety"
 FUTURE_TOLERANCE_S = 0.05  # Frozen A03 clock contract.
 ACTIVE_ROUTE_TTL_S = 0.75  # Frozen mission route-authorization contract.
 LOCALIZATION_POLICY_SHA256 = "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"
+LOCALIZATION_EVIDENCE_CACHE_SIZE = 8
 
 UNKNOWN = 0
 CLEAR = 1
@@ -43,6 +45,61 @@ REASON_MAP_MISMATCH = 1 << 25
 REASON_INPUT_UNKNOWN = 1 << 31
 REASON_ROUTE_STATE = 1 << 32
 REASON_POLICY_MISMATCH = 1 << 36
+
+class LocalizationEvidenceBuffer:
+    """Bounded candidate/status evidence matched only by immutable identity fields."""
+
+    def __init__(self, limit: int = LOCALIZATION_EVIDENCE_CACHE_SIZE) -> None:
+        if limit < 1:
+            raise ValueError("localization evidence cache limit must be positive")
+        self._limit = limit
+        self._lock = Lock()
+        self.candidates: List[Any] = []
+        self.statuses: List[Any] = []
+
+    @staticmethod
+    def _matches(candidate: Any, status: Any) -> bool:
+        try:
+            candidate_stamp = float(candidate.pose.header.stamp.to_sec())
+            status_stamp = float(status.header.stamp.to_sec())
+            return (
+                math.isfinite(candidate_stamp)
+                and math.isfinite(status_stamp)
+                and abs(candidate_stamp - status_stamp) <= 1.0e-9
+                and candidate.reset_count == status.reset_count
+                and candidate.map_id == status.map_id
+                and candidate.map_sha256 == status.map_sha256
+            )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return False
+
+    @staticmethod
+    def _append_bounded(cache: List[Any], value: Any, limit: int) -> None:
+        cache.append(value)
+        if len(cache) > limit:
+            del cache[0:len(cache) - limit]
+
+    def add_candidate(self, candidate: Any) -> None:
+        with self._lock:
+            self._append_bounded(self.candidates, candidate, self._limit)
+
+    def add_status(self, status_evidence: Any) -> None:
+        with self._lock:
+            self._append_bounded(self.statuses, status_evidence, self._limit)
+
+    def snapshot(self) -> Tuple[Optional[Any], Optional[Any]]:
+        """Return the newest status and its exact matching candidate atomically."""
+        with self._lock:
+            status_evidence = self.statuses[-1] if self.statuses else None
+            if status_evidence is None:
+                return None, None
+            status = status_evidence[0]
+            candidate = next(
+                (candidate for candidate in reversed(self.candidates)
+                 if self._matches(candidate, status)),
+                None,
+            )
+            return status_evidence, candidate
 
 
 class ManifestError(ValueError):
@@ -779,28 +836,30 @@ def run_ros_node() -> None:
     policy = load_simulation_policy(config_path, expected_config_sha256)
     status_pub = rospy.Publisher("/route_safety/geofence_status", GeofenceStatus, queue_size=1)
     signal_pub = rospy.Publisher("/safety/geofence", SafetySignal, queue_size=1)
-    latest: Dict[str, Any] = {"pose": None, "status": None, "route": None}
+    latest: Dict[str, Any] = {"route": None}
     high_water: Dict[str, Any] = {
         "pose": None, "route": None, "status": None, "status_message": None,
         "status_message_valid": False,
     }
+    evidence = LocalizationEvidenceBuffer()
     sequence = [0]
     status_message = [0]
 
     def receive_status(msg: Any) -> None:
         status_message[0] += 1
-        latest["status"] = (msg, rospy.Time.now().to_sec(), status_message[0])
+        evidence.add_status((msg, rospy.Time.now().to_sec(), status_message[0]))
 
-    rospy.Subscriber("/localization/candidate", LocalizationCandidate, lambda msg: latest.__setitem__("pose", msg), queue_size=1)
+    rospy.Subscriber(
+        "/localization/candidate", LocalizationCandidate, evidence.add_candidate, queue_size=1,
+    )
     rospy.Subscriber("/localization/status", LocalizationStatus, receive_status, queue_size=1)
     rospy.Subscriber("/route/active", ActiveRoute, lambda msg: latest.__setitem__("route", msg), queue_size=1)
 
     def publish(_event: Any) -> None:
         now = rospy.Time.now()
         now_s = now.to_sec()
-        route_msg, pose_msg, status_evidence = (
-            latest["route"], latest["pose"], latest["status"]
-        )
+        route_msg = latest["route"]
+        status_evidence, pose_msg = evidence.snapshot()
         selection = None
         if route_msg is not None:
             try:
@@ -816,12 +875,10 @@ def run_ros_node() -> None:
                     high_water["route"] = route_stamp
             except (AttributeError, TypeError, ValueError):
                 selection = None
-        sample = None
-        if pose_msg is not None and status_evidence is not None:
+        status_is_acceptable = False
+        if status_evidence is not None:
             try:
                 localization_msg, receipt_stamp, status_message_id = status_evidence
-                pose_stamped = pose_msg.pose
-                pose_stamp = float(pose_stamped.header.stamp.to_sec())
                 status_source_stamp = float(localization_msg.header.stamp.to_sec())
                 status_evaluation_stamp = float(localization_msg.evaluation_stamp.to_sec())
                 receipt_stamp = float(receipt_stamp)
@@ -835,10 +892,26 @@ def run_ros_node() -> None:
                     previous_status is None
                     or all(current > previous for current, previous in zip(status_high_water, previous_status))
                 )
+                if is_new_status_message:
+                    if status_is_newer:
+                        high_water["status"] = status_high_water
+                    high_water["status_message"] = status_message_id
+                    high_water["status_message_valid"] = status_is_newer
                 status_is_acceptable = (
                     (not is_new_status_message and high_water["status_message_valid"])
                     or (is_new_status_message and status_is_newer)
                 )
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                try:
+                    high_water["status_message"] = status_evidence[2]
+                except (IndexError, TypeError):
+                    pass
+                high_water["status_message_valid"] = False
+        sample = None
+        if pose_msg is not None and status_evidence is not None:
+            try:
+                pose_stamped = pose_msg.pose
+                pose_stamp = float(pose_stamped.header.stamp.to_sec())
                 covariance = pose_stamped.pose.covariance
                 covariance_std = (
                     math.sqrt(max(0.0, max(covariance[0], covariance[7])))
@@ -876,13 +949,6 @@ def run_ros_node() -> None:
                     pose_stamped.header.frame_id,
                     paired and math.isfinite(transform_age) and transform_age >= 0.0,
                 )
-                # Record every newer status, including restrictive or malformed-OK evidence,
-                # so it cannot be superseded by an older permissive message.
-                if is_new_status_message:
-                    if status_is_newer:
-                        high_water["status"] = status_high_water
-                    high_water["status_message"] = status_message_id
-                    high_water["status_message_valid"] = status_is_newer
                 if paired:
                     high_water["pose"] = pose_stamp
             except (AttributeError, TypeError, ValueError, OverflowError):

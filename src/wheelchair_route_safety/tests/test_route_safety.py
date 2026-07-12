@@ -158,6 +158,118 @@ def test_ros_config_mismatch_fails_before_publishers_are_created(monkeypatch):
     with pytest.raises(route_safety.ManifestError, match="simulation config SHA-256 mismatch"):
         route_safety.run_ros_node()
     assert publisher_calls == []
+def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 64,
+                           state="OK"):
+    pose = types.SimpleNamespace(
+        header=types.SimpleNamespace(
+            stamp=types.SimpleNamespace(to_sec=lambda: stamp),
+        ),
+    )
+    candidate = types.SimpleNamespace(
+        pose=pose,
+        reset_count=reset_count,
+        map_id=map_id,
+        map_sha256=map_sha256,
+    )
+    status = types.SimpleNamespace(
+        header=pose.header,
+        reset_count=reset_count,
+        map_id=map_id,
+        map_sha256=map_sha256,
+        state=state,
+    )
+    return candidate, status
+
+
+def test_localization_candidate_status_interleaving_preserves_matching_pair():
+    evidence = route_safety.LocalizationEvidenceBuffer()
+    candidate_a, status_a = _localization_evidence(10.0)
+    candidate_b, _ = _localization_evidence(10.1)
+
+    evidence.add_candidate(candidate_a)
+    permissive_evidence = (status_a, 10.01, 1)
+    evidence.add_status(permissive_evidence)
+    assert evidence.snapshot() == (permissive_evidence, candidate_a)
+
+    evidence.add_candidate(candidate_b)
+    assert evidence.snapshot() == (permissive_evidence, candidate_a)
+
+
+def test_newest_restrictive_status_overrides_prior_permissive_pair():
+    evidence = route_safety.LocalizationEvidenceBuffer()
+    candidate_a, status_a = _localization_evidence(10.0)
+    candidate_b, restrictive_status = _localization_evidence(10.1, state="NOT_OK")
+
+    evidence.add_candidate(candidate_a)
+    evidence.add_status((status_a, 10.01, 1))
+    assert evidence.snapshot()[1] is candidate_a
+
+    evidence.add_candidate(candidate_b)
+    restrictive_evidence = (restrictive_status, 10.11, 2)
+    evidence.add_status(restrictive_evidence)
+    assert evidence.snapshot() == (restrictive_evidence, candidate_b)
+
+
+def test_localization_status_without_exact_candidate_match_fails_closed():
+    evidence = route_safety.LocalizationEvidenceBuffer()
+    _, status = _localization_evidence(10.0)
+    evidence.add_status((status, 10.01, 1))
+    assert evidence.snapshot() == ((status, 10.01, 1), None)
+
+    wrong_stamp, _ = _localization_evidence(10.1)
+    wrong_reset, _ = _localization_evidence(10.0, reset_count=2)
+    wrong_map, _ = _localization_evidence(10.0, map_sha256="b" * 64)
+    for candidate in (wrong_stamp, wrong_reset, wrong_map):
+        evidence.add_candidate(candidate)
+    assert evidence.snapshot() == ((status, 10.01, 1), None)
+
+
+def test_localization_evidence_caches_are_bounded_and_deterministic():
+    evidence = route_safety.LocalizationEvidenceBuffer(limit=2)
+    candidates = []
+    for stamp in (1.0, 2.0, 3.0):
+        candidate, status = _localization_evidence(stamp)
+        candidates.append(candidate)
+        evidence.add_candidate(candidate)
+        evidence.add_status((status, stamp, int(stamp)))
+
+    assert evidence.candidates == candidates[-2:]
+    assert len(evidence.statuses) == 2
+    assert evidence.snapshot()[0][0].header.stamp.to_sec() == 3.0
+
+
+def test_localization_snapshot_recovers_only_with_newer_matching_evidence():
+    evidence = route_safety.LocalizationEvidenceBuffer()
+    candidate_a, status_a = _localization_evidence(10.0)
+    evidence.add_candidate(candidate_a)
+    evidence.add_status((status_a, 10.01, 1))
+    assert evidence.snapshot()[1] is candidate_a
+
+    malformed_evidence = (object(), 10.02, 2)
+    evidence.add_status(malformed_evidence)
+    assert evidence.snapshot() == (malformed_evidence, None)
+
+    candidate_b, status_b = _localization_evidence(10.1)
+    recovered_evidence = (status_b, 10.11, 3)
+    evidence.add_candidate(candidate_b)
+    evidence.add_status(recovered_evidence)
+    assert evidence.snapshot() == (recovered_evidence, candidate_b)
+
+
+def test_ros_pairing_retains_existing_stamp_reset_map_and_policy_checks():
+    source = SCRIPT.read_text(encoding="utf-8")
+    for condition in (
+            "abs(pose_stamp - status_source_stamp) <= 1.0e-9",
+            "pose_msg.reset_count == localization_msg.reset_count",
+            "pose_msg.map_id == localization_msg.map_id == policy.map_id",
+            "pose_msg.map_sha256 == localization_msg.map_sha256 == policy.map_sha256",
+            "localization_msg.policy_sha256 == policy.localization_policy_sha256",
+            "localization_msg.state == LocalizationStatus.OK",
+            "localization_msg.reason_mask == 0",
+            "localization_msg.independent_check_passed",
+    ):
+        assert condition in source
+
 
 
 @pytest.mark.parametrize("binding", ["manifest", "map", "route"])
