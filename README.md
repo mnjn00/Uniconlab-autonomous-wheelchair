@@ -3,7 +3,7 @@
 [![ROS1 Noetic](https://img.shields.io/badge/ROS-Noetic-22314E?style=for-the-badge&logo=ros)](http://wiki.ros.org/noetic)
 [![Ubuntu 20.04](https://img.shields.io/badge/Ubuntu-20.04-E95420?style=for-the-badge&logo=ubuntu)](https://releases.ubuntu.com/20.04/)
 [![Gazebo Classic](https://img.shields.io/badge/Gazebo-Classic%2011-7057ff?style=for-the-badge)](https://classic.gazebosim.org/)
-[![License GPLv2](https://img.shields.io/badge/License-GPLv2-blue?style=for-the-badge)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-orange.svg?style=for-the-badge)](LICENSE)
 
 한양대학교 Unicon Lab 하드웨어 트랙 프로젝트: **전동휠체어 기반 실환경 탑승 안내 플랫폼**을 위한 ROS1 Noetic 기반 개발 저장소입니다.
 
