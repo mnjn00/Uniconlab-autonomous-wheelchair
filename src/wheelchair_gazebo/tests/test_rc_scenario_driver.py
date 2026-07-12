@@ -482,6 +482,57 @@ class ScenarioDriverTests(unittest.TestCase):
         driver.time.monotonic, driver.time.sleep = wall.monotonic, wall.sleep
         return scenario, wall
 
+    def stable_startup_evidence_scenario(self, samples, timeout=1.0):
+        scenario, wall = self.startup_wait_scenario()
+        scenario.ready_timeout_s = timeout
+        calls = []
+        scenario.evidence = Attribute()
+
+        def startup_ready(unused_now):
+            calls.append(None)
+            return samples[min(len(calls) - 1, len(samples) - 1)]
+
+        scenario.evidence.startup_ready = startup_ready
+        scenario._arm = ConnectionPublisher((1,))
+        return scenario, wall, calls
+
+    def test_stable_startup_evidence_requires_a_half_second_true_window(self):
+        scenario, wall, calls = self.stable_startup_evidence_scenario([True])
+
+        scenario._wait_for_stable_startup_evidence()
+
+        self.assertAlmostEqual(wall.now, driver.STARTUP_STABILITY_HOLD_SEC)
+        self.assertEqual(wall.sleeps, [0.05] * 10)
+        self.assertEqual(len(calls), 11)
+        self.assertTrue(all(duration <= 0.05 for duration in wall.sleeps))
+
+    def test_stable_startup_evidence_false_sample_resets_the_hold(self):
+        scenario, wall, unused_calls = self.stable_startup_evidence_scenario(
+            [True, True, True, False, True])
+
+        scenario._wait_for_stable_startup_evidence()
+
+        self.assertAlmostEqual(wall.now, 0.7)
+
+    def test_intermittent_startup_evidence_times_out_without_arm_publication(self):
+        scenario, wall = self.startup_wait_scenario()
+        scenario.ready_timeout_s = 0.3
+        scenario._arm = ConnectionPublisher((1,))
+        scenario.evidence = Attribute()
+        calls = {"count": 0}
+
+        def startup_ready(unused_now):
+            calls["count"] += 1
+            return calls["count"] % 2 == 1
+
+        scenario.evidence.startup_ready = startup_ready
+        with self.assertRaisesRegex(driver.ScenarioError,
+                                    "timeout waiting for stable startup evidence"):
+            scenario._wait_for_stable_startup_evidence()
+
+        self.assertAlmostEqual(wall.now, 0.3)
+        self.assertEqual(scenario._arm.messages, [])
+
     def test_ordinary_waits_do_not_publish_initial_pose(self):
         scenario, unused_wall = self.startup_wait_scenario()
         calls = {"count": 0}
@@ -563,7 +614,7 @@ class ScenarioDriverTests(unittest.TestCase):
         goal_active = run.index('"active mission goal"')
         pre_initialization = run.index('"pre-initialization evidence"')
         initial_pose = run.index("self._publish_initial_pose()")
-        startup_evidence = run.index('"startup evidence"')
+        stable_startup_evidence = run.index("self._wait_for_stable_startup_evidence()")
         gate_arm = run.index("self._publish_arm_request()")
         gate_clear = run.index('"armed safety gate"')
         monitoring = run.index("self._safety_monitoring = True")
@@ -573,8 +624,8 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertLess(send_goal, goal_active)
         self.assertLess(goal_active, pre_initialization)
         self.assertLess(pre_initialization, initial_pose)
-        self.assertLess(initial_pose, startup_evidence)
-        self.assertLess(startup_evidence, gate_arm)
+        self.assertLess(initial_pose, stable_startup_evidence)
+        self.assertLess(stable_startup_evidence, gate_arm)
         self.assertLess(gate_arm, gate_clear)
         self.assertLess(gate_clear, monitoring)
         self.assertEqual(run.count("self._publish_arm_low_baseline()"), 1)
@@ -585,8 +636,7 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertEqual(source.count("self._initial_pose.publish"), 1)
         self.assertIn(
             'self._publish_initial_pose()\n'
-            '            self._wait(self.evidence.startup_ready, self.ready_timeout_s, '
-            '"startup evidence")',
+            '            self._wait_for_stable_startup_evidence()',
             run)
         arm_baseline = source[source.index("    def _publish_arm_low_baseline(self):"):
                               source.index("    def _publish_arm_request(self):")]
@@ -599,6 +649,7 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertIn('self._cancel("action timeout")', source)
         self.assertNotIn("reset", run.lower())
         self.assertNotIn("resume", run.lower())
+        self.assertNotIn("retry", run.lower())
         pre_initialization_ready = source[
             source.index("    def pre_initialization_ready(self, now):"):
             source.index("    def safety_clear(self, now):")]

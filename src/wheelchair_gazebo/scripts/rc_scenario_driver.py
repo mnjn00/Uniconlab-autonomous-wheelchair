@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import yaml
 
 STARTUP_REASON = 2048
+STARTUP_STABILITY_HOLD_SEC = 0.50
+STARTUP_STABILITY_HOLD_TOLERANCE_SEC = 1e-12
 DIRECTION_VALUES = {"outbound": 1, "return": 2}
 ROUTE_KEYS = {"outbound": "outbound_route", "return": "return_route"}
 
@@ -519,6 +521,36 @@ class ScenarioDriver:
             time.sleep(min(0.05, remaining))
         raise ScenarioError("timeout waiting for %s" % description)
 
+
+    def _wait_for_stable_startup_evidence(self):
+        """Require continuously permissive startup evidence before the one arm edge."""
+        deadline = time.monotonic() + self.ready_timeout_s
+        true_since = None
+        while not self.rospy.is_shutdown():
+            wall_now = time.monotonic()
+            if wall_now > deadline:
+                break
+            if self.evidence.startup_ready(float(self.rospy.Time.now().to_sec())):
+                if true_since is None:
+                    true_since = wall_now
+                if (wall_now - true_since + STARTUP_STABILITY_HOLD_TOLERANCE_SEC
+                        >= STARTUP_STABILITY_HOLD_SEC):
+                    return
+            else:
+                true_since = None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            sleep_for = min(0.05, remaining)
+            if true_since is not None:
+                sleep_for = min(sleep_for, true_since + STARTUP_STABILITY_HOLD_SEC - wall_now)
+            if sleep_for <= 0.0:
+                break
+            time.sleep(sleep_for)
+        if self.rospy.is_shutdown():
+            raise ScenarioError("ROS shutdown waiting for stable startup evidence")
+        raise ScenarioError("timeout waiting for stable startup evidence")
+
     def _cancel(self, reason):
         if self._goal_sent and not self._canceled:
             self._canceled = True
@@ -628,7 +660,7 @@ class ScenarioDriver:
                        "pre-initialization evidence")
             self._emit(self._DiagnosticStatus.OK, "publishing initial localization pose")
             self._publish_initial_pose()
-            self._wait(self.evidence.startup_ready, self.ready_timeout_s, "startup evidence")
+            self._wait_for_stable_startup_evidence()
             self._publish_arm_request()
             self._wait(self.evidence.safety_clear, self.ready_timeout_s, "armed safety gate")
         except ScenarioError:
