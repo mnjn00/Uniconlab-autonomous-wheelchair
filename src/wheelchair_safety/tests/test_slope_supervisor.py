@@ -294,25 +294,50 @@ class StructuredZoneEvidenceTests(unittest.TestCase):
         self.node._bootstrap_zone_evaluation_high_water_stamp_s = None
         self.node._bootstrap_zone_source_high_water_stamp_s = None
 
-    def test_bootstrap_deadline_starts_at_first_valid_calibration_receipt(self):
-        self._enable_bootstrap()
-        self.node._initial_zone_bootstrap_deadline_s = None
-        self.node._start_initial_zone_bootstrap_deadline(10.0)
-        self.node._start_initial_zone_bootstrap_deadline(11.0)
+    def test_bootstrap_timeout_requires_explicit_simulation_configuration(self):
         self.assertEqual(
-            self.node._initial_zone_bootstrap_deadline_s,
-            10.0 + self.node.core.policy.calibration_duration_s
-            + self.node.core.policy.route_zone_ttl_s,
+            slope._initial_zone_bootstrap_configuration(
+                "simulation_allow", "simulation", True, 30.0, 4.5
+            ),
+            ("normal", True, 34.5),
+        )
+        for policy, operation_mode, calibration_enabled, timeout in (
+            ("unknown", "simulation", True, 30.0),
+            ("simulation_allow", "hardware", True, 30.0),
+            ("simulation_allow", "replay", True, 30.0),
+            ("simulation_allow", "simulation", False, 30.0),
+            ("simulation_allow", "simulation", True, math.inf),
+        ):
+            with self.assertRaises(ValueError):
+                slope._initial_zone_bootstrap_configuration(
+                    policy, operation_mode, calibration_enabled, timeout, 4.5
+                )
+        self.assertEqual(
+            slope._initial_zone_bootstrap_configuration(
+                "simulation_allow", "simulation", True, 0.0, 4.5
+            ),
+            ("unknown", False, None),
+        )
+        self.assertEqual(
+            slope._initial_zone_bootstrap_configuration(
+                "simulation_allow", "simulation", True, -1.0, 4.5
+            ),
+            ("unknown", False, None),
         )
 
-    def test_simulation_pre_route_stop_preserves_bounded_bootstrap(self):
+    def test_simulation_pre_route_stop_preserves_bootstrap_before_deadline(self):
         self._enable_bootstrap()
         self.node._zone_cb(self.bootstrap_message())
-        self.node._refresh_initial_zone_bootstrap(20.1)
+        self.node._refresh_initial_zone_bootstrap(20.09)
         self.assertEqual(self.node.zone, "normal")
         self.assertEqual(self.node.zone_receipt_stamp_s, 10.0)
         self.assertTrue(self.node._initial_zone_bootstrap_active)
 
+    def test_simulation_bootstrap_revokes_at_deadline(self):
+        self._enable_bootstrap()
+        self.node._refresh_initial_zone_bootstrap(20.1)
+        self.assertEqual(self.node.zone, "unknown")
+        self.assertFalse(self.node._initial_zone_bootstrap_active)
     def test_simulation_bootstrap_accepts_exact_tf_reason_only(self):
         self._enable_bootstrap()
         self.node._zone_cb(self.bootstrap_message(reason_mask=slope.TF | slope.GEOFENCE))

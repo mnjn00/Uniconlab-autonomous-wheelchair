@@ -130,6 +130,7 @@
     <arg name="collision_policy" value="$(arg collision_policy)"/>
     <arg name="slope_policy" value="$(arg slope_policy)"/>
     <arg name="slope_initial_route_zone_policy" value="simulation_allow"/>
+    <arg name="slope_initial_route_zone_timeout_s" value="$(arg startup_readiness_timeout_sec)"/>
     <arg name="localization_policy" value="$(arg localization_policy)"/>
     <arg name="localization_policy_file_sha256" value="7b539d7fc276be0b702e7ad848dd38340ebec866dc9e4ddf4abffc65ce27bc80"/>
     <arg name="localization_map" value="$(find wheelchair_navigation)/../../data/hanyang_aegimun_loop/map.yaml"/>

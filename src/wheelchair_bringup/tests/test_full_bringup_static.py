@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCH = ROOT / "src" / "wheelchair_bringup" / "launch"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+SAFETY_LAUNCH = ROOT / "src" / "wheelchair_safety" / "launch" / "safety.launch"
 LOCALIZATION_POLICY = (
     ROOT / "src" / "wheelchair_navigation" / "config" / "localization_confidence_sim.yaml"
 )
@@ -82,6 +83,33 @@ def test_sim_profile_has_complete_fail_closed_evidence_graph():
     assert localization["source"] == "$(arg localization_source)"
     assert localization["base_model_enabled"] == "true"
     assert localization["base_model_pose_topic"] == "/base_model/localization_pose"
+
+def test_slope_bootstrap_timeout_is_default_denied_and_shares_readiness_bound():
+    safety_root = ET.parse(str(SAFETY_LAUNCH)).getroot()
+    safety_args = _args(safety_root)
+    assert safety_args["slope_initial_route_zone_timeout_s"].get("default") == "0.0"
+    assert safety_args["slope_initial_route_zone_policy"].get("default") == "unknown"
+    slope_node = next(
+        node for node in safety_root.findall(".//node")
+        if node.get("pkg") == "wheelchair_safety"
+        and node.get("type") == "slope_supervisor.py"
+    )
+    slope_params = {
+        item.get("name"): item.get("value") for item in slope_node.findall("param")
+    }
+    assert slope_params["initial_route_zone_timeout_s"] == (
+        "$(arg slope_initial_route_zone_timeout_s)"
+    )
+
+    sim_root = _root("sim_bringup.launch")
+    assert _args(sim_root)["startup_readiness_timeout_sec"].get("default") == "30.0"
+    sim_safety_args = _include_args(
+        _include(sim_root, "wheelchair_safety)/launch/safety.launch")
+    )
+    assert sim_safety_args["slope_initial_route_zone_policy"] == "simulation_allow"
+    assert sim_safety_args["slope_initial_route_zone_timeout_s"] == (
+        "$(arg startup_readiness_timeout_sec)"
+    )
 
 
 def test_sim_spawn_is_vetted_second_outbound_waypoint():

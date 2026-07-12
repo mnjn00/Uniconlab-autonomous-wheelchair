@@ -716,6 +716,37 @@ def _published_diagnostic(value: float) -> float:
     return value if math.isfinite(value) else -1.0
 
 
+def _initial_zone_bootstrap_configuration(
+    initial_policy, operation_mode, calibration_enabled, timeout_s, construction_stamp_s
+):
+    """Validate the bounded, simulation-only initial route-zone exception."""
+    try:
+        timeout_s = float(timeout_s)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("initial route-zone timeout must be finite") from None
+    if not math.isfinite(timeout_s):
+        raise ValueError("initial route-zone timeout must be finite")
+    normalized_policy = normalize_initial_zone_policy(initial_policy, operation_mode)
+    if timeout_s <= 0.0:
+        return "unknown", False, None
+    if (
+        normalized_policy != "normal"
+        or operation_mode != "simulation"
+        or not calibration_enabled
+    ):
+        raise ValueError(
+            "positive initial route-zone timeout requires simulation_allow simulation bootstrap"
+        )
+    try:
+        construction_stamp_s = float(construction_stamp_s)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("initial route-zone bootstrap construction time must be finite") from None
+    deadline_s = construction_stamp_s + timeout_s
+    if not math.isfinite(construction_stamp_s) or not math.isfinite(deadline_s):
+        raise ValueError("initial route-zone bootstrap construction time must be finite")
+    return normalized_policy, True, deadline_s
+
+
 class SlopeSupervisorRosNode:
     """Thin ROS1 adapter.  All ROS imports remain behind construction."""
 
@@ -726,6 +757,7 @@ class SlopeSupervisorRosNode:
         from wheelchair_interfaces.msg import GeofenceStatus, SafetySignal, SlopeStatus
 
         self.rospy = rospy
+        construction_stamp_s = rospy.Time.now().to_sec()
         self.SlopeStatus = SlopeStatus
         self.SafetySignal = SafetySignal
         self.core = SlopeSupervisorCore(load_slope_policy(
@@ -753,13 +785,18 @@ class SlopeSupervisorRosNode:
             # Precomputed hashes cannot authorize replay, hardware, or unverified input.
             self.core.calibration_state = CAL_UNCALIBRATED
             self.core.calibration_sha256 = ""
-        self.zone = normalize_initial_zone_policy(
-            rospy.get_param("~initial_route_zone_policy", "unknown"),
-            self.operation_mode,
+        self.zone, self._initial_zone_bootstrap_active, self._initial_zone_bootstrap_deadline_s = (
+            _initial_zone_bootstrap_configuration(
+                rospy.get_param("~initial_route_zone_policy", "unknown"),
+                self.operation_mode,
+                self.calibration_enabled,
+                rospy.get_param("~initial_route_zone_timeout_s", 0.0),
+                construction_stamp_s,
+            )
         )
-        self._initial_zone_bootstrap_active = self.zone == "normal"
-        self._initial_zone_bootstrap_deadline_s = None
-        self.zone_receipt_stamp_s = rospy.Time.now().to_sec() if self._initial_zone_bootstrap_active else -math.inf
+        self.zone_receipt_stamp_s = (
+            construction_stamp_s if self._initial_zone_bootstrap_active else -math.inf
+        )
         self._bootstrap_zone_sequence_high_water = None
         self._bootstrap_zone_evaluation_high_water_stamp_s = None
         self._bootstrap_zone_source_high_water_stamp_s = None
@@ -828,8 +865,8 @@ class SlopeSupervisorRosNode:
                 and zone_id == ""
                 and self._initial_zone_bootstrap_active
                 and self.operation_mode == "simulation"
-                and (self._initial_zone_bootstrap_deadline_s is None
-                     or receipt_stamp <= self._initial_zone_bootstrap_deadline_s)
+                and self._initial_zone_bootstrap_deadline_s is not None
+                and receipt_stamp < self._initial_zone_bootstrap_deadline_s
                 and (self._bootstrap_zone_sequence_high_water is None
                      or sequence > self._bootstrap_zone_sequence_high_water)
                 and (self._bootstrap_zone_evaluation_high_water_stamp_s is None
@@ -925,19 +962,14 @@ class SlopeSupervisorRosNode:
         return transform_q, transform_translation, transform_stamp, (
             receipt - tf.header.stamp
         ).to_sec()
-    def _start_initial_zone_bootstrap_deadline(self, receipt_stamp):
-        if self._initial_zone_bootstrap_active and self._initial_zone_bootstrap_deadline_s is None:
-            self._initial_zone_bootstrap_deadline_s = (
-                receipt_stamp + self.core.policy.calibration_duration_s + self.core.policy.route_zone_ttl_s
-            )
 
     def _refresh_initial_zone_bootstrap(self, receipt_stamp):
         if not self._initial_zone_bootstrap_active:
             return
         if (
             self.operation_mode != "simulation"
-            or self._initial_zone_bootstrap_deadline_s is not None
-            and receipt_stamp > self._initial_zone_bootstrap_deadline_s
+            or self._initial_zone_bootstrap_deadline_s is None
+            or receipt_stamp >= self._initial_zone_bootstrap_deadline_s
         ):
             self._revoke_initial_zone_bootstrap(receipt_stamp)
 
@@ -1049,13 +1081,10 @@ class SlopeSupervisorRosNode:
             imu_to_base_quaternion=transform_q,
             imu_to_base_translation=transform_translation,
         )
-        calibration_sample_valid = False
         if self.calibration_enabled and self.operation_mode == "simulation":
-            calibration_sample_valid = self._observe_calibration_sample(
+            self._observe_calibration_sample(
                 sample, transform_valid, transform_q, transform_translation, transform_stamp
             )
-        if calibration_sample_valid:
-            self._start_initial_zone_bootstrap_deadline(receipt.to_sec())
         source_stamp_s = msg.header.stamp.to_sec()
         self._refresh_initial_zone_bootstrap(receipt.to_sec())
         try:

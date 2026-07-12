@@ -14,6 +14,7 @@
   <arg name="slope_transform_is_static" default="true"/>
   <arg name="slope_input_provenance" default="gazebo:/sensors/imu/data:imu_link"/>
   <arg name="slope_initial_route_zone_policy" default="unknown"/>
+  <arg name="slope_initial_route_zone_timeout_s" default="0.0"/>
   <arg name="localization_policy"/>
   <arg name="localization_policy_file_sha256"/>
   <arg name="localization_map"/>
@@ -56,6 +57,7 @@
     <param name="transform_is_static" value="$(arg slope_transform_is_static)"/>
     <param name="input_provenance" value="$(arg slope_input_provenance)"/>
     <param name="initial_route_zone_policy" value="$(arg slope_initial_route_zone_policy)"/>
+    <param name="initial_route_zone_timeout_s" value="$(arg slope_initial_route_zone_timeout_s)"/>
   </node>
 
   <!-- This independent guard is the sole localization confidence/status publisher. -->
