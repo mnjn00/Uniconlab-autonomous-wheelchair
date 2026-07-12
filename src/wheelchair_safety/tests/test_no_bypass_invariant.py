@@ -27,6 +27,7 @@ def _authority_evidence_paths():
 STATIC_AUTHORITY_EVIDENCE = _authority_evidence_paths()
 MOTOR_TOPICS = ("/wheelchair_base_controller/cmd_vel", "/base_controller/cmd_vel", "/motor_command")
 UNSAFE_COMMAND_TOPICS = ("/cmd_vel_nav", "/cmd_vel_raw", "/cmd_vel_shadow")
+SIMULATION_CONTROLLERS = ROOT / "src" / "wheelchair_gazebo" / "config" / "controllers.yaml"
 
 
 def test_authority_evidence_path_list_covers_every_launch_profile_and_package_file():
@@ -87,6 +88,18 @@ def test_expected_nav_to_safety_to_base_command_chain_is_present():
     assert 'SINK_TOPIC = "/wheelchair_base_controller/cmd_vel"' in adapter_text
     for unsafe_topic in UNSAFE_COMMAND_TOPICS:
         assert f'SOURCE_TOPIC = "{unsafe_topic}"' not in adapter_text
+
+def test_simulation_sink_rejects_multiple_command_publishers():
+    controllers_text = SIMULATION_CONTROLLERS.read_text()
+    setting_values = re.findall(
+        r"(?im)^  allow_multiple_cmd_vel_publishers:\s*([^\s#]+)\s*(?:#.*)?$",
+        controllers_text,
+    )
+    assert setting_values == ["false"]
+    assert not re.search(
+        r"(?im)^  allow_multiple_cmd_vel_publishers:\s*(?:true|1|yes|on)\s*(?:#.*)?$",
+        controllers_text,
+    )
 
 
 def _minimal_valid_graph():

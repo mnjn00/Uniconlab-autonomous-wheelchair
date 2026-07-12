@@ -10,7 +10,7 @@ artifacts:
   - path: A02-interface-abi-v1.md
     sha256: be34063bdc8521a72a08512519b7c315ae66c0b80161aa2603d367680aaf531d
   - path: A03-topic-tf-time-ownership.yaml
-    sha256: b5560136e1ba74ca54b80b90c5068aa10aa9abf89c6e39af09f0b6a5a337b84c
+    sha256: 698721f0efb097907553f45587b8b9a15ff9e51738ad2f949c166c26ca7de9d2
   - path: A04-safety-reason-registry.yaml
     sha256: 9ab82c36d470776ce3a69bb75bdb90b449235f8773a149b5be87ceab54b5baa7
   - path: A05-route-schema.json
@@ -34,13 +34,13 @@ artifacts:
   - path: A14-hazard-log.yaml
     sha256: e52a198c74bc4331f8f1ad8a51ed7c72be9f6117469bd98e8a681eb825428a74
   - path: A15-evidence-inventory.yaml
-    sha256: 8171706bbe38046dea985046b5bb4d3c6e42b5d69f08da917c15cf0dc642306f
+    sha256: 07ce114a2e8801127ce313d182bbd0c10633211bb76b680d6de60299ae06eaac
   - path: A16-release-authority.yaml
     sha256: 519622195bcbeee1472615014b81978198286105aa3425561167ac53347024fb
   - path: A17-verification-matrix.yaml
     sha256: 6f9b3773fa2e66e2d04ac9e262d8f8e85cb4db400927e36ca3a61fb402748aca
   - path: collision-simulation-policy.yaml
-    sha256: 312534ae7f05cbd94dbed1a12e3deb9b9b2dcc7e3f57c11de76d62a1b0a51984
+    sha256: d9e723cfc548e34e525ae43aaa687f09352530781ad1843f88a41f36004f6852
   - path: driver-unverified.yaml
     sha256: 98eb37a28caf76eab078bf895edd9c9c189c3c12fafd4dcc5b8e37116d7e5055
   - path: driver-verified-fixture.yaml

@@ -211,7 +211,7 @@ class Evidence:
                     and localization.map_id == self.binding.map_id
                     and localization.map_sha256 == self.binding.map_sha256):
                 return False
-            if not (geofence.state in (geofence.INSIDE, geofence.MARGIN)
+            if not (geofence.state == geofence.INSIDE
                     and geofence.reason_mask == 0
                     and geofence.manifest_sha256 == self.binding.safety_manifest_sha256
                     and geofence.route_id == self.binding.route_id):
@@ -303,7 +303,6 @@ class ScenarioDriver:
     def _wait(self, predicate, timeout, description, tick=None, tick_interval_s=1.0):
         deadline = time.monotonic() + timeout
         next_tick = time.monotonic() + tick_interval_s if tick is not None else None
-        rate = self.rospy.Rate(20)
         while not self.rospy.is_shutdown() and time.monotonic() <= deadline:
             if predicate(float(self.rospy.Time.now().to_sec())):
                 return
@@ -311,13 +310,10 @@ class ScenarioDriver:
             if tick is not None and wall_now >= next_tick:
                 tick()
                 next_tick = wall_now + tick_interval_s
-            if tick is None:
-                rate.sleep()
-            else:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0.0:
-                    break
-                time.sleep(min(0.05, remaining))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(0.05, remaining))
         raise ScenarioError("timeout waiting for %s" % description)
 
     def _cancel(self, reason):
@@ -325,6 +321,21 @@ class ScenarioDriver:
             self._canceled = True
             self._action.cancel_goal()
             self._emit(self._DiagnosticStatus.ERROR, "action canceled: " + reason)
+    def _wait_for_mission_action(self, terminal):
+        deadline = time.monotonic() + self.action_timeout_s
+        while not self.rospy.is_shutdown():
+            if self._action.get_state() in terminal:
+                return
+            if not self.evidence.safety_clear(float(self.rospy.Time.now().to_sec())):
+                self._cancel("safety loss")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                self._cancel("action timeout")
+                raise ScenarioError("mission action timeout")
+            time.sleep(min(0.05, remaining))
+        self._cancel("ROS shutdown")
+        raise ScenarioError("ROS shutdown during mission action")
+
 
 
     def _publish_initial_pose_message(self):
@@ -386,17 +397,9 @@ class ScenarioDriver:
             self._cancel("startup failure")
             raise
         self._safety_monitoring = True
-        deadline = time.monotonic() + self.action_timeout_s
-        rate = self.rospy.Rate(20)
         terminal = {GoalStatus.PREEMPTED, GoalStatus.SUCCEEDED, GoalStatus.ABORTED,
                     GoalStatus.REJECTED, GoalStatus.RECALLED, GoalStatus.LOST}
-        while not self.rospy.is_shutdown() and self._action.get_state() not in terminal:
-            if not self.evidence.safety_clear(float(self.rospy.Time.now().to_sec())):
-                self._cancel("safety loss")
-            if time.monotonic() > deadline:
-                self._cancel("action timeout")
-                raise ScenarioError("mission action timeout")
-            rate.sleep()
+        self._wait_for_mission_action(terminal)
         if self._canceled or self._action.get_state() != GoalStatus.SUCCEEDED:
             raise ScenarioError("mission did not succeed (state %s)" % self._action.get_state())
         result = self._action.get_result()

@@ -9,7 +9,7 @@
 
 이 저장소는 Intel NUC가 이미 **Ubuntu 20.04 + ROS1 Noetic** 환경으로 운용되는 점을 전제로 합니다. 실차 NUC 환경은 바꾸지 않고, 기존 `base_model` 운용 방식과 연결 가능한 시뮬레이션/내비게이션/안전 제어 scaffold를 제공합니다.
 
-> 이 코드는 연구·개발용입니다. 실차 탑승 주행 전에는 반드시 저속 제한, 수동 전환, 물리 e-stop, 보행자 없는 공간 테스트, 지도/TF/센서 검증을 통과해야 합니다.
+> 현재 산출물은 **소프트웨어 RC 후보**입니다. `hardware_motion_authorized: false`와 `passenger_operation_authorized: false`가 강제되며, 검증된 실제 드라이버 계약·물리 e-stop/수동 우선권·정지거리·NUC 자원 시험·별도 승인 전에는 실차 모터 토픽을 광고하거나 탑승 주행에 사용하면 안 됩니다.
 
 ---
 
@@ -30,14 +30,17 @@
 | Area | Included |
 | --- | --- |
 | Platform target | Ubuntu 20.04, ROS1 Noetic, catkin |
-| Simulator | Gazebo Classic 11 |
-| Robot model | 전동휠체어 크기 기반 URDF/xacro |
-| Navigation | `move_base`, `costmap_2d`, `dwa_local_planner` |
-| Safety path | `/cmd_vel_nav` → `wheelchair_safety/safety_gate.py` → `/cmd_vel_safe` |
-| Route data | 애지문 ↔ 공업센터 GLIM/2D map/waypoint 산출물 |
-| Tests | URDF, navigation config, safety gate, no-bypass invariant |
+| Simulator | Gazebo Classic 11 (`SIMULATION_ONLY`) |
+| Runtime localization | Native Noetic candidate adapter plus independent confidence guard |
+| Navigation/control | `move_base` is the sole `/cmd_vel_nav` publisher; costmap/DWA caps are simulation-only |
+| Safety path | `/cmd_vel_nav` → independent safety authorities → `/cmd_vel_safe` → simulation adapter |
+| Independent authorities | collision/TTC, slope, localization confidence, route safety/geofence, topology/timing |
+| Mission | immutable directional routes, route progress, deterministic mission FSM/action cancellation |
+| Offline-only tools | ROS 2 Livox/IMU normalization and pinned GLIM reproduction; never in the NUC runtime closure |
+| Hardware boundary | exact manifest parser and shadow profile; real output is rejected while authority/evidence is incomplete |
+| Tests | contract/ABI, pure/property, fail-closed safety, replay, package, Gazebo/fault, release/rollback |
 
-ROS2 Jazzy/Gazebo Sim/Nav2 실험 코드는 실차 NUC 배포 대상이 아니므로 이 저장소의 기본 실행 경로에서 제외합니다.
+ROS 2 and GLIM remain workstation/offline tools only. The production startup closure is ROS1 Noetic; no bridge, Nav2, or ROS 2 runtime process is permitted.
 
 ---
 
@@ -70,7 +73,8 @@ ROS2 Jazzy/Gazebo Sim/Nav2 실험 코드는 실차 NUC 배포 대상이 아니�
 
 ---
 
-## Next work packages
+## Post-RC gated work (not authorized by this repository)
+The following physical activities are future WP7 work, not instructions to operate the current RC. They require a reviewed WP0-HW evidence bundle, actual target-NUC qualification, a verified driver/watchdog and physical override chain, measured geometry/extrinsics/braking/slope envelope, a dry segregated procedure, and named approval. Software/Gazebo success never grants hardware, campus, or passenger authority.
 
 ### 1. 실차 NUC ROS1 stack 확인
 
@@ -201,22 +205,29 @@ Key information from the manual:
 
 ```text
 src/
-├── wheelchair_bringup/        # integrated launch and runtime mode parameters
-├── wheelchair_description/    # URDF/xacro wheelchair model
-├── wheelchair_gazebo/         # Gazebo Classic worlds and spawn/controller config
-├── wheelchair_navigation/     # move_base, costmap, DWA, geofence config
-└── wheelchair_safety/         # safety gate, mode manager, e-stop/stale/geofence logic
+├── wheelchair_interfaces/       # frozen ROS messages/actions and ABI contracts
+├── wheelchair_perception/       # canonical sensor products; no motion permission
+├── wheelchair_navigation/       # localizer adapter, route manager, move_base control
+├── wheelchair_route_safety/     # independent immutable geofence intersection
+├── wheelchair_decision/         # deterministic mission FSM and ExecuteRoute action
+├── wheelchair_safety/           # gate plus collision/slope/localization/topology authorities
+├── wheelchair_hardware/         # exact driver contract; default boundary is disabled
+├── wheelchair_bringup/          # explicit sim/replay/shadow/hardware profiles
+├── wheelchair_description/      # provenance-labeled URDF/xacro
+└── wheelchair_gazebo/           # simulation-only scenarios and evidence collectors
 ```
 
-Command path:
+Command authority:
 
 ```text
-move_base
+move_base (sole publisher)
   -> /cmd_vel_nav
   -> wheelchair_safety/safety_gate.py
   -> /cmd_vel_safe
-  -> base controller driver or relay
+  -> simulation_controller_adapter (sim only)
 ```
+
+No real motor sink is selected by default. `hardware_enabled.launch` must fail before advertising a real command topic while the verified driver and release authorities are false.
 
 The safety gate is the architectural boundary. Motor drivers must not subscribe directly to navigation output.
 
@@ -271,19 +282,24 @@ Display model only:
 roslaunch wheelchair_description display.launch
 ```
 
-Gazebo Classic simulation with navigation and safety gate:
+Gazebo Classic software-in-loop startup (disarmed, no hardware path):
 
 ```bash
-roslaunch wheelchair_bringup sim_bringup.launch world:=sidewalk_obstacles
+roslaunch wheelchair_bringup sim_bringup.launch auto_start:=false gui:=false
 ```
 
-Other worlds:
+The bounded qualification entry points are:
 
 ```bash
-roslaunch wheelchair_bringup sim_bringup.launch world:=empty
-roslaunch wheelchair_bringup sim_bringup.launch world:=road_free_space
-roslaunch wheelchair_bringup sim_bringup.launch world:=static_dynamic_obstacles
+python3 scripts/run_gazebo_rc_suite.py \
+  --config src/wheelchair_gazebo/config/scenarios.yaml \
+  --output artifacts/gazebo-rc-report.json
+python3 scripts/run_fault_matrix.py \
+  --config src/wheelchair_gazebo/config/scenarios.yaml \
+  --output artifacts/gazebo-fault-report.json
 ```
+
+Every report is tagged `SIMULATION_ONLY`; it cannot promote physical authority.
 
 Navigation-only:
 
@@ -301,38 +317,35 @@ roslaunch wheelchair_safety safety.launch
 
 ## Verification
 
-Static/unit verification on any Python 3 host:
+Focused host verification:
 
 ```bash
+python3 scripts/validate_wp0_contracts.py --root .
 python3 -m pytest -q
 ```
 
-The tests cover:
+Pinned Ubuntu 20.04/Noetic verification:
 
-- URDF/xacro dimension invariants
-- Navigation and safety parameter invariants
-- Safety gate priority order
-- Speed caps
-- e-stop latch/reset behavior
-- stale command watchdog
-- no-bypass command wiring
-
-Latest verified result before push:
-
-```text
-14 passed
+```bash
+docker build -f tools/noetic/Dockerfile -t wheelchair-noetic-validation .
+docker run --rm --network none wheelchair-noetic-validation bash -lc \
+  'source /opt/ros/noetic/setup.bash &&
+   catkin_make &&
+   catkin_make run_tests &&
+   python3 -m pytest -q'
 ```
+
+The suites cover contract/ABI hashes, package and launch topology, nonfinite/time/TTL/reset safety matrices, independent route/collision/slope/localization guards, deterministic mission behavior, replay conversion/GLIM contracts, Gazebo fault evidence, and release/rollback rejection paths. Do not replace a skipped external-data or target-NUC gate with a simulated claim; record it as blocked.
 
 ---
 
 ## Hardware notes
 
-- Keep the NUC on Ubuntu 20.04 + ROS1 Noetic.
-- Keep the existing platform `base_model` stack until the real motor driver contract is fully understood.
-- Use `/cmd_vel_safe` as the only command allowed to reach the base controller.
-- Publish `/odom` and `odom -> base_footprint` TF from the real platform stack, or adapt launch/config accordingly.
-- Wire hardware e-stop and software e-stop into `/safety/estop`; reset must be explicit through `/safety/estop_reset`.
-- For sidewalks, geofence and low-speed policy are mandatory. For road/open-space tests, speed limits can be relaxed only after safety validation.
+- Keep the NUC on Ubuntu 20.04 + ROS1 Noetic and retain the existing `base_model` stack for read-only inventory only.
+- The repository default driver manifest is unverified and disabled; hardware launch must reject it without advertising a real command topic.
+- `/cmd_vel_safe` may reach a real controller only after exact driver topic/unit/sign/rate/timeout/mode/manual/e-stop evidence is reviewed and hash-bound.
+- Actual `/odom` and `odom -> base_footprint` ownership, physical e-stop/manual priority, and native command timeout require inert secured-stand verification.
+- No grounded motion, campus operation, or passenger trial is authorized by WP0-WP6. Those gates cannot be relaxed by Gazebo, replay, or workstation results.
 
 ---
 

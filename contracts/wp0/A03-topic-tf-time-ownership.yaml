@@ -66,8 +66,9 @@ runtime_profiles:
     passenger_operation_authorized: false
     real_motor_topic: null
     read_only_observers:
-      exact_node_names: [rc_scenario_driver, rc_metrics_collector]
-      topics: [/route/progress, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status]
+      exact_topic_grants:
+        rc_scenario_driver: [/route/progress, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status]
+        rc_metrics_collector: [/route/progress, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status, /cmd_vel_nav, /cmd_vel_safe, /wheelchair_base_controller/cmd_vel]
       publishing_authority: none
       profile_scope: sim_only
   replay:

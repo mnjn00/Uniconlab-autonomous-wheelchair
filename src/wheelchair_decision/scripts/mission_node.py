@@ -65,6 +65,20 @@ def _collision_evidence(state: int, clear_state: int, caution_state: int) -> str
     return "clear" if state in (clear_state, caution_state) else "blocked"
 
 
+def _geofence_evidence(state: int, inside_state: int, reason_mask: int,
+                        route_id: str, expected_route_id: str,
+                        manifest_sha256: str, expected_manifest_sha256: str) -> bool:
+    """Accept only the independently authorized interior, never boundary margin."""
+    return (
+        state == inside_state
+        and reason_mask == 0
+        and bool(expected_route_id)
+        and route_id == expected_route_id
+        and bool(expected_manifest_sha256)
+        and manifest_sha256 == expected_manifest_sha256
+    )
+
+
 def _move_base_failure_reason(reason: Any) -> bool:
     """Distinguish action failures from the normal ``move_base_active`` state."""
     normalized = str(reason).strip().lower()
@@ -757,9 +771,15 @@ def main() -> None:
         binding = runtime.binding
         good = bool(
             binding is not None
-            and msg.state in (GeofenceStatus.INSIDE, GeofenceStatus.MARGIN)
-            and msg.route_id == binding.route_id
-            and msg.manifest_sha256 == binding.safety_manifest_sha256
+            and _geofence_evidence(
+                msg.state,
+                GeofenceStatus.INSIDE,
+                int(msg.reason_mask),
+                msg.route_id,
+                binding.route_id,
+                msg.manifest_sha256,
+                binding.safety_manifest_sha256,
+            )
         )
         stamp = msg.evaluation_stamp if msg.evaluation_stamp.to_sec() else msg.header.stamp
         dispatch("GEOFENCE", good, stamp)

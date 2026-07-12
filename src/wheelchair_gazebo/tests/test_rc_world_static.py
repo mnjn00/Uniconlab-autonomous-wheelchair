@@ -12,6 +12,7 @@ PACKAGE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 WORLD_PATH = os.path.join(PACKAGE, "worlds", "wheelchair_rc_scenarios.world")
 RC_LAUNCH_PATH = os.path.join(PACKAGE, "launch", "rc_sim.launch")
 ADAPTER_PATH = os.path.join(PACKAGE, "scripts", "simulation_controller_adapter.py")
+CONTROLLERS_PATH = os.path.join(PACKAGE, "config", "controllers.yaml")
 BRINGUP_PATH = os.path.abspath(
     os.path.join(PACKAGE, "..", "wheelchair_bringup", "launch", "sim_bringup.launch")
 )
@@ -43,6 +44,8 @@ class RcWorldStaticTest(unittest.TestCase):
             cls.rc_text = stream.read()
         with open(ADAPTER_PATH, encoding="utf-8") as stream:
             cls.adapter_text = stream.read()
+        with open(CONTROLLERS_PATH, encoding="utf-8") as stream:
+            cls.controllers_text = stream.read()
         with open(BRINGUP_PATH, encoding="utf-8") as stream:
             cls.bringup_text = stream.read()
         spec = importlib.util.spec_from_file_location("hanyang_generator", GENERATOR_PATH)
@@ -186,6 +189,15 @@ class RcWorldStaticTest(unittest.TestCase):
         )
         self.assertNotIn("get_param(\"~", self.adapter_text)
 
+    def test_simulation_sink_rejects_multiple_command_publishers(self):
+        self.assertRegex(
+            self.controllers_text,
+            r"(?m)^  allow_multiple_cmd_vel_publishers:\s*false\s*$",
+        )
+        self.assertNotRegex(
+            self.controllers_text,
+            r"(?im)^  allow_multiple_cmd_vel_publishers:\s*(?:true|1|yes|on)\s*$",
+        )
     def test_no_real_motor_or_ros2_actuation_path(self):
         combined = self.rc_text + self.bringup_text + self.adapter_text
         forbidden = (

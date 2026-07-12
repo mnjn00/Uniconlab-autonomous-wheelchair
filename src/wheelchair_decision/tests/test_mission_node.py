@@ -117,6 +117,24 @@ def test_collision_caution_remains_nonblocking_while_stop_and_unknown_block():
     assert node._collision_evidence(3, 1, 2) == "blocked"
 
 
+def test_geofence_margin_and_identity_mismatch_never_clear_mission_evidence():
+    exact = dict(
+        inside_state=1,
+        reason_mask=0,
+        route_id="route-out",
+        expected_route_id="route-out",
+        manifest_sha256="b" * 64,
+        expected_manifest_sha256="b" * 64,
+    )
+    assert node._geofence_evidence(state=1, **exact)
+    assert not node._geofence_evidence(state=2, **exact)
+    assert not node._geofence_evidence(state=1, **dict(exact, reason_mask=1))
+    assert not node._geofence_evidence(
+        state=1, **dict(exact, route_id="route-forged"))
+    assert not node._geofence_evidence(
+        state=1, **dict(exact, manifest_sha256="c" * 64))
+
+
 def test_normal_move_base_active_reason_is_not_an_internal_fault():
     assert not node._move_base_failure_reason("move_base_active")
     assert not node._move_base_failure_reason("ready")

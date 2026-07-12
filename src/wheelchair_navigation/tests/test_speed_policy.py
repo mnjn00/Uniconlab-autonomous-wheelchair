@@ -14,7 +14,7 @@ from wheelchair_navigation.speed_policy import (
 
 
 SLOPE_HASH = "69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62"
-COLLISION_HASH = "9534bfafded0191e9434ca0d16a7d1ae8caa32c1ff0f6bf6d85f0a21ba27e9db"
+COLLISION_HASH = "e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1"
 LOCALIZATION_HASH = "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"
 
 CONFIG = Path(__file__).parents[1] / "config" / "speed_policy.yaml"

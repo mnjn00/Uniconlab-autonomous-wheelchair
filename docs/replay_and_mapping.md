@@ -54,13 +54,18 @@ Alignment remains identity with zero offset and `verified: false`. The source re
 
 ## 3. Offline GLIM repeatability
 
-There is currently a **blocked handoff** between the landed normalizer and GLIM runner: `normalize_livox_bag.py` emits artifact ID `normalized-livox-bag-v1` with `output.bag_sha256`, while `run_glim_repro.py` accepts only `wheelchair.normalized_livox/v1` with `output.bag_path`, `output.sha256`, `output.format`, and exact topic metadata. Do not edit the manifest or invent an adapter. Resolve and review that contract mismatch before running GLIM on normalized output.
-
-After the producers share one reviewed manifest ABI, the actual GLIM runner interface is:
+The normalizer and verifier now share the reviewed `wheelchair.normalized_livox/v1`
+manifest ABI (`output.bag_path`, `output.sha256`, `output.format`, and exact topic
+metadata). The explicit offline exporter converts that immutable ROS 1 artifact
+into a hash-bound `wheelchair.glim_rosbag2_input/v1` directory; GLIM never reads
+an edited or ad-hoc manifest.
 
 ```bash
-python3 scripts/run_glim_repro.py \
+python3 scripts/export_glim_rosbag2.py \
   --input-manifest WORK/normalized/normalization_manifest.yaml \
+  --output-dir WORK/glim-input
+python3 scripts/run_glim_repro.py \
+  --ros2-manifest WORK/glim-input/glim_rosbag2_manifest.json \
   --config INPUT/glim.json \
   --output-dir WORK/glim-repro \
   --image REGISTRY/GLIM_IMAGE@sha256:IMAGE_DIGEST

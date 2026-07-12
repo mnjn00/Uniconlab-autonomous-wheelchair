@@ -12,7 +12,7 @@ provenance:
     intent_reconciliation_sha256: a31092d64375ae1958fa77ea8adb682ffd1232d11f01865109fcb0112fb3607f
   repository_readme:
     path: README.md
-    sha256: 1807de09c799ffe8917486e79535ac5496b0e691ce038f95d745270a8291a1b4
+    sha256: fdac59b554ef8b14780534e6b6b79272ec585bbdbe149a010a0480f34f99825d
     claim_scope: operator-reported source location, manual summary, and committed-artifact inventory
   local_manual:
     reported_path: /home/mnjn/다운로드/20230725_wheel_manual (2).pdf

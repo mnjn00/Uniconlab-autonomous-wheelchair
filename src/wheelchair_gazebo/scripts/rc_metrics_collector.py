@@ -22,6 +22,7 @@ REQUIRED_STREAMS = (
     "nav_command", "safe_command",
 )
 MINIMUM_TERMINAL_SETTLE_S = 0.60
+WALL_POLL_INTERVAL_S = 0.02
 TWIST_AXES = ("linear.x", "linear.y", "linear.z",
               "angular.x", "angular.y", "angular.z")
 UNSUPPORTED_TWIST_AXES = ("linear.y", "linear.z", "angular.x", "angular.y")
@@ -80,6 +81,19 @@ SAFETY_REASON_BITS = {
 def finite(*values: float) -> bool:
     return all(isinstance(value, (int, float)) and not isinstance(value, bool)
                and math.isfinite(float(value)) for value in values)
+
+
+def collection_stop_reason(now: float, started: float,
+                           terminal_seen_wall: Optional[float],
+                           settle_time: float, timeout: float) -> Optional[str]:
+    """Return the wall-clock lifecycle stop reason, if collection is complete."""
+    if terminal_seen_wall is not None and now >= terminal_seen_wall + settle_time:
+        return "terminal"
+    if now >= started + timeout:
+        return "timeout"
+    return None
+
+
 
 
 def percentile(values: List[float], percent: float) -> float:
@@ -303,6 +317,8 @@ class MetricsCore:
             )
             if stream == "safety":
                 self.safety_stop_history.append((float(stamp), stopped or bool(latched)))
+        if stream == "geofence" and state in (2, 3, 4):
+            self.failures.append("geofence boundary violation")
         if stopped:
             if self.motion_started:
                 self.trigger_stop(stamp, stream, reason_mask)
@@ -331,6 +347,8 @@ class MetricsCore:
             return
         if not self._reject("contacts", stamp, float(contact_count)):
             self.footprint_collisions += contact_count
+            if contact_count:
+                self.failures.append("footprint contact observed")
 
     def observe_collision_ttc(self, value: float) -> None:
         if not finite(value):
@@ -449,8 +467,11 @@ class MetricsCore:
             failures.append("collector timeout")
         if self.route_terminal is None:
             failures.append("absent terminal route evidence")
-        if self.goal_error_yaw_deg is None:
-            failures.append("absent terminal goal yaw evidence")
+        elif self.route_terminal == "completed":
+            if self.goal_error_m is None:
+                failures.append("absent terminal goal error evidence")
+            if self.goal_error_yaw_deg is None:
+                failures.append("absent terminal goal yaw evidence")
         end = self.clock[-1] if self.clock else None
         stale: List[str] = []
         if end is not None:
@@ -552,7 +573,7 @@ class MetricsCore:
             "goal_error_m": self.goal_error_m,
             "goal_error_yaw_deg": self.goal_error_yaw_deg,
             "footprint_collisions": self.footprint_collisions,
-            "geofence_exits": sum(count for state, count in self.status_counts["geofence"].items() if state in ("3", "4")),
+            "geofence_exits": sum(count for state, count in self.status_counts["geofence"].items() if state in ("2", "3", "4")),
             "command": {
                 "finite": self.command_nonfinite_components == 0,
                 "caps_respected": command_caps_respected,
@@ -656,7 +677,7 @@ class RosCollector:
         self.last_clock = 0.0
         self.terminal_seen_wall: Optional[float] = None
         self.model_missing = False
-        rospy.init_node("rc_metrics_collector", anonymous=True, disable_signals=True)
+        rospy.init_node("rc_metrics_collector", anonymous=False, disable_signals=True)
         rospy.Subscriber(args.clock_topic, Clock, self._clock, queue_size=1)
         rospy.Subscriber(args.ground_truth_topic, ModelStates, self._models, queue_size=1)
         rospy.Subscriber(args.contact_topic, ContactsState, self._contacts, queue_size=1)
@@ -666,7 +687,7 @@ class RosCollector:
         rospy.Subscriber(args.collision_topic, CollisionStatus,
                          self._collision, queue_size=1)
         rospy.Subscriber(args.geofence_topic, GeofenceStatus,
-                         lambda m: self._status("geofence", m, (3, 4)), queue_size=1)
+                         lambda m: self._status("geofence", m, (2, 3, 4)), queue_size=1)
         rospy.Subscriber(args.slope_topic, SlopeStatus,
                          lambda m: self._status("slope", m, (3,)), queue_size=1)
         rospy.Subscriber(args.safety_topic, SafetyState,
@@ -733,18 +754,15 @@ class RosCollector:
             message.angular.x, message.angular.y, message.angular.z)
 
     def collect(self) -> Tuple[Dict[str, object], bool]:
-        rate = self.rospy.Rate(50)
         timed_out = False
         while not self.rospy.is_shutdown():
-            if (
-                self.terminal_seen_wall is not None
-                and time.monotonic() - self.terminal_seen_wall >= self.args.settle_time
-            ):
+            stop_reason = collection_stop_reason(
+                time.monotonic(), self.started, self.terminal_seen_wall,
+                self.args.settle_time, self.args.timeout)
+            if stop_reason is not None:
+                timed_out = stop_reason == "timeout"
                 break
-            if time.monotonic() - self.started >= self.args.timeout:
-                timed_out = True
-                break
-            rate.sleep()
+            time.sleep(WALL_POLL_INTERVAL_S)
         result = self.core.finalize(timed_out=timed_out)
         if self.model_missing and "ground_truth" not in self.core.seen:
             result["failures"].append("model '{}' absent from ground truth".format(self.args.model_name))

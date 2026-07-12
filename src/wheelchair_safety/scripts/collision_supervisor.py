@@ -270,9 +270,6 @@ class CloudPreprocessorTracker:
                 )
                 if reset:
                     self._coverage_frames.clear()
-            while (self._coverage_frames
-                   and stamp_s - self._coverage_frames[0][0] > self.policy.coverage_window_s + 1e-12):
-                self._coverage_frames.popleft()
             self._coverage_frames.append(
                 (stamp_s, linear_speed_mps, angular_speed_rps, frozenset(cells))
             )
@@ -295,19 +292,15 @@ class CloudPreprocessorTracker:
                 ego_angular_speed_rps=ego_angular_speed_rps,
             )
             expected_cells = self._required_coverage_cells(linear_speed_mps, angular_speed_rps)
-            observed_cells = set.intersection(
-                *(set(frame[3]) for frame in self._coverage_frames)
+            coverage_frames = self._coverage_suffix()
+            observed_cells = (
+                set.intersection(*(set(frame[3]) for frame in coverage_frames))
+                if coverage_frames else set()
             )
             observed = len(expected_cells & observed_cells)
             expected = len(expected_cells)
-            enough_frames = (
-                len(self._coverage_frames) >= self.policy.coverage_min_frames
-                and self._coverage_frames[-1][0] - self._coverage_frames[0][0]
-                >= self.policy.coverage_window_s - 1e-12
-            )
-            fraction = observed / float(expected) if expected else 0.0
-            if not enough_frames:
-                fraction = 0.0
+            fraction = observed / float(expected) if expected and coverage_frames else 0.0
+            if not coverage_frames:
                 observed = 0
             return CloudProcessingResult(
                 observations, len(raw), expected, observed, fraction, True, "ok",
@@ -323,6 +316,21 @@ class CloudPreprocessorTracker:
                 0, 0.0, False, str(exc),
             )
 
+    def _coverage_suffix(self) -> Tuple[Tuple[float, float, float, frozenset], ...]:
+        """Select the shortest latest frame suffix proving the minimum duration."""
+        frames = tuple(self._coverage_frames)
+        minimum = self.policy.coverage_min_frames
+        if len(frames) < minimum:
+            return ()
+        latest_start = len(frames) - minimum
+        for start in range(latest_start, -1, -1):
+            candidate = frames[start:]
+            if (
+                candidate[-1][0] - candidate[0][0]
+                >= self.policy.coverage_window_s - 1e-12
+            ):
+                return candidate
+        return ()
     def _visibility_cells(self, points: Sequence[PointObservation],
                           sensor_origin: Sequence[float]) -> set:
         cells = set()

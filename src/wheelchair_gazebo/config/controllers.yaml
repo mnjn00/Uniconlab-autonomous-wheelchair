@@ -15,6 +15,7 @@ wheelchair_base_controller:
   wheel_radius: 0.254
   publish_rate: 50
   cmd_vel_timeout: 0.25
+  allow_multiple_cmd_vel_publishers: false
   base_frame_id: base_footprint
   odom_frame_id: odom
   enable_odom_tf: true

@@ -38,6 +38,7 @@ def load_metrics_collector():
 def good_scenario():
     return {
         "live_evidence": True,
+        "passed": True,
         "simulation_only": True,
         "hardware_motion_authorized": False,
         "passenger_operation_authorized": False,
@@ -134,6 +135,47 @@ class ScenarioOrchestrationTests(unittest.TestCase):
         result = run_gazebo_rc_suite.validate_result(raw, self.config["thresholds"], False)
         self.assertFalse(result["passed"])
         self.assertIn("nonzero command observed after fault", result["failures"])
+    def test_completed_and_safe_abort_have_distinct_terminal_contracts(self):
+        completed = run_gazebo_rc_suite.validate_result(
+            good_scenario(), self.config["thresholds"], require_completion=True)
+        self.assertTrue(completed["passed"], completed["failures"])
+
+        safe_abort = good_scenario()
+        safe_abort.update({
+            "route_outcome": "safe_abort",
+            "stop": {
+                "envelope_respected": True,
+                "minimum_ttc_s": 1.2,
+                "trigger_stamp_s": 10.0,
+                "zero_stamp_s": 10.1,
+                "latency_s": 0.1,
+                "overshoot_m": 0.01,
+            },
+        })
+        del safe_abort["cross_track_samples_m"]
+        del safe_abort["goal_error_m"]
+        del safe_abort["goal_error_yaw_deg"]
+        safe_abort["hysteresis"]["resume_after_clear"] = False
+        safe_abort["hysteresis"]["reason_events"] = [{
+            "event": "stop",
+            "source": "route_invalid",
+            "stamp_s": 10.0,
+            "reason_mask": 0,
+        }]
+        result = run_gazebo_rc_suite.validate_result(
+            safe_abort, self.config["thresholds"], require_completion=False)
+        self.assertTrue(result["passed"], result["failures"])
+
+    def test_collector_safety_failure_cannot_be_reported_as_pass(self):
+        raw = good_scenario()
+        raw["passed"] = False
+        raw["missing_topics"] = ["contacts"]
+        raw["verdicts"] = {"topics_complete": False}
+        result = run_gazebo_rc_suite.validate_result(
+            raw, self.config["thresholds"], require_completion=True)
+        self.assertFalse(result["passed"])
+        self.assertIn("collector reported blocking failures", result["failures"])
+        self.assertIn("collector is missing required stream evidence", result["failures"])
     def test_config_selects_complete_bringup_and_live_contact_contract(self):
         self.assertEqual(
             self.config["launch"],

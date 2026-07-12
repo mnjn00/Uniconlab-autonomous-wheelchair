@@ -201,6 +201,27 @@ class MetricsCoreTest(unittest.TestCase):
         core.observe_contacts(1.0, 2)
         self.assertEqual(core.footprint_collisions, 2)
 
+    def test_footprint_contact_and_geofence_margin_are_blocking(self):
+        core = self.complete_core()
+        core.observe_contacts(1.3, 1)
+        core.observe_status("geofence", 1.3, 2, stop_states=(2, 3, 4))
+        result = core.finalize()
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["footprint_collisions"], 1)
+        self.assertEqual(result["geofence_exits"], 1)
+        self.assertIn("footprint contact observed", result["failures"])
+        self.assertIn("geofence boundary violation", result["failures"])
+
+    def test_safe_abort_does_not_require_terminal_goal_error(self):
+        core = self.complete_core()
+        core.observe_route(1.3, 4, 0.0, 0.2)
+        core.goal_error_m = None
+        core.goal_error_yaw_deg = None
+        result = core.finalize()
+        self.assertTrue(result["passed"], result["failures"])
+        self.assertEqual(result["route_outcome"], "safe_abort")
+        self.assertIsNone(result["goal_error_m"])
+        self.assertIsNone(result["goal_error_yaw_deg"])
     def test_contacts_are_required_live_topic_evidence(self):
         core = self.complete_core()
         core.seen.remove("contacts")
@@ -313,6 +334,26 @@ class MetricsCoreTest(unittest.TestCase):
         self.assertNotIn("fault_event", result["missing_topics"])
         self.assertNotIn("actuator_sink", result["missing_topics"])
 
+class CollectionLifecycleTest(unittest.TestCase):
+    def test_terminal_settle_uses_monotonic_wall_deadline(self):
+        decision = collector.collection_stop_reason(
+            now=10.59, started=0.0, terminal_seen_wall=10.0,
+            settle_time=0.60, timeout=30.0)
+        self.assertIsNone(decision)
+        self.assertEqual(
+            collector.collection_stop_reason(
+                now=10.60, started=0.0, terminal_seen_wall=10.0,
+                settle_time=0.60, timeout=30.0),
+            "terminal")
+
+    def test_timeout_is_deterministic_when_no_clock_messages_arrive(self):
+        self.assertEqual(
+            collector.collection_stop_reason(
+                now=30.0, started=0.0, terminal_seen_wall=None,
+                settle_time=0.60, timeout=30.0),
+            "timeout")
+
+
 class StaticContractTest(unittest.TestCase):
     def test_ros_imports_are_lazy_and_authority_is_fixed_false(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -321,6 +362,8 @@ class StaticContractTest(unittest.TestCase):
         self.assertIn('"hardware_motion_authorized": False', source)
         self.assertIn('"passenger_operation_authorized": False', source)
         self.assertNotIn("rospy.Publisher", source)
+        self.assertNotIn("rospy.Rate", source)
+        self.assertIn("time.sleep(WALL_POLL_INTERVAL_S)", source)
 
 
 if __name__ == "__main__":

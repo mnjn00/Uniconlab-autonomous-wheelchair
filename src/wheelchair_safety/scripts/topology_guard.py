@@ -107,14 +107,37 @@ PASSIVE_NODE_TOKENS = ("diagnostic", "monitor", "observer", "recorder", "rosbag"
 FORBIDDEN_ACTIVE_NODE_TOKENS = ("relay", "mux", "twist_mux", "yocs_cmd_vel", "velocity_smoother", "plugin")
 COMMAND_TOPIC_TOKENS = ("cmd_vel", "motor_command", "wheel_command", "drive_command", "actuator_command")
 EVENT_TOPICS = ("/safety/estop", "/safety/estop_reset", "/safety/arm", "/safety/mission_cancelled")
-SIM_READ_ONLY_OBSERVERS = ("rc_scenario_driver", "rc_metrics_collector")
-SIM_OBSERVER_TOPICS = (
-    "/route/progress",
-    "/localization/status",
-    "/route_safety/geofence_status",
-    "/safety/collision_status",
-    "/safety/slope_status",
-)
+SIM_OBSERVER_TOPIC_GRANTS = {
+    "rc_scenario_driver": (
+        "/route/progress",
+        "/localization/status",
+        "/route_safety/geofence_status",
+        "/safety/collision_status",
+        "/safety/slope_status",
+    ),
+    "rc_metrics_collector": (
+        "/route/progress",
+        "/localization/status",
+        "/route_safety/geofence_status",
+        "/safety/collision_status",
+        "/safety/slope_status",
+        "/cmd_vel_nav",
+        "/cmd_vel_safe",
+        "/wheelchair_base_controller/cmd_vel",
+    ),
+}
+
+
+def sim_observer_topic_grants(input_cmd_topic: str, output_cmd_topic: str):
+    """Bind collector command observation to launch-selected command topics."""
+    return {
+        observer: tuple(
+            input_cmd_topic if topic == "/cmd_vel_nav" else
+            output_cmd_topic if topic == "/cmd_vel_safe" else topic
+            for topic in topics
+        )
+        for observer, topics in SIM_OBSERVER_TOPIC_GRANTS.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -215,20 +238,21 @@ def expected_graph(profile: str, input_cmd_topic: str, output_cmd_topic: str,
         "/safety/driver": TopicAuthority(evidence_owner, ("safety_gate",)),
         "/safety/topology": TopicAuthority(("topology_guard",), ("safety_gate",)),
     }
-    if profile == "sim":
-        for topic in SIM_OBSERVER_TOPICS:
-            authority = authorities[topic]
-            authorities[topic] = TopicAuthority(
-                authority.publishers,
-                authority.subscribers,
-                authority.subscriber_alternatives,
-                authority.publisher_optional,
-                authority.required_when_motion_active,
-                authority.subscriber_alternatives_optional,
-                allowed_subscribers=SIM_READ_ONLY_OBSERVERS,
-            )
     if sink_topic is not None:
         authorities[sink_topic] = sink_authority
+    if profile == "sim":
+        for observer, topics in sim_observer_topic_grants(input_topic, output_topic).items():
+            for topic in topics:
+                authority = authorities[topic]
+                authorities[topic] = TopicAuthority(
+                    authority.publishers,
+                    authority.subscribers,
+                    authority.subscriber_alternatives,
+                    authority.publisher_optional,
+                    authority.required_when_motion_active,
+                    authority.subscriber_alternatives_optional,
+                    allowed_subscribers=authority.allowed_subscribers + (observer,),
+                )
     event_owners = {
         "/safety/estop": ("operator_io", "verified_io", "hardware_shadow_adapter"),
         "/safety/estop_reset": ("operator_request", "guarded_operator_request"),

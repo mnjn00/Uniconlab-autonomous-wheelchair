@@ -345,6 +345,18 @@ def validate_result(raw, thresholds, require_completion):
     failures = []
     if result.get("live_evidence") is not True:
         failures.append("missing live ROS/Gazebo evidence")
+    if result.get("passed") is False:
+        failures.append("collector reported blocking failures")
+    if "missing_topics" in result and result["missing_topics"] != []:
+        failures.append("collector is missing required stream evidence")
+    verdicts = result.get("verdicts")
+    if isinstance(verdicts, dict):
+        for name in ("topics_complete", "samples_finite", "clock_monotonic",
+                     "terminal_evidence", "terminal_inputs_fresh",
+                     "command_limits", "zero_after_stop", "stopping_envelope"):
+            if name in verdicts and verdicts[name] is not True:
+                failures.append("collector safety verdict failed: " + name)
+
     outcome = result.get("route_outcome")
     result["route_outcome"] = outcome
     if outcome not in ("completed", "safe_abort"):
@@ -352,27 +364,6 @@ def validate_result(raw, thresholds, require_completion):
     if require_completion and outcome != "completed":
         failures.append("deterministic route did not complete")
 
-    samples = result.get("cross_track_samples_m")
-    if not isinstance(samples, list) or not samples or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in samples):
-        failures.append("cross-track samples are missing or non-finite")
-    else:
-        absolute = [abs(float(x)) for x in samples]
-        result["cross_track_m"] = {
-            "mean": sum(absolute) / len(absolute),
-            "p95": percentile(absolute, 95.0),
-            "max": max(absolute),
-        }
-        for name in ("mean", "p95", "max"):
-            limit = float(thresholds["cross_track_" + name + "_m"])
-            if result["cross_track_m"][name] > limit:
-                failures.append("cross-track {} exceeds {:.3f} m".format(name, limit))
-
-    for field, limit_key in (("goal_error_m", "goal_error_m"), ("goal_error_yaw_deg", "goal_error_yaw_deg")):
-        value = result.get(field)
-        if not isinstance(value, (int, float)) or not math.isfinite(value):
-            failures.append(field + " is missing or non-finite")
-        elif float(value) > float(thresholds[limit_key]):
-            failures.append(field + " exceeds limit")
     for field in ("footprint_collisions", "geofence_exits"):
         if result.get(field) != 0:
             failures.append(field + " is nonzero")
@@ -382,6 +373,8 @@ def validate_result(raw, thresholds, require_completion):
         failures.append("command stream contains a non-finite value")
     if command.get("caps_respected") is not True:
         failures.append("command cap was exceeded")
+    if command.get("shape_respected") is False:
+        failures.append("command shape was violated")
     if command.get("nonzero_after_fault", 0) != 0:
         failures.append("nonzero command observed after fault")
 
@@ -395,13 +388,51 @@ def validate_result(raw, thresholds, require_completion):
     hysteresis = result.get("hysteresis", {})
     if hysteresis.get("stop_observed") is not True:
         failures.append("required stop was not observed")
-    if hysteresis.get("resume_after_clear") is not True:
-        failures.append("clear hysteresis/resume was not observed")
     events = hysteresis.get("reason_events")
     if not isinstance(events, list) or not events:
-        failures.append("structured stop/resume reason events are missing")
-    result["failures"] = failures
-    result["passed"] = not failures
+        failures.append("structured stop reason events are missing")
+
+    if outcome == "completed":
+        samples = result.get("cross_track_samples_m")
+        if (not isinstance(samples, list) or not samples or
+                not all(isinstance(x, (int, float)) and math.isfinite(x)
+                        for x in samples)):
+            failures.append("cross-track samples are missing or non-finite")
+        else:
+            absolute = [abs(float(x)) for x in samples]
+            result["cross_track_m"] = {
+                "mean": sum(absolute) / len(absolute),
+                "p95": percentile(absolute, 95.0),
+                "max": max(absolute),
+            }
+            for name in ("mean", "p95", "max"):
+                limit = float(thresholds["cross_track_" + name + "_m"])
+                if result["cross_track_m"][name] > limit:
+                    failures.append("cross-track {} exceeds {:.3f} m".format(name, limit))
+        for field, limit_key in (("goal_error_m", "goal_error_m"),
+                                 ("goal_error_yaw_deg", "goal_error_yaw_deg")):
+            value = result.get(field)
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                failures.append(field + " is missing or non-finite")
+            elif float(value) > float(thresholds[limit_key]):
+                failures.append(field + " exceeds limit")
+        if hysteresis.get("resume_after_clear") is not True:
+            failures.append("clear hysteresis/resume was not observed")
+    elif outcome == "safe_abort":
+        has_stop_reason = any(
+            isinstance(event, dict) and event.get("event") == "stop" and
+            isinstance(event.get("source"), str) and event["source"]
+            for event in events
+        )
+        if not has_stop_reason:
+            failures.append("safe abort lacks a structured stop reason")
+        for field in ("trigger_stamp_s", "zero_stamp_s", "latency_s", "overshoot_m"):
+            value = stop.get(field)
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                failures.append("safe abort lacks stop boundary evidence: " + field)
+
+    result["failures"] = list(dict.fromkeys(failures))
+    result["passed"] = not result["failures"]
     return result
 
 

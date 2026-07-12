@@ -18,7 +18,7 @@ hashes:
     status: verified
     scope: raw-bytes-of-A07-collision-policy-schema.json
   policy_sha256:
-    value: 4a273958bab3cb8f8321afde3f0e8cc5454199df275a2dd59087cb00c49e37bc
+    value: aaf5a86585d0bd8c91185abed63324cc119521355af47f6e9537b3da5c4d9a81
     status: verified
     scope: canonical-JSON-sorted-keys-compact-UTF8-excluding-hashes.policy_sha256
   footprint_sha256:
@@ -97,7 +97,7 @@ visibility:
   coverage_window_s: 0.20
   coverage_bins: 36
   coverage_min_frames: 3
-  coverage_max_frames: 3
+  coverage_max_frames: 4
   coverage_max_frame_gap_s: 0.11
   coverage_elevation_bins: 2
   coverage_min_elevation_rad: -0.10

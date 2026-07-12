@@ -126,13 +126,19 @@ def test_topology_observers_are_passive_per_edge():
         replace(snapshot, publishers=publishers)).ok
 
 
-def test_sim_qualification_observers_are_limited_to_five_read_only_topics():
+def test_sim_qualification_observers_have_exact_per_topic_grants():
     expected, snapshot = valid_snapshot("sim")
     subscribers = dict(snapshot.subscribers)
-    for topic in topology_guard.SIM_OBSERVER_TOPICS:
+    scenario_topics = topology_guard.SIM_OBSERVER_TOPIC_GRANTS["rc_scenario_driver"]
+    collector_topics = topology_guard.SIM_OBSERVER_TOPIC_GRANTS["rc_metrics_collector"]
+
+    for topic in scenario_topics:
         assert expected.authorities[topic].allowed_subscribers == (
             "rc_scenario_driver", "rc_metrics_collector")
         subscribers[topic] += ("rc_scenario_driver", "rc_metrics_collector")
+    for topic in set(collector_topics) - set(scenario_topics):
+        assert expected.authorities[topic].allowed_subscribers == ("rc_metrics_collector",)
+        subscribers[topic] += ("rc_metrics_collector",)
     snapshot = replace(snapshot, subscribers=subscribers)
     assert topology_guard.TopologyAuditor(expected).audit(snapshot).ok
 
@@ -143,24 +149,30 @@ def test_sim_qualification_observers_are_limited_to_five_read_only_topics():
     assert not result.ok
     assert any("/route/progress publisher authority" in item for item in result.violations)
 
-    for topic in (
-        "/cmd_vel_nav", "/cmd_vel_safe", "/safety/localization",
-        "/localization/candidate", "/route/active",
-    ):
+    for topic in set(collector_topics) - set(scenario_topics):
+        assert "rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
+    for topic in ("/safety/localization", "/localization/candidate", "/route/active"):
         assert "rc_scenario_driver" not in expected.authorities[topic].allowed_subscribers
         assert "rc_metrics_collector" not in expected.authorities[topic].allowed_subscribers
 
 
 @pytest.mark.parametrize("profile", ("replay", "hardware_shadow", "hardware_enabled"))
-@pytest.mark.parametrize("observer", ("rc_scenario_driver", "rc_metrics_collector"))
-def test_qualification_observers_are_rejected_outside_sim(profile, observer):
+@pytest.mark.parametrize(
+    ("observer", "topic"),
+    (
+        ("rc_scenario_driver", "/route/progress"),
+        ("rc_metrics_collector", "/route/progress"),
+        ("rc_metrics_collector", "/cmd_vel_nav"),
+    ),
+)
+def test_qualification_observers_are_rejected_outside_sim(profile, observer, topic):
     expected, snapshot = valid_snapshot(profile)
     subscribers = dict(snapshot.subscribers)
-    subscribers["/route/progress"] += (observer,)
+    subscribers[topic] += (observer,)
     result = topology_guard.TopologyAuditor(expected).audit(
         replace(snapshot, subscribers=subscribers))
     assert not result.ok
-    assert any("/route/progress unauthorized subscribers" in item
+    assert any("{} unauthorized subscribers".format(topic) in item
                for item in result.violations)
 
 
@@ -282,6 +294,17 @@ def test_queue_contract_is_exactly_latest_only_one():
 
 def test_profile_command_topic_remap_is_audited_as_selected():
     expected, snapshot = valid_snapshot("sim", "/nav/selected_cmd", "/safe/selected_cmd")
+    collector_topics = topology_guard.sim_observer_topic_grants(
+        "/nav/selected_cmd", "/safe/selected_cmd")["rc_metrics_collector"]
+    assert collector_topics == (
+        "/route/progress", "/localization/status", "/route_safety/geofence_status",
+        "/safety/collision_status", "/safety/slope_status", "/nav/selected_cmd",
+        "/safe/selected_cmd", "/wheelchair_base_controller/cmd_vel",
+    )
+    assert expected.authorities["/nav/selected_cmd"].allowed_subscribers == (
+        "rc_metrics_collector",)
+    assert expected.authorities["/safe/selected_cmd"].allowed_subscribers == (
+        "rc_metrics_collector",)
     assert expected.command_topics == (
         "/nav/selected_cmd",
         "/safe/selected_cmd",

@@ -111,6 +111,23 @@ class CallbackEvidence:
 
     def safety_clear(self, now):
         return self.clear
+class ActiveAction:
+    def __init__(self):
+        self.cancel_count = 0
+
+    def get_state(self):
+        return "ACTIVE"
+
+    def cancel_goal(self):
+        self.cancel_count += 1
+
+
+class FrozenClockRospy(FakeRospy):
+    def __init__(self):
+        super().__init__({})
+        self.Time = SequenceTime([12.0])
+        self.is_shutdown = lambda: False
+
 
 
 class ScenarioDriverTests(unittest.TestCase):
@@ -195,6 +212,35 @@ class ScenarioDriverTests(unittest.TestCase):
             invalid[name] = True
             with self.assertRaises(driver.ScenarioError):
                 driver.require_preflight(FakeRospy(invalid), binding)
+    def test_startup_ready_rejects_margin_geofence(self):
+        evidence = driver.Evidence(self.binding("outbound"), 1.0)
+
+        def message(**values):
+            status = Attribute()
+            status.header = Attribute()
+            status.header.stamp = FakeStamp(12.0)
+            for name, value in values.items():
+                setattr(status, name, value)
+            return status
+
+        evidence.update("safety", message(
+            state="DISARMED", DISARMED="DISARMED", armed=False,
+            estop_latched=False, reason_mask=driver.STARTUP_REASON))
+        evidence.update("localization", message(
+            state="OK", OK="OK", reason_mask=0, map_id="map-a", map_sha256="a" * 64))
+        evidence.update("geofence", message(
+            state="MARGIN", INSIDE="INSIDE", MARGIN="MARGIN", reason_mask=0,
+            manifest_sha256="b" * 64, route_id="route-out"))
+        evidence.update("collision", message(
+            state="CLEAR", STATE_CLEAR="CLEAR", STATE_CAUTION="CAUTION", reason_mask=0))
+        evidence.update("slope", message(
+            state="CLEAR", STATE_CLEAR="CLEAR", STATE_SLOW="SLOW", reason_mask=0))
+        evidence.update("route", message(
+            state="ACTIVE", ACTIVE="ACTIVE", route_id="route-out", map_id="map-a"))
+
+        self.assertFalse(evidence.startup_ready(12.0))
+        evidence.values["geofence"].state = evidence.values["geofence"].INSIDE
+        self.assertTrue(evidence.startup_ready(12.0))
 
     def test_sim_time_wait_succeeds_immediately_without_sleeping(self):
         rospy = FakeRospy({})
@@ -394,6 +440,30 @@ class ScenarioDriverTests(unittest.TestCase):
 
         self.assertLessEqual(wall.now, 1.75)
         self.assertEqual(len(scenario._initial_pose.messages), 1)
+    def test_mission_action_timeout_cancels_once_with_frozen_sim_clock(self):
+        scenario = driver.ScenarioDriver.__new__(driver.ScenarioDriver)
+        scenario.rospy = FrozenClockRospy()
+        scenario.action_timeout_s = 0.12
+        scenario._action = ActiveAction()
+        scenario._goal_sent = True
+        scenario._canceled = False
+        scenario._DiagnosticStatus = Attribute()
+        scenario._DiagnosticStatus.ERROR = "ERROR"
+        scenario._emit = lambda unused_level, unused_message: None
+        scenario.evidence = CallbackEvidence(clear=True)
+        wall = FakeWallClock()
+        original_monotonic, original_sleep = driver.time.monotonic, driver.time.sleep
+        self.addCleanup(setattr, driver.time, "monotonic", original_monotonic)
+        self.addCleanup(setattr, driver.time, "sleep", original_sleep)
+        driver.time.monotonic, driver.time.sleep = wall.monotonic, wall.sleep
+
+        with self.assertRaisesRegex(driver.ScenarioError, "mission action timeout"):
+            scenario._wait_for_mission_action({"SUCCEEDED"})
+
+        self.assertAlmostEqual(wall.now, 0.12)
+        self.assertEqual(scenario._action.cancel_count, 1)
+        self.assertTrue(scenario._canceled)
+
 
     def test_preflight_precedes_every_ros_endpoint_constructor(self):
         source = SCRIPT.read_text(encoding="utf-8")
@@ -429,8 +499,8 @@ class ScenarioDriverTests(unittest.TestCase):
         self.assertLess(gate_arm, gate_clear)
         self.assertLess(gate_clear, monitoring)
         self.assertEqual(run.count("self._action.send_goal(goal)"), 1)
-        self.assertIn('self._cancel("safety loss")', run)
-        self.assertIn('self._cancel("action timeout")', run)
+        self.assertIn('self._cancel("safety loss")', source)
+        self.assertIn('self._cancel("action timeout")', source)
         self.assertNotIn("reset", run.lower())
         self.assertNotIn("resume", run.lower())
         startup_ready = source[source.index("    def startup_ready(self, now):"):

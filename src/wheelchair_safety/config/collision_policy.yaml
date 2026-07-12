@@ -26,7 +26,7 @@ dynamic_covariance_max_mps2: 0.25
 coverage_bins: 36
 coverage_window_s: 0.20
 coverage_min_frames: 3
-coverage_max_frames: 3
+coverage_max_frames: 4
 coverage_max_frame_gap_s: 0.11
 coverage_elevation_bins: 2
 coverage_min_elevation_rad: -0.105
@@ -52,4 +52,4 @@ clear_consecutive_frames: 5
 clear_hold_s: 0.50
 clearance_strictly_above_margin_m: 0.25
 ttc_strictly_above_s: 3.0
-policy_sha256: 9534bfafded0191e9434ca0d16a7d1ae8caa32c1ff0f6bf6d85f0a21ba27e9db
+policy_sha256: e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1

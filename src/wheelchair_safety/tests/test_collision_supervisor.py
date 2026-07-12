@@ -57,7 +57,8 @@ def test_policy_is_hash_checked_and_simulation_only():
     assert loaded.qualification == "simulation_only"
     assert loaded.hardware_motion_authorized is False
     assert loaded.passenger_operation_authorized is False
-    assert loaded.policy_sha256 == "9534bfafded0191e9434ca0d16a7d1ae8caa32c1ff0f6bf6d85f0a21ba27e9db"
+    assert loaded.policy_sha256 == "e9397ad5993319d336149b8cdf9b3eb45da3574d3baa21654f0b544c2739cfd1"
+    assert loaded.coverage_max_frames == 4
     raw = {field.name: getattr(loaded, field.name) for field in dataclasses.fields(loaded)}
     raw["footprint_width_m"] += 0.01
     with pytest.raises(ValueError, match="SHA-256"):
@@ -687,6 +688,74 @@ def test_coverage_regression_and_turn_geometry_change_reset_evidence():
     assert gapped.coverage_fraction == 0.0
     assert len(gap_processor._coverage_frames) == 1
     assert gap_processor._coverage_frames.maxlen == policy().coverage_max_frames
+
+
+def test_coverage_uses_bounded_latest_suffix_across_nominal_jitter():
+    full = full_ground_cloud()
+
+    slightly_slow = cs.CloudPreprocessorTracker(policy())
+    for stamp in (1.000, 1.101, 1.201):
+        result = slightly_slow.process(full, stamp, 0.5, 0.0)
+    assert result.coverage_fraction == 1.0
+    assert [frame[0] for frame in slightly_slow._coverage_suffix()] == pytest.approx(
+        [1.000, 1.101, 1.201]
+    )
+
+    slightly_fast = cs.CloudPreprocessorTracker(policy())
+    for stamp in (2.000, 2.099, 2.198):
+        result = slightly_fast.process(full, stamp, 0.5, 0.0)
+    assert result.coverage_fraction == 0.0
+    result = slightly_fast.process(full, 2.297, 0.5, 0.0)
+    selected = slightly_fast._coverage_suffix()
+    assert result.coverage_fraction == 1.0
+    assert len(selected) == 4
+    assert selected[-1][0] - selected[0][0] == pytest.approx(0.297)
+    assert selected[-1][0] - selected[0][0] < (
+        policy().coverage_window_s + policy().coverage_max_frame_gap_s
+    )
+
+
+def test_coverage_gap_motion_and_missing_cell_boundaries_remain_stops():
+    full = full_ground_cloud()
+
+    gapped = cs.CloudPreprocessorTracker(policy())
+    gapped.process(full, 3.000, 0.5, 0.0)
+    gapped.process(full, 3.100, 0.5, 0.0)
+    result = gapped.process(full, 3.211001, 0.5, 0.0)
+    assert result.coverage_fraction == 0.0
+    assert len(gapped._coverage_frames) == 1
+
+    linear_tolerance = policy().coverage_motion_linear_tolerance_mps
+    stable_linear = cs.CloudPreprocessorTracker(policy())
+    stable_linear.process(full, 4.000, 0.0, 0.0)
+    stable_linear.process(full, 4.100, linear_tolerance, 0.0)
+    result = stable_linear.process(full, 4.200, linear_tolerance, 0.0)
+    assert result.coverage_fraction == 1.0
+    result = stable_linear.process(
+        full, 4.300, 2.0 * linear_tolerance + 1e-6, 0.0
+    )
+    assert result.coverage_fraction == 0.0
+
+    angular_tolerance = policy().coverage_motion_angular_tolerance_rps
+    stable_angular = cs.CloudPreprocessorTracker(policy())
+    stable_angular.process(full, 5.000, 0.0, 0.0)
+    stable_angular.process(full, 5.100, 0.0, angular_tolerance)
+    result = stable_angular.process(full, 5.200, 0.0, angular_tolerance)
+    assert result.coverage_fraction == 1.0
+    result = stable_angular.process(
+        full, 5.300, 0.0, 2.0 * angular_tolerance + 1e-6
+    )
+    assert result.coverage_fraction == 0.0
+
+    corridor_hole = tuple(
+        point for point in full
+        if abs(math.atan2(point.y, point.x)) > 0.4
+    )
+    missing = cs.CloudPreprocessorTracker(policy())
+    for stamp in (6.000, 6.101, 6.201):
+        result = missing.process(corridor_hole, stamp, 0.5, 0.0)
+    assert result.observed_coverage_bins < result.expected_coverage_bins
+    assert result.coverage_fraction < policy().required_forward_coverage_fraction
 
 
 def test_adequate_temporal_coverage_clears_only_after_existing_hysteresis():
