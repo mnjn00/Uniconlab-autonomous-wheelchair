@@ -94,6 +94,58 @@ def test_manifest_is_deterministic_and_verifiable(tmp_path):
     assert verify.verify_manifest(output, tmp_path) == first
     third = generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
     assert third == first
+def test_excluded_runtime_symlink_is_ignored_by_generation_and_verification(tmp_path):
+    report, source = release_tree(tmp_path)
+    runtime_link = tmp_path / "artifacts/qa/roslog-startup-final/latest"
+    runtime_link.parent.mkdir(parents=True)
+    runtime_link.symlink_to(tmp_path.parent / "outside-release-root")
+
+    manifest = generate.generate_manifest(
+        tmp_path, [report], "parent-unarmed", source=source)
+    output = tmp_path / "release-manifest.json"
+    generate.atomic_write(output, manifest)
+
+    assert verify.verify_manifest(output, tmp_path) == manifest
+
+
+def test_nonexcluded_escaping_symlink_is_rejected_by_generation_and_verification(tmp_path):
+    report, source = release_tree(tmp_path)
+    escaping = tmp_path / "docs/escaping-link"
+    escaping.parent.mkdir()
+    escaping.symlink_to(tmp_path.parent / "outside-release-root")
+
+    with pytest.raises(generate.ManifestError, match="symlink escapes release root"):
+        generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
+
+    escaping.unlink()
+    output, _ = make_manifest(tmp_path)
+    escaping.symlink_to(tmp_path.parent / "outside-release-root")
+    with pytest.raises(verify.ManifestError, match="symlink escapes release root"):
+        verify.verify_manifest(output, tmp_path)
+
+
+def test_explicit_report_symlinks_are_rejected(tmp_path):
+    report, source = release_tree(tmp_path)
+    report.unlink()
+    report.symlink_to(tmp_path / "reports/replacement.json")
+
+    with pytest.raises(generate.ManifestError, match="inventory entry is a symlink"):
+        generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
+
+    report.unlink()
+    write_report(report, clean_simulation_report())
+    manifest = generate.generate_manifest(
+        tmp_path, [report], "parent-unarmed", source=source)
+    output = tmp_path / "release-manifest.json"
+    generate.atomic_write(output, manifest)
+    replacement = tmp_path / "reports/replacement.json"
+    write_report(replacement, clean_simulation_report())
+    report.unlink()
+    report.symlink_to(replacement)
+
+    with pytest.raises(verify.ManifestError, match="test report is a symlink"):
+        verify.verify_manifest(output, tmp_path)
+
 
 
 def test_manifest_includes_representative_clean_target_assets(tmp_path):

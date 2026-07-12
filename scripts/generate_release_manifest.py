@@ -250,6 +250,8 @@ def inventory_paths(root, report_paths):
     reports = set(report_paths)
     for path in root.rglob("*"):
         relative = path.relative_to(root).as_posix()
+        if relative not in reports and _excluded(relative):
+            continue
         if path.is_symlink():
             try:
                 path.resolve(strict=True).relative_to(root)
@@ -259,8 +261,6 @@ def inventory_paths(root, report_paths):
             continue
         if relative in reports:
             result["qualification_evidence"].append(relative)
-            continue
-        if _excluded(relative):
             continue
         category = _category(relative)
         if category is None:
@@ -305,9 +305,16 @@ def source_identity(root):
         commit = None
 
     inventory = []
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
         if _excluded(relative):
+            continue
+        if path.is_symlink():
+            try:
+                path.resolve(strict=True).relative_to(root)
+            except (FileNotFoundError, ValueError) as exc:
+                raise ManifestError("symlink escapes release root: " + relative) from exc
+        if not path.is_file():
             continue
         inventory.append({"path": relative, "sha256": file_hash(path)})
     return {
@@ -338,15 +345,16 @@ def generate_manifest(root, reports, rollback_parent, blockers=None, source=None
         raise ManifestError("rollback parent must identify a known unarmed parent")
     report_entries = []
     report_paths = set()
-    for report in sorted((Path(item).resolve() for item in reports), key=lambda item: item.as_posix()):
-        if not report.is_file() or report.stat().st_size == 0:
-            raise ManifestError("missing or empty test report: " + str(report))
-        validate_report(report)
+    for item in sorted((Path(item) for item in reports), key=lambda item: item.as_posix()):
+        report = item if item.is_absolute() else root / item
         try:
             relative = report.relative_to(root).as_posix()
         except ValueError as exc:
             raise ManifestError("test reports must be inside the release root: " + str(report)) from exc
-        _safe_file(root, relative)
+        report = _safe_file(root, relative)
+        if report.stat().st_size == 0:
+            raise ManifestError("missing or empty test report: " + str(report))
+        validate_report(report)
         if relative in report_paths:
             raise ManifestError("duplicate test report: " + relative)
         report_paths.add(relative)

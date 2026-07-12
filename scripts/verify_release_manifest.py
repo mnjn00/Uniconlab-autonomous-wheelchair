@@ -113,6 +113,8 @@ def _expected_inventory(root, report_paths):
     reports = set(report_paths)
     for candidate in root.rglob("*"):
         relative = candidate.relative_to(root).as_posix()
+        if relative not in reports and _verifier_excluded(relative):
+            continue
         if candidate.is_symlink():
             try:
                 candidate.resolve(strict=True).relative_to(root)
@@ -122,8 +124,6 @@ def _expected_inventory(root, report_paths):
             continue
         if relative in reports:
             expected["qualification_evidence"].append(relative)
-            continue
-        if _verifier_excluded(relative):
             continue
         category = _verifier_category(relative)
         require(category is not None, "unclassified regular file: " + relative)
@@ -287,6 +287,7 @@ def verify_manifest(path, root=None):
     require(report_paths == sorted(set(report_paths)), "duplicate or unsorted test reports")
     for relative in report_paths:
         candidate = root / relative
+        require(not candidate.is_symlink(), "test report is a symlink: " + relative)
         try:
             resolved_report = candidate.resolve(strict=True)
             resolved_report.relative_to(root)
