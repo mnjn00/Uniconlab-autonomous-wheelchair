@@ -327,15 +327,29 @@ def main(argv=None):
             })
     except (OSError, ValueError, json.JSONDecodeError) as error:
         report["errors"].append(str(error))
-    report["loop_report_pass"] = (
+    report["loop_target_met_all_runs"] = (
         len(report["runs"]) == 3
         and all(run.get("loop_residual", {}).get("target_met", False) for run in report["runs"])
+    )
+    if not report["loop_target_met_all_runs"]:
+        report["limitations"].append(
+            "One or more loop-closure residuals exceed the diagnostic target; this does not change pairwise repeatability."
+        )
+    valid_successful_runs = (
+        len(report["runs"]) == 3
+        and all(
+            run.get("status") == "success"
+            and "error" not in run
+            and "trajectory" in run
+            and "loop_residual" in run
+            for run in report["runs"]
+        )
     )
     report["status"] = (
         "pass"
         if (
             not report["errors"]
-            and report["loop_report_pass"]
+            and valid_successful_runs
             and len(report["pairs"]) == 3
             and all(pair["ac3_repeatability_pass"] for pair in report["pairs"])
         )
