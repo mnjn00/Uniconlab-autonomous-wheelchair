@@ -101,6 +101,34 @@ class LocalizationEvidenceBuffer:
             )
             return status_evidence, candidate
 
+def status_allows_pair_hold(status: Any, receipt_stamp: float, prior_reset_count: Any,
+                            map_id: str, map_sha256: str, frame_id: str,
+                            policy_sha256: str, ok_state: Any) -> bool:
+    """Validate status-only evidence before retaining a prior exact pair."""
+    try:
+        source_stamp = float(status.header.stamp.to_sec())
+        evaluation_stamp = float(status.evaluation_stamp.to_sec())
+        transform_age = float(status.transform_age_s)
+        return (
+            int(status.sequence) >= 0
+            and math.isfinite(source_stamp)
+            and math.isfinite(evaluation_stamp)
+            and math.isfinite(receipt_stamp)
+            and math.isfinite(transform_age)
+            and source_stamp <= evaluation_stamp <= receipt_stamp + FUTURE_TOLERANCE_S
+            and transform_age >= 0.0
+            and status.reset_count == prior_reset_count
+            and status.map_id == map_id
+            and status.map_sha256 == map_sha256
+            and status.header.frame_id == frame_id
+            and status.policy_sha256 == policy_sha256
+            and status.state == ok_state
+            and status.reason_mask == 0
+            and status.independent_check_passed
+        )
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+
 
 class ManifestError(ValueError):
     """A manifest cannot safely become an immutable policy."""
@@ -844,6 +872,8 @@ def run_ros_node() -> None:
     evidence = LocalizationEvidenceBuffer()
     sequence = [0]
     status_message = [0]
+    held_pair = [None]
+
 
     def receive_status(msg: Any) -> None:
         status_message[0] += 1
@@ -875,6 +905,7 @@ def run_ros_node() -> None:
                     high_water["route"] = route_stamp
             except (AttributeError, TypeError, ValueError):
                 selection = None
+        sample = None
         status_is_acceptable = False
         if status_evidence is not None:
             try:
@@ -901,13 +932,25 @@ def run_ros_node() -> None:
                     (not is_new_status_message and high_water["status_message_valid"])
                     or (is_new_status_message and status_is_newer)
                 )
+                if pose_msg is None:
+                    if (
+                            held_pair[0] is not None
+                            and status_is_acceptable
+                            and status_allows_pair_hold(
+                                localization_msg, receipt_stamp, held_pair[0][1],
+                                policy.map_id, policy.map_sha256, policy.frame_id,
+                                policy.localization_policy_sha256, LocalizationStatus.OK,
+                            )):
+                        sample = held_pair[0][0]
+                    else:
+                        held_pair[0] = None
             except (AttributeError, TypeError, ValueError, OverflowError):
                 try:
                     high_water["status_message"] = status_evidence[2]
                 except (IndexError, TypeError):
                     pass
                 high_water["status_message_valid"] = False
-        sample = None
+                held_pair[0] = None
         if pose_msg is not None and status_evidence is not None:
             try:
                 pose_stamped = pose_msg.pose
@@ -932,6 +975,7 @@ def run_ros_node() -> None:
                     and pose_msg.map_id == localization_msg.map_id == policy.map_id
                     and pose_msg.map_sha256 == localization_msg.map_sha256 == policy.map_sha256
                     and pose_stamped.header.frame_id == policy.frame_id
+                    and localization_msg.header.frame_id == policy.frame_id
                     and localization_msg.policy_sha256 == policy.localization_policy_sha256
                     and localization_msg.state == LocalizationStatus.OK
                     and localization_msg.reason_mask == 0
@@ -951,8 +995,12 @@ def run_ros_node() -> None:
                 )
                 if paired:
                     high_water["pose"] = pose_stamp
+                    held_pair[0] = (sample, pose_msg.reset_count)
+                else:
+                    held_pair[0] = None
             except (AttributeError, TypeError, ValueError, OverflowError):
                 sample = None
+                held_pair[0] = None
         sequence[0] += 1
         result = evaluate(policy, sample, selection, now_s, sequence[0])
         status = GeofenceStatus()

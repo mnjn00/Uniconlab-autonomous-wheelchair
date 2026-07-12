@@ -159,12 +159,12 @@ def test_ros_config_mismatch_fails_before_publishers_are_created(monkeypatch):
         route_safety.run_ros_node()
     assert publisher_calls == []
 def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 64,
-                           state="OK"):
-    pose = types.SimpleNamespace(
-        header=types.SimpleNamespace(
-            stamp=types.SimpleNamespace(to_sec=lambda: stamp),
-        ),
+                           frame_id="map", policy_sha256="p" * 64, state="OK"):
+    header = types.SimpleNamespace(
+        stamp=types.SimpleNamespace(to_sec=lambda: stamp),
+        frame_id=frame_id,
     )
+    pose = types.SimpleNamespace(header=header)
     candidate = types.SimpleNamespace(
         pose=pose,
         reset_count=reset_count,
@@ -172,11 +172,17 @@ def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 
         map_sha256=map_sha256,
     )
     status = types.SimpleNamespace(
-        header=pose.header,
+        header=header,
+        evaluation_stamp=types.SimpleNamespace(to_sec=lambda: stamp),
+        transform_age_s=0.0,
+        sequence=1,
         reset_count=reset_count,
         map_id=map_id,
         map_sha256=map_sha256,
+        policy_sha256=policy_sha256,
         state=state,
+        reason_mask=0,
+        independent_check_passed=True,
     )
     return candidate, status
 
@@ -210,18 +216,22 @@ def test_newest_restrictive_status_overrides_prior_permissive_pair():
     assert evidence.snapshot() == (restrictive_evidence, candidate_b)
 
 
-def test_localization_status_without_exact_candidate_match_fails_closed():
+def test_localization_status_without_exact_candidate_match_fails_closed_then_promotes():
     evidence = route_safety.LocalizationEvidenceBuffer()
-    _, status = _localization_evidence(10.0)
-    evidence.add_status((status, 10.01, 1))
-    assert evidence.snapshot() == ((status, 10.01, 1), None)
+    candidate, status = _localization_evidence(10.0)
+    status_evidence = (status, 10.01, 1)
+    evidence.add_status(status_evidence)
+    assert evidence.snapshot() == (status_evidence, None)
 
     wrong_stamp, _ = _localization_evidence(10.1)
     wrong_reset, _ = _localization_evidence(10.0, reset_count=2)
     wrong_map, _ = _localization_evidence(10.0, map_sha256="b" * 64)
-    for candidate in (wrong_stamp, wrong_reset, wrong_map):
-        evidence.add_candidate(candidate)
-    assert evidence.snapshot() == ((status, 10.01, 1), None)
+    for invalid_candidate in (wrong_stamp, wrong_reset, wrong_map):
+        evidence.add_candidate(invalid_candidate)
+    assert evidence.snapshot() == (status_evidence, None)
+
+    evidence.add_candidate(candidate)
+    assert evidence.snapshot() == (status_evidence, candidate)
 
 
 def test_localization_evidence_caches_are_bounded_and_deterministic():
@@ -254,6 +264,37 @@ def test_localization_snapshot_recovers_only_with_newer_matching_evidence():
     evidence.add_candidate(candidate_b)
     evidence.add_status(recovered_evidence)
     assert evidence.snapshot() == (recovered_evidence, candidate_b)
+def test_permissive_status_hold_rejects_restrictive_identity_and_timing_changes():
+    _, status = _localization_evidence(10.0)
+    allowed = lambda value: route_safety.status_allows_pair_hold(
+        value, 10.01, 1, "map", "a" * 64, "map", "p" * 64, "OK",
+    )
+    assert allowed(status)
+    for field, value in (
+            ("reset_count", 2), ("map_id", "other"), ("map_sha256", "b" * 64),
+            ("policy_sha256", "q" * 64), ("state", "NOT_OK"),
+            ("reason_mask", 1), ("independent_check_passed", False),
+            ("transform_age_s", -0.01)):
+        changed = types.SimpleNamespace(**vars(status))
+        setattr(changed, field, value)
+        assert not allowed(changed)
+
+    wrong_frame = types.SimpleNamespace(**vars(status))
+    wrong_frame.header = types.SimpleNamespace(
+        stamp=status.header.stamp, frame_id="odom",
+    )
+    assert not allowed(wrong_frame)
+
+
+def test_status_hold_rejects_malformed_and_stale_prior_evidence():
+    _, status = _localization_evidence(10.0)
+    assert not route_safety.status_allows_pair_hold(
+        object(), 10.01, 1, "map", "a" * 64, "map", "p" * 64, "OK",
+    )
+    assert not route_safety.status_allows_pair_hold(
+        status, 9.0, 1, "map", "a" * 64, "map", "p" * 64, "OK",
+    )
+
 
 
 def test_ros_pairing_retains_existing_stamp_reset_map_and_policy_checks():
