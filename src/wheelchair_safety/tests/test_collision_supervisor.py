@@ -68,6 +68,7 @@ def _slope_callback_node(policy_sha256):
     node._lock = threading.RLock()
     node.slope = None
     node.slope_high_water = None
+    node.slope_evidence = cs.deque()
     node.slope_policy_sha256 = policy_sha256
     return node
 
@@ -122,7 +123,12 @@ def test_slope_callback_rejects_source_regression(monkeypatch):
     node._slope_cb(_slope_message(0.9, 1.0, policy_sha256, cs.CLEAR))
 
     assert node.slope[-1] is False
-    assert node.slope_high_water == 1.0
+    assert not node.slope_evidence
+    assert cs._select_slope_evidence(node.slope_evidence, 1.0, 1.0) is None
+
+    node._slope_cb(_slope_message(1.01, 1.01, policy_sha256, cs.CLEAR))
+
+    assert node.slope_evidence[-1].valid is True
 
 
 @pytest.mark.parametrize(
@@ -149,8 +155,103 @@ def test_slope_callback_rejects_wrong_policy_and_unsafe_states(monkeypatch, poli
     node._slope_cb(_slope_message(1.0, 1.0, policy_sha256, state))
 
     assert node.slope[-1] is False
-    assert node.slope_high_water is None
+    assert node.slope_high_water == 1.0
 
+
+def _evidence(source, evaluation=None, receipt=None, valid=True):
+    return cs.SlopeEvidence(
+        source,
+        source if evaluation is None else evaluation,
+        source if receipt is None else receipt,
+        0.0,
+        "a" * 64,
+        valid,
+    )
+
+
+def test_slope_buffer_selects_async_cloud_pair_and_restrictive_entry():
+    evidence = cs.deque()
+    for source in (0.86, 0.88, 0.90, 0.92, 0.94, 0.96, 0.98):
+        cs._buffer_slope_evidence(evidence, _evidence(source))
+    cs._buffer_slope_evidence(evidence, _evidence(0.95, valid=False))
+
+    selected = cs._select_slope_evidence(evidence, 0.90, 1.0)
+
+    assert selected is not None
+    assert selected.source_s == pytest.approx(0.95)
+    assert selected.valid is False
+
+
+def test_slope_buffer_has_no_candidate_when_all_samples_are_too_new():
+    evidence = cs.deque((_evidence(0.96), _evidence(0.98)))
+
+    assert cs._select_slope_evidence(evidence, 0.90, 1.0) is None
+
+
+def test_slope_buffer_is_source_ordered_and_bounded():
+    evidence = cs.deque()
+    for source in (1.00, 0.99, 1.01, 1.30):
+        cs._buffer_slope_evidence(evidence, _evidence(source))
+
+    assert [entry.source_s for entry in evidence] == [1.30]
+
+
+@pytest.mark.parametrize(
+    "source,receipt,cloud_stamp,now,expected",
+    (
+        (0.95 - 0.0001, 1.0, 0.90, 1.0, True),
+        (0.95, 1.0, 0.90, 1.0, True),
+        (0.95 + 0.0001, 1.0, 0.90, 1.0, False),
+        (0.90, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, 0.90, 1.0, True),
+        (0.90, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 0.90, 1.0, False),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, 1.0, 1.0, 1.0, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, 1.0, 1.0, 1.0, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 1.0, 1.0, 1.0, False),
+        (0.90, 0.90, 0.90, 1.0, True),
+        (0.90 - 0.0001, 0.90, 0.90, 1.0, False),
+    ),
+)
+def test_slope_core_timing_keeps_exact_future_and_ttl_bounds(
+    source, receipt, cloud_stamp, now, expected
+):
+    assert cs._slope_timing_valid(source, receipt, cloud_stamp, now) is expected
+
+
+def test_slope_callback_clears_prior_evidence_after_malformed_callback(monkeypatch):
+    node = _slope_callback_node("a" * 64)
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: 1.0)
+            )
+        ),
+    )
+    node._slope_cb(_slope_message(0.95, 0.95, "a" * 64, cs.CLEAR))
+    malformed = _slope_message(1.0, float("nan"), "a" * 64, cs.CLEAR)
+
+    node._slope_cb(malformed)
+
+    assert node.slope[-1] is False
+    assert not node.slope_evidence
+    assert cs._select_slope_evidence(node.slope_evidence, 1.0, 1.0) is None
+
+    node._slope_cb(_slope_message(1.01, 1.01, "a" * 64, cs.CLEAR))
+
+    assert node.slope_evidence[-1].valid is True
+
+
+def test_slope_buffer_selects_equal_source_restrictive_latest_entry():
+    evidence = cs.deque((
+        _evidence(0.95, evaluation=0.95, receipt=0.95, valid=True),
+        _evidence(0.95, evaluation=0.96, receipt=0.96, valid=False),
+    ))
+
+    selected = cs._select_slope_evidence(evidence, 0.90, 1.0)
+
+    assert selected is not None
+    assert selected.valid is False
 
 def test_policy_is_hash_checked_and_simulation_only():
     loaded = policy()

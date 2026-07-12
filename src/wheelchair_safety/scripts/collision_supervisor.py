@@ -16,6 +16,8 @@ from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Sequence
 
 IMMUTABLE_HARD_LINEAR_SPEED_MPS = 0.55
 CLOCK_FUTURE_TOLERANCE_S = 0.05
+SLOPE_EVIDENCE_BUFFER_HORIZON_S = 0.20
+SLOPE_EVIDENCE_BUFFER_MAXLEN = 16
 
 UNKNOWN, CLEAR, CAUTION, STOP = 0, 1, 2, 3
 VIS_UNKNOWN, VIS_FULL, VIS_PARTIAL, VIS_BLIND = 0, 1, 2, 3
@@ -1070,11 +1072,11 @@ class CollisionSupervisorCore:
         odom_receipt = i.odom_stamp_s if i.odom_receipt_s is None else i.odom_receipt_s
         slope_stamp = i.cloud_stamp_s if i.slope_stamp_s is None else i.slope_stamp_s
         slope_receipt = i.now_s if i.slope_receipt_s is None else i.slope_receipt_s
-        if (not all(_finite(value) for value in (odom_receipt, slope_stamp, slope_receipt))
+        if (not _finite(odom_receipt)
                 or odom_receipt < i.odom_stamp_s or odom_receipt > i.now_s
-                or slope_stamp > i.cloud_stamp_s + 0.05 or slope_stamp > slope_receipt
-                or slope_receipt > i.now_s
-                or i.now_s - slope_stamp > 0.10 or i.now_s - slope_receipt > 0.10):
+                or not _slope_timing_valid(
+                    slope_stamp, slope_receipt, i.cloud_stamp_s, i.now_s
+                )):
             return SENSOR_STALE | INPUT_UNKNOWN | COLLISION, "stale_or_mismatched_slope_odom"
         if (_direction_disagreement(
                 (i.odom_linear_mps, i.safe_linear_mps) +
@@ -1409,6 +1411,70 @@ def _slope_chronology_valid(
         and evaluation_s <= receipt_s + CLOCK_FUTURE_TOLERANCE_S
         and (source_high_water_s is None or source_s > source_high_water_s)
     )
+@dataclass(frozen=True)
+class SlopeEvidence:
+    source_s: float
+    evaluation_s: float
+    receipt_s: float
+    pitch_rad: float
+    policy_sha256: str
+    valid: bool
+
+
+def _buffer_slope_evidence(
+    evidence: Deque[SlopeEvidence], entry: SlopeEvidence
+) -> None:
+    if not _finite(entry.source_s):
+        evidence.append(entry)
+    else:
+        position = len(evidence)
+        for index, existing in enumerate(evidence):
+            if not _finite(existing.source_s) or entry.source_s < existing.source_s:
+                position = index
+                break
+        evidence.insert(position, entry)
+    finite_sources = [item.source_s for item in evidence if _finite(item.source_s)]
+    if finite_sources:
+        minimum_source = max(finite_sources) - SLOPE_EVIDENCE_BUFFER_HORIZON_S
+        while evidence and (
+            not _finite(evidence[0].source_s)
+            or evidence[0].source_s < minimum_source
+        ):
+            evidence.popleft()
+    while len(evidence) > SLOPE_EVIDENCE_BUFFER_MAXLEN:
+        evidence.popleft()
+
+
+def _select_slope_evidence(
+    evidence: Iterable[SlopeEvidence], cloud_stamp_s: float, now_s: float
+) -> Optional[SlopeEvidence]:
+    candidates = (
+        entry for entry in evidence
+        if _finite(entry.source_s)
+        and _slope_cloud_time_valid(
+            entry.source_s, entry.evaluation_s, cloud_stamp_s, now_s
+        )
+    )
+    return max(
+        candidates,
+        key=lambda entry: (entry.source_s, entry.evaluation_s, entry.receipt_s),
+        default=None,
+    )
+
+
+def _slope_timing_valid(
+    source_s: float, receipt_s: float, cloud_stamp_s: float, now_s: float
+) -> bool:
+    return (
+        all(_finite(value) for value in (source_s, receipt_s))
+        and source_s <= cloud_stamp_s + CLOCK_FUTURE_TOLERANCE_S
+        and source_s <= receipt_s + CLOCK_FUTURE_TOLERANCE_S
+        and receipt_s <= now_s + CLOCK_FUTURE_TOLERANCE_S
+        and now_s - source_s <= 0.10
+        and now_s - receipt_s <= 0.10
+    )
+
+
 
 
 def _slope_cloud_time_valid(
@@ -1458,6 +1524,7 @@ class CollisionSupervisorRosNode:
         self.nav_stamp = self.safe_stamp = None
         self.slope = None
         self.slope_high_water = None
+        self.slope_evidence: Deque[SlopeEvidence] = deque()
         self.slope_policy_sha256 = str(rospy.get_param("~slope_policy_sha256", ""))
         self.intent = None
         self.transform_lookup_timeout_s = float(rospy.get_param("~transform_lookup_timeout_s", 0.05))
@@ -1543,26 +1610,32 @@ class CollisionSupervisorRosNode:
         receipt = rospy.Time.now().to_sec()
         try:
             source = float(msg.header.stamp.to_sec())
+        except (AttributeError, TypeError, ValueError):
+            source = math.nan
+        try:
             evaluation = float(msg.evaluation_stamp.to_sec())
             pitch = float(msg.pitch_rad)
             policy = str(msg.policy_sha256)
             state = int(msg.state)
-            valid = (
-                _slope_chronology_valid(
-                    source, evaluation, receipt, self.slope_high_water
-                )
+        except (AttributeError, TypeError, ValueError):
+            evaluation, pitch, policy, state = math.nan, math.nan, "", UNKNOWN
+        with self._lock:
+            chronology_valid = _slope_chronology_valid(
+                source, evaluation, receipt, self.slope_high_water
+            )
+            valid = bool(
+                chronology_valid
                 and _finite(pitch)
                 and state in (CLEAR, CAUTION)
                 and policy == self.slope_policy_sha256
             )
-        except (AttributeError, TypeError, ValueError):
-            source, evaluation, pitch, policy, state, valid = (
-                math.nan, math.nan, math.nan, "", UNKNOWN, False
-            )
-        with self._lock:
             self.slope = (source, evaluation, receipt, pitch, policy, valid)
-            if valid:
-                self.slope_high_water = source
+            if not chronology_valid:
+                self.slope_evidence.clear()
+                return
+            entry = SlopeEvidence(source, evaluation, receipt, pitch, policy, valid)
+            _buffer_slope_evidence(self.slope_evidence, entry)
+            self.slope_high_water = source
 
     def _safe_cb(self, msg):
         import rospy
@@ -1619,14 +1692,16 @@ class CollisionSupervisorRosNode:
         odom_linear, odom_angular = self.odom or (math.nan, math.nan)
         nav_linear, nav_angular = self.nav or (0.0, 0.0)
         safe_linear, safe_angular = self.safe or (0.0, 0.0)
+        slope_entry = _select_slope_evidence(self.slope_evidence, stamp, now)
         slope_source, slope_evaluation, slope_receipt, pitch, slope_policy, slope_valid = (
-            self.slope if self.slope is not None
+            (slope_entry.source_s, slope_entry.evaluation_s, slope_entry.receipt_s,
+             slope_entry.pitch_rad, slope_entry.policy_sha256, slope_entry.valid)
+            if slope_entry is not None
             else (math.nan, math.nan, math.nan, math.nan, "", False)
         )
         slope_valid = bool(
             slope_valid
             and slope_policy == self.slope_policy_sha256
-            and _slope_cloud_time_valid(slope_source, slope_evaluation, stamp, now)
         )
         intent_behavior = self.intent[1] if self.intent is not None else -1
         coverage_linear = self._conservative_component(
