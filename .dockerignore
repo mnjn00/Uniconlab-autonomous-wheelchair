@@ -1,0 +1,16 @@
+.git
+.gjc
+.pytest_cache
+**/__pycache__
+**/*.pyc
+build
+devel
+install
+logs
+log
+artifacts
+*.bag
+*.db3
+*.mcap
+*.mp4
+*.avi

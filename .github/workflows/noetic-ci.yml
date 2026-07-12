@@ -1,0 +1,143 @@
+name: ROS Noetic software RC
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Run the explicit release qualification gates
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  software-rc:
+    runs-on: ubuntu-20.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Build pinned Noetic image
+        run: docker build --pull=false --tag wheelchair-noetic-ci:${GITHUB_SHA} --file tools/noetic/Dockerfile .
+      - name: Resolve dependencies and build catkin workspace
+        run: |
+          mkdir -p reports
+          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            source /opt/ros/noetic/setup.bash
+            rosdep check --from-paths src --ignore-src --rosdistro=noetic
+            catkin_make -DCMAKE_BUILD_TYPE=Release'
+      - name: Full pytest and WP0 contract validation
+        run: |
+          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            source /opt/ros/noetic/setup.bash
+            python3 -m pytest --junitxml=reports/pytest.xml
+            python3 scripts/validate_wp0_contracts.py'
+      - name: Xacro and URDF validation
+        run: |
+          docker run --rm wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            source /opt/ros/noetic/setup.bash
+            xacro src/wheelchair_description/urdf/wheelchair.urdf.xacro > /tmp/wheelchair.urdf
+            check_urdf /tmp/wheelchair.urdf'
+      - name: Static sole-command-path no-bypass gate
+        run: |
+          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            source /opt/ros/noetic/setup.bash
+            python3 -m pytest src/wheelchair_safety/tests/test_no_bypass_invariant.py tests/test_decision_no_twist.py \
+              --junitxml=reports/no-bypass.xml'
+      - name: Fake/replay algorithm fixtures (not live evidence)
+        run: |
+          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            source /opt/ros/noetic/setup.bash
+            python3 -m pytest tests/test_rc_scenario_runner.py src/wheelchair_gazebo/tests/test_rc_world_static.py \
+              --junitxml=reports/scenario-fixtures.xml'
+      - name: Generate and verify software-only release manifest
+        run: |
+          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            python3 scripts/generate_release_manifest.py \
+              --output reports/release-manifest.json \
+              --report reports/pytest.xml \
+              --report reports/no-bypass.xml \
+              --report reports/scenario-fixtures.xml \
+              --rollback-parent "'"${{ github.event.before || 'unavailable-unarmed-parent' }}"'"
+            python3 scripts/verify_release_manifest.py reports/release-manifest.json --root /ws'
+      - name: Upload hash-bound software evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: noetic-software-rc-${{ github.sha }}
+          path: reports/
+          if-no-files-found: error
+          retention-days: 30
+
+  gazebo-live-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    needs: software-rc
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run real ROS/Gazebo surface; unavailable is a failure
+        run: |
+          test -x scripts/run_gazebo_rc_suite.py || { echo 'BLOCKED: real Gazebo scenario runner is unavailable'; exit 2; }
+          source /opt/ros/noetic/setup.bash || { echo 'BLOCKED: ROS Noetic/Gazebo is unavailable'; exit 2; }
+          python3 scripts/run_gazebo_rc_suite.py --config src/wheelchair_gazebo/config/scenarios.yaml --output gazebo-live-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gazebo-live-${{ github.sha }}
+          path: gazebo-live-report.json
+          if-no-files-found: error
+
+  external-full-bag-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    needs: software-rc
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Require externally acquired full-bag qualification
+        run: |
+          echo 'BLOCKED: CI has no external full sensor bag and cannot manufacture replay evidence.'
+          exit 2
+
+  target-nuc-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    needs: software-rc
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Require target NUC qualification
+        run: |
+          echo 'BLOCKED: target-NUC qualification must be performed and attested externally.'
+          exit 2
+
+  hardware-passenger-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.release
+    needs: software-rc
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Refuse hardware or passenger authority from CI
+        run: |
+          echo 'BLOCKED: CI simulation/replay is not physical, hardware, or passenger authority.'
+          exit 2
+
+  release-gate:
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.release
+    needs: [software-rc, gazebo-live-gate, external-full-bag-gate, target-nuc-gate, hardware-passenger-gate]
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Require every explicit release gate
+        env:
+          SOFTWARE: ${{ needs.software-rc.result }}
+          GAZEBO: ${{ needs.gazebo-live-gate.result }}
+          BAG: ${{ needs.external-full-bag-gate.result }}
+          NUC: ${{ needs.target-nuc-gate.result }}
+          HARDWARE: ${{ needs.hardware-passenger-gate.result }}
+        run: |
+          test "$SOFTWARE" = success && test "$GAZEBO" = success && test "$BAG" = success \
+            && test "$NUC" = success && test "$HARDWARE" = success || {
+              echo "RELEASE BLOCKED: software=$SOFTWARE gazebo=$GAZEBO bag=$BAG nuc=$NUC hardware=$HARDWARE"
+              exit 2
+            }
