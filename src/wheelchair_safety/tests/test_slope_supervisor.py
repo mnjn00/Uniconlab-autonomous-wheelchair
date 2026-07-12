@@ -226,6 +226,20 @@ class CalibrationTests(unittest.TestCase):
             for index in range(1900)
         ]
 
+    def with_gravity_outliers(self, count):
+        samples = self.make_samples()
+        return [
+            slope.CalibrationSample(
+                quaternion=sample.quaternion,
+                acceleration=gravity(magnitude=11.0) if index < count else sample.acceleration,
+                angular_velocity=sample.angular_velocity,
+                source_stamp_s=sample.source_stamp_s,
+                imu_to_base_quaternion=sample.imu_to_base_quaternion,
+            )
+            for index, sample in enumerate(samples)
+        ]
+
+
     def calibrate(self, core, samples, **overrides):
         evidence = dict(
             transform_verified=True,
@@ -274,6 +288,19 @@ class CalibrationTests(unittest.TestCase):
         core = slope.SlopeSupervisorCore()
         self.assertTrue(self.calibrate(core, samples))
         self.assertEqual(core.calibration_state, slope.CAL_VALID)
+
+    def test_p95_stationarity_allows_fewer_than_five_percent_outliers(self):
+        core = slope.SlopeSupervisorCore()
+        self.assertTrue(self.calibrate(core, self.with_gravity_outliers(95)))
+        self.assertEqual(core.calibration_state, slope.CAL_VALID)
+
+    def test_p95_stationarity_rejects_more_than_five_percent_outliers(self):
+        core = slope.SlopeSupervisorCore()
+        self.assertFalse(self.calibrate(core, self.with_gravity_outliers(96)))
+        self.assertEqual(core.calibration_state, slope.CAL_INVALID)
+        result = decide(core)
+        self.assertEqual(result.recommended_max_linear_mps, 0.0)
+        self.assertTrue(result.reason_mask & slope.IMU_UNCALIBRATED)
 
     def test_window_duration_boundaries(self):
         for duration in (10.0, 10.005):
@@ -399,10 +426,19 @@ class CalibrationTests(unittest.TestCase):
             0.0,
         )
 
-    def test_startup_transient_resets_candidate_without_poisoning_retry(self):
+    def test_malformed_sample_resets_candidate_without_poisoning_retry(self):
         node = self.make_calibrating_node()
         self.observe(node, 1.0)
-        self.observe(node, 1.005, magnitude=12.0)
+        malformed = slope.CalibrationSample(
+            quaternion=(math.nan, 0.0, 0.0, 1.0),
+            acceleration=gravity(),
+            angular_velocity=(0.0, 0.0, 0.0),
+            source_stamp_s=1.005,
+            imu_to_base_quaternion=(0.0, 0.0, 0.0, 1.0),
+        )
+        node._observe_calibration_sample(
+            malformed, True, (0.0, 0.0, 0.0, 1.0), 0.0
+        )
         self.assertEqual(node._calibration_samples, [])
         self.assertEqual(node.core.calibration_state, slope.CAL_CALIBRATING)
 
@@ -411,7 +447,7 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(node.core.calibration_state, slope.CAL_VALID)
         self.assertEqual(node._calibration_samples, [])
 
-    def test_overlong_candidate_restarts_with_current_sample(self):
+    def test_overlong_candidate_trims_to_current_sample(self):
         node = self.make_calibrating_node()
         self.observe(node, 1.0)
         self.observe(node, 11.005001)
@@ -421,12 +457,39 @@ class CalibrationTests(unittest.TestCase):
         )
         self.assertEqual(node.core.calibration_state, slope.CAL_CALIBRATING)
 
+    def test_overshot_crossing_trims_to_valid_suffix_and_calibrates(self):
+        node = self.make_calibrating_node()
+        for index in range(1900):
+            self.observe(node, 1.0 + 9.99 * index / 1899)
+        self.assertEqual(len(node._calibration_samples), 1900)
+        self.assertLess(
+            node._calibration_samples[-1].source_stamp_s
+            - node._calibration_samples[0].source_stamp_s,
+            10.0,
+        )
+
+        self.observe(node, 11.01)
+        self.assertEqual(node.core.calibration_state, slope.CAL_VALID)
+        self.assertEqual(node._calibration_samples, [])
+
     def test_live_collector_calibrates_jittered_dropped_window(self):
         node = self.make_calibrating_node()
         for stamp in self.jittered_stamps():
             self.observe(node, stamp)
         self.assertEqual(node.core.calibration_state, slope.CAL_VALID)
         self.assertEqual(node._calibration_samples, [])
+
+    def test_live_collector_keeps_p95_eligible_outliers(self):
+        node = self.make_calibrating_node()
+        for index in range(1900):
+            self.observe(
+                node,
+                1.0 + 10.0 * index / 1899,
+                magnitude=11.0 if index < 95 else 9.80665,
+            )
+        self.assertEqual(node.core.calibration_state, slope.CAL_VALID)
+        self.assertEqual(node._calibration_samples, [])
+
 
     def test_timestamp_gap_is_retained_and_regression_restarts_candidate(self):
         node = self.make_calibrating_node()
@@ -453,6 +516,9 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(node.core.calibration_state, slope.CAL_CALIBRATING)
         self.assertEqual(node.core.calibration_sha256, "")
         self.assertEqual(node._calibration_samples, [])
+        result = decide(node.core)
+        self.assertEqual(result.recommended_max_linear_mps, 0.0)
+        self.assertTrue(result.reason_mask & slope.IMU_UNCALIBRATED)
 
 
 class PublicationCadenceTests(unittest.TestCase):

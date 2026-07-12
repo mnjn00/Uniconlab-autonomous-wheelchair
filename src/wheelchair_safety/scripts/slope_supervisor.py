@@ -635,36 +635,6 @@ class SlopeSupervisorRosNode:
             self.core.calibration_state = CAL_CALIBRATING
             self.core.calibration_sha256 = ""
 
-    def _calibration_sample_is_stationary(self, sample, transform_q):
-        policy = self.core.policy
-        try:
-            acceleration = rotate_vector(sample.acceleration, transform_q)
-            gyro = rotate_vector(sample.angular_velocity, transform_q)
-            orientation_imu = normalize_quaternion(
-                sample.quaternion, policy.quaternion_norm_tolerance
-            )
-            transform = normalize_quaternion(
-                transform_q, policy.quaternion_norm_tolerance
-            )
-            orientation = _quaternion_multiply(
-                orientation_imu, _quaternion_conjugate(transform)
-            )
-            pitch, roll = quaternion_to_pitch_roll(
-                orientation, policy.quaternion_norm_tolerance
-            )
-            expected = _gravity_from_angles(pitch, roll, policy.gravity_mps2)
-            residual = _norm(
-                tuple(acceleration[index] - expected[index] for index in range(3))
-            )
-            return (
-                abs(_norm(acceleration) - policy.gravity_mps2)
-                <= policy.gravity_tolerance_mps2 + 1.0e-12
-                and _norm(gyro)
-                <= policy.calibration_gyro_p95_max_rps + 1.0e-12
-                and residual <= policy.dynamic_residual_max_mps2 + 1.0e-12
-            )
-        except (AttributeError, TypeError, ValueError, OverflowError):
-            return False
 
     def _observe_calibration_sample(
         self, sample, transform_valid, transform_q, transform_stamp
@@ -672,6 +642,18 @@ class SlopeSupervisorRosNode:
         if self.core.calibration_state != CAL_CALIBRATING:
             return
         stamp = sample.source_stamp_s
+        try:
+            normalize_quaternion(sample.quaternion, self.core.policy.quaternion_norm_tolerance)
+            _components(sample.acceleration, 3)
+            _components(sample.angular_velocity, 3)
+            normalize_quaternion(
+                sample.imu_to_base_quaternion,
+                self.core.policy.quaternion_norm_tolerance,
+            )
+            normalize_quaternion(transform_q, self.core.policy.quaternion_norm_tolerance)
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            self._reset_calibration_candidate()
+            return
         if (
             not transform_valid
             or stamp is None
@@ -679,7 +661,6 @@ class SlopeSupervisorRosNode:
             or float(stamp) <= 0.0
             or transform_stamp is None
             or not math.isfinite(float(transform_stamp))
-            or not self._calibration_sample_is_stationary(sample, transform_q)
         ):
             self._reset_calibration_candidate()
             return
@@ -694,10 +675,12 @@ class SlopeSupervisorRosNode:
             self.core.policy.calibration_duration_s
             + 1.0 / self.core.policy.calibration_rate_hz
         )
-        if stamp - self._calibration_samples[0].source_stamp_s > maximum_window + 1.0e-12:
-            self._reset_calibration_candidate()
-            self._calibration_samples.append(sample)
-            return
+        while (
+            len(self._calibration_samples) > 1
+            and stamp - self._calibration_samples[0].source_stamp_s
+            > maximum_window + 1.0e-12
+        ):
+            self._calibration_samples.pop(0)
 
         minimum_samples = math.ceil(
             self.core.policy.calibration_duration_s
