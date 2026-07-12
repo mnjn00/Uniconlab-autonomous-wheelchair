@@ -299,13 +299,46 @@ def test_slope_buffer_is_source_ordered_and_bounded():
         (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, 1.0, 1.0, 1.0, True),
         (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 1.0, 1.0, 1.0, False),
         (0.90, 0.90, 0.90, 1.0, True),
-        (0.90 - 0.0001, 0.90, 0.90, 1.0, False),
+        (0.90 - 0.1001, 1.0, 0.90, 1.0, False),
     ),
 )
 def test_slope_core_timing_keeps_exact_future_and_ttl_bounds(
     source, receipt, cloud_stamp, now, expected
 ):
     assert cs._slope_timing_valid(source, receipt, cloud_stamp, now) is expected
+
+def test_core_accepts_async_cloud_matched_slope_with_fresh_receipt():
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_stamp_s=0.90,
+        slope_receipt_s=1.0,
+    ))
+
+    assert decision.reason != "stale_or_mismatched_slope_odom"
+
+
+@pytest.mark.parametrize(
+    "slope_stamp_s,slope_receipt_s",
+    (
+        (0.90 - 0.1001, 1.0),
+        (0.90 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, 1.0),
+        (0.90, 1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001),
+    ),
+)
+def test_core_rejects_stale_or_future_async_slope_evidence(
+    slope_stamp_s, slope_receipt_s
+):
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_stamp_s=slope_stamp_s,
+        slope_receipt_s=slope_receipt_s,
+    ))
+
+    assert decision.state == cs.STOP
+    assert decision.reason == "stale_or_mismatched_slope_odom"
+
 
 
 def test_slope_callback_clears_prior_evidence_after_malformed_callback(monkeypatch):

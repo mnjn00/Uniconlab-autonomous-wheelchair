@@ -17,6 +17,7 @@ import os
 import struct
 from typing import Iterable, List, Sequence
 import time
+import threading
 
 
 # LocalizationStatus states.
@@ -1098,6 +1099,8 @@ class LocalizationGuardNode:
     CANDIDATE_TOPIC = "/localization/candidate"
     CLOUD_TOPIC = "/sensors/lidar/points"
     ODOM_TOPIC = "/odom"
+    TF_AUTHORITY_WAIT_S = 0.05
+    MAP_TO_ODOM_AUTHORITY = "/localization_adapter"
 
     def __init__(self):
         import rospy
@@ -1143,6 +1146,7 @@ class LocalizationGuardNode:
         self.mission_canceled = False
         self.relocalization_requested = False
         self.tf_authorities = {}
+        self.tf_authority_condition = threading.Condition()
         self.stationary_since = None
         self.last_candidate_receipt = None
         self.last_candidate_source_stamp = None
@@ -1261,15 +1265,35 @@ class LocalizationGuardNode:
 
     def _tf_callback(self, message):
         caller = getattr(message, "_connection_header", {}).get("callerid", "")
-        for transform in message.transforms:
-            if (caller and transform.header.frame_id == "map" and
-                    transform.child_frame_id == "odom"):
-                self.tf_authorities[caller] = True
+        if not caller:
+            return
+        with self.tf_authority_condition:
+            for transform in message.transforms:
+                if (transform.header.frame_id == "map" and
+                        transform.child_frame_id == "odom"):
+                    self.tf_authorities[caller] = True
+            self.tf_authority_condition.notify_all()
 
     def _active_tf_authorities(self, _now):
         # Authority identity is latched: a duplicate must not disappear merely
         # because one conflicting broadcaster goes quiet.
-        return len(self.tf_authorities)
+        with self.tf_authority_condition:
+            return self._tf_authority_count()
+
+    def _tf_authority_count(self):
+        return 1 if (len(self.tf_authorities) == 1 and
+                     self.MAP_TO_ODOM_AUTHORITY in self.tf_authorities) else 0
+
+    def _await_single_tf_authority(self):
+        """Bound startup callback skew without accepting absent or duplicate TF."""
+        deadline = self._monotonic() + self.TF_AUTHORITY_WAIT_S
+        with self.tf_authority_condition:
+            while self.MAP_TO_ODOM_AUTHORITY not in self.tf_authorities:
+                remaining = deadline - self._monotonic()
+                if remaining <= 0.0:
+                    break
+                self.tf_authority_condition.wait(remaining)
+            return self._tf_authority_count()
 
     def _lookup(self, target, source, stamp):
         transform = self.tf_buffer.lookup_transform(
@@ -1344,7 +1368,17 @@ class LocalizationGuardNode:
         if odom.header.frame_id != "odom" or odom.child_frame_id != "base_footprint":
             raise ValueError("odometry frame contract is invalid")
         sensor_tf, _ = self._lookup("base_link", cloud.header.frame_id, cloud.header.stamp)
-        map_to_odom, transform_age = self._lookup("map", "odom", stamp)
+        map_to_odom, _ = self._lookup("map", "odom", stamp)
+        tf_authority_count = self._await_single_tf_authority()
+        now = self.rospy.Time.now().to_sec()
+        cloud_age = now - cloud_stamp_s
+        odom_source_age = now - odom_stamp_s
+        if (not -self.policy.max_future_skew_s <= cloud_age <= self.policy.max_candidate_age_s or
+                not -self.policy.max_future_skew_s <= odom_source_age <= self.policy.max_odom_age_s or
+                now - cloud_receipt > self.policy.max_candidate_age_s or
+                now - odom_receipt > self.policy.max_odom_age_s):
+            raise ValueError("cloud/odom stale after TF authority wait")
+        transform_age = now - map_to_odom.header.stamp.to_sec()
         translation = sensor_tf.transform.translation
         rotation = sensor_tf.transform.rotation
         candidate_pose = Pose2D(
@@ -1406,7 +1440,7 @@ class LocalizationGuardNode:
             linear_speed_mps=odom.twist.twist.linear.x,
             angular_speed_rps=odom.twist.twist.angular.z,
             stationary_duration_s=stationary_duration,
-            tf_authority_count=self._active_tf_authorities(now),
+            tf_authority_count=tf_authority_count,
             odom_delta_m=odom_delta, initial_pose_fresh=initial_fresh,
             mission_canceled=self.mission_canceled,
             relocalization_requested=self.relocalization_requested,

@@ -100,6 +100,20 @@ class LocalizationEvidenceBuffer:
                 None,
             )
             return status_evidence, candidate
+def status_chronology_is_newer(current: Tuple[int, float, float, float],
+                               previous: Optional[Tuple[int, float, float, float]]) -> bool:
+    """Accept a later status without treating an unchanged source identity as a regression."""
+    if previous is None:
+        return True
+    current_sequence, current_source, current_evaluation, current_receipt = current
+    previous_sequence, previous_source, previous_evaluation, previous_receipt = previous
+    return (
+        current_sequence > previous_sequence
+        and current_source >= previous_source
+        and current_evaluation >= previous_evaluation
+        and current_receipt > previous_receipt
+    )
+
 
 def status_allows_pair_hold(status: Any, receipt_stamp: float, prior_reset_count: Any,
                             map_id: str, map_sha256: str, frame_id: str,
@@ -919,9 +933,8 @@ def run_ros_node() -> None:
                 )
                 previous_status = high_water["status"]
                 is_new_status_message = status_message_id != high_water["status_message"]
-                status_is_newer = (
-                    previous_status is None
-                    or all(current > previous for current, previous in zip(status_high_water, previous_status))
+                status_is_newer = status_chronology_is_newer(
+                    status_high_water, previous_status,
                 )
                 if is_new_status_message:
                     if status_is_newer:

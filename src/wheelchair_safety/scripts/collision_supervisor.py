@@ -1505,11 +1505,14 @@ def _slope_timing_valid(
     source_s: float, receipt_s: float, cloud_stamp_s: float, now_s: float
 ) -> bool:
     return (
-        all(_finite(value) for value in (source_s, receipt_s))
+        all(_finite(value) for value in (source_s, receipt_s, cloud_stamp_s, now_s))
+        # Source stamps establish the slope/cloud evidence association.  Receipt
+        # stamps establish freshness at the later collision evaluation; comparing
+        # the source stamp directly to now rejects a valid asynchronous pair.
         and source_s <= cloud_stamp_s + CLOCK_FUTURE_TOLERANCE_S
+        and cloud_stamp_s - source_s <= 0.10
         and source_s <= receipt_s + CLOCK_FUTURE_TOLERANCE_S
         and receipt_s <= now_s + CLOCK_FUTURE_TOLERANCE_S
-        and now_s - source_s <= 0.10
         and now_s - receipt_s <= 0.10
     )
 

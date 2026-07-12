@@ -159,7 +159,7 @@ def test_ros_config_mismatch_fails_before_publishers_are_created(monkeypatch):
         route_safety.run_ros_node()
     assert publisher_calls == []
 def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 64,
-                           frame_id="map", policy_sha256="p" * 64, state="OK"):
+                           frame_id="map", policy_sha256="p" * 64, state="OK", sequence=1):
     header = types.SimpleNamespace(
         stamp=types.SimpleNamespace(to_sec=lambda: stamp),
         frame_id=frame_id,
@@ -175,7 +175,7 @@ def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 
         header=header,
         evaluation_stamp=types.SimpleNamespace(to_sec=lambda: stamp),
         transform_age_s=0.0,
-        sequence=1,
+        sequence=sequence,
         reset_count=reset_count,
         map_id=map_id,
         map_sha256=map_sha256,
@@ -187,34 +187,69 @@ def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 
     return candidate, status
 
 
-def test_localization_candidate_status_interleaving_preserves_matching_pair():
+def test_localization_candidate_then_status_retains_prior_pair_until_new_pair_joins():
     evidence = route_safety.LocalizationEvidenceBuffer()
-    candidate_a, status_a = _localization_evidence(10.0)
-    candidate_b, _ = _localization_evidence(10.1)
+    candidate_a, status_a = _localization_evidence(10.0, sequence=1)
+    candidate_b, status_b = _localization_evidence(10.1, sequence=2)
+    first_evidence = (status_a, 10.01, 1)
+    in_flight_evidence = (status_b, 10.11, 2)
 
     evidence.add_candidate(candidate_a)
-    permissive_evidence = (status_a, 10.01, 1)
-    evidence.add_status(permissive_evidence)
-    assert evidence.snapshot() == (permissive_evidence, candidate_a)
+    evidence.add_status(first_evidence)
+    assert evidence.snapshot() == (first_evidence, candidate_a)
 
     evidence.add_candidate(candidate_b)
-    assert evidence.snapshot() == (permissive_evidence, candidate_a)
+    assert evidence.snapshot() == (first_evidence, candidate_a)
+
+    evidence.add_status(in_flight_evidence)
+    assert evidence.snapshot() == (in_flight_evidence, candidate_b)
 
 
-def test_newest_restrictive_status_overrides_prior_permissive_pair():
+def test_localization_status_then_candidate_retains_prior_pair_until_new_pair_joins():
     evidence = route_safety.LocalizationEvidenceBuffer()
-    candidate_a, status_a = _localization_evidence(10.0)
-    candidate_b, restrictive_status = _localization_evidence(10.1, state="NOT_OK")
+    candidate_a, status_a = _localization_evidence(10.0, sequence=1)
+    candidate_b, status_b = _localization_evidence(10.1, sequence=2)
+    first_evidence = (status_a, 10.01, 1)
+    in_flight_evidence = (status_b, 10.11, 2)
 
     evidence.add_candidate(candidate_a)
-    evidence.add_status((status_a, 10.01, 1))
-    assert evidence.snapshot()[1] is candidate_a
+    evidence.add_status(first_evidence)
+    assert evidence.snapshot() == (first_evidence, candidate_a)
+
+    evidence.add_status(in_flight_evidence)
+    assert evidence.snapshot() == (in_flight_evidence, None)
+    assert route_safety.status_allows_pair_hold(
+        status_b, 10.11, candidate_a.reset_count, "map", "a" * 64, "map", "p" * 64, "OK",
+    )
 
     evidence.add_candidate(candidate_b)
+    assert evidence.snapshot() == (in_flight_evidence, candidate_b)
+
+
+def test_status_chronology_accepts_newer_status_for_unchanged_candidate_identity():
+    prior = (1, 10.0, 10.01, 10.02)
+    assert route_safety.status_chronology_is_newer((2, 10.0, 10.03, 10.04), prior)
+    assert not route_safety.status_chronology_is_newer((2, 9.9, 10.03, 10.04), prior)
+    assert not route_safety.status_chronology_is_newer((2, 10.0, 10.0, 10.04), prior)
+    assert not route_safety.status_chronology_is_newer((1, 10.0, 10.03, 10.04), prior)
+
+def test_newer_restrictive_status_revokes_prior_permissive_pair():
+    evidence = route_safety.LocalizationEvidenceBuffer()
+    candidate_a, status_a = _localization_evidence(10.0, sequence=1)
+    candidate_b, restrictive_status = _localization_evidence(10.1, state="NOT_OK", sequence=2)
+    first_evidence = (status_a, 10.01, 1)
     restrictive_evidence = (restrictive_status, 10.11, 2)
+
+    evidence.add_candidate(candidate_a)
+    evidence.add_status(first_evidence)
+    assert evidence.snapshot() == (first_evidence, candidate_a)
+
+    evidence.add_candidate(candidate_b)
     evidence.add_status(restrictive_evidence)
     assert evidence.snapshot() == (restrictive_evidence, candidate_b)
-
+    assert not route_safety.status_allows_pair_hold(
+        restrictive_status, 10.11, candidate_a.reset_count, "map", "a" * 64, "map", "p" * 64, "OK",
+    )
 
 def test_localization_status_without_exact_candidate_match_fails_closed_then_promotes():
     evidence = route_safety.LocalizationEvidenceBuffer()

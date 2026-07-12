@@ -9,6 +9,7 @@ import random
 from pathlib import Path
 import sys
 import struct
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -809,6 +810,105 @@ def test_zero_duplicate_and_regressing_candidate_sequences_are_rejected():
     assert not sequences.observe(2)
     assert sequences.watchdog_sequence() == 2
     assert sequences.observe(4)
+
+def test_startup_waits_for_expected_tf_authority_after_candidate_stamped_lookup():
+    node = guard.LocalizationGuardNode.__new__(guard.LocalizationGuardNode)
+    node.tf_authorities = {}
+    node._monotonic = lambda: 10.0
+
+    transform = SimpleNamespace(
+        header=SimpleNamespace(frame_id="map"), child_frame_id="odom"
+    )
+    message = SimpleNamespace(
+        _connection_header={"callerid": "/localization_adapter"},
+        transforms=(transform,),
+    )
+
+    class DelayedAuthorityCondition:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _type, _value, _traceback):
+            return False
+
+        def wait(self, _timeout):
+            node._tf_callback(message)
+
+        def notify_all(self):
+            pass
+
+    node.tf_authority_condition = DelayedAuthorityCondition()
+    authority_count = node._await_single_tf_authority()
+
+    result = guard.LocalizationGuardCore(policy()).evaluate(
+        evidence(tf_authority_count=authority_count), 1.0
+    )
+    assert authority_count == 1
+    assert not result.reason_mask & guard.REASON_TF
+    assert result.state == guard.INITIALIZING
+
+
+def test_rogue_only_map_to_odom_authority_remains_lost():
+    node = guard.LocalizationGuardNode.__new__(guard.LocalizationGuardNode)
+    node.tf_authorities = {}
+    node.tf_authority_condition = threading.Condition()
+    node._tf_callback(SimpleNamespace(
+        _connection_header={"callerid": "/rogue_localizer"},
+        transforms=(SimpleNamespace(
+            header=SimpleNamespace(frame_id="map"), child_frame_id="odom"
+        ),),
+    ))
+
+    result = guard.LocalizationGuardCore(policy()).evaluate(
+        evidence(tf_authority_count=node._active_tf_authorities(1.0)), 1.0
+    )
+    assert result.state == guard.LOST
+    assert result.reason_mask & guard.REASON_TF
+
+
+def test_expected_plus_rogue_map_to_odom_authorities_remain_lost():
+    node = guard.LocalizationGuardNode.__new__(guard.LocalizationGuardNode)
+    node.tf_authorities = {}
+    node.tf_authority_condition = threading.Condition()
+    transform = SimpleNamespace(
+        header=SimpleNamespace(frame_id="map"), child_frame_id="odom"
+    )
+    for caller in ("/localization_adapter", "/rogue_localizer"):
+        node._tf_callback(SimpleNamespace(
+            _connection_header={"callerid": caller}, transforms=(transform,)
+        ))
+
+    result = guard.LocalizationGuardCore(policy()).evaluate(
+        evidence(tf_authority_count=node._active_tf_authorities(1.0)), 1.0
+    )
+    assert result.state == guard.LOST
+    assert result.reason_mask & guard.REASON_TF
+
+
+def test_wrong_frame_expected_authority_remains_lost():
+    node = guard.LocalizationGuardNode.__new__(guard.LocalizationGuardNode)
+    node.tf_authorities = {}
+    node.tf_authority_condition = threading.Condition()
+    node._tf_callback(SimpleNamespace(
+        _connection_header={"callerid": "/localization_adapter"},
+        transforms=(SimpleNamespace(
+            header=SimpleNamespace(frame_id="map"), child_frame_id="base_link"
+        ),),
+    ))
+
+    result = guard.LocalizationGuardCore(policy()).evaluate(
+        evidence(tf_authority_count=node._active_tf_authorities(1.0)), 1.0
+    )
+    assert result.state == guard.LOST
+    assert result.reason_mask & guard.REASON_TF
+
+
+def test_stale_tf_remains_lost_after_startup_authority_wait():
+    result = guard.LocalizationGuardCore(policy()).evaluate(
+        evidence(transform_age_s=0.251, tf_authority_count=1), 1.0
+    )
+    assert result.state == guard.LOST
+    assert result.reason_mask & guard.REASON_TF
 
 def test_map_to_odom_lookup_is_candidate_stamped_not_latest():
     source = SCRIPT.read_text()
