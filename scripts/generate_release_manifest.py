@@ -130,17 +130,46 @@ def inventory_paths(root, report_paths=()):
 def _inventory(root):
     return {category: {"digest": canonical_hash(entries := [{"path": p, "sha256": file_hash(_safe_file(root, p)), "executable": bool(_safe_file(root, p).stat().st_mode & 0o111)} for p in paths]), "files": entries} for category, paths in inventory_paths(root).items()}
 
+def _generated_status_path(relative):
+    return relative == "release-manifest.json" or relative == "release-bindings.json" or relative.startswith("evidence/")
+
+
+def _worktree_dirty(root):
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    entries = result.stdout.decode("utf-8", "surrogateescape").split("\0")
+    index = 0
+    while index < len(entries) - 1:
+        entry = entries[index]
+        status, relative = entry[:2], entry[3:]
+        paths = [relative]
+        index += 1
+        if "R" in status or "C" in status:
+            paths.append(entries[index])
+            index += 1
+        if any(not _generated_status_path(path) for path in paths):
+            return True
+    return False
+
+
 def source_identity(root):
     root = _root(root)
     try:
         commit = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout
-        if GIT_SHA.fullmatch(commit) and not dirty: return {"kind": "git_commit", "revision": commit, "worktree_clean": True}
-    except (OSError, subprocess.CalledProcessError): pass
+        if GIT_SHA.fullmatch(commit) and not _worktree_dirty(root):
+            return {"kind": "git_commit", "revision": commit, "worktree_clean": True}
+    except (OSError, subprocess.CalledProcessError):
+        pass
     files = []
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
-        if not _excluded(relative) and not relative.startswith("evidence/") and path.is_file(): files.append({"path": relative, "sha256": file_hash(path)})
+        if not _excluded(relative) and not relative.startswith("evidence/") and path.is_file():
+            files.append({"path": relative, "sha256": file_hash(path)})
     return {"kind": "worktree", "revision": "worktree:" + canonical_hash(files), "worktree_clean": False}
 
 def _bind_inputs(source, hashes):

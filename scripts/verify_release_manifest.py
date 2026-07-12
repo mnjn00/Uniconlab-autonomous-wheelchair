@@ -77,8 +77,13 @@ def verify_manifest(path, root=None, release_signing_key=None):
     signature = manifest["release_signature_hmac_sha256"]
     if authoritative:
         require(isinstance(signature, str) and HEX64.fullmatch(signature), "authoritative release lacks signature")
-        if release_signing_key is not None: require(hmac.compare_digest(signature, sign_release_binding(binding, _key(release_signing_key))), "release signature is invalid")
-    else: require(signature is None, "draft release must not carry authoritative signature")
+        require(release_signing_key is not None, "authoritative release requires an explicitly supplied signing key")
+        require(
+            hmac.compare_digest(signature, sign_release_binding(binding, _key(release_signing_key))),
+            "release signature is invalid",
+        )
+    else:
+        require(signature is None, "draft release must not carry authoritative signature")
     digests = _validate_inventory(root, manifest["hashes"]); bindings = _bindings(manifest["source"], digests)
     matrix = manifest["gate_matrix"]; require(isinstance(matrix, dict) and set(matrix) == {"requiredGateIds", "passedGateIds", "releaseBindings"} and matrix["requiredGateIds"] == sorted(REQUIRED_GATES) and matrix["passedGateIds"] == sorted(REQUIRED_GATES) and matrix["releaseBindings"] == bindings, "AC gate matrix is incomplete or stale")
     reports = manifest["test_reports"]; paths = sorted(REQUIRED_GATES.values()); require(isinstance(reports, list) and len(reports) == len(paths) and [x.get("path") if isinstance(x, dict) else None for x in reports] == paths, "test reports do not match AC gate matrix")

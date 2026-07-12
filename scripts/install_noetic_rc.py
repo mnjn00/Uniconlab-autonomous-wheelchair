@@ -17,7 +17,7 @@ class InstallError(ValueError):
     """A release is unsafe or cannot be installed."""
 
 
-def _default_verifier(manifest_path, root):
+def _default_verifier(manifest_path, root, release_signing_key):
     verifier_path = Path(__file__).with_name("verify_release_manifest.py")
     if not verifier_path.is_file():
         raise InstallError("release verifier is unavailable")
@@ -35,7 +35,7 @@ def _default_verifier(manifest_path, root):
         if added_path:
             sys.path.remove(script_directory)
     try:
-        return module.verify_manifest(Path(manifest_path), Path(root))
+        return module.verify_manifest(Path(manifest_path), Path(root), release_signing_key)
     except module.ManifestError as exc:
         raise InstallError(str(exc)) from exc
 
@@ -181,19 +181,34 @@ def _current_release(prefix):
     return _safe_id(parts[1])
 
 
-def install_release(source, manifest_path, prefix, apply=False, verifier=None, interrupt_hook=None):
+def install_release(source, manifest_path, prefix, apply=False, verifier=None, interrupt_hook=None,
+                    release_signing_key=None):
     source = Path(source).resolve()
     manifest_path = Path(manifest_path).resolve()
     prefix = _check_prefix(prefix, apply)
+    if release_signing_key is None:
+        raise InstallError("installation requires an explicitly supplied release signing key")
     if not source.is_dir() or not manifest_path.is_file():
         raise InstallError("source root or release manifest is missing")
+    custom_verifier = verifier is not None
     verifier = verifier or _default_verifier
-    manifest = verifier(manifest_path, source)
+
+    def verify_bound(candidate, candidate_root):
+        if custom_verifier:
+            return verifier(candidate, candidate_root)
+        return verifier(candidate, candidate_root, release_signing_key)
+
+    manifest = verify_bound(manifest_path, source)
     if not isinstance(manifest, dict):
         raise InstallError("release verifier returned no verified manifest")
     _authority_is_software_only(manifest)
     release_id = _safe_id(manifest.get("release_binding_sha256"))
-    if _canonical_hash({k: v for k, v in manifest.items() if k != "release_binding_sha256"}) != release_id:
+    unsigned = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"release_binding_sha256", "release_signature_hmac_sha256"}
+    }
+    if _canonical_hash(unsigned) != release_id:
         raise InstallError("release binding does not match manifest")
     files = [item.as_posix() for item in _manifest_files(manifest)]
     previous = _current_release(prefix) if prefix.exists() else None
@@ -208,14 +223,14 @@ def install_release(source, manifest_path, prefix, apply=False, verifier=None, i
     if final.exists():
         if final.is_symlink() or not final.is_dir():
             raise InstallError("release destination is unsafe")
-        installed = verifier(final / "release-manifest.json", final)
+        installed = verify_bound(final / "release-manifest.json", final)
         if installed.get("release_binding_sha256") != release_id:
             raise InstallError("existing release does not match requested release")
     else:
         staging = releases / ("." + release_id + ".staging-" + uuid.uuid4().hex)
         staging.mkdir(mode=0o755)
         _copy_bound_files(source, staging, manifest, manifest_path)
-        verifier(staging / "release-manifest.json", staging)
+        verify_bound(staging / "release-manifest.json", staging)
         if interrupt_hook:
             interrupt_hook("staged", staging)
         os.replace(str(staging), str(final))
@@ -243,9 +258,16 @@ def main(argv=None):
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--prefix", required=True, type=Path)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--release-signing-key", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        result = install_release(args.source, args.manifest, args.prefix, args.apply)
+        result = install_release(
+            args.source,
+            args.manifest,
+            args.prefix,
+            args.apply,
+            release_signing_key=args.release_signing_key,
+        )
     except (InstallError, OSError) as exc:
         parser.exit(2, "installation refused: {}\n".format(exc))
     print(json.dumps(result, sort_keys=True))

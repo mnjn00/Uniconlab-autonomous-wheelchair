@@ -95,27 +95,47 @@ def _parent_rollback(current_manifest, parent_root, parent_manifest, target_id, 
     receipt_hash = _restart_receipt(parent_root, rollback["restartReceipt"], target_id, inventory_digest)
     return receipt_hash, inventory_digest
 
-def _release(prefix, release_id, verifier):
-    release_id = _INSTALL._safe_id(release_id); path = prefix / "releases" / release_id
-    if not path.is_dir() or path.is_symlink(): raise RollbackError("rollback release is missing or unsafe")
+def _release(prefix, release_id, verifier, release_signing_key, custom_verifier):
+    release_id = _INSTALL._safe_id(release_id)
+    path = prefix / "releases" / release_id
+    if not path.is_dir() or path.is_symlink():
+        raise RollbackError("rollback release is missing or unsafe")
     manifest_path = path / "release-manifest.json"
-    if not manifest_path.is_file() or manifest_path.is_symlink(): raise RollbackError("release manifest is missing or unsafe")
-    manifest = verifier(manifest_path, path)
-    if not isinstance(manifest, dict) or manifest.get("release_binding_sha256") != release_id: raise RollbackError("release directory and manifest binding differ")
-    _INSTALL._authority_is_software_only(manifest); return path, manifest
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise RollbackError("release manifest is missing or unsafe")
+    if custom_verifier:
+        manifest = verifier(manifest_path, path)
+    else:
+        manifest = verifier(manifest_path, path, release_signing_key)
+    if not isinstance(manifest, dict) or manifest.get("release_binding_sha256") != release_id:
+        raise RollbackError("release directory and manifest binding differ")
+    _INSTALL._authority_is_software_only(manifest)
+    return path, manifest
 
-def rollback_release(prefix, target_release, disarmed_evidence, apply=False, verifier=None, interrupt_hook=None, release_signing_key=None):
+def rollback_release(prefix, target_release, disarmed_evidence, apply=False, verifier=None,
+                     interrupt_hook=None, release_signing_key=None):
     prefix = _INSTALL._check_prefix(prefix, apply)
-    if not prefix.is_dir(): raise RollbackError("release prefix is missing")
-    verifier = verifier or _INSTALL._default_verifier; current_id = _INSTALL._current_release(prefix)
-    if current_id is None: raise RollbackError("there is no current release")
-    target_id = _INSTALL._safe_id(target_release); current_path, current_manifest = _release(prefix, current_id, verifier); target_path, target_manifest = _release(prefix, target_id, verifier)
-    evidence_sha256 = _evidence(disarmed_evidence, current_id, target_id); idempotent = current_id == target_id
+    if release_signing_key is None:
+        raise RollbackError("rollback requires an explicitly supplied release signing key")
+    signing_key = _key(release_signing_key)
+    if not prefix.is_dir():
+        raise RollbackError("release prefix is missing")
+    custom_verifier = verifier is not None
+    verifier = verifier or _INSTALL._default_verifier
+    current_id = _INSTALL._current_release(prefix)
+    if current_id is None:
+        raise RollbackError("there is no current release")
+    target_id = _INSTALL._safe_id(target_release)
+    current_path, current_manifest = _release(
+        prefix, current_id, verifier, release_signing_key, custom_verifier)
+    target_path, target_manifest = _release(
+        prefix, target_id, verifier, release_signing_key, custom_verifier)
+    evidence_sha256 = _evidence(disarmed_evidence, current_id, target_id)
+    idempotent = current_id == target_id
     if not idempotent:
-        if release_signing_key is None: raise RollbackError("rollback requires an explicitly supplied release signing key")
-        signing_key = _key(release_signing_key)
         _authenticate_parent(current_manifest, signing_key)
-        receipt_hash, inventory_digest = _parent_rollback(current_manifest, target_path, target_manifest, target_id, signing_key)
+        receipt_hash, inventory_digest = _parent_rollback(
+            current_manifest, target_path, target_manifest, target_id, signing_key)
     result = {"action":"rollback", "applied":bool(apply), "from_release":current_id, "to_release":target_id, "disarmed_evidence_sha256":evidence_sha256, "state":"DISARMED", "idempotent":idempotent}
     if not idempotent: result.update(parent_restart_receipt_sha256=receipt_hash, parent_inventory_digest=inventory_digest)
     if not apply: return result
