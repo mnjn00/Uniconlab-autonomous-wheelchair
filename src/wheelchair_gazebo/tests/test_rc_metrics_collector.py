@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused ROS-independent tests for the RC metrics evidence contract."""
 import importlib.util
+import hashlib
 import json
 import math
 import pathlib
@@ -334,6 +335,74 @@ class MetricsCoreTest(unittest.TestCase):
         self.assertNotIn("fault_event", result["missing_topics"])
         self.assertNotIn("actuator_sink", result["missing_topics"])
 
+    def route_truth(self):
+        return collector.DirectionalRouteTruth(
+            "mission", "route", "map", "a" * 64, "b" * 64, "c" * 64,
+            1, ((0.0, 0.0), (1.0, 0.0)), 0.2, 0.0)
+
+    def test_forged_route_progress_cannot_replace_ground_truth(self):
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 0.5, 0.2, 0.0)
+        core.observe_route_evidence(1.0, 1, "mission", "route", "map", 1, 1.0,
+                                    0.0, 0.5)
+        self.assertIn("RouteProgress disagrees with Gazebo route truth", core.failures)
+
+    def test_route_truth_rejects_wrong_identity_and_terminal_yaw_surrogate(self):
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 1.0, 0.0, 0.2)
+        core.observe_route_evidence(1.0, 3, "mission", "wrong", "map", 1, 1.0,
+                                    0.0, 1.0)
+        self.assertIn("invalid route identity or evidence", core.failures)
+        core.observe_route_evidence(1.1, 3, "mission", "route", "map", 2, 1.0,
+                                    0.0, 1.0)
+        self.assertIn("RouteProgress COMPLETE before approved terminal truth", core.failures)
+
+    def test_localization_truth_rejects_plausible_wrong_ok_candidate(self):
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.0, 0.3, 0.0, 0.0, "map", "a" * 64, "source")
+        core.observe_localization_pose(1.1, 0.6, 0.0, 0.0, "map", "a" * 64, "source")
+        result = core.finalize()
+        self.assertFalse(result["passed"])
+        self.assertIn("AC4 planar p95 exceeded", result["failures"])
+    def test_ac4_p95_boundaries_and_invalid_interval_dwell(self):
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.0, 0.25, 0.0, math.radians(8.0), "map", "a" * 64, "source")
+        core.observe_pose(1.2, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(1.2, 0.0, 0.0, 0.0, "map", "a" * 64, "source")
+        self.assertEqual(core.localization_invalid_intervals, 0)
+        core.observe_pose(2.0, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(2.0, 0.6, 0.0, 0.0, "map", "a" * 64, "source")
+        core.observe_pose(2.6, 0.0, 0.0, 0.0)
+        core.observe_localization_pose(2.6, 0.0, 0.0, 0.0, "map", "a" * 64, "source")
+        self.assertEqual(core.localization_invalid_intervals, 1)
+
+    def test_route_receipt_must_be_monotonic_and_fresh(self):
+        core = collector.MetricsCore()
+        core.bind_route_truth(self.route_truth())
+        core.observe_pose(1.0, 0.5, 0.0, 0.0)
+        core.observe_route_evidence(1.0, 1, "mission", "route", "map", 1, 1.0, 0.0, 0.5)
+        core.observe_route_evidence(1.1, 1, "mission", "route", "map", 1, 1.1, 0.0, 0.5)
+        self.assertIn("non-monotonic route sequence or source stamp", core.failures)
+    def test_static_truth_requires_hash_bound_references(self):
+        truth = PACKAGE / "config" / "route_truth_outbound.yaml"
+        loaded = collector.load_route_truth(
+            str(truth), "2ddbf2660ac98868732e14e5540abaa77c8b6a600e024f1d12a71dee06bebf1b",
+            "rc-0123456789abcdef01234567")
+        self.assertEqual(loaded.mission_id, "rc-0123456789abcdef01234567")
+        self.assertEqual(loaded.corridor_clearance_m, 0.2)
+        self.assertEqual(loaded.direction, 1)
+    def test_derived_mission_identity_matches_driver_material(self):
+        self.assertEqual(
+            collector.derive_mission_id("qualification", 1701, "outbound",
+                                        "hanyang_aegimun_engineering_outbound"),
+            "rc-" + hashlib.sha256(
+                b"qualification\n1701\noutbound\nhanyang_aegimun_engineering_outbound").hexdigest()[:24])
 class CollectionLifecycleTest(unittest.TestCase):
     def test_terminal_settle_uses_monotonic_wall_deadline(self):
         decision = collector.collection_stop_reason(

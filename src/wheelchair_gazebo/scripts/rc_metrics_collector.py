@@ -13,6 +13,9 @@ import tempfile
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple
+import hashlib
+import yaml
+from pathlib import Path
 
 SCHEMA = "wheelchair_gazebo.rc_metrics"
 SCHEMA_VERSION = 1
@@ -76,6 +79,14 @@ SAFETY_REASON_BITS = {
     34359738368: "LIDAR_STALE",
     68719476736: "POLICY_MISMATCH",
 }
+STATUS_ENUMS = {
+    "localization": {0, 1, 2, 3, 4, 5},
+    "collision": {0, 1, 2, 3},
+    "geofence": {0, 1, 2, 3, 4},
+    "slope": {0, 1, 2, 3},
+    "safety": {0, 1, 2, 3, 4},
+}
+MAX_REASON_MASK = sum(SAFETY_REASON_BITS)
 
 
 def finite(*values: float) -> bool:
@@ -95,6 +106,157 @@ def collection_stop_reason(now: float, started: float,
 
 
 
+@dataclass(frozen=True)
+class DirectionalRouteTruth:
+    mission_id: str
+    route_id: str
+    map_id: str
+    map_sha256: str
+    route_manifest_sha256: str
+    safety_manifest_sha256: str
+    direction: int
+    points: Tuple[Tuple[float, float], ...]
+    corridor_clearance_m: float
+    terminal_yaw_rad: float
+
+    def projection(self, x_m: float, y_m: float) -> Tuple[float, float]:
+        best = None
+        accumulated = 0.0
+        for start, end in zip(self.points, self.points[1:]):
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length > 0.0:
+                fraction = min(1.0, max(0.0, ((x_m - start[0]) * dx + (y_m - start[1]) * dy) / (length * length)))
+                distance = math.hypot(x_m - start[0] - fraction * dx, y_m - start[1] - fraction * dy)
+                candidate = (distance, accumulated + fraction * length)
+                if best is None or candidate[0] < best[0]:
+                    best = candidate
+            accumulated += length
+        if best is None:
+            raise ValueError("route must contain distinct segments")
+        return best
+
+def _sha256(value: object, name: str) -> str:
+    if (not isinstance(value, str) or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)):
+        raise ValueError("{} must be a lowercase SHA-256".format(name))
+    return value
+
+
+def _contained_regular_path(path: Path, root: Path) -> Path:
+    if not path.is_absolute():
+        raise ValueError("path must be absolute")
+    root = root.absolute()
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        if part == "..":
+            if current == root:
+                raise ValueError("path escapes repository")
+            current = current.parent
+            continue
+        current /= part
+        if current.is_symlink():
+            raise ValueError("symlinked route truth path")
+    try:
+        current.relative_to(root)
+    except ValueError:
+        raise ValueError("path escapes repository")
+    if not current.is_file():
+        raise ValueError("route truth source is not a regular file")
+    return current
+
+
+def _read_bound_yaml(path: Path, expected_sha256: str, root: Path) -> Dict[str, object]:
+    path = _contained_regular_path(path, root)
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != _sha256(expected_sha256, "reference sha256"):
+        raise ValueError("route truth source hash mismatch")
+    value = yaml.safe_load(raw)
+    if not isinstance(value, dict):
+        raise ValueError("route truth source is malformed")
+    return value
+
+
+def load_route_truth(path: str, expected_sha256: str, mission_id: Optional[str] = None) -> DirectionalRouteTruth:
+    truth_path = Path(path).absolute()
+    root = truth_path.parents[3]
+    binding = _read_bound_yaml(truth_path, expected_sha256, root)
+    if set(binding) != {"immutable", "direction", "navigation_manifest", "route_safety_config"}:
+        raise ValueError("route truth binding fields mismatch")
+    if binding["immutable"] is not True or binding["direction"] != "outbound":
+        raise ValueError("invalid immutable route truth binding")
+    reference_documents = {}
+    reference_paths = {}
+    for key in ("navigation_manifest", "route_safety_config"):
+        reference = binding[key]
+        if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+            raise ValueError("invalid route truth reference")
+        relative = reference["path"]
+        if not isinstance(relative, str) or Path(relative).is_absolute():
+            raise ValueError("invalid route truth reference path")
+        reference_path = _contained_regular_path(truth_path.parent / relative, root)
+        reference_paths[key] = reference_path
+        reference_documents[key] = _read_bound_yaml(reference_path, reference["sha256"], root)
+    navigation = reference_documents["navigation_manifest"]
+    safety_config = reference_documents["route_safety_config"]
+    route = navigation.get("outbound_route")
+    map_value = navigation.get("map")
+    geometry = safety_config.get("simulation_geometry")
+    if (not isinstance(route, dict) or not isinstance(map_value, dict) or not isinstance(geometry, dict)
+            or safety_config.get("simulation_only") is not True
+            or safety_config.get("hardware_motion_authorized") is not False
+            or safety_config.get("passenger_operation_authorized") is not False):
+        raise ValueError("route truth authority or source mismatch")
+    map_sha = _sha256(map_value.get("sha256"), "navigation map sha256")
+    if (_sha256(safety_config.get("expected_map_sha256"), "safety map sha256") != map_sha
+            or _sha256(geometry.get("navigation_route_manifest_sha256"), "safety navigation sha256")
+            != hashlib.sha256(reference_paths["navigation_manifest"].read_bytes()).hexdigest()):
+        raise ValueError("navigation/safety cross hash mismatch")
+    semantic = {"map_id": map_value.get("map_id"), "map_sha256": map_sha,
+                "route": {key: item for key, item in route.items() if key != "route_manifest_sha256"}}
+    route_sha = _sha256(route.get("route_manifest_sha256"), "route semantic sha256")
+    if hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest() != route_sha:
+        raise ValueError("directional route semantic hash mismatch")
+    safety_path = safety_config.get("manifest_path")
+    safety_sha = _sha256(safety_config.get("expected_manifest_sha256"), "safety manifest sha256")
+    if not isinstance(safety_path, str) or Path(safety_path).is_absolute():
+        raise ValueError("invalid safety manifest reference")
+    safety_manifest_path = _contained_regular_path(
+        reference_paths["route_safety_config"].parent / safety_path, root)
+    safety_manifest = _read_bound_yaml(safety_manifest_path, safety_sha, root)
+    approved_routes = safety_manifest.get("approved_routes")
+    if not isinstance(approved_routes, list):
+        raise ValueError("safety approved_routes is missing or invalid")
+    expected_route = geometry.get("route_bindings", {}).get("outbound", {}).get("route_id")
+    matching = [item for item in approved_routes
+                if isinstance(item, dict) and item.get("route_id") == route.get("route_id")]
+    if (expected_route != route.get("route_id") or len(matching) != 1
+            or matching[0].get("direction") != "outbound"
+            or matching[0].get("route_manifest_sha256") != route_sha
+            or matching[0].get("hardware_authorized") is not False
+            or safety_manifest.get("authority", {}).get("simulation_only") is not True
+            or safety_manifest.get("authority", {}).get("hardware_authorized") is not False
+            or safety_manifest.get("authority", {}).get("passenger_authorized") is not False):
+        raise ValueError("safety route identity mismatch")
+    waypoints = route.get("waypoints")
+    if not isinstance(waypoints, list) or len(waypoints) < 2:
+        raise ValueError("route has invalid waypoints")
+    points = []
+    for waypoint in waypoints:
+        if not isinstance(waypoint, dict) or not finite(waypoint.get("x_m"), waypoint.get("y_m"), waypoint.get("yaw_rad")):
+            raise ValueError("route has non-finite waypoint")
+        points.append((float(waypoint["x_m"]), float(waypoint["y_m"])))
+    clearance = matching[0].get("corridor_margin_m")
+    if not finite(clearance) or float(clearance) != float(geometry.get("recorded_corridor_margin_m")):
+        raise ValueError("invalid independent corridor allowance")
+    return DirectionalRouteTruth(
+        mission_id or "", route["route_id"], map_value["map_id"], map_sha, route_sha,
+        safety_sha, 1, tuple(points), float(clearance), float(waypoints[-1]["yaw_rad"]))
+def derive_mission_id(scenario: str, seed: int, direction: str, route_id: str) -> str:
+    if not isinstance(scenario, str) or isinstance(seed, bool) or not isinstance(seed, int) or direction != "outbound":
+        raise ValueError("invalid mission identity inputs")
+    material = "%s\n%s\n%s\n%s" % (scenario, seed, direction, route_id)
+    return "rc-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 def percentile(values: List[float], percent: float) -> float:
     ordered = sorted(float(value) for value in values)
@@ -184,6 +346,127 @@ class MetricsCore:
         self.reset_safety_index: Optional[int] = None
         self.reset_stamp_s: Optional[float] = None
         self.reset_had_stop = False
+        self.localization_candidates: Dict[float, Tuple[str, str, str, float, float]] = {}
+        self.localization_error_start: Optional[float] = None
+        self.localization_error_lost = False
+        self.status_last: Dict[str, Tuple[int, float, float, str]] = {}
+        self.route_identity: Optional[Dict[str, object]] = None
+        self.route_diagnostic_disagreements = 0
+        self.localization_samples: List[Tuple[float, float, float, float]] = []
+        self.localization_invalid_intervals = 0
+        self.localization_false_ok_windows = 0
+        self.localization_jumps = 0
+        self.localization_last: Optional[Tuple[float, float, float, float]] = None
+        self.route_truth: Optional[DirectionalRouteTruth] = None
+        self.route_last_along: Optional[float] = None
+        self.route_clearances: List[float] = []
+        self.route_last_receipt: Optional[Tuple[int, float]] = None
+
+    def bind_route_truth(self, truth: DirectionalRouteTruth) -> None:
+        if not isinstance(truth, DirectionalRouteTruth):
+            raise ValueError("route truth must be directional and hash-bound")
+        self.route_truth = truth
+        self.bind_route_identity(truth.mission_id, truth.route_id, truth.map_id,
+                                 truth.map_sha256, truth.route_manifest_sha256,
+                                 truth.safety_manifest_sha256)
+
+    def observe_route_evidence(self, stamp: float, state: int, mission_id: str,
+                               route_id: str, map_id: str, sequence: int, source_stamp: float,
+                               claimed_cross_track_m: float, claimed_along_track_m: float,
+                               complete_state: int = 3) -> None:
+        truth = self.route_truth
+        if truth is None:
+            self.failures.append("unbound route evidence is non-verdict")
+            return
+        if (not finite(stamp, source_stamp, claimed_cross_track_m, claimed_along_track_m)
+                or state not in (1, 2, 3) or isinstance(sequence, bool)
+                or not isinstance(sequence, int) or sequence < 0
+                or (mission_id, route_id, map_id) != (truth.mission_id, truth.route_id, truth.map_id)):
+            self.failures.append("invalid route identity or evidence")
+            return
+        if (self.route_last_receipt is not None
+                and (sequence <= self.route_last_receipt[0] or source_stamp <= self.route_last_receipt[1])):
+            self.failures.append("non-monotonic route sequence or source stamp")
+            return
+        self.route_last_receipt = (sequence, float(source_stamp))
+        pose = min(self.poses, key=lambda item: abs(item[0] - source_stamp)) if self.poses else None
+        if pose is None or abs(pose[0] - source_stamp) > 0.50:
+            self.failures.append("route lacks time-aligned Gazebo truth")
+            return
+        cross_track, along_track = truth.projection(pose[1], pose[2])
+        terminal_error = math.hypot(pose[1] - truth.points[-1][0], pose[2] - truth.points[-1][1])
+        yaw_error = abs(math.degrees(math.atan2(math.sin(pose[3] - truth.terminal_yaw_rad),
+                                                math.cos(pose[3] - truth.terminal_yaw_rad))))
+        if self.route_last_along is not None and along_track + 1e-6 < self.route_last_along:
+            self.failures.append("non-monotonic independent route progress")
+        self.route_last_along = along_track
+        self.route_clearances.append(truth.corridor_clearance_m - cross_track)
+        if self.route_clearances[-1] < 0.0:
+            self.failures.append("independent corridor clearance violated")
+        if abs(claimed_cross_track_m - cross_track) > 1e-3 or abs(claimed_along_track_m - along_track) > 1e-3:
+            self.route_diagnostic_disagreements += 1
+            self.failures.append("RouteProgress disagrees with Gazebo route truth")
+        self.cross_track.append(cross_track)
+        self.goal_error_m = terminal_error
+        self.goal_error_yaw_deg = yaw_error
+        if state == complete_state and (terminal_error > 0.30 or yaw_error > 10.0):
+            self.failures.append("RouteProgress COMPLETE before approved terminal truth")
+        elif state == complete_state:
+            self.route_terminal = "completed"
+            self.trigger_stop(stamp, "route_complete_truth")
+
+    def bind_route_identity(self, mission_id: str, route_id: str, map_id: str,
+                            map_sha256: str, route_sha256: str,
+                            safety_sha256: str) -> None:
+        values = (mission_id, route_id, map_id, map_sha256, route_sha256, safety_sha256)
+        if (not all(isinstance(value, str) and value for value in values)
+                or not all(len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+                           for value in values[3:])):
+            raise ValueError("invalid route identity binding")
+        self.route_identity = {
+            "mission_id": mission_id, "route_id": route_id, "map_id": map_id,
+            "map_sha256": map_sha256, "route_manifest_sha256": route_sha256,
+            "safety_manifest_sha256": safety_sha256,
+        }
+
+    def observe_localization_pose(self, stamp: float, x_m: float, y_m: float,
+                                  yaw_rad: float, map_id: str, map_sha256: str,
+                                  source: str) -> None:
+        if (not source or not isinstance(map_id, str) or not isinstance(map_sha256, str)
+                or self._reject("localization_pose", stamp, x_m, y_m, yaw_rad)):
+            return
+        if self.route_identity and (map_id != self.route_identity["map_id"]
+                                    or map_sha256 != self.route_identity["map_sha256"]):
+            self.failures.append("localization pose identity mismatch")
+            return
+        truth = min(self.poses, key=lambda value: abs(value[0] - stamp)) if self.poses else None
+        if truth is None or abs(truth[0] - stamp) > self.limits.stale_s:
+            self.failures.append("localization pose lacks time-aligned ground truth")
+            return
+        planar = math.hypot(x_m - truth[1], y_m - truth[2])
+        yaw = abs(math.degrees(math.atan2(math.sin(yaw_rad - truth[3]),
+                                          math.cos(yaw_rad - truth[3]))))
+        self.localization_candidates[float(stamp)] = (source, map_id, map_sha256, planar, yaw)
+        invalid = planar > 0.50 or yaw > 15.0
+        if invalid and self.localization_error_start is None:
+            self.localization_error_start = float(stamp)
+            self.localization_error_lost = False
+        elif not invalid and self.localization_error_start is not None:
+            if stamp - self.localization_error_start > 0.50 and not self.localization_error_lost:
+                self.localization_invalid_intervals += 1
+                self.failures.append("unreported localization invalid interval")
+            self.localization_error_start = None
+            self.localization_error_lost = False
+        sample = (float(stamp), planar, yaw, 1.0)
+        if self.localization_last is not None:
+            previous = self.localization_last
+            if (math.hypot(x_m - previous[1], y_m - previous[2]) > 0.50
+                    or abs(math.degrees(math.atan2(math.sin(yaw_rad - previous[3]),
+                                                   math.cos(yaw_rad - previous[3])))) > 15.0):
+                self.localization_jumps += 1
+                self.failures.append("localization jump exceeds AC4")
+        self.localization_last = (float(stamp), float(x_m), float(y_m), float(yaw_rad))
+        self.localization_samples.append(sample)
 
     def _reject(self, stream: str, stamp: float, *values: float) -> bool:
         if not finite(stamp, *values) or stamp < 0.0:
@@ -217,9 +500,10 @@ class MetricsCore:
                       invalid_state: int = 4) -> None:
         if self._reject("route", stamp, cross_track_m, distance_remaining_m):
             return
-        self.cross_track.append(float(cross_track_m))
-        self.goal_error_m = abs(float(distance_remaining_m))
-        if state == complete_state:
+        if self.route_truth is None:
+            self.cross_track.append(float(cross_track_m))
+            self.goal_error_m = abs(float(distance_remaining_m))
+        if state == complete_state and self.route_truth is None:
             self.route_terminal = "completed"
             self.trigger_stop(stamp, "route_complete")
             # RouteProgress does not carry a goal heading.  Estimate the terminal
@@ -294,22 +578,44 @@ class MetricsCore:
 
     def observe_status(self, stream: str, stamp: float, state: int, reason_mask: int = 0,
                        stop_states: Tuple[int, ...] = (), latched: bool = False,
-                       source: str = "") -> None:
+                       source: str = "", sequence: Optional[int] = None,
+                       evaluation_stamp: Optional[float] = None) -> None:
         if stream not in self.status_counts:
             raise ValueError("unknown status stream: " + stream)
-        if (isinstance(state, bool) or not isinstance(state, int) or
-                isinstance(reason_mask, bool) or not isinstance(reason_mask, int) or
-                reason_mask < 0):
+        if (isinstance(state, bool) or not isinstance(state, int) or state not in STATUS_ENUMS[stream]
+                or isinstance(reason_mask, bool) or not isinstance(reason_mask, int)
+                or reason_mask < 0 or reason_mask & ~MAX_REASON_MASK):
             self.failures.append("invalid {} status sample".format(stream))
             return
         source = str(source or stream)
         if not source or any(ord(character) < 32 for character in source):
             self.failures.append("invalid {} status source".format(stream))
             return
+        if sequence is not None or evaluation_stamp is not None:
+            if (sequence is None or isinstance(sequence, bool) or not isinstance(sequence, int)
+                    or sequence < 0 or evaluation_stamp is None
+                    or not finite(evaluation_stamp) or evaluation_stamp < 0.0):
+                self.failures.append("missing or invalid {} status receipt".format(stream))
+                return
+            previous = self.status_last.get(stream)
+            if previous and (sequence <= previous[0] or stamp <= previous[1]
+                             or evaluation_stamp <= previous[2] or source != previous[3]):
+                self.failures.append("non-monotonic {} status evidence".format(stream))
+                return
+            self.status_last[stream] = (sequence, float(stamp), float(evaluation_stamp), source)
         if self._reject(stream, stamp, state, reason_mask):
             return
         key = str(state)
         self.status_counts[stream][key] = self.status_counts[stream].get(key, 0) + 1
+        if stream == "localization" and self.route_truth is not None:
+            candidate = self.localization_candidates.get(float(stamp))
+            if candidate is None:
+                self.failures.append("localization status lacks exact candidate pair")
+            elif state == 2 and (candidate[3] > 0.50 or candidate[4] > 15.0):
+                self.localization_false_ok_windows += 1
+                self.failures.append("localization OK contradicts truth")
+            elif state == 4 and self.localization_error_start is not None:
+                self.localization_error_lost = True
         stopped = state in stop_states
         if self.fault_run:
             self.fault_status_history.append(
@@ -322,7 +628,7 @@ class MetricsCore:
         if stopped:
             if self.motion_started:
                 self.trigger_stop(stamp, stream, reason_mask)
-        elif self.stop_trigger_s is not None:
+        elif stream == "safety" and state == 1 and self.stop_trigger_s is not None:
             self.clear_after_stop = True
 
     def trigger_stop(self, stamp: float, source: str, reason_mask: int = 0) -> None:
@@ -473,6 +779,11 @@ class MetricsCore:
             if self.goal_error_yaw_deg is None:
                 failures.append("absent terminal goal yaw evidence")
         end = self.clock[-1] if self.clock else None
+        if (self.localization_error_start is not None and end is not None
+                and end - self.localization_error_start > 0.50
+                and not self.localization_error_lost):
+            self.localization_invalid_intervals += 1
+            failures.append("open unreported localization invalid interval")
         stale: List[str] = []
         if end is not None:
             for stream in REQUIRED_STREAMS:
@@ -562,6 +873,18 @@ class MetricsCore:
             self.reset_stamp_s is not None and
             any(stamp >= self.reset_stamp_s and stopped
                 for stamp, stopped in self.safety_stop_history[self.reset_safety_index:]))
+        localization_planar = [sample[1] for sample in self.localization_samples]
+        localization_yaw = [sample[2] for sample in self.localization_samples]
+        if self.route_identity and "localization_pose" not in self.seen:
+            failures.append("missing independent localization pose evidence")
+        if localization_planar and percentile(localization_planar, 95.0) > 0.25:
+            failures.append("AC4 planar p95 exceeded")
+        if localization_yaw and percentile(localization_yaw, 95.0) > 8.0:
+            failures.append("AC4 yaw p95 exceeded")
+        if self.localization_false_ok_windows:
+            failures.append("localization false-OK window")
+        if self.localization_invalid_intervals:
+            failures.append("unreported localization invalid interval")
         absolute = [abs(value) for value in self.cross_track]
         unique_failures = list(dict.fromkeys(failures))
         document = {
@@ -572,6 +895,22 @@ class MetricsCore:
                                                          "p95": percentile(absolute, 95.0), "max": max(absolute)},
             "goal_error_m": self.goal_error_m,
             "goal_error_yaw_deg": self.goal_error_yaw_deg,
+            "independent_route_truth": None if self.route_truth is None else {
+                "minimum_corridor_clearance_m": min(self.route_clearances) if self.route_clearances else None,
+                "cross_track_m": None if not self.cross_track else {
+                    "p95": percentile([abs(value) for value in self.cross_track], 95.0),
+                    "max": max(abs(value) for value in self.cross_track),
+                },
+                "terminal_position_error_m": self.goal_error_m,
+                "terminal_yaw_error_deg": self.goal_error_yaw_deg,
+            },
+            "localization_truth": {
+                "planar_p95_m": percentile(localization_planar, 95.0) if localization_planar else None,
+                "yaw_p95_deg": percentile(localization_yaw, 95.0) if localization_yaw else None,
+                "jump_count": self.localization_jumps,
+                "false_ok_windows": self.localization_false_ok_windows,
+                "unreported_invalid_intervals": self.localization_invalid_intervals,
+            },
             "footprint_collisions": self.footprint_collisions,
             "geofence_exits": sum(count for state, count in self.status_counts["geofence"].items() if state in ("2", "3", "4")),
             "command": {
@@ -668,8 +1007,8 @@ class RosCollector:
         from rosgraph_msgs.msg import Clock
         from std_msgs.msg import String
         from wheelchair_interfaces.msg import (CollisionStatus, GeofenceStatus,
-                                                LocalizationStatus, RouteProgress,
-                                                SafetyState, SlopeStatus)
+                                                LocalizationCandidate, LocalizationStatus,
+                                                RouteProgress, SafetyState, SlopeStatus)
         self.rospy = rospy
         self.args = args
         self.core = core
@@ -684,6 +1023,8 @@ class RosCollector:
         rospy.Subscriber(args.route_topic, RouteProgress, self._route, queue_size=1)
         rospy.Subscriber(args.localization_topic, LocalizationStatus,
                          lambda m: self._status("localization", m, (4, 5)), queue_size=1)
+        rospy.Subscriber(args.localization_candidate_topic, LocalizationCandidate,
+                         self._localization_pose, queue_size=1)
         rospy.Subscriber(args.collision_topic, CollisionStatus,
                          self._collision, queue_size=1)
         rospy.Subscriber(args.geofence_topic, GeofenceStatus,
@@ -723,6 +1064,11 @@ class RosCollector:
     def _route(self, message) -> None:
         self.core.observe_route(self._stamp(message), message.state, message.cross_track_error_m,
                                 message.distance_remaining_m, message.COMPLETE, message.INVALID)
+        if self.core.route_truth is not None:
+            self.core.observe_route_evidence(
+                self._stamp(message), message.state, message.mission_id, message.route_id,
+                message.map_id, message.sequence, self._stamp(message),
+                message.cross_track_error_m, message.along_track_m, message.COMPLETE)
         if message.state in (message.COMPLETE, message.INVALID) and self.terminal_seen_wall is None:
             self.terminal_seen_wall = time.monotonic()
         if message.state == message.COMPLETE and hasattr(message, "goal_yaw_error_deg"):
@@ -741,7 +1087,20 @@ class RosCollector:
             getattr(message, "reason_mask", 0), stops,
             latched=bool(getattr(message, "estop_latched", False)),
             source=str(getattr(message, "source", stream)),
+            sequence=getattr(message, "sequence", None),
+            evaluation_stamp=(getattr(message, "evaluation_stamp", None).to_sec()
+                              if getattr(message, "evaluation_stamp", None) is not None
+                              else self._stamp(message)),
         )
+
+    def _localization_pose(self, message) -> None:
+        pose = message.pose.pose
+        orientation = pose.orientation
+        yaw = math.atan2(2.0 * (orientation.w * orientation.z + orientation.x * orientation.y),
+                         1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z))
+        self.core.observe_localization_pose(
+            message.pose.header.stamp.to_sec(), pose.position.x, pose.position.y, yaw,
+            message.map_id, message.map_sha256, message.source)
 
     def _collision(self, message) -> None:
         self._status("collision", message, (3,))
@@ -794,6 +1153,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--contact-topic", default="/simulation/contacts")
     value.add_argument("--route-topic", default="/route/progress")
     value.add_argument("--localization-topic", default="/localization/status")
+    value.add_argument("--localization-candidate-topic", default="/localization/candidate")
     value.add_argument("--collision-topic", default="/safety/collision_status")
     value.add_argument("--geofence-topic", default="/route_safety/geofence_status")
     value.add_argument("--slope-topic", default="/safety/slope_status")
@@ -809,6 +1169,12 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--linear-cap-mps", type=float, default=0.55)
     value.add_argument("--angular-cap-rps", type=float, default=0.85)
     value.add_argument("--stop-budget-s", type=float, default=FAULT_STOP_BUDGET_S)
+    value.add_argument("--scenario-sha256")
+    value.add_argument("--a13-sha256")
+    value.add_argument("--claim-tag", default="SIMULATION_ONLY")
+    value.add_argument("--route-truth")
+    value.add_argument("--route-truth-sha256")
+    value.add_argument("--scenario", default="qualification")
     return value
 
 
@@ -820,6 +1186,12 @@ def main() -> int:
         fault_stop_budget_s=args.stop_budget_s,
     )
     core = MetricsCore(limits, args.fault)
+    mission_id = derive_mission_id(
+        args.scenario, args.seed, "outbound", "hanyang_aegimun_engineering_outbound")
+    if args.route_truth and args.route_truth_sha256:
+        core.bind_route_truth(load_route_truth(args.route_truth, args.route_truth_sha256, mission_id))
+    else:
+        core.failures.append("missing hash-bound directional route truth")
     error = None
     timed_out = False
     try:
@@ -829,12 +1201,23 @@ def main() -> int:
         result = core.finalize(timed_out=False)
         result["failures"] = list(dict.fromkeys(result["failures"] + [error]))
         result["passed"] = False
+    bound = (args.claim_tag == "SIMULATION_ONLY"
+             and all(isinstance(value, str) and len(value) == 64
+                     and all(char in "0123456789abcdef" for char in value)
+                     for value in (args.scenario_sha256, args.a13_sha256)))
+    if not bound:
+        result["failures"] = list(dict.fromkeys(result["failures"] + [
+            "unbound or non-simulation-only artifact is non-verdict"]))
+        result["passed"] = False
     artifact = {
         "schema": SCHEMA, "schema_version": SCHEMA_VERSION,
         "scenario": {"world": args.world, "seed": args.seed,
-                     "robustness": args.robustness == "true", "fault": args.fault},
-        "authority": {"simulation_only": True, "hardware_motion_authorized": False,
-                      "passenger_operation_authorized": False},
+                     "robustness": args.robustness == "true", "fault": args.fault,
+                     "sha256": args.scenario_sha256},
+        "authority": {"claim_tag": args.claim_tag, "simulation_only": True,
+                      "hardware_motion_authorized": False,
+                      "passenger_operation_authorized": False,
+                      "a13_sha256": args.a13_sha256},
         "simulation_only": True,
         "hardware_motion_authorized": False,
         "passenger_operation_authorized": False,

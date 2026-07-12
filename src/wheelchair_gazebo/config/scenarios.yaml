@@ -4,6 +4,16 @@
   "simulation_only": true,
   "hardware_motion_authorized": false,
   "passenger_operation_authorized": false,
+  "binding_sources": {
+    "a13": {
+      "path": "contracts/wp0/A13-simulator-fidelity.yaml",
+      "sha256": "f7984b85d8ccf7d0f481f7daa73135109440209ca8c62847c57095da47604123"
+    },
+    "route_truth": {
+      "path": "src/wheelchair_gazebo/config/route_truth_outbound.yaml",
+      "sha256": "2ddbf2660ac98868732e14e5540abaa77c8b6a600e024f1d12a71dee06bebf1b"
+    }
+  },
   "deterministic_repetitions": 10,
   "robustness_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
   "minimum_robustness_acceptable": 29,
@@ -46,7 +56,13 @@
     "--linear-cap-mps", "0.55", "--angular-cap-rps", "0.85",
     "--fault-event-topic", "/simulation/fault_event",
     "--actuator-command-topic", "/wheelchair_base_controller/cmd_vel",
-    "--stop-budget-s", "0.15"
+    "--stop-budget-s", "0.15",
+    "--scenario-sha256", "{scenario_sha256}",
+    "--a13-sha256", "{a13_sha256}",
+    "--claim-tag", "SIMULATION_ONLY",
+    "--route-truth", "{route_truth}",
+    "--route-truth-sha256", "{route_truth_sha256}",
+    "--scenario", "{scenario}"
   ],
   "canonical_topics": {
     "navigation_command": "/cmd_vel_nav",

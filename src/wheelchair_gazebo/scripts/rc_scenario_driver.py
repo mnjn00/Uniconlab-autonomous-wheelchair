@@ -225,6 +225,7 @@ class Evidence:
                     and slope.reason_mask == 0):
                 return False
             return (route.state == route.ACTIVE
+                    and route.mission_id == self.binding.mission_id
                     and route.route_id == self.binding.route_id
                     and route.map_id == self.binding.map_id)
 
@@ -249,6 +250,7 @@ class Evidence:
                     and slope.reason_mask == 0):
                 return False
             return (route.state == route.ACTIVE
+                    and route.mission_id == self.binding.mission_id
                     and route.route_id == self.binding.route_id
                     and route.map_id == self.binding.map_id)
 

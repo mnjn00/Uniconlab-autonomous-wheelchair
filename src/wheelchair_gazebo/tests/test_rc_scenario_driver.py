@@ -239,11 +239,14 @@ class ScenarioDriverTests(unittest.TestCase):
         evidence.update("slope", message(
             state="CLEAR", STATE_CLEAR="CLEAR", STATE_SLOW="SLOW", reason_mask=0))
         evidence.update("route", message(
-            state="ACTIVE", ACTIVE="ACTIVE", route_id="route-out", map_id="map-a"))
+            state="ACTIVE", ACTIVE="ACTIVE", mission_id=evidence.binding.mission_id,
+            route_id="route-out", map_id="map-a"))
 
         self.assertFalse(evidence.startup_ready(12.0))
         evidence.values["geofence"].state = evidence.values["geofence"].INSIDE
         self.assertTrue(evidence.startup_ready(12.0))
+        evidence.values["route"].mission_id = "wrong-mission"
+        self.assertFalse(evidence.startup_ready(12.0))
 
     def test_pre_initialization_requires_fresh_stationary_route_evidence(self):
         evidence = driver.Evidence(self.binding("outbound"), 1.0)
@@ -264,7 +267,8 @@ class ScenarioDriverTests(unittest.TestCase):
         evidence.update("slope", message(
             state="SLOW", STATE_CLEAR="CLEAR", STATE_SLOW="SLOW", reason_mask=0))
         evidence.update("route", message(
-            state="ACTIVE", ACTIVE="ACTIVE", route_id="route-out", map_id="map-a"))
+            state="ACTIVE", ACTIVE="ACTIVE", mission_id=evidence.binding.mission_id,
+            route_id="route-out", map_id="map-a"))
 
         self.assertTrue(evidence.pre_initialization_ready(12.0))
         evidence.values["safety"].state = evidence.values["safety"].STOPPED

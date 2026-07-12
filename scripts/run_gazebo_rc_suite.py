@@ -152,6 +152,104 @@ REQUIRED_LATCH_FAULTS = {
     "reset_in_auto",
     "graph_bypass",
 }
+BINDING_SOURCES = {
+    "a13": (
+        "contracts/wp0/A13-simulator-fidelity.yaml",
+        "f7984b85d8ccf7d0f481f7daa73135109440209ca8c62847c57095da47604123",
+    ),
+    "route_truth": (
+        "src/wheelchair_gazebo/config/route_truth_outbound.yaml",
+        "2ddbf2660ac98868732e14e5540abaa77c8b6a600e024f1d12a71dee06bebf1b",
+    ),
+}
+FROZEN_BINDING_OPTIONS = {
+    "--scenario-sha256": "{scenario_sha256}",
+    "--a13-sha256": "{a13_sha256}",
+    "--claim-tag": CLAIM_TAG,
+    "--route-truth": "{route_truth}",
+    "--route-truth-sha256": "{route_truth_sha256}",
+    "--scenario": "{scenario}",
+}
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _contained_regular_path(root, reference):
+    if not isinstance(reference, str) or Path(reference).is_absolute():
+        raise ValueError("binding source path must be a relative repository path")
+    candidate = root / reference
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("binding source escapes repository root") from exc
+    current = root
+    for part in candidate.relative_to(root).parts:
+        current /= part
+        if current.is_symlink():
+            raise ValueError("binding source must not be symlinked")
+    if not candidate.is_file():
+        raise ValueError("binding source is missing or not a regular file")
+    return candidate
+
+
+def _validate_binding_contract(config):
+    bindings = config.get("binding_sources")
+    if not isinstance(bindings, dict) or set(bindings) != set(BINDING_SOURCES):
+        raise ValueError("binding_sources must define exactly the immutable repository sources")
+    for name, (expected_path, expected_sha256) in BINDING_SOURCES.items():
+        value = bindings.get(name)
+        if not isinstance(value, dict):
+            raise ValueError("binding source {} is missing".format(name))
+        if value.get("path") != expected_path or value.get("sha256") != expected_sha256:
+            raise ValueError("binding source {} does not match the immutable contract".format(name))
+    return bindings
+
+
+def _validate_binding_sources(config, config_path):
+    repository = Path(__file__).resolve().parents[1]
+    config_path = Path(config_path)
+    try:
+        config_path.relative_to(repository)
+    except ValueError as exc:
+        raise ValueError("scenario config must be contained by repository root") from exc
+    if config_path.is_symlink() or not config_path.is_file():
+        raise ValueError("scenario config must be a non-symlink regular file")
+
+    bindings = _validate_binding_contract(config)
+    resolved = {}
+    for name, (_, expected_sha256) in BINDING_SOURCES.items():
+        value = bindings[name]
+        source = _contained_regular_path(repository, value["path"])
+        actual_sha256 = _sha256(source)
+        if actual_sha256 != expected_sha256:
+            raise ValueError("binding source {} hash mismatch".format(name))
+        resolved[name] = source
+    return {
+        "config_path": str(config_path),
+        "scenario_sha256": _sha256(config_path),
+        "a13_sha256": bindings["a13"]["sha256"],
+        "route_truth": str(resolved["route_truth"]),
+        "route_truth_sha256": bindings["route_truth"]["sha256"],
+    }
+
+
+def _validate_collector_binding_options(config):
+    for option, expected in FROZEN_BINDING_OPTIONS.items():
+        if _collector_value(config, option) != expected:
+            raise ValueError("{} must be fixed to {}".format(option, expected))
+
+
+def _runtime_binding(config):
+    binding = config.get("_collector_binding")
+    if not isinstance(binding, dict):
+        raise ValueError("collector binding was not loaded from an immutable config")
+    _validate_collector_binding_options(config)
+    current = _validate_binding_sources(config, binding.get("config_path"))
+    if current != binding:
+        raise ValueError("binding sources changed after config load")
+    return binding
 
 
 class PlatformUnavailable(RuntimeError):
@@ -278,6 +376,8 @@ def _validate_ac5_matrix(data):
             or data.get("hardware_motion_authorized") is not False
             or data.get("passenger_operation_authorized") is not False):
         raise ValueError("qualification config must claim simulation-only authority")
+    _validate_collector_binding_options(data)
+    _validate_binding_contract(data)
 
 def validate_config(data):
     if not isinstance(data, dict):
@@ -317,7 +417,8 @@ def validate_config(data):
 
 
 def load_config(path):
-    text = Path(path).read_text(encoding="utf-8")
+    config_path = Path(path).absolute()
+    text = config_path.read_text(encoding="utf-8")
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
@@ -326,7 +427,9 @@ def load_config(path):
         except ImportError as exc:
             raise ValueError("scenario config is not JSON and PyYAML is unavailable") from exc
         data = yaml.safe_load(text)
-    return validate_config(data)
+    data = validate_config(data)
+    data["_collector_binding"] = _validate_binding_sources(data, config_path)
+    return data
 
 
 def percentile(values, percentage):
@@ -543,6 +646,7 @@ class RosGazeboBackend:
                 last_error, launch_log))
 
     def run_scenario(self, world, seed, robustness=False, fault=None):
+        binding = _runtime_binding(self.config)
         self.preflight()
         launch_spec = self.config["launch"]
         world_file = world["file"]
@@ -581,7 +685,11 @@ class RosGazeboBackend:
                         str(item).format(
                             output=str(evidence_path), world=world["id"], seed=seed,
                             robustness=str(bool(robustness)).lower(),
-                            fault=fault or "none")
+                            fault=fault or "none", scenario=scenario,
+                            scenario_sha256=binding["scenario_sha256"],
+                            a13_sha256=binding["a13_sha256"],
+                            route_truth=binding["route_truth"],
+                            route_truth_sha256=binding["route_truth_sha256"])
                         for item in template
                     ]
                     completed = subprocess.run(

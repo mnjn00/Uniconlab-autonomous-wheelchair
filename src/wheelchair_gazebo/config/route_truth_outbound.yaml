@@ -1,0 +1,8 @@
+immutable: true
+direction: outbound
+navigation_manifest:
+  path: ../../wheelchair_navigation/config/hanyang_routes.yaml
+  sha256: d8ea442b55e53c5d04d6eef5e99e88701bb5e0220b87985a887b49439642b21a
+route_safety_config:
+  path: ../../wheelchair_route_safety/config/route_safety_sim.yaml
+  sha256: 596598a135ba9d4a3ceef9018dfdab37f1095b93a5610fd890570e3055446386

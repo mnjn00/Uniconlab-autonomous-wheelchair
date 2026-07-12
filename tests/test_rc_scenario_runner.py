@@ -202,6 +202,10 @@ class ScenarioOrchestrationTests(unittest.TestCase):
     def test_committed_config_satisfies_frozen_ac5_matrix(self):
         self.assertIs(run_gazebo_rc_suite.validate_config(
             copy.deepcopy(self.config))["simulation_only"], True)
+        self.assertEqual(
+            json.loads(json.dumps(self.config))["_collector_binding"]["config_path"],
+            str(self.config_path),
+        )
 
     def test_ac5_world_repetition_seed_and_acceptance_mutations_fail_closed(self):
         mutations = [
@@ -328,6 +332,7 @@ class ScenarioOrchestrationTests(unittest.TestCase):
         expected_topics = "\n".join(
             list(self.config["canonical_topics"].values()) + action_topics)
         expected_services = "\n".join(self.config["required_services"])
+        collector_commands = []
 
         def completed(command, *args, **kwargs):
             if command[:2] == ["rospack", "find"]:
@@ -343,6 +348,7 @@ class ScenarioOrchestrationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "clock: 1.0\n", "")
             if command[:3] == [
                     "rosrun", "wheelchair_gazebo", "rc_metrics_collector.py"]:
+                collector_commands.append(command)
                 output = Path(command[command.index("--output") + 1])
                 output.write_text(json.dumps(good_scenario()), encoding="utf-8")
                 return subprocess.CompletedProcess(command, 0, "", "")
@@ -365,6 +371,77 @@ class ScenarioOrchestrationTests(unittest.TestCase):
             "scenario_direction:=outbound",
             "world:=" + expected_world,
         ])
+        collector = collector_commands.pop()
+        for option, expected in {
+                "--scenario-sha256": self.config["_collector_binding"]["scenario_sha256"],
+                "--a13-sha256": self.config["_collector_binding"]["a13_sha256"],
+                "--claim-tag": "SIMULATION_ONLY",
+                "--route-truth": self.config["_collector_binding"]["route_truth"],
+                "--route-truth-sha256":
+                    self.config["_collector_binding"]["route_truth_sha256"],
+                "--scenario": "empty",
+        }.items():
+            self.assertEqual(collector.count(option), 1)
+            self.assertEqual(collector[collector.index(option) + 1], expected)
+        collector_module = load_metrics_collector()
+        self.assertEqual(
+            collector_module.derive_mission_id(
+                collector[collector.index("--scenario") + 1], 7, "outbound",
+                "hanyang_aegimun_engineering_outbound"),
+            collector_module.derive_mission_id(
+                "empty", 7, self.config["scenario_direction"],
+                "hanyang_aegimun_engineering_outbound"),
+        )
+
+    def test_binding_option_mutations_fail_closed(self):
+        mutations = [
+            ("wrong scenario hash", "--scenario-sha256", "bad"),
+            ("wrong A13 hash", "--a13-sha256", "bad"),
+            ("wrong route path", "--route-truth", "/tmp/route.yaml"),
+            ("wrong route hash", "--route-truth-sha256", "bad"),
+            ("wrong claim tag", "--claim-tag", "HARDWARE_READY"),
+            ("wrong scenario", "--scenario", "qualification"),
+        ]
+        for name, option, replacement in mutations:
+            with self.subTest(name=name):
+                self.assert_config_rejected(
+                    lambda value, option=option, replacement=replacement:
+                    value["collector_command"].__setitem__(
+                        value["collector_command"].index(option) + 1, replacement),
+                    name,
+                )
+        for option in run_gazebo_rc_suite.FROZEN_BINDING_OPTIONS:
+            with self.subTest(missing=option):
+                self.assert_config_rejected(
+                    lambda value, option=option: value["collector_command"].remove(option),
+                    option,
+                )
+        binding_mutations = [
+            ("missing binding source", lambda value: value["binding_sources"].pop("a13")),
+            ("escaped binding path", lambda value: value["binding_sources"]["route_truth"].update(
+                path="../route_truth_outbound.yaml")),
+            ("wrong binding hash", lambda value: value["binding_sources"]["a13"].update(
+                sha256="0" * 64)),
+        ]
+        for name, mutate in binding_mutations:
+            with self.subTest(name=name):
+                self.assert_config_rejected(mutate, name)
+
+    def test_changed_binding_source_rejects_before_ros_preflight(self):
+        backend = run_gazebo_rc_suite.RosGazeboBackend(self.config)
+        original_sha256 = run_gazebo_rc_suite._sha256
+
+        def tampered_sha256(path):
+            if Path(path).name == "route_truth_outbound.yaml":
+                return "0" * 64
+            return original_sha256(path)
+
+        with mock.patch.object(
+                run_gazebo_rc_suite, "_sha256", side_effect=tampered_sha256), \
+                mock.patch.object(backend, "preflight") as preflight:
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                backend.run_scenario(self.config["worlds"][0], 0)
+        preflight.assert_not_called()
 
     def test_launch_argv_separates_scenario_identity_from_fault_selection(self):
         backend = run_gazebo_rc_suite.RosGazeboBackend(self.config)
