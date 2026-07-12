@@ -513,6 +513,103 @@ def pair_signal(sequence=7, state=gate.CLEAR, stamp=100.0, receipt=100.0,
 def pair_buffer(names=("permission",), stamp_semantics="evaluation"):
     return gate.EvidencePairBuffer(names, 0.25, 0.05, stamp_semantics)
 
+def pending_arm_node(pair, pending_wall=10.0):
+    node = object.__new__(gate.SafetyGateRosNode)
+    node.pairs = {"permission": pair}
+    node.arm_pending_wall = pending_wall
+    return node
+
+
+def consume_pending_arm(node, now=100.0, wall_now=10.01):
+    paired = {name: pair.evidence(now) for name, pair in node.pairs.items()}
+    return node._consume_pending_arm_request(wall_now, now, paired)
+
+
+@pytest.mark.parametrize("status_first", [True, False])
+def test_pending_arm_waits_for_benign_pair_join_in_both_arrival_orders(status_first):
+    pair = pair_buffer()
+    status, signal = pair_status(), pair_signal()
+    first, second = ((pair.update_status, status),
+                     (lambda value: pair.update_signal("permission", value), signal))
+    if not status_first:
+        first, second = second, first
+
+    node = pending_arm_node(pair)
+    first[0](first[1])
+    assert not consume_pending_arm(node)
+    assert node.arm_pending_wall == 10.0
+
+    second[0](second[1])
+    assert consume_pending_arm(node)
+    assert node.arm_pending_wall is None
+    assert not consume_pending_arm(node)
+
+
+@pytest.mark.parametrize("status_first", [True, False])
+def test_pending_arm_ignores_prior_stop_during_new_clear_pair_join(status_first):
+    pair = pair_buffer()
+    pair.update_status(pair_status(clear=False))
+    pair.update_signal("permission", pair_signal(state=gate.STOP))
+    assert pair.evidence(100.0).state == gate.STOP
+
+    status = pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05)
+    signal = pair_signal(sequence=8, stamp=100.05, receipt=100.05)
+    first, second = ((pair.update_status, status),
+                     (lambda value: pair.update_signal("permission", value), signal))
+    if not status_first:
+        first, second = second, first
+
+    node = pending_arm_node(pair)
+    first[0](first[1])
+    assert pair.evidence(100.05).state == gate.UNKNOWN
+    assert not consume_pending_arm(node, now=100.05)
+    assert node.arm_pending_wall == 10.0
+
+    second[0](second[1])
+    assert consume_pending_arm(node, now=100.05)
+    assert node.arm_pending_wall is None
+    assert not consume_pending_arm(node, now=100.05)
+
+
+@pytest.mark.parametrize("status_first", [True, False])
+def test_pending_arm_drops_for_current_generation_restrictive_half(status_first):
+    pair = pair_buffer()
+    status = pair_status(
+        sequence=8, clear=not status_first, source_stamp=100.05,
+        evaluation_stamp=100.05, receipt=100.05)
+    signal = pair_signal(
+        sequence=8, state=gate.CLEAR if status_first else gate.STOP,
+        stamp=100.05, receipt=100.05)
+    update = ((pair.update_status, status) if status_first else
+              (lambda value: pair.update_signal("permission", value), signal))
+
+    node = pending_arm_node(pair)
+    update[0](update[1])
+    assert not consume_pending_arm(node, now=100.05)
+    assert node.arm_pending_wall is None
+
+def test_pending_arm_drops_for_restrictive_partial_or_poisoned_pair():
+    restrictive = pair_buffer()
+    restrictive.update_status(pair_status(clear=False))
+    node = pending_arm_node(restrictive)
+    assert not consume_pending_arm(node)
+    assert node.arm_pending_wall is None
+
+    poisoned = pair_buffer()
+    poisoned.update_status(pair_status())
+    poisoned.update_status(pair_status(clear=False))
+    node = pending_arm_node(poisoned)
+    assert not consume_pending_arm(node)
+    assert node.arm_pending_wall is None
+
+
+def test_pending_arm_drops_after_monotonic_bound_expires():
+    node = pending_arm_node(pair_buffer())
+    assert not consume_pending_arm(
+        node, wall_now=10.0 + gate.ARM_PENDING_TTL_S + 0.001)
+    assert node.arm_pending_wall is None
+
 
 @pytest.mark.parametrize("status_first", [True, False])
 def test_pair_reconciles_only_complete_matching_sequence_in_both_arrival_orders(status_first):

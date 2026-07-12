@@ -29,6 +29,9 @@ for _name, _value in REASONS.items():
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 TOPOLOGY_TTL_S = 0.75
+# An arm edge may wait only for a current pair join; this matches the 0.10 s
+# slope evidence TTL and never extends any evidence authority window.
+ARM_PENDING_TTL_S = 0.10
 _REQUIRED_POLICY_KEYS = frozenset(
     ("geofence", "collision", "slope", "localization", "mode", "driver", "topology"))
 _DEFAULT_POLICY_SHA256 = {
@@ -303,6 +306,70 @@ class EvidencePairBuffer:
         except Exception:
             self.reject()
             return self._unknown()
+    def pending_arm_state(self, now_s, evidence=None):
+        """Classify this pair for an already edge-qualified pending arm request."""
+        with self._lock:
+            if evidence is None:
+                evidence = self._evidence_unlocked(now_s)
+            if self.poisoned or not _finite(now_s):
+                return "drop"
+            status = self.status
+            signals = tuple(self.signals.values())
+            complete = (
+                status is not None
+                and status.sequence == self.sequence
+                and all(signal is not None and signal.sequence == self.sequence
+                        for signal in signals)
+            )
+            if complete:
+                return ("complete" if evidence.state == CLEAR and evidence.reason_mask == 0
+                        else "drop")
+            members = [(status, True, "status")]
+            members.extend((signal, False, name)
+                           for name, signal in self.signals.items())
+            for value, is_status, name in members:
+                if value is None or value.sequence != self.sequence:
+                    continue
+                if not self._pending_arm_value_permissive(
+                        value, is_status, name, now_s):
+                    return "drop"
+            return "wait"
+
+    def _pending_arm_value_permissive(self, value, is_status, name, now_s):
+        if (not self._sequence(value.sequence) or value.reason_mask != 0 or
+                not self._text_valid(value.source) or
+                not _HASH_RE.fullmatch(value.policy_sha256)):
+            return False
+        if is_status:
+            if (value.clear is not True or
+                    not all(_finite(stamp) and stamp > 0.0 for stamp in
+                            (value.source_stamp_s, value.evaluation_stamp_s,
+                             value.receipt_stamp_s))):
+                return False
+            timestamps = {
+                "status_source": value.source_stamp_s,
+                "status_evaluation": value.evaluation_stamp_s,
+                "status_receipt": value.receipt_stamp_s,
+            }
+            caps = (value.max_linear_mps, value.max_angular_rps)
+        else:
+            if (value.state != CLEAR or
+                    not all(_finite(stamp) and stamp > 0.0 for stamp in
+                            (value.stamp_s, value.receipt_stamp_s))):
+                return False
+            timestamps = {
+                "%s_stamp" % name: value.stamp_s,
+                "%s_receipt" % name: value.receipt_stamp_s,
+            }
+            caps = ()
+        if any(cap is not None and (not _finite(cap) or cap < 0.0) for cap in caps):
+            return False
+        return all(
+            now_s - stamp <= self.ttl_s + 1e-12 and
+            stamp - now_s <= self.future_tolerance_s + 1e-12 and
+            (self._last_stamps[key] is None or stamp >= self._last_stamps[key])
+            for key, stamp in timestamps.items()
+        )
 
 
 @dataclass(frozen=True)
@@ -850,6 +917,7 @@ class SafetyGateRosNode:
         self.reset_requested = self.arm_requested = False
         self.reset_level = self.arm_level = None
         self.reset_low_observed = self.arm_low_observed = False
+        self.arm_pending_wall = None
         self.manual_or_disarmed = self.reset_driver_healthy = self.stationary = False
         self.mission_cancelled = False
         self.topology_evidence = None
@@ -1049,15 +1117,21 @@ class SafetyGateRosNode:
             if not value:
                 setattr(self, level, False)
                 setattr(self, low_observed, True)
-            elif getattr(self, low_observed) and not getattr(self, level):
+                return False
+            if getattr(self, low_observed) and not getattr(self, level):
                 setattr(self, request, True)
                 setattr(self, level, True)
+                return True
+            return False
 
     def _reset_cb(self, msg):
         self._request_edge("reset_requested", "reset_level", "reset_low_observed", msg)
 
     def _arm_cb(self, msg):
-        self._request_edge("arm_requested", "arm_level", "arm_low_observed", msg)
+        if self._request_edge("arm_requested", "arm_level", "arm_low_observed", msg):
+            with self._input_lock:
+                if getattr(self, "arm_pending_wall", None) is None:
+                    self.arm_pending_wall = time.monotonic()
 
     def _mission_cb(self, msg):
         self.mission_cancelled = bool(msg.data)
@@ -1086,6 +1160,26 @@ class SafetyGateRosNode:
             deadline += self._wall_period_s
             self._wall_stop.wait(max(0.0, deadline - time.monotonic()))
 
+    def _consume_pending_arm_request(self, wall_now, now, paired):
+        """Return the one stored arm edge only after every pair has joined."""
+        pending_wall = self.arm_pending_wall
+        if pending_wall is None:
+            return False
+        if (not _finite(wall_now) or not _finite(pending_wall) or
+                wall_now < pending_wall or
+                wall_now - pending_wall > ARM_PENDING_TTL_S + 1e-12):
+            self.arm_pending_wall = None
+            return False
+        states = [pair.pending_arm_state(now, paired[name])
+                  for name, pair in self.pairs.items()]
+        if any(state == "drop" for state in states):
+            self.arm_pending_wall = None
+            return False
+        if all(state == "complete" for state in states):
+            self.arm_pending_wall = None
+            return True
+        return False
+
     def _timer_cb(self, _event, wall_now=None):
         wall_now = time.monotonic() if wall_now is None else wall_now
         now = self._now()
@@ -1101,9 +1195,11 @@ class SafetyGateRosNode:
                     clock_fault |= wall_now - self.last_ros_wall >= self._wall_period_s
             if _finite(now) and (self.last_ros_time is None or now > self.last_ros_time):
                 self.last_ros_time, self.last_ros_wall = now, wall_now
-            reset, arm = self.reset_requested, self.arm_requested
-            self.reset_requested = self.arm_requested = False
+            reset = self.reset_requested
+            self.reset_requested = False
             paired = {name: pair.evidence(now) for name, pair in self.pairs.items()}
+            arm = self._consume_pending_arm_request(wall_now, now, paired)
+            self.arm_requested = False
             self.evidence.update({
                 "geofence": paired["geofence"], "collision": paired["collision"],
                 "slope": paired["slope"], "localization": paired["localization"],
