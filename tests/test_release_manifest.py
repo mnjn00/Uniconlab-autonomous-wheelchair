@@ -94,6 +94,8 @@ def test_manifest_is_deterministic_and_verifiable(tmp_path):
     assert verify.verify_manifest(output, tmp_path) == first
     third = generate.generate_manifest(tmp_path, [report], "parent-unarmed", source=source)
     assert third == first
+
+
 def test_excluded_runtime_symlink_is_ignored_by_generation_and_verification(tmp_path):
     report, source = release_tree(tmp_path)
     runtime_link = tmp_path / "artifacts/qa/roslog-startup-final/latest"
