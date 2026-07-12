@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import struct
 import sys
+import copy
 import tempfile
 
 TOPICS = {
@@ -19,6 +20,80 @@ TOPICS = {
 }
 ROSBAGS_VERSION = "0.10.11"
 PINNED_NORMALIZED_BAG_SHA256 = "b317642b44140629b3447f5744adb068f74c57a58a3f6498df59ac582d8d8aa5"
+CANONICAL_LIDAR_FIELDS = [
+    ("x", 0, 7, 1), ("y", 4, 7, 1), ("z", 8, 7, 1),
+    ("intensity", 12, 7, 1), ("offset_time", 16, 6, 1),
+    ("line", 20, 2, 1), ("tag", 21, 2, 1),
+    ("reflectivity", 22, 2, 1), ("lidar_id", 23, 2, 1),
+]
+GLIM_LIDAR_FIELDS = CANONICAL_LIDAR_FIELDS[:4] + [("t", 16, 6, 1)] + CANONICAL_LIDAR_FIELDS[5:]
+GLIM_POINT_TIME_COMPATIBILITY_CONTRACT = {
+    "schema_version": 1,
+    "scope": "derived_glim_rosbag2_only",
+    "translation": "pointcloud2_offset_time_to_t_metadata_only",
+    "preserves": ["data_bytes", "point_order", "header_timestamp", "storage_timestamp", "uint32_values"],
+    "source_field_abi": {"fields": [list(field) for field in CANONICAL_LIDAR_FIELDS], "point_step": 24},
+    "derived_field_abi": {"fields": [list(field) for field in GLIM_LIDAR_FIELDS], "point_step": 24},
+}
+GLIM_POINT_TIME_COMPATIBILITY = {
+    "contract": GLIM_POINT_TIME_COMPATIBILITY_CONTRACT,
+    "contract_sha256": hashlib.sha256(
+        (json.dumps(GLIM_POINT_TIME_COMPATIBILITY_CONTRACT, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False) + "\n").encode()).hexdigest(),
+}
+
+
+def point_field_abi(fields):
+    try:
+        result = tuple((field.name, field.offset, field.datatype, field.count) for field in fields)
+    except (AttributeError, TypeError) as exc:
+        raise ValueError("lidar PointCloud2 fields are malformed") from exc
+    if any(not isinstance(name, str) or isinstance(offset, bool) or isinstance(datatype, bool)
+           or isinstance(count, bool) or not all(isinstance(value, int)
+           for value in (offset, datatype, count)) for name, offset, datatype, count in result):
+        raise ValueError("lidar PointCloud2 fields are malformed")
+    return result
+
+
+def validate_canonical_lidar(message):
+    try:
+        fields = message.fields
+    except AttributeError as exc:
+        raise ValueError("lidar PointCloud2 fields are malformed") from exc
+    if point_field_abi(fields) != tuple(CANONICAL_LIDAR_FIELDS):
+        raise ValueError("lidar PointCloud2 canonical field ABI mismatch")
+    try:
+        height, width = message.height, message.width
+        point_step, row_step = message.point_step, message.row_step
+        is_bigendian, is_dense = message.is_bigendian, message.is_dense
+        data = bytes(message.data)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("lidar PointCloud2 layout is malformed") from exc
+    if (isinstance(height, bool) or isinstance(width, bool) or isinstance(point_step, bool)
+            or isinstance(row_step, bool) or not all(isinstance(value, int)
+            for value in (height, width, point_step, row_step))):
+        raise ValueError("lidar PointCloud2 dimensions are malformed")
+    if (height != 1 or width < 0 or is_bigendian is not False or is_dense is not True
+            or point_step != 24 or row_step != point_step * width or len(data) != row_step * height):
+        raise ValueError("lidar PointCloud2 canonical layout mismatch")
+    return data
+
+
+def glim_lidar_message(message):
+    """Return the derived-only GLIM view without changing canonical payload bytes."""
+    data = validate_canonical_lidar(message)
+    translated = copy.copy(message)
+    fields = list(message.fields)
+    time_field = copy.copy(fields[4])
+    try:
+        time_field.name = "t"
+    except (AttributeError, TypeError):
+        time_field = type(time_field)("t", 16, 6, 1)
+    fields[4] = time_field
+    translated.fields = fields
+    if point_field_abi(translated.fields) != tuple(GLIM_LIDAR_FIELDS) or bytes(translated.data) != data:
+        raise ValueError("derived GLIM PointCloud2 translation mismatch")
+    return translated
 
 
 def sha256_file(path: Path) -> str:
@@ -123,6 +198,8 @@ CREATE INDEX timestamp_idx ON messages(timestamp ASC);
                 ros1_semantic.update(struct.pack("<IQ", len(item.topic), timestamp)); ros1_semantic.update(item.topic.encode())
                 ros1_semantic.update(struct.pack("<I", len(raw))); ros1_semantic.update(raw)
                 decoded = ros1.deserialize_ros1(raw, item.msgtype)
+                if item.topic == "/sensors/lidar/points":
+                    decoded = glim_lidar_message(decoded)
                 cdr = bytes(ros2.serialize_cdr(decoded, item.msgtype))
                 connection.execute("INSERT INTO messages(topic_id,timestamp,data) VALUES(?,?,?)", (topic_ids[item.topic], timestamp, cdr))
                 ros2_semantic.update(struct.pack("<IQ", len(item.topic), timestamp)); ros2_semantic.update(item.topic.encode())
@@ -147,7 +224,8 @@ CREATE INDEX timestamp_idx ON messages(timestamp ASC);
                              "topics": {name: {"type": kind, "count": count} for name, (kind, count) in TOPICS.items()},
                              "first_storage_time_ns": first, "last_storage_time_ns": last,
                              "ros2_semantic_stream_sha256": ros2_semantic.hexdigest()},
-                  "converter": {"rosbags_version": ROSBAGS_VERSION}}
+                  "converter": {"rosbags_version": ROSBAGS_VERSION},
+                  "compatibility": GLIM_POINT_TIME_COMPATIBILITY}
         (stage / "glim_rosbag2_manifest.json").write_bytes(canonical(result))
         os.replace(stage, output)
         return result

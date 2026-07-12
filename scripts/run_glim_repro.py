@@ -24,6 +24,75 @@ THREADS = 1
 GLIM_ROSBAG_EXECUTABLE = "/opt/glim_ws/install/lib/glim_ros/glim_rosbag"
 TOPICS = {"/sensors/lidar/points": ("sensor_msgs/msg/PointCloud2", 6882),
           "/sensors/imu/data": ("sensor_msgs/msg/Imu", 137602)}
+CANONICAL_LIDAR_FIELDS = [
+    ("x", 0, 7, 1), ("y", 4, 7, 1), ("z", 8, 7, 1),
+    ("intensity", 12, 7, 1), ("offset_time", 16, 6, 1),
+    ("line", 20, 2, 1), ("tag", 21, 2, 1),
+    ("reflectivity", 22, 2, 1), ("lidar_id", 23, 2, 1),
+]
+GLIM_LIDAR_FIELDS = CANONICAL_LIDAR_FIELDS[:4] + [("t", 16, 6, 1)] + CANONICAL_LIDAR_FIELDS[5:]
+GLIM_POINT_TIME_COMPATIBILITY_CONTRACT = {
+    "schema_version": 1,
+    "scope": "derived_glim_rosbag2_only",
+    "translation": "pointcloud2_offset_time_to_t_metadata_only",
+    "preserves": ["data_bytes", "point_order", "header_timestamp", "storage_timestamp", "uint32_values"],
+    "source_field_abi": {"fields": [list(field) for field in CANONICAL_LIDAR_FIELDS], "point_step": 24},
+    "derived_field_abi": {"fields": [list(field) for field in GLIM_LIDAR_FIELDS], "point_step": 24},
+}
+GLIM_POINT_TIME_COMPATIBILITY = {
+    "contract": GLIM_POINT_TIME_COMPATIBILITY_CONTRACT,
+    "contract_sha256": hashlib.sha256(
+        (json.dumps(GLIM_POINT_TIME_COMPATIBILITY_CONTRACT, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False) + "\n").encode()).hexdigest(),
+}
+PSEUDO_POINT_TIME_DIAGNOSTICS = (
+    "per-point timestamps are not given",
+    "use pseudo per-point timestamps",
+)
+
+
+def pseudo_point_time_diagnostics(*paths):
+    needles = tuple(item.encode() for item in PSEUDO_POINT_TIME_DIAGNOSTICS)
+    matches = set()
+    for path in paths:
+        carry = b""
+        with Path(path).open("rb") as stream:
+            while chunk := stream.read(64 * 1024):
+                data = (carry + chunk).lower()
+                matches.update(needle.decode() for needle in needles if needle in data)
+                carry = data[-(max(map(len, needles)) - 1):]
+    return sorted(matches)
+
+
+def expected_metadata(start, end, database):
+    duration = end - start
+    lines = [
+        "rosbag2_bagfile_information:", "  version: 5", "  storage_identifier: sqlite3",
+        "  duration:", f"    nanoseconds: {duration}", "  starting_time:",
+        f"    nanoseconds_since_epoch: {start}",
+        f"  message_count: {sum(item[1] for item in TOPICS.values())}",
+        "  topics_with_message_count:",
+    ]
+    for name, (kind, count) in TOPICS.items():
+        lines += [
+            "    - topic_metadata:", f"        name: {name}", f"        type: {kind}",
+            "        serialization_format: cdr", "        offered_qos_profiles: ''",
+            f"      message_count: {count}",
+        ]
+    lines += [
+        "  compression_format: ''", "  compression_mode: ''", "  relative_file_paths:",
+        f"    - {database}", "  files:", f"    - path: {database}", "      starting_time:",
+        f"        nanoseconds_since_epoch: {start}", "      duration:",
+        f"        nanoseconds: {duration}",
+        f"      message_count: {sum(item[1] for item in TOPICS.values())}",
+    ]
+    return "\n".join(lines) + "\n"
+def run_failure(returncode, missing, pseudo_time_diagnostics):
+    if pseudo_time_diagnostics:
+        return "E_GLIM_PSEUDO_POINT_TIME"
+    if returncode:
+        return f"E_GLIM_EXIT_{returncode}"
+    return "E_GLIM_MISSING_ACTUAL_OUTPUT:" + ",".join(missing)
 
 
 def sha256_file(path):
@@ -74,20 +143,35 @@ def load_input_manifest(path):
 def validate_ros2_manifest(path):
     path = path.resolve(strict=True)
     value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("derived rosbag2 manifest is not an object")
     if value.get("artifact_id") != "wheelchair.glim_rosbag2_input/v1" or value.get("nuc_runtime_artifact") is not False:
         raise ValueError("input is not an offline-only derived GLIM rosbag2 artifact")
-    if value.get("source", {}).get("normalized_bag_sha256") != PINNED_NORMALIZED_BAG_SHA256:
+    source = value.get("source")
+    if not isinstance(source, dict) or source.get("normalized_bag_sha256") != PINNED_NORMALIZED_BAG_SHA256:
         raise ValueError("derived input is not bound to the canonical normalized bag")
-    output = value.get("output", {})
+    if value.get("compatibility") != GLIM_POINT_TIME_COMPATIBILITY:
+        raise ValueError("derived input GLIM point-time compatibility contract mismatch")
+    output = value.get("output")
     expected = {name: {"type": kind, "count": count} for name, (kind, count) in TOPICS.items()}
-    if output.get("format") != "rosbag2-sqlite3" or output.get("topics") != expected:
+    if not isinstance(output, dict) or output.get("format") != "rosbag2-sqlite3" or output.get("topics") != expected:
         raise ValueError("derived rosbag2 ABI mismatch")
-    database = path.parent / output.get("database", "")
+    first, last = output.get("first_storage_time_ns"), output.get("last_storage_time_ns")
+    if (isinstance(first, bool) or isinstance(last, bool)
+            or not isinstance(first, int) or not isinstance(last, int) or last < first):
+        raise ValueError("derived rosbag2 storage-time extent mismatch")
+    if output.get("database") != "normalized.db3":
+        raise ValueError("derived rosbag2 database filename mismatch")
+    database = path.parent / "normalized.db3"
     metadata = path.parent / "metadata.yaml"
-    if not database.is_file() or not metadata.is_file():
-        raise ValueError("derived rosbag2 files are absent")
+    if (database.parent != path.parent or metadata.parent != path.parent
+            or database.is_symlink() or metadata.is_symlink()
+            or not database.is_file() or not metadata.is_file()):
+        raise ValueError("derived rosbag2 files must be direct regular non-symlink files")
     if sha256_file(database) != output.get("database_sha256") or sha256_file(metadata) != output.get("metadata_sha256"):
         raise ValueError("derived rosbag2 hash mismatch")
+    if metadata.read_bytes() != expected_metadata(first, last, database.name).encode():
+        raise ValueError("derived rosbag2 metadata binding mismatch")
     connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     rows = connection.execute("SELECT t.name,t.type,COUNT(m.id),MIN(m.timestamp),MAX(m.timestamp) FROM topics t LEFT JOIN messages m ON m.topic_id=t.id GROUP BY t.id ORDER BY t.name").fetchall()
     observed = {name: {"type": kind, "count": count} for name, kind, count, _, _ in rows}
@@ -221,10 +305,12 @@ def main(argv=None):
         command = container_command(args, bag_dir, run_dir); started = time.time()
         try: returncode = subprocess.run(command, check=False, stdout=(run_dir / "stdout.log").open("wb"), stderr=(run_dir / "stderr.log").open("wb")).returncode
         except OSError as exc: returncode = 127; (run_dir / "stderr.log").write_text(str(exc) + "\n")
+        pseudo_time_diagnostics = pseudo_point_time_diagnostics(run_dir / "stdout.log", run_dir / "stderr.log")
         missing = [name for name in ("trajectory.csv", "occupancy.pgm", "occupancy.yaml", "actual_output_evidence.json") if not (run_dir / name).is_file()]
-        okay = returncode == 0 and not missing; success &= okay
+        okay = returncode == 0 and not missing and not pseudo_time_diagnostics; success &= okay
+        failure = None if okay else run_failure(returncode, missing, pseudo_time_diagnostics)
         record = {"run_id": index, "directory": run_dir.name, "status": "success" if okay else "failed",
-                  "failure": None if okay else (f"E_GLIM_EXIT_{returncode}" if returncode else "E_GLIM_MISSING_ACTUAL_OUTPUT:" + ",".join(missing)),
+                  "failure": failure, "pseudo_point_time_diagnostics": pseudo_time_diagnostics,
                   "returncode": returncode, "command": command, "image": args.image, "source_revision": GLIM_REVISION,
                   "glim_ros2_revision": GLIM_ROS2_REVISION, "seed": SEED, "threads": THREADS,
                   "elapsed_s": time.time() - started, "artifacts": artifacts(run_dir)}

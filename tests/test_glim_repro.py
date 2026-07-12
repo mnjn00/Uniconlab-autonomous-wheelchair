@@ -8,6 +8,7 @@ import sqlite3
 import struct
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -92,9 +93,10 @@ class Rosbag2ValidationTests(unittest.TestCase):
             semantic.update(struct.pack("<IQ", len(topic), timestamp)); semantic.update(topic.encode())
             semantic.update(struct.pack("<I", len(payload))); semantic.update(payload)
         connection.close()
-        (self.root / "metadata.yaml").write_text("rosbag2_bagfile_information:\n  storage_identifier: sqlite3\n")
+        (self.root / "metadata.yaml").write_text(runner.expected_metadata(first, last, self.db.name))
         value = {"schema_version": 1, "artifact_id": "wheelchair.glim_rosbag2_input/v1", "nuc_runtime_artifact": False,
                  "source": {"normalized_bag_sha256": runner.PINNED_NORMALIZED_BAG_SHA256},
+                 "compatibility": runner.GLIM_POINT_TIME_COMPATIBILITY,
                  "output": {"format": "rosbag2-sqlite3", "database": self.db.name,
                             "database_sha256": runner.sha256_file(self.db), "metadata_sha256": runner.sha256_file(self.root / "metadata.yaml"),
                             "topics": {name: {"type": kind, "count": count} for name, (kind, count) in runner.TOPICS.items()},
@@ -113,6 +115,48 @@ class Rosbag2ValidationTests(unittest.TestCase):
         with self.db.open("ab") as stream: stream.write(b"corrupt")
         with self.assertRaisesRegex(ValueError, "hash mismatch"):
             runner.validate_ros2_manifest(self.manifest)
+    def test_missing_or_mismatched_compatibility_contract_is_rejected(self):
+        value = json.loads(self.manifest.read_text())
+        value.pop("compatibility")
+        self.manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "point-time compatibility"):
+            runner.validate_ros2_manifest(self.manifest)
+        value["compatibility"] = json.loads(json.dumps(runner.GLIM_POINT_TIME_COMPATIBILITY))
+        value["compatibility"]["contract"]["derived_field_abi"]["fields"][4][0] = "offset_time"
+        self.manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "point-time compatibility"):
+            runner.validate_ros2_manifest(self.manifest)
+    def test_database_traversal_and_symlink_are_rejected(self):
+        value = json.loads(self.manifest.read_text())
+        value["output"]["database"] = "../normalized.db3"
+        self.manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "database filename"):
+            runner.validate_ros2_manifest(self.manifest)
+        value["output"]["database"] = self.db.name
+        self.manifest.write_text(json.dumps(value))
+        target = self.root / "database-target.db3"
+        self.db.replace(target)
+        self.db.symlink_to(target.name)
+        with self.assertRaisesRegex(ValueError, "non-symlink"):
+            runner.validate_ros2_manifest(self.manifest)
+
+    def test_metadata_binding_mismatch_is_rejected_after_rehash(self):
+        value = json.loads(self.manifest.read_text())
+        metadata = self.root / "metadata.yaml"
+        metadata.write_text(runner.expected_metadata(100, 201, self.db.name))
+        value["output"]["metadata_sha256"] = runner.sha256_file(metadata)
+        self.manifest.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "metadata binding"):
+            runner.validate_ros2_manifest(self.manifest)
+
+    def test_pseudo_point_time_diagnostics_are_reported(self):
+        stdout, stderr = self.root / "stdout.log", self.root / "stderr.log"
+        stdout.write_text("per-point timestamps are not given\n")
+        stderr.write_text("Use pseudo per-point timestamps\n")
+        self.assertEqual(runner.pseudo_point_time_diagnostics(stdout, stderr), [
+            "per-point timestamps are not given", "use pseudo per-point timestamps"])
+        self.assertEqual(runner.run_failure(0, [], ["use pseudo per-point timestamps"]),
+                         "E_GLIM_PSEUDO_POINT_TIME")
 
 
 class ActualOutputTests(unittest.TestCase):
@@ -137,6 +181,38 @@ class ActualOutputTests(unittest.TestCase):
             self.assertEqual(evidence, {"trajectory_rows": 3, "submap_count": 1})
             self.assertTrue((output / "trajectory.csv").is_file()); self.assertTrue((output / "occupancy.pgm").is_file())
 
+
+class GlimPointTimeCompatibilityTests(unittest.TestCase):
+    def cloud(self):
+        fields = [SimpleNamespace(name=name, offset=offset, datatype=datatype, count=count)
+                  for name, offset, datatype, count in converter.CANONICAL_LIDAR_FIELDS]
+        header = SimpleNamespace(stamp=SimpleNamespace(sec=7, nanosec=11))
+        payload = struct.pack("<ffffIBBBB", 1.0, 2.0, 3.0, 17.0, 91, 2, 3, 17, 4)
+        return SimpleNamespace(header=header, height=1, width=1, is_bigendian=False,
+                               is_dense=True, point_step=24, row_step=24, fields=fields, data=payload)
+
+    def test_identity_rename_preserves_payload_order_and_timestamps(self):
+        source = self.cloud()
+        derived = converter.glim_lidar_message(source)
+        self.assertEqual(bytes(derived.data), bytes(source.data))
+        self.assertIs(derived.header, source.header)
+        self.assertEqual(converter.point_field_abi(source.fields), tuple(converter.CANONICAL_LIDAR_FIELDS))
+        self.assertEqual(converter.point_field_abi(derived.fields), tuple(converter.GLIM_LIDAR_FIELDS))
+        self.assertEqual(struct.unpack_from("<I", derived.data, 16)[0], 91)
+
+    def test_noncanonical_field_or_malformed_stride_is_rejected(self):
+        source = self.cloud()
+        source.fields[4].name = "t"
+        with self.assertRaisesRegex(ValueError, "field ABI"):
+            converter.validate_canonical_lidar(source)
+        source = self.cloud()
+        source.row_step = 23
+        with self.assertRaisesRegex(ValueError, "layout"):
+            converter.validate_canonical_lidar(source)
+        source = self.cloud()
+        source.data = source.data[:-1]
+        with self.assertRaisesRegex(ValueError, "layout"):
+            converter.validate_canonical_lidar(source)
 
 class ConverterTransactionTests(unittest.TestCase):
     def test_corrupt_source_hash_leaves_no_partial_output(self):
