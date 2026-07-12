@@ -1,9 +1,12 @@
 from pathlib import Path
 from dataclasses import replace
+import inspect
 import importlib.util
 import math
+import sys
 import threading
 import time
+import types
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -852,3 +855,73 @@ def test_generic_signal_alone_never_grants_permission():
     result = pair.evidence(100.0)
     assert result.state == gate.UNKNOWN
     assert result.reason_mask & gate.INPUT_UNKNOWN
+
+def test_timer_publishes_command_before_one_matching_state_snapshot():
+    source = inspect.getsource(gate.SafetyGateRosNode._timer_cb)
+    assert source.count("self.pub.publish(") == 1
+    assert source.count("self.state_pub.publish(") == 1
+    assert source.index("self.pub.publish(") < source.index("self.state_pub.publish(")
+    assert "self.sequence += 1" in source
+    assert "self._build_safety_state(self._observability_snapshot)" in source
+
+
+def test_observability_publishes_diagnostics_without_republishing_state():
+    source = inspect.getsource(gate.SafetyGateRosNode._publish_observability)
+    assert "self.diag_pub.publish(diag)" in source
+    assert "self.state_pub.publish(" not in source
+    assert "self._build_safety_state(" not in source
+
+
+def test_safety_state_snapshot_preserves_all_state_fields(monkeypatch):
+    class Twist:
+        def __init__(self):
+            self.linear = types.SimpleNamespace(x=None)
+            self.angular = types.SimpleNamespace(z=None)
+
+    class SafetyState:
+        def __init__(self):
+            self.header = types.SimpleNamespace(stamp=None, frame_id=None)
+
+    rospy = types.ModuleType("rospy")
+    rospy.Time = types.SimpleNamespace(from_sec=lambda value: ("stamp", value))
+    geometry = types.ModuleType("geometry_msgs.msg")
+    geometry.Twist = Twist
+    interfaces = types.ModuleType("wheelchair_interfaces.msg")
+    interfaces.SafetyState = SafetyState
+    monkeypatch.setitem(sys.modules, "rospy", rospy)
+    monkeypatch.setitem(sys.modules, "geometry_msgs.msg", geometry)
+    monkeypatch.setitem(sys.modules, "wheelchair_interfaces.msg", interfaces)
+
+    node = object.__new__(gate.SafetyGateRosNode)
+    node.cfg = types.SimpleNamespace(release_manifest_sha256="a" * 64)
+    decision = gate.GateDecision(
+        gate.VelocityCommand(0.2, -0.1), "nominal", True, reason_mask=7,
+        state=gate.STATE_CLEAR, armed=True,
+        ages={"command": 0.01, "motion_intent": 0.02, "geofence": 0.03,
+              "collision": 0.04, "localization": 0.05, "slope": 0.06,
+              "mode": 0.07, "driver": 0.08},
+        deadline_miss_count=3, dropped_input_count=4)
+    state = node._build_safety_state((
+        42.5, 9, decision, gate.VelocityCommand(0.4, 0.3), {"sequence": 1}))
+
+    assert (state.header.stamp, state.header.frame_id, state.sequence, state.state,
+            state.reason_mask, state.armed, state.estop_latched) == (
+                ("stamp", 42.5), "base_footprint", 9, gate.STATE_CLEAR, 7, True, True)
+    assert (state.requested_command.linear.x, state.requested_command.angular.z,
+            state.output_command.linear.x, state.output_command.angular.z) == (
+                0.4, 0.3, 0.2, -0.1)
+    assert tuple(getattr(state, name) for name in (
+        "command_age_s", "intent_age_s", "geofence_age_s", "collision_age_s",
+        "localization_age_s", "slope_age_s", "mode_age_s", "driver_age_s")) == (
+            0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08)
+    assert (state.deadline_miss_count, state.dropped_input_count,
+            state.release_manifest_sha256) == (3, 4, "a" * 64)
+
+
+def test_timer_serializes_sequence_and_snapshot_publication():
+    source = inspect.getsource(gate.SafetyGateRosNode._timer_cb)
+    lock_start = source.index("with self._observability_lock:")
+    sequence = source.index("self.sequence += 1")
+    snapshot = source.index("self._observability_snapshot =")
+    state = source.index("self.state_pub.publish(state)")
+    assert lock_start < sequence < snapshot < state

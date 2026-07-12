@@ -1222,6 +1222,8 @@ class SafetyGateRosNode:
             self._observability_snapshot = (
                 now, self.sequence, decision, requested_command,
                 self.pairs["collision"].diagnostic_snapshot())
+            state = self._build_safety_state(self._observability_snapshot)
+            self.state_pub.publish(state)
 
     def _observability_loop(self):
         while not self._observability_stop.wait(1.0):
@@ -1231,15 +1233,11 @@ class SafetyGateRosNode:
                 with self._input_lock:
                     self.internal_fault = True
 
-    def _publish_observability(self):
+    def _build_safety_state(self, snapshot):
         import rospy
-        from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
         from wheelchair_interfaces.msg import SafetyState
-        with self._observability_lock:
-            snapshot = self._observability_snapshot
-        if snapshot is None:
-            return
-        now, sequence, decision, requested, collision_pair = snapshot
+
+        now, sequence, decision, requested, _collision_pair = snapshot
         state = SafetyState()
         state.header.stamp = rospy.Time.from_sec(now)
         state.header.frame_id = "base_footprint"
@@ -1255,7 +1253,16 @@ class SafetyGateRosNode:
         state.deadline_miss_count = decision.deadline_miss_count
         state.dropped_input_count = decision.dropped_input_count
         state.release_manifest_sha256 = self.cfg.release_manifest_sha256
-        self.state_pub.publish(state)
+        return state
+
+    def _publish_observability(self):
+        import rospy
+        from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+        with self._observability_lock:
+            snapshot = self._observability_snapshot
+        if snapshot is None:
+            return
+        now, _sequence, decision, _requested, collision_pair = snapshot
         status = DiagnosticStatus(
             level=DiagnosticStatus.OK if decision.armed else DiagnosticStatus.ERROR,
             name="wheelchair_safety/gate", message=decision.reason,
@@ -1267,7 +1274,7 @@ class SafetyGateRosNode:
             KeyValue("collision_pair_poisoned", str(collision_pair["poisoned"]).lower()),
         ]
         diag = DiagnosticArray()
-        diag.header.stamp = state.header.stamp
+        diag.header.stamp = rospy.Time.from_sec(now)
         diag.status = [status]
         self.diag_pub.publish(diag)
 
