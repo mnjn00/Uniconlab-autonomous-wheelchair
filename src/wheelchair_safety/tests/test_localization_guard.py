@@ -98,13 +98,17 @@ def test_initialization_attempt_survives_bad_sample_then_clears_on_success():
                  transform_age_s=-0.01),
         10.1,
     )
-    assert bad.state == guard.INITIALIZING
+    assert bad.state == guard.LOST
     assert bad.consecutive_good_samples == 0
 
-    for index in range(20):
-        stamp = 11.0 + index * 2.0 / 19.0
+    for index in range(30):
+        stamp = 11.0 + index * 3.0 / 29.0
         result = node.core.evaluate(
-            evidence(stamp, initial_pose_fresh=node._initial_pose_fresh(stamp)),
+            evidence(
+                stamp, reset_count=1, relocalization_requested=True,
+                relocalization_jump_evidence=True, position_jump_m=1.0,
+                initial_pose_fresh=True,
+            ),
             stamp,
         )
     assert clock[0] < node.initialization_attempt_deadline
@@ -498,7 +502,7 @@ def test_scan_ambiguity_retains_viable_one_metre_alias():
         ),
         1.0,
     )
-    assert result.state == guard.INITIALIZING
+    assert result.state == guard.LOST
     assert result.safety_state == guard.SAFETY_STOP
     assert result.reason_mask & guard.REASON_LOCALIZATION_INCONSISTENT
     assert not result.reason_mask & guard.REASON_RESET_REJECTED
@@ -526,7 +530,7 @@ def test_poor_scan_candidate_fails_independently_of_unambiguous_ratio():
         ),
         1.0,
     )
-    assert result.state == guard.INITIALIZING
+    assert result.state == guard.LOST
     assert result.safety_state == guard.SAFETY_STOP
     assert result.reason_mask & guard.REASON_LOCALIZATION_INCONSISTENT
     assert not result.reason_mask & guard.REASON_RESET_REJECTED
@@ -545,10 +549,37 @@ def test_covariance_nis_continuity_and_frozen_pose_are_independently_derived():
     result = guard.LocalizationGuardCore(policy()).evaluate(
         evidence(odom_delta_m=odom_delta, position_jump_m=jump, innovation_nis=nis), 1.0
     )
-    assert result.state == guard.INITIALIZING
+    assert result.state == guard.LOST
     assert result.safety_state == guard.SAFETY_STOP
     assert result.reason_mask & guard.REASON_LOCALIZATION_INCONSISTENT
     assert not result.reason_mask & guard.REASON_RESET_REJECTED
+def test_reset_change_and_source_stamp_regression_latch_loss():
+    core = guard.LocalizationGuardCore(policy())
+    assert initialize(core).state == guard.OK
+    reset = core.evaluate(evidence(3.2, reset_count=1), 3.2)
+    assert reset.state == guard.LOST
+    assert reset.reason_mask & guard.REASON_RESET_REJECTED
+
+    core = guard.LocalizationGuardCore(policy())
+    assert initialize(core, 10.0).state == guard.OK
+    assert core.evaluate(evidence(9.0), 10.0).state == guard.LOST
+    regressed = core.evaluate(evidence(9.1), 10.0)
+    assert regressed.state == guard.LOST
+    assert regressed.reason_mask & guard.REASON_CLOCK
+
+
+def test_map_transform_rotates_odom_pose_and_covariance_before_nis():
+    transform = SimpleNamespace(transform=SimpleNamespace(
+        translation=SimpleNamespace(x=10.0, y=-2.0),
+        rotation=SimpleNamespace(x=0.0, y=0.0, z=math.sqrt(0.5), w=math.sqrt(0.5)),
+    ))
+    pose = guard.transform_planar_pose(transform, guard.Pose2D(2.0, 0.0, 0.0))
+    assert (pose.x, pose.y, pose.yaw) == pytest.approx((10.0, 0.0, math.pi / 2.0))
+    covariance = guard.rotate_planar_covariance(
+        (1.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 9.0), math.pi / 2.0
+    )
+    assert covariance == pytest.approx((4.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 9.0))
+
 
 
 @pytest.mark.parametrize("changes, reason", [
@@ -572,26 +603,20 @@ def test_missing_stale_duplicate_or_inconsistent_evidence_is_lost_stop(changes, 
     assert result.reason_mask & reason
 
 
-def test_repeated_bad_startup_evidence_resets_window_and_recovers_without_reset():
+def test_bad_startup_evidence_latches_loss_and_requires_reset_recovery():
     core = guard.LocalizationGuardCore(policy())
-    for index in range(3):
-        stamp = 1.0 + index * 0.1
-        transient = core.evaluate(
-            evidence(stamp, transform_age_s=-0.01),
-            stamp,
-        )
-        assert transient.state == guard.INITIALIZING
-        assert transient.reason_mask & guard.REASON_STARTUP
-        assert transient.reason_mask & guard.REASON_TF
-        assert not transient.reason_mask & guard.REASON_RESET_REJECTED
-        assert transient.safety_state == guard.SAFETY_STOP
-        assert transient.consecutive_good_samples == 0
-
-    for index in range(20):
-        stamp = 2.0 + index * 2.0 / 19.0
-        result = core.evaluate(evidence(stamp), stamp)
+    failed = core.evaluate(evidence(1.0, transform_age_s=-0.01), 1.0)
+    assert failed.state == guard.LOST
+    assert failed.reason_mask & guard.REASON_TF
+    assert core.evaluate(evidence(1.1), 1.1).state == guard.LOST
+    for index in range(30):
+        stamp = 2.0 + index * 3.0 / 29.0
+        result = core.evaluate(evidence(
+            stamp, reset_count=1, relocalization_requested=True,
+            relocalization_jump_evidence=True, position_jump_m=1.0,
+        ), stamp)
     assert result.state == guard.OK
-    assert result.consecutive_good_samples == 20
+    assert result.consecutive_good_samples == 30
     assert result.safety_state == guard.SAFETY_CLEAR
 
 
@@ -626,11 +651,11 @@ def test_initialization_and_explicit_relocalization_windows_never_clear_early():
     assert result.state == guard.OK and result.safety_state == guard.SAFETY_CLEAR
 
 
-def test_degraded_is_always_stop_and_unqualified_policy_never_clears():
-    degraded = guard.LocalizationGuardCore(policy()).evaluate(evidence(raw_state=3), 1.0)
-    assert degraded.state == guard.DEGRADED and degraded.safety_state == guard.SAFETY_STOP
+def test_non_raw_ok_and_unqualified_policy_never_clear():
+    non_raw_ok = guard.LocalizationGuardCore(policy()).evaluate(evidence(raw_state=3), 1.0)
+    assert non_raw_ok.state == guard.LOST and non_raw_ok.safety_state == guard.SAFETY_STOP
     unqualified = guard.LocalizationGuardCore(policy(calibration_qualified=False)).evaluate(evidence(), 1.0)
-    assert unqualified.state == guard.INITIALIZING
+    assert unqualified.state == guard.LOST
     assert unqualified.safety_state == guard.SAFETY_STOP
     assert unqualified.reason_mask & guard.REASON_POLICY_MISMATCH
 
@@ -718,9 +743,15 @@ def test_candidate_watchdog_candidate_sequence_identity_recovers_without_desync(
     )
     assert node.candidate_sequences.observe(2)
     second = node.core.evaluate(evidence(1.4), 1.4)
+    assert second.state == guard.LOST
     node._publish_result(second, 2, 1.4)
     assert node.candidate_sequences.observe(3)
-    clear = initialize(node.core, 2.0)
+    for index in range(30):
+        stamp = 2.0 + index * 3.0 / 29.0
+        clear = node.core.evaluate(evidence(
+            stamp, reset_count=1, relocalization_requested=True,
+            relocalization_jump_evidence=True, position_jump_m=1.0,
+        ), stamp)
     assert clear.safety_state == guard.SAFETY_CLEAR
     node._publish_result(clear, 3, clear.evaluation_stamp_s)
     assert node.candidate_sequences.observe(4)
@@ -731,7 +762,7 @@ def test_candidate_watchdog_candidate_sequence_identity_recovers_without_desync(
     assert [message.sequence for message in node.signal_pub.messages] == [1, 1, 2, 3, 4]
     for status, signal in zip(node.status_pub.messages, node.signal_pub.messages):
         assert signal.header is not status.header
-        assert signal.header.stamp == status.evaluation_stamp
+        assert signal.header.stamp == status.header.stamp
         assert (
             signal.sequence,
             signal.reason_mask,

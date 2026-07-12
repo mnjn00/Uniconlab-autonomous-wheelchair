@@ -226,7 +226,7 @@ class LocalizationGuardCore:
         self.sequence = 0
         self._good_count = 0
         self._window_start_stamp: Optional[float] = None
-        self._last_stamp: Optional[float] = None
+        self._source_stamp_high_water: Optional[float] = None
         self._last_reset_count: Optional[int] = None
         self._loss_reset_count: Optional[int] = None
 
@@ -243,41 +243,44 @@ class LocalizationGuardCore:
             candidate.zone_id in (self.policy.degraded_zones + self.policy.manual_only_zones)
             or candidate.zone_id in ("unknown", "unknown_zone")
         )
-
-        reset_regressed = self._last_reset_count is not None and candidate.reset_count < self._last_reset_count
+        reset_changed = (
+            self._last_reset_count is not None and
+            candidate.reset_count != self._last_reset_count
+        )
+        reset_regressed = (
+            self._last_reset_count is not None and
+            candidate.reset_count < self._last_reset_count
+        )
         if reset_regressed:
+            reasons |= REASON_LOCALIZATION | REASON_RESET_REJECTED
+        raw_ok = candidate.raw_state == OK
+        if not raw_ok:
+            reasons |= REASON_LOCALIZATION
+            reasons |= (REASON_LOCALIZATION_INCONSISTENT
+                        if candidate.raw_state in (INITIALIZING, DEGRADED, LOST, RELOCALIZING)
+                        else REASON_INPUT_UNKNOWN)
+
+        # A reset is recovery evidence only after loss.  Everywhere else it is a
+        # discontinuity, never an opportunity for an already-clear guard to stay clear.
+        if reset_changed and self.state not in (LOST, RELOCALIZING):
             reasons |= REASON_LOCALIZATION | REASON_RESET_REJECTED
         if self._last_reset_count is None or candidate.reset_count > self._last_reset_count:
             self._last_reset_count = candidate.reset_count
 
-        if candidate.raw_state == 4:
-            reasons |= REASON_LOCALIZATION | REASON_LOCALIZATION_INCONSISTENT
-        elif candidate.raw_state not in (1, 2, 3):
-            reasons |= REASON_LOCALIZATION | REASON_INPUT_UNKNOWN
-        if candidate.raw_state == 3:
-            degraded = True
-
-        if self.state in (UNINITIALIZED, INITIALIZING):
-            initialization_prerequisites = (
-                candidate.initial_pose_fresh and stationary
-            )
-            if reasons or not initialization_prerequisites:
-                self._reset_window()
-                self.state = INITIALIZING
-                return self._result(
-                    INITIALIZING,
-                    REASON_LOCALIZATION | REASON_STARTUP | reasons,
-                    False, candidate, now_s, pose_age,
-                )
-
         if reasons:
-            self._latch_loss(candidate.reset_count)
+            self._transition_loss(candidate.reset_count)
             return self._result(LOST, reasons, False, candidate, now_s, pose_age)
 
         if degraded:
             self._reset_window()
             self.state = DEGRADED
             return self._result(DEGRADED, REASON_LOCALIZATION, False, candidate, now_s, pose_age)
+        if self.state == DEGRADED:
+            self._transition_loss(candidate.reset_count)
+            return self._result(
+                LOST, REASON_LOCALIZATION | REASON_RESET_REJECTED,
+                False, candidate, now_s, pose_age,
+            )
 
         if self.state in (LOST, RELOCALIZING):
             reset_advanced = self._loss_reset_count is not None and candidate.reset_count > self._loss_reset_count
@@ -288,26 +291,40 @@ class LocalizationGuardCore:
             if not recovery_ready:
                 self._reset_window()
                 self.state = LOST
-                reason = REASON_LOCALIZATION | REASON_RESET_REJECTED
-                return self._result(LOST, reason, False, candidate, now_s, pose_age)
+                return self._result(
+                    LOST, REASON_LOCALIZATION | REASON_RESET_REJECTED,
+                    False, candidate, now_s, pose_age,
+                )
             self.state = RELOCALIZING
             self._advance_window(candidate.stamp_s)
-            if self._good_count >= self.policy.relocalization_samples and self._window_span(candidate.stamp_s) >= self.policy.relocalization_span_s:
+            if (self._good_count >= self.policy.relocalization_samples and
+                    self._window_span(candidate.stamp_s) >= self.policy.relocalization_span_s):
                 self.state = OK
                 return self._result(OK, 0, True, candidate, now_s, pose_age)
-            return self._result(RELOCALIZING, REASON_LOCALIZATION | REASON_STARTUP, False, candidate, now_s, pose_age)
+            return self._result(
+                RELOCALIZING, REASON_LOCALIZATION | REASON_STARTUP,
+                False, candidate, now_s, pose_age,
+            )
 
         if self.state in (UNINITIALIZED, INITIALIZING):
-            if not stationary or not candidate.initial_pose_fresh:
+            initialization_prerequisites = candidate.initial_pose_fresh and stationary
+            if not initialization_prerequisites:
                 self._reset_window()
                 self.state = INITIALIZING
-                return self._result(INITIALIZING, REASON_LOCALIZATION | REASON_STARTUP, False, candidate, now_s, pose_age)
+                return self._result(
+                    INITIALIZING, REASON_LOCALIZATION | REASON_STARTUP,
+                    False, candidate, now_s, pose_age,
+                )
             self.state = INITIALIZING
             self._advance_window(candidate.stamp_s)
-            if self._good_count >= self.policy.initialization_samples and self._window_span(candidate.stamp_s) >= self.policy.initialization_span_s:
+            if (self._good_count >= self.policy.initialization_samples and
+                    self._window_span(candidate.stamp_s) >= self.policy.initialization_span_s):
                 self.state = OK
                 return self._result(OK, 0, True, candidate, now_s, pose_age)
-            return self._result(INITIALIZING, REASON_LOCALIZATION | REASON_STARTUP, False, candidate, now_s, pose_age)
+            return self._result(
+                INITIALIZING, REASON_LOCALIZATION | REASON_STARTUP,
+                False, candidate, now_s, pose_age,
+            )
 
         self._advance_window(candidate.stamp_s)
         self.state = OK
@@ -324,9 +341,11 @@ class LocalizationGuardCore:
             pose_age = 0.0
         elif pose_age > self.policy.max_candidate_age_s:
             reason |= REASON_LOCALIZATION | REASON_SENSOR_STALE
-        if self._last_stamp is not None and c.stamp_s <= self._last_stamp:
+        if self._source_stamp_high_water is not None and c.stamp_s <= self._source_stamp_high_water:
             reason |= REASON_LOCALIZATION | REASON_CLOCK
-        self._last_stamp = c.stamp_s
+        if (self._source_stamp_high_water is None or
+                c.stamp_s > self._source_stamp_high_water):
+            self._source_stamp_high_water = c.stamp_s
         if c.frame_id != self.policy.expected_frame:
             reason |= REASON_LOCALIZATION | REASON_TF
         if c.map_id != self.policy.map_id or c.map_sha256 != self.policy.map_sha256:
@@ -392,11 +411,18 @@ class LocalizationGuardCore:
         self._good_count = 0
         self._window_start_stamp = None
 
-    def _latch_loss(self, reset_count: int) -> None:
-        if self.state != LOST:
-            self._loss_reset_count = reset_count
+    def _transition_loss(self, reset_count: Optional[int] = None) -> None:
+        """Enter LOST once and preserve the reset baseline required for recovery."""
+        if self.state not in (LOST, RELOCALIZING):
+            self._loss_reset_count = (
+                self._last_reset_count if reset_count is None else reset_count
+            )
         self.state = LOST
         self._reset_window()
+
+    def force_loss(self) -> None:
+        """Fail closed for adapter failures that cannot yield CandidateEvidence."""
+        self._transition_loss()
 
     def _result(self, state: int, reason: int, passed: bool, c: CandidateEvidence,
                 now_s: float, pose_age: float) -> GuardResult:
@@ -921,6 +947,38 @@ def covariance_nis(dx: float, dy: float, dyaw: float,
 
 def angle_delta(first: float, second: float) -> float:
     return math.atan2(math.sin(first - second), math.cos(first - second))
+def transform_planar_pose(transform, pose: Pose2D) -> Pose2D:
+    """Apply a map<-odom transform to an odometry-frame planar pose."""
+    translation = transform.transform.translation
+    yaw = quaternion_yaw(transform.transform.rotation)
+    cosine, sine = math.cos(yaw), math.sin(yaw)
+    return Pose2D(
+        translation.x + cosine * pose.x - sine * pose.y,
+        translation.y + sine * pose.x + cosine * pose.y,
+        angle_delta(yaw + pose.yaw, 0.0),
+    )
+
+
+def rotate_planar_covariance(covariance: Sequence[float], yaw: float) -> Tuple[float, ...]:
+    """Express an odometry planar covariance in the map frame."""
+    if len(covariance) != 9:
+        raise ValueError("planar covariance must have nine elements")
+    cosine, sine = math.cos(yaw), math.sin(yaw)
+    rotation = (
+        cosine, -sine, 0.0,
+        sine, cosine, 0.0,
+        0.0, 0.0, 1.0,
+    )
+    first = tuple(
+        sum(rotation[row * 3 + inner] * covariance[inner * 3 + column]
+            for inner in range(3))
+        for row in range(3) for column in range(3)
+    )
+    return tuple(
+        sum(first[row * 3 + inner] * rotation[column * 3 + inner]
+            for inner in range(3))
+        for row in range(3) for column in range(3)
+    )
 
 
 class IndependentEvidenceTracker:
@@ -1041,9 +1099,8 @@ class LocalizationGuardNode:
         self.initialization_attempt_timeout_s = float(
             rospy.get_param("~initialization_attempt_timeout_s")
         )
-        if (not math.isfinite(self.initialization_attempt_timeout_s) or
-                self.initialization_attempt_timeout_s <= 0.0):
-            raise ValueError("~initialization_attempt_timeout_s must be finite and positive")
+        if self.initialization_attempt_timeout_s != 30.0:
+            raise ValueError("~initialization_attempt_timeout_s must be the fixed 30 seconds")
         self._monotonic = time.monotonic
         self.policy = load_localization_policy(policy_path, policy_hash)
         if (self.policy.calibration_qualified and
@@ -1067,6 +1124,7 @@ class LocalizationGuardNode:
         self.tf_authorities = {}
         self.stationary_since = None
         self.last_candidate_receipt = None
+        self.last_candidate_source_stamp = None
         self.candidate_sequences = CandidateSequenceTracker()
         self.last_cloud_stamp = None
         self.last_odom_stamp = None
@@ -1089,14 +1147,20 @@ class LocalizationGuardNode:
 
     def _cloud_callback(self, message):
         stamp = message.header.stamp.to_sec()
-        self.cloud_regressed = self.last_cloud_stamp is not None and stamp <= self.last_cloud_stamp
+        self.cloud_regressed = getattr(self, "cloud_regressed", False) or (
+            getattr(self, "last_cloud_stamp", None) is not None and
+            stamp <= self.last_cloud_stamp
+        )
         self.last_cloud_stamp = stamp
         self.cloud = (message, self.rospy.Time.now().to_sec())
 
     def _odom_callback(self, message):
         now = self.rospy.Time.now().to_sec()
         stamp = message.header.stamp.to_sec()
-        self.odom_regressed = self.last_odom_stamp is not None and stamp <= self.last_odom_stamp
+        self.odom_regressed = getattr(self, "odom_regressed", False) or (
+            getattr(self, "last_odom_stamp", None) is not None and
+            stamp <= self.last_odom_stamp
+        )
         self.last_odom_stamp = stamp
         self.odom = (message, now)
         moving = (abs(message.twist.twist.linear.x) >= self.policy.stationary_linear_mps or
@@ -1192,6 +1256,7 @@ class LocalizationGuardNode:
     def _candidate_callback(self, message):
         now = self.rospy.Time.now().to_sec()
         self.last_candidate_receipt = now
+        self.last_candidate_source_stamp = message.pose.header.stamp.to_sec()
         candidate_sequence = int(message.pose.header.seq)
         if not self.candidate_sequences.observe(candidate_sequence):
             self._publish_stop(
@@ -1238,10 +1303,13 @@ class LocalizationGuardNode:
                 not -self.policy.max_future_skew_s <= odom_source_age <= self.policy.max_odom_age_s or
                 now - cloud_receipt > self.policy.max_candidate_age_s or
                 now - odom_receipt > self.policy.max_odom_age_s or
-                abs(cloud_stamp_s - stamp_s) > self.policy.max_candidate_age_s):
+                abs(cloud_stamp_s - stamp_s) > self.policy.max_candidate_age_s or
+                abs(odom_stamp_s - stamp_s) > self.policy.max_odom_age_s):
             raise ValueError("cloud/odom stale, future, regressing, or unsynchronized")
+        if odom.header.frame_id != "odom" or odom.child_frame_id != "base_link":
+            raise ValueError("odometry frame contract is invalid")
         sensor_tf, _ = self._lookup("base_link", cloud.header.frame_id, cloud.header.stamp)
-        _, transform_age = self._lookup("map", "odom", stamp)
+        map_to_odom, transform_age = self._lookup("map", "odom", stamp)
         translation = sensor_tf.transform.translation
         rotation = sensor_tf.transform.rotation
         candidate_pose = Pose2D(
@@ -1269,13 +1337,20 @@ class LocalizationGuardNode:
             self.policy.max_scan_residual_m, self.policy.min_inlier_ratio,
         )
         covariance = planar_covariance(message.pose.pose.covariance)
-        odom_covariance = planar_covariance(odom.pose.covariance)
+        odom_covariance = rotate_planar_covariance(
+            planar_covariance(odom.pose.covariance),
+            quaternion_yaw(map_to_odom.transform.rotation),
+        )
         innovation_covariance = add_planar_covariances(covariance, odom_covariance)
+        map_odom_pose = transform_planar_pose(
+            map_to_odom,
+            Pose2D(
+                odom.pose.pose.position.x, odom.pose.pose.position.y,
+                quaternion_yaw(odom.pose.pose.orientation),
+            ),
+        )
         position_jump, yaw_jump, odom_delta, nis = self.tracker.derive(
-            candidate_pose,
-            Pose2D(odom.pose.pose.position.x, odom.pose.pose.position.y,
-                   quaternion_yaw(odom.pose.pose.orientation)),
-            innovation_covariance,
+            candidate_pose, map_odom_pose, innovation_covariance,
         )
         position_std = math.sqrt(max(covariance[0], covariance[4]))
         yaw_std = math.sqrt(covariance[8])
@@ -1353,9 +1428,14 @@ class LocalizationGuardNode:
             candidate_sequence = self.candidate_sequences.watchdog_sequence()
         candidate_sequence = int(candidate_sequence)
         reason |= REASON_LOCALIZATION
+        self.core.force_loss()
+        source_stamp_s = getattr(self, "last_candidate_source_stamp", None)
+        if source_stamp_s is None or not math.isfinite(source_stamp_s):
+            source_stamp_s = 0.0
+        source_stamp = self.rospy.Time.from_sec(source_stamp_s)
         evaluation_stamp = self.rospy.Time.from_sec(now)
         status = self.LocalizationStatus()
-        status.header.stamp = evaluation_stamp
+        status.header.stamp = source_stamp
         status.header.frame_id = self.policy.expected_frame
         status.evaluation_stamp = evaluation_stamp
         status.sequence = candidate_sequence
@@ -1367,7 +1447,7 @@ class LocalizationGuardNode:
         status.transform_age_s = -1.0
         status.independent_check_passed = False
         signal = self.SafetySignal()
-        signal.header.stamp = status.evaluation_stamp
+        signal.header.stamp = status.header.stamp
         signal.header.frame_id = status.header.frame_id
         signal.sequence = status.sequence
         signal.state = SAFETY_STOP
