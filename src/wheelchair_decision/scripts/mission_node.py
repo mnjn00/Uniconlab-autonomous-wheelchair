@@ -93,7 +93,7 @@ def _move_base_failure_reason(reason: Any) -> bool:
 
 _A06_SIMULATION_ZONE_BINDINGS = {
     (
-        "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc",
+        "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57",
         "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278",
     ): ("zone-simulation-candidate", "candidate-unsurveyed"),
 }

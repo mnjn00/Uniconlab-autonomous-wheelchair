@@ -32,9 +32,9 @@ TOPOLOGY_TTL_S = 0.75
 _REQUIRED_POLICY_KEYS = frozenset(
     ("geofence", "collision", "slope", "localization", "mode", "driver", "topology"))
 _DEFAULT_POLICY_SHA256 = {
-    "geofence": "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc",
+    "geofence": "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57",
     "collision": "5850bb0cd84bc04f4f9cdc78cd347640a3f60f66241ad3f37c196ad63cbeba18",
-    "slope": "2ad11dc946b09b7346dc29d90172e3009518a2399646b6c48448be8993deda0f",
+    "slope": "171d0febf5f3a691d1500d7b7839ef8f4a04637545b79dcb95d825bead7f6d0d",
     "localization": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
     "mode": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
     "driver": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",

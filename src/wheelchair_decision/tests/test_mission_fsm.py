@@ -104,7 +104,7 @@ class RouteProgressAndZoneRegressionTest(unittest.TestCase):
             "map-a",
             "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278",
             "route-hash",
-            "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc",
+            "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57",
             None,
         )
         self.receipt = node.RouteProgressReceipt()

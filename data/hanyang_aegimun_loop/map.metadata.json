@@ -50,7 +50,7 @@
     "cloud_source_sha256": "8350193a1e2d3911de0a96ac5c1a1888f08103e74dab24d21bbf43ccfd02a88d",
     "map_yaml_sha256": "9f36ab2d3d35a667996570b45babb7cb3ba8bd1e706a971af22603da1220e7ff",
     "pgm_sha256": "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278",
-    "route_sha256": "96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32",
+    "route_sha256": "adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672",
     "trajectory_source_sha256": "7c236960bcf4f7600facd023aeb8f4f05906215c10b97a9187c6401f151ec614"
   },
   "limitations": [

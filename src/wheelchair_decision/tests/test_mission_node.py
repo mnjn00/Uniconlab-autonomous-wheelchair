@@ -163,7 +163,7 @@ def test_route_progress_targets_the_waypoint_after_latest_reached():
 
 
 def test_speed_zone_classification_preserves_surfaces_and_exact_candidate():
-    safety_hash = "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc"
+    safety_hash = "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57"
     map_hash = "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"
     assert node.classify_speed_zone(["campus-road"]) == "road"
     assert node.classify_speed_zone(["north-sidewalk"]) == "sidewalk"
@@ -173,7 +173,7 @@ def test_speed_zone_classification_preserves_surfaces_and_exact_candidate():
 
 
 def test_speed_zone_classification_rejects_unknown_and_mixed_candidate_tags():
-    safety_hash = "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc"
+    safety_hash = "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57"
     map_hash = "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"
     for zone_ids, bound_safety, bound_map in (
             ([], "", ""),

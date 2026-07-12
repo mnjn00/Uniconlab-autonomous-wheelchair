@@ -86,6 +86,7 @@ def test_both_explicit_directions_preserve_all_732_recorded_waypoints():
     assert [route.direction for route in routes] == ["outbound", "return"]
     assert [len(route.waypoints) for route in routes] == [359, 373]
     assert sum(len(route.waypoints) for route in routes) == 732
+    assert route_manager.REQUIRED_CORRIDOR_CLEARANCE_M == 0.75
     for route, expected in zip(routes, source_routes):
         assert len(route.segments) == len(route.waypoints) - 1
         assert [(w.x_m, w.y_m, w.yaw_rad) for w in route.waypoints] == [
@@ -98,6 +99,10 @@ def test_both_explicit_directions_preserve_all_732_recorded_waypoints():
         assert terminal.yaw_rad == pytest.approx(math.atan2(terminal.y_m - previous.y_m, terminal.x_m - previous.x_m), abs=1e-6)
     assert routes[0].waypoints[-1].x_m == routes[1].waypoints[0].x_m
     assert routes[0].waypoints[-1].y_m == routes[1].waypoints[0].y_m
+    assert [(route.waypoints[0].x_m, route.waypoints[0].y_m, route.waypoints[-1].x_m, route.waypoints[-1].y_m) for route in routes] == [
+        (0.014207, 0.021744, 227.989433, 26.052264),
+        (227.989433, 26.052264, -0.912387, -0.284932),
+    ]
     assert [w.waypoint_id for w in routes[1].waypoints] != list(reversed([w.waypoint_id for w in routes[0].waypoints]))
 
 
@@ -275,3 +280,17 @@ def test_ros_is_lazy_and_adapter_has_no_motion_or_geofence_authority():
     assert 'Publisher("/safety/geofence"' not in text
     assert 'Publisher("/cmd_vel' not in text
     assert "runtime_generation_allowed: false" in CONFIG.read_text(encoding="utf-8")
+def test_resealed_route_must_match_the_hash_pinned_waypoint_source(tmp_path):
+    value = copy.deepcopy(_raw())
+    value["map"]["yaml_path"] = str(MAP_YAML)
+    value["map"]["pgm_path"] = str(MAP_PGM)
+    value["waypoint_asset"]["path"] = str(SOURCE)
+    points = value["outbound_route"]["waypoints"]
+    points[1]["x_m"] += 0.1
+    points[0]["yaw_rad"] = math.atan2(points[1]["y_m"] - points[0]["y_m"],
+                                      points[1]["x_m"] - points[0]["x_m"])
+    points[1]["yaw_rad"] = math.atan2(points[2]["y_m"] - points[1]["y_m"],
+                                      points[2]["x_m"] - points[1]["x_m"])
+    _seal(value)
+    with pytest.raises(route_manager.RouteValidationError, match="disagrees with pinned source"):
+        route_manager.load_manifest(str(_write(tmp_path, value)))

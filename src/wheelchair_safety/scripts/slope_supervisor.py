@@ -78,7 +78,7 @@ class SlopePolicy:
     passenger_operation_authorized: bool = False
     route_safety_source: str = "wheelchair_route_safety"
     route_safety_manifest_id: str = "hanyang-route-safety-candidate-v1"
-    route_safety_manifest_sha256: str = "a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc"
+    route_safety_manifest_sha256: str = "93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57"
     route_safety_map_id: str = "hanyang_aegimun_loop"
     route_safety_map_sha256: str = "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"
     route_zone_policies: Tuple[Tuple[str, str], ...] = (("zone-simulation-candidate", "normal"),)

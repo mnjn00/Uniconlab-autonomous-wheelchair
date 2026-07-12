@@ -20,6 +20,10 @@ DIRECTIONS = ("outbound", "return")
 QUALIFICATIONS = ("candidate", "simulation_qualified", "closed_course_qualified", "campus_approved")
 BEHAVIORS = ("proceed", "yield", "stop", "terminal_stop")
 TAGS = ("none", "candidate", "unknown")
+WHEELCHAIR_HALF_WIDTH_M = 0.30
+LOCALIZATION_MARGIN_M = 0.25
+FIXED_BOUNDARY_MARGIN_M = 0.20
+REQUIRED_CORRIDOR_CLEARANCE_M = WHEELCHAIR_HALF_WIDTH_M + LOCALIZATION_MARGIN_M + FIXED_BOUNDARY_MARGIN_M
 
 
 class RouteValidationError(ValueError):
@@ -108,6 +112,162 @@ def _file_sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+def _load_yaml_strict(path: Path, label: str) -> Any:
+    """Load YAML without accepting duplicate-key resealing tricks."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RouteValidationError("PyYAML is required to load route manifests") from exc
+
+    class StrictLoader(yaml.SafeLoader):
+        pass
+
+    def construct_mapping(loader: Any, node: Any, deep: bool = False) -> Mapping[str, Any]:
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            if key in mapping:
+                raise RouteValidationError("%s has a duplicate key: %r" % (label, key))
+            mapping[key] = loader.construct_object(value_node, deep=deep)
+        return mapping
+
+    StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
+    try:
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=StrictLoader)
+    except (OSError, yaml.YAMLError) as exc:
+        raise RouteValidationError("cannot read %s: %s" % (label, exc)) from exc
+
+
+@dataclass(frozen=True)
+class _OccupancyGrid:
+    width: int
+    height: int
+    resolution_m: float
+    origin_x_m: float
+    origin_y_m: float
+    occupied_threshold: float
+    free_threshold: float
+    negate: int
+    pixels: bytes
+
+    def _cell(self, x_m: float, y_m: float) -> Tuple[int, int]:
+        column = int(math.floor((x_m - self.origin_x_m) / self.resolution_m))
+        row_from_bottom = int(math.floor((y_m - self.origin_y_m) / self.resolution_m))
+        return column, self.height - 1 - row_from_bottom
+
+    def is_free(self, x_m: float, y_m: float) -> bool:
+        column, row = self._cell(x_m, y_m)
+        if column < 0 or column >= self.width or row < 0 or row >= self.height:
+            return False
+        value = self.pixels[row * self.width + column]
+        occupancy = (value if self.negate else 255 - value) / 255.0
+        return occupancy < self.free_threshold
+
+
+def _pgm_tokens(data: bytes) -> Tuple[List[bytes], int]:
+    tokens: List[bytes] = []
+    index = 0
+    while len(tokens) < 4:
+        while index < len(data) and data[index:index + 1].isspace():
+            index += 1
+        if index < len(data) and data[index:index + 1] == b"#":
+            while index < len(data) and data[index:index + 1] not in (b"\r", b"\n"):
+                index += 1
+            continue
+        start = index
+        while index < len(data) and not data[index:index + 1].isspace():
+            index += 1
+        if start == index:
+            raise RouteValidationError("map PGM header is truncated")
+        tokens.append(data[start:index])
+    return tokens, index
+
+
+def _load_occupancy_grid(map_yaml_path: Path, map_pgm_path: Path) -> _OccupancyGrid:
+    map_value = _load_yaml_strict(map_yaml_path, "map YAML")
+    fields = ("image", "mode", "resolution", "origin", "negate", "occupied_thresh", "free_thresh")
+    value = _object(map_value, "map YAML", fields, fields)
+    if value["mode"] != "trinary" or value["image"] != map_pgm_path.name:
+        raise RouteValidationError("map YAML image or mode mismatch")
+    origin = value["origin"]
+    if not isinstance(origin, list) or len(origin) != 3:
+        raise RouteValidationError("map YAML origin must be a three-element list")
+    resolution = _finite(value["resolution"], "map YAML resolution", 1e-6, 100.0)
+    origin_x, origin_y = _finite(origin[0], "map YAML origin.x"), _finite(origin[1], "map YAML origin.y")
+    if _finite(origin[2], "map YAML origin.yaw", -1e-9, 1e-9) != 0.0:
+        raise RouteValidationError("rotated map origins are unsupported")
+    negate = value["negate"]
+    if isinstance(negate, bool) or negate not in (0, 1):
+        raise RouteValidationError("map YAML negate must be zero or one")
+    occupied, free = _finite(value["occupied_thresh"], "map YAML occupied threshold", 0.0, 1.0), _finite(value["free_thresh"], "map YAML free threshold", 0.0, 1.0)
+    if free >= occupied:
+        raise RouteValidationError("map YAML thresholds are invalid")
+    try:
+        data = map_pgm_path.read_bytes()
+    except OSError as exc:
+        raise RouteValidationError("cannot read map PGM: %s" % exc) from exc
+    tokens, offset = _pgm_tokens(data)
+    if tokens[0] != b"P5":
+        raise RouteValidationError("map PGM must be binary P5")
+    try:
+        width, height, maximum = (int(token) for token in tokens[1:])
+    except ValueError as exc:
+        raise RouteValidationError("map PGM header is invalid") from exc
+    if width <= 0 or height <= 0 or maximum != 255:
+        raise RouteValidationError("map PGM dimensions or depth are invalid")
+    if offset >= len(data) or not data[offset:offset + 1].isspace():
+        raise RouteValidationError("map PGM header is not terminated")
+    offset += 1
+    pixels = data[offset:]
+    if len(pixels) != width * height:
+        raise RouteValidationError("map PGM payload size mismatch")
+    return _OccupancyGrid(width, height, resolution, origin_x, origin_y, occupied, free, negate, pixels)
+
+
+def _validate_source_route(raw: Any, direction: str, route: Route, indexes: Sequence[int]) -> None:
+    fields = ("direction", "route_id", "route_manifest_sha256", "segments", "waypoints")
+    value = _object(raw, "waypoint source " + direction, fields, fields)
+    if value["direction"] != direction or not isinstance(value["waypoints"], list) or len(value["waypoints"]) != len(indexes):
+        raise RouteValidationError("%s waypoint source direction/index mismatch" % direction)
+    for index, (source, waypoint) in enumerate(zip(value["waypoints"], route.waypoints)):
+        source_value = _object(source, "waypoint source %s[%d]" % (direction, index),
+                               ("x_m", "y_m", "yaw_rad"), ("x_m", "y_m", "yaw_rad"))
+        if (_finite(source_value["x_m"], "source x"), _finite(source_value["y_m"], "source y"),
+                _finite(source_value["yaw_rad"], "source yaw", -math.pi, math.pi)) != (waypoint.x_m, waypoint.y_m, waypoint.yaw_rad):
+            raise RouteValidationError("%s waypoint %d disagrees with pinned source" % (direction, index))
+    segments = value["segments"]
+    if not isinstance(segments, list) or len(segments) != 1:
+        raise RouteValidationError("%s source must define one complete directional segment" % direction)
+    source_segment = _object(segments[0], "waypoint source " + direction + " segment",
+                             ("corridor_margin_m", "end_waypoint_index", "hardware_authorized", "max_angular_rps", "max_linear_mps", "segment_id", "start_waypoint_index", "zone_ids"),
+                             ("corridor_margin_m", "end_waypoint_index", "hardware_authorized", "max_angular_rps", "max_linear_mps", "segment_id", "start_waypoint_index", "zone_ids"))
+    if (source_segment["start_waypoint_index"] != 0
+            or source_segment["end_waypoint_index"] != len(value["waypoints"]) - 1):
+        raise RouteValidationError("%s source segment does not cover its local route" % direction)
+    source_margin = _finite(source_segment["corridor_margin_m"], "source corridor margin", 1e-6, 100.0)
+    source_zones = source_segment["zone_ids"]
+    if source_segment["hardware_authorized"] is not False or not isinstance(source_zones, list):
+        raise RouteValidationError("%s source segment authority is invalid" % direction)
+    for segment in route.segments:
+        if segment.corridor_margin_m != source_margin or list(segment.zone_ids) != source_zones or segment.hardware_authorized:
+            raise RouteValidationError("%s segment semantics disagree with pinned source" % direction)
+
+
+def _validate_route_occupancy(route: Route, grid: _OccupancyGrid) -> None:
+    """Require free centerline and the declared fixed corridor; unknown is never free."""
+    for segment, first, second in zip(route.segments, route.waypoints, route.waypoints[1:]):
+        length = math.hypot(second.x_m - first.x_m, second.y_m - first.y_m)
+        samples = max(1, int(math.ceil(length / (grid.resolution_m / 2.0))))
+        normal_x, normal_y = -(second.y_m - first.y_m) / length, (second.x_m - first.x_m) / length
+        lateral_steps = int(math.ceil(max(segment.corridor_margin_m, REQUIRED_CORRIDOR_CLEARANCE_M) / (grid.resolution_m / 2.0)))
+        for sample in range(samples + 1):
+            fraction = sample / samples
+            center_x = first.x_m + fraction * (second.x_m - first.x_m)
+            center_y = first.y_m + fraction * (second.y_m - first.y_m)
+            for lateral in range(-lateral_steps, lateral_steps + 1):
+                offset = lateral * grid.resolution_m / 2.0
+                if not grid.is_free(center_x + normal_x * offset, center_y + normal_y * offset):
+                    raise RouteValidationError("%s crosses occupied, unknown, or off-map space" % segment.segment_id)
 
 
 @dataclass(frozen=True)
@@ -278,15 +438,8 @@ def _validate_route(raw: Any, direction: str, map_id: str, map_sha256: str) -> R
 
 def load_manifest(path: str, verify_assets: bool = True) -> RouteManifest:
     """Load a strict frozen manifest. ROS is intentionally not imported here."""
-    try:
-        import yaml
-    except ImportError as exc:
-        raise RouteValidationError("PyYAML is required to load route manifests") from exc
     manifest_path = Path(path).resolve()
-    try:
-        raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise RouteValidationError("cannot read route manifest: %s" % exc) from exc
+    raw = _load_yaml_strict(manifest_path, "route manifest")
     fields = ("schema_version", "manifest_id", "owner", "reviewer", "status", "provenance", "immutable", "map", "waypoint_asset", "safety_manifest_sha256", "geometry_semantics", "generation", "outbound_route", "return_route", "content_sha256")
     value = _object(raw, "manifest", fields, fields)
     if value["schema_version"] != 1 or value["immutable"] is not True or value["status"] not in QUALIFICATIONS:
@@ -328,6 +481,51 @@ def load_manifest(path: str, verify_assets: bool = True) -> RouteManifest:
                                          _identifier(map_value["map_id"], "map.map_id"),
                                          _sha(map_value["sha256"], "map.sha256"))
               for direction in DIRECTIONS}
+    map_yaml_path = (manifest_path.parent / map_value["yaml_path"]).resolve()
+    map_pgm_path = (manifest_path.parent / map_value["pgm_path"]).resolve()
+    source_path = (manifest_path.parent / waypoint_asset["path"]).resolve()
+    source = _load_yaml_strict(source_path, "waypoint source")
+    source_fields = ("geometry_semantics", "immutable", "manifest_id", "map", "outbound_route",
+                     "owner", "provenance", "return_route", "reviewer", "safety_manifest_sha256",
+                     "schema_version", "status")
+    source_value = _object(source, "waypoint source", source_fields, source_fields)
+    source_geometry = _object(source_value["geometry_semantics"], "waypoint source geometry",
+                              ("angular_unit", "coordinate_frame", "linear_unit",
+                               "nonfinite_geometry_action", "point_order", "unknown_geometry_action"),
+                              ("angular_unit", "coordinate_frame", "linear_unit",
+                               "nonfinite_geometry_action", "point_order", "unknown_geometry_action"))
+    if (source_value["schema_version"] != 1 or source_value["immutable"] is not True
+            or source_value["status"] != "candidate"
+            or tuple(source_geometry.values()) != ("rad", "map", "m", "REJECT_AND_STOP",
+                                                   "ordered_centerline", "STOP")):
+        raise RouteValidationError("waypoint source schema or geometry semantics mismatch")
+    _identifier(source_value["manifest_id"], "waypoint source manifest_id")
+    if not isinstance(source_value["owner"], str) or not source_value["owner"]:
+        raise RouteValidationError("waypoint source owner is invalid")
+    if not isinstance(source_value["reviewer"], str) or not source_value["reviewer"]:
+        raise RouteValidationError("waypoint source reviewer is invalid")
+    _sha(source_value["safety_manifest_sha256"], "waypoint source safety manifest hash")
+    source_provenance = _object(source_value["provenance"], "waypoint source provenance",
+                                ("evidence_level", "source_path", "source_sha256", "surveyed"),
+                                ("evidence_level", "source_path", "source_sha256", "surveyed"))
+    if (source_provenance["evidence_level"] != "candidate"
+            or source_provenance["surveyed"] is not False
+            or not isinstance(source_provenance["source_path"], str)
+            or not source_provenance["source_path"]):
+        raise RouteValidationError("waypoint source provenance is invalid")
+    _sha(source_provenance["source_sha256"], "waypoint source provenance hash")
+    source_map = _object(source_value["map"], "waypoint source map", ("frame_id", "map_id", "sha256"), ("frame_id", "map_id", "sha256"))
+    if (source_map["frame_id"], source_map["map_id"], _sha(source_map["sha256"], "waypoint source map hash")) != (
+            "map", map_value["map_id"], _sha(map_value["sha256"], "map.sha256")):
+        raise RouteValidationError("waypoint source map binding mismatch")
+    for direction in DIRECTIONS:
+        _validate_source_route(source_value[direction + "_route"], direction, routes[direction], samples[direction])
+    indexed_source_points = list(samples["outbound"]) + list(samples["return"])
+    if indexed_source_points != list(range(sum(len(routes[direction].waypoints) for direction in DIRECTIONS))):
+        raise RouteValidationError("global source waypoint indexes must be contiguous, unique, and in range")
+    grid = _load_occupancy_grid(map_yaml_path, map_pgm_path)
+    for direction in DIRECTIONS:
+        _validate_route_occupancy(routes[direction], grid)
     if (not provenance["surveyed"] or provenance["evidence_level"] in ("candidate", "simulation_only")) and (
             value["status"] != "candidate" or any(route.qualification != "candidate" for route in routes.values())):
         raise RouteValidationError("unknown route qualification evidence requires candidate status")

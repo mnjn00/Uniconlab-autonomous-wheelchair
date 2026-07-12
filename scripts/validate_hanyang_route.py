@@ -12,8 +12,22 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
-OCCUPIED_MAX = 50
-FREE_MIN = 250
+def classify_pixel(pixel, negate, occupied_thresh, free_thresh):
+    """Classify an 8-bit map pixel using ROS trinary occupancy semantics."""
+    if (not isinstance(pixel, int) or isinstance(pixel, bool) or not 0 <= pixel <= 255):
+        raise ValueError("map pixel must be an integer in [0, 255]")
+    if not isinstance(negate, int) or isinstance(negate, bool) or negate not in (0, 1):
+        raise ValueError("map negate must be 0 or 1")
+    if (not finite_number(free_thresh) or not finite_number(occupied_thresh)
+            or not 0 <= free_thresh <= occupied_thresh <= 1):
+        raise ValueError("map thresholds must satisfy 0 <= free <= occupied <= 1")
+
+    occupancy = pixel / 255.0 if negate else (255 - pixel) / 255.0
+    if occupancy < free_thresh:
+        return "free"
+    if occupancy > occupied_thresh:
+        return "occupied"
+    return "unknown"
 
 
 def digest(path):
@@ -122,8 +136,25 @@ def validate(map_yaml_path, route_path, metadata_path=None, required_margin=0.0)
     if not finite_number(resolution) or resolution <= 0 or not isinstance(origin, list) or len(origin) < 2 or not all(finite_number(v) for v in origin[:2]):
         errors.append("E_MAP_GEOMETRY: resolution/origin invalid")
         resolution, origin = 1.0, [0.0, 0.0]
-    if map_document.get("mode", "trinary") != "trinary" or map_document.get("negate", 0) != 0:
-        errors.append("E_MAP_SEMANTICS: expected trinary negate=0")
+    try:
+        classify_pixel(
+            0,
+            map_document["negate"],
+            map_document["occupied_thresh"],
+            map_document["free_thresh"],
+        )
+    except (KeyError, ValueError):
+        errors.append("E_MAP_SEMANTICS: expected trinary map with valid negate and thresholds")
+        classify = None
+    else:
+        if map_document.get("mode", "trinary") != "trinary":
+            errors.append("E_MAP_SEMANTICS: expected trinary map with valid negate and thresholds")
+            classify = None
+        else:
+            negate = map_document["negate"]
+            occupied_thresh = map_document["occupied_thresh"]
+            free_thresh = map_document["free_thresh"]
+            classify = lambda pixel: classify_pixel(pixel, negate, occupied_thresh, free_thresh)
     routes = extract_routes(route_document)
     if len(routes) == 1:
         errors.append(
@@ -171,9 +202,10 @@ def validate(map_yaml_path, route_path, metadata_path=None, required_margin=0.0)
                 errors.append(f"E_POSE_OUTSIDE_MAP: {route_name}[{index}]")
                 continue
             pixel = pixels[row * width + x]
-            if pixel <= OCCUPIED_MAX:
+            classification = classify(pixel) if classify is not None else "unknown"
+            if classification == "occupied":
                 occupied_failures += 1
-            elif pixel < FREE_MIN:
+            elif classification != "free":
                 unknown_failures += 1
             margin_failed = False
             for dy in range(-radius, radius + 1):
@@ -182,7 +214,8 @@ def validate(map_yaml_path, route_path, metadata_path=None, required_margin=0.0)
                         continue
                     xx, yy = x + dx, row - dy
                     if (xx < 0 or yy < 0 or xx >= width or yy >= height
-                            or pixels[yy * width + xx] < FREE_MIN):
+                            or classify is None
+                            or classify(pixels[yy * width + xx]) != "free"):
                         margin_failed = True
                         break
                 if margin_failed:

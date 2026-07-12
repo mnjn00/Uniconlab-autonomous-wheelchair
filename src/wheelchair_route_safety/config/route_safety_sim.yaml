@@ -3,12 +3,12 @@ hardware_motion_authorized: false
 passenger_operation_authorized: false
 manifest_path: ../../../contracts/wp0/route-safety-candidate.yaml
 schema_path: ../../../contracts/wp0/A06-route-safety-schema.json
-expected_manifest_sha256: a3c51baf020eb79e1550ba0d1a7fb40dddfff7e50ff2d142f1ebc3479bf732dc
+expected_manifest_sha256: 93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57
 expected_map_sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278
 expected_geometry_sha256: a1625f13ad0a7eb8fc199ed24bd898e67a0249d72c401c77b64dc738d23c3925
 expected_route_hashes:
-  hanyang_aegimun_engineering_outbound: eef9d2edcab8433fa69036338820d8d44880992e3cc14cbea8d2786468bbe30e
-  hanyang_engineering_aegimun_return: 5135717428df1d4f6efb8025c5964e5f161f101d01bd6bbf45e8aee72311ede0
+  hanyang_aegimun_engineering_outbound: 7466ff78ce529d4285adad08fa48cb9b9f5ef9f74a9aa5ea98f0708e8cdde70d
+  hanyang_engineering_aegimun_return: f31138befc3b578d0a556737742f8253c6ef5a56d82899f08c07c3b6bd4d8b13
 measured_footprint_length_m: 0.97
 measured_footprint_width_m: 0.6
 pose_ttl_s: 0.25
@@ -21,9 +21,9 @@ simulation_geometry:
   runtime_mutation_allowed: false
   widening_allowed: false
   route_asset_path: ../../../data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml
-  route_asset_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+  route_asset_sha256: adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672
   navigation_route_manifest_path: ../../wheelchair_navigation/config/hanyang_routes.yaml
-  navigation_route_manifest_sha256: d8ea442b55e53c5d04d6eef5e99e88701bb5e0220b87985a887b49439642b21a
+  navigation_route_manifest_sha256: 3861e21a6360fe7e32f833f867acb7dd50dccbf45a67f17d93699cea9cbe13c6
   recorded_corridor_margin_m: 0.2
   footprint_clearance_margin_m: 0.2
   localization_uncertainty_margin_m: 0.25

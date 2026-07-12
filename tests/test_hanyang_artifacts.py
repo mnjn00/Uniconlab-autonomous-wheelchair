@@ -35,13 +35,31 @@ class HanyangArtifactTests(unittest.TestCase):
         pgm_sha256 = hashlib.sha256(pgm.read_bytes()).hexdigest()
         route_sha256 = hashlib.sha256(route.read_bytes()).hexdigest()
         self.assertEqual(pgm_sha256, "c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278")
-        self.assertEqual(route_sha256, "96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32")
+        self.assertEqual(route_sha256, "adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672")
         self.assertEqual(self.report["map"]["sha256"], pgm_sha256)
         self.assertEqual(self.report["route"]["sha256"], route_sha256)
         self.assertEqual(self.metadata["hashes"]["pgm_sha256"], pgm_sha256)
         self.assertEqual(self.metadata["hashes"]["route_sha256"], route_sha256)
         self.assertEqual(self.route["map"]["sha256"], pgm_sha256)
 
+    def test_trinary_pixel_classification_matches_map_metadata(self):
+        map_document = VALIDATE.load_yaml(DATA / "map.yaml")
+        classify = VALIDATE.classify_pixel
+        negate = map_document["negate"]
+        occupied_thresh = map_document["occupied_thresh"]
+        free_thresh = map_document["free_thresh"]
+
+        self.assertEqual(classify(192, negate, occupied_thresh, free_thresh), "free")
+        self.assertEqual(classify(191, negate, occupied_thresh, free_thresh), "unknown")
+        self.assertEqual(classify(89, negate, occupied_thresh, free_thresh), "occupied")
+        self.assertEqual(classify(90, negate, occupied_thresh, free_thresh), "unknown")
+        self.assertEqual(classify(0, 1, occupied_thresh, free_thresh), "free")
+        self.assertEqual(classify(255, 1, occupied_thresh, free_thresh), "occupied")
+
+        with self.assertRaises(ValueError):
+            classify(192, 2, occupied_thresh, free_thresh)
+        with self.assertRaises(ValueError):
+            classify(192, negate, 0.2, 0.25)
     def test_current_assets_remain_candidate_only(self):
         self.assertTrue(self.report["valid"])
         self.assertTrue(self.report["candidate_qualified"])

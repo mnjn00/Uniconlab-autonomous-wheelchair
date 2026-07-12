@@ -146,7 +146,7 @@ committed_map_candidate:
   artifacts:
     - {path: data/hanyang_aegimun_loop/map.yaml, sha256: 9f36ab2d3d35a667996570b45babb7cb3ba8bd1e706a971af22603da1220e7ff}
     - {path: data/hanyang_aegimun_loop/map.pgm, sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278}
-    - {path: data/hanyang_aegimun_loop/map.metadata.json, sha256: 6b7a0b5bc6ccd38a35c83c08971e41959e0cb57c20ebd59fe04c4d4b0fb82642}
+    - {path: data/hanyang_aegimun_loop/map.metadata.json, sha256: 512ab77711f4b89b0a85690e58d04e842e5520f3671288c62f7ca7040f455700}
   reported_generation_metadata:
     resolution_m: 0.1
     grid_width: 3220
@@ -175,7 +175,7 @@ committed_route_candidate:
   evidence_tag: REPLAY_CONSISTENCY
   physical_authority: false
   artifacts:
-    - {path: data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml, sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32}
+    - {path: data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml, sha256: adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672}
   reported_properties:
     frame_id: map
     manifest_id: hanyang-aegimun-generated-candidate-v1

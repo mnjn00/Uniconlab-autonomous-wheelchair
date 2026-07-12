@@ -8,7 +8,7 @@ provenance:
   map_source_path: data/hanyang_aegimun_loop/map.pgm
   map_source_sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278
   route_source_path: data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml
-  route_source_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+  route_source_sha256: adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672
   evidence_level: simulation_only
   surveyed_geofence: false
 qualification: candidate
@@ -43,7 +43,7 @@ global_exclusion_polygons: []
 approved_routes:
 - route_id: hanyang_aegimun_engineering_outbound
   direction: outbound
-  route_manifest_sha256: eef9d2edcab8433fa69036338820d8d44880992e3cc14cbea8d2786468bbe30e
+  route_manifest_sha256: 7466ff78ce529d4285adad08fa48cb9b9f5ef9f74a9aa5ea98f0708e8cdde70d
   safety_manifest_binding: self_sha256_from_signed_release_bundle
   corridor_polygon: *id001
   corridor_margin_m: 0.2
@@ -56,7 +56,7 @@ approved_routes:
   hardware_authorized: false
 - route_id: hanyang_engineering_aegimun_return
   direction: return
-  route_manifest_sha256: 5135717428df1d4f6efb8025c5964e5f161f101d01bd6bbf45e8aee72311ede0
+  route_manifest_sha256: f31138befc3b578d0a556737742f8253c6ef5a56d82899f08c07c3b6bd4d8b13
   safety_manifest_binding: self_sha256_from_signed_release_bundle
   corridor_polygon: *id001
   corridor_margin_m: 0.2
