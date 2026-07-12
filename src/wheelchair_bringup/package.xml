@@ -8,11 +8,22 @@
 
   <buildtool_depend>catkin</buildtool_depend>
 
+  <depend>diagnostic_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rospy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>wheelchair_interfaces</depend>
   <exec_depend>wheelchair_description</exec_depend>
   <exec_depend>wheelchair_gazebo</exec_depend>
+  <exec_depend>wheelchair_hardware</exec_depend>
+  <exec_depend>wheelchair_decision</exec_depend>
+  <exec_depend>wheelchair_perception</exec_depend>
+  <exec_depend>wheelchair_route_safety</exec_depend>
   <exec_depend>wheelchair_navigation</exec_depend>
   <exec_depend>wheelchair_safety</exec_depend>
   <exec_depend>topic_tools</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <export>
     <architecture_independent/>

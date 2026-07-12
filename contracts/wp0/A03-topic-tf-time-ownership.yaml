@@ -1,0 +1,153 @@
+schema_version: 1
+artifact_id: A03-topic-tf-time-ownership-v1
+owner: WP0-SW-interface-owner
+reviewer: WP0-architect-and-critic
+status: candidate
+provenance:
+  source: Stage-2-approved-plan
+  runtime_architecture: native-ros1-noetic
+  mapping_boundary: offline-ros2-glim-only
+  clock_domain_count: 1
+invariants:
+  sole_authority_required: true
+  safety_subscriber_queue_size: 1
+  queue_policy: latest_only_drop_old
+  tcp_nodelay: true
+  validate_source_stamp_and_receipt_age: true
+  future_tolerance_s: 0.05
+  stale_unknown_hash_mismatch_action: STOP
+  ttl_widening_allowed: false
+  runtime_clock_switch_allowed: false
+  backward_clock_jump_action: DISARM_STOP
+  duplicate_publisher_or_tf_action: STOP
+  safety_callback_forbidden_work:
+    - disk_io
+    - console_formatting
+    - parameter_lookup
+    - graph_scan
+    - incident_recording
+    - diagnostics
+  topology_audit:
+    process: topology_guard
+    graph_scan_rate_hz_max: 2.0
+    callback_graph_scan_allowed: false
+    observer_transport: rospy.AnyMsg
+    observer_queue_size: 1
+    observer_semantics: passive_latest_only_receipt_timestamp
+    passive_consumers_do_not_acquire_authority: true
+    deadlines_frozen_at_startup: true
+    event_topics_time_audited: false
+    topology_signal_self_observation_required_for_clear: false
+    motion_activity_source: /decision/motion_intent
+    motion_active_behaviors: [PROCEED, SLOW]
+    hold_allows_absent_navigation_command: true
+clock_profiles:
+  native:
+    use_sim_time: false
+    clock_owner: system_monotonic_and_ros_wall_time
+  simulation:
+    use_sim_time: true
+    clock_owner: gazebo
+  replay:
+    use_sim_time: true
+    clock_owner: canonical_noetic_bag
+    clock_publishers: 1
+runtime_profiles:
+  sim:
+    input_cmd_topic: /cmd_vel_nav
+    output_cmd_topic: /cmd_vel_safe
+    driver_status_signal_owners: [sim_evidence_bridge]
+    map_to_odom_owners: [localization_adapter, selected_localization_adapter, base_model_localization_adapter]
+    odom_to_base_footprint_owners: [gazebo, gazebo_ros_control, wheelchair_base_controller, sim_evidence_bridge]
+    safe_output_consumers: [collision_supervisor, simulation_controller_adapter]
+    simulation_controller_isolation: dedicated_software_only_adapter
+    generic_relay_mux_plugin_allowed: false
+    hardware_motion_authorized: false
+    passenger_operation_authorized: false
+    real_motor_topic: null
+    read_only_observers:
+      exact_node_names: [rc_scenario_driver, rc_metrics_collector]
+      topics: [/route/progress, /localization/status, /route_safety/geofence_status, /safety/collision_status, /safety/slope_status]
+      publishing_authority: none
+      profile_scope: sim_only
+  replay:
+    input_cmd_topic: /cmd_vel_nav
+    output_cmd_topic: /shadow/cmd_vel_safe
+    driver_status_signal_owners: [play, rosbag, replay_evidence_bridge]
+    map_to_odom_owners: [play, rosbag, replay_localization_adapter, localization_adapter]
+    odom_to_base_footprint_owners: [play, rosbag, replay_base_adapter]
+    safe_output_consumers: [collision_supervisor]
+    actuation_sink: null
+    hardware_motion_authorized: false
+    passenger_operation_authorized: false
+    real_motor_topic: null
+  hardware_shadow:
+    input_cmd_topic: /cmd_vel_nav
+    output_cmd_topic: /cmd_vel_safe
+    driver_status_signal_owners: [hardware_shadow_adapter]
+    map_to_odom_owners: [localization_adapter, selected_localization_adapter, amcl]
+    odom_to_base_footprint_owners: [hardware_shadow_adapter, verified_base_adapter]
+    safe_output_consumers: [collision_supervisor, hardware_shadow_adapter]
+    hardware_motion_authorized: false
+    passenger_operation_authorized: false
+    real_motor_topic: null
+  native:
+    input_cmd_topic: launch_selected_absolute_topic
+    output_cmd_topic: launch_selected_absolute_topic
+    boundary: explicit_profile_required
+    hardware_motion_authorized: false
+    passenger_operation_authorized: false
+    real_motor_topic: null
+topics:
+  - {name: /sensors/lidar/points, type: sensor_msgs/PointCloud2, sole_owner: selected_sensor_adapter, consumers: [collision_supervisor], nominal_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: COLLISION_BLIND_STOP}
+  - {name: /sensors/imu/data, type: sensor_msgs/Imu, sole_owner: selected_sensor_adapter, consumers: [slope_supervisor, selected_localization_adapter], nominal_rate_hz: 200.0, ttl_s: 0.10, queue_size: 1, stale_action: IMU_UNKNOWN_STOP}
+  - {name: /odom, type: nav_msgs/Odometry, sole_owner: verified_base_or_sim_adapter, consumers: [collision_supervisor, localization_guard, hardware_adapter], minimum_rate_hz: 20.0, ttl_s: 0.20, queue_size: 1, stale_action: ODOM_STALE_STOP}
+  - {name: /localization/candidate, type: wheelchair_interfaces/LocalizationCandidate, sole_owner: profile_selected_localization_candidate_adapter, owner_alternatives_by_profile: {sim: [localization_adapter, selected_localization_adapter, base_model_localization_adapter], replay: [replay_localization_adapter, localization_adapter], hardware_shadow: [localization_adapter, selected_localization_adapter, amcl]}, required_consumers: [wheelchair_route_safety], ros_consumer_alternatives: [localization_guard, independent_localization_guard], ros_consumer_optional_when_guard_colocated: false, minimum_ros_consumers: 2, maximum_ros_consumers: 2, minimum_rate_hz: 10.0, ttl_s: 0.25, queue_size: 1, authority: untrusted_candidate, stale_action: LOST_STOP}
+  - {name: /localization/status, type: wheelchair_interfaces/LocalizationStatus, sole_owner: independent_localization_guard, runtime_owner_aliases: [localization_guard, independent_localization_guard], consumers: [safety_gate, wheelchair_route_safety, wheelchair_mission, localization_adapter], minimum_rate_hz: 10.0, ttl_s: 0.25, queue_size: 1, stale_action: LOST_STOP}
+  - {name: /safety/localization, type: wheelchair_interfaces/SafetySignal, sole_owner: independent_localization_guard, runtime_owner_aliases: [localization_guard, independent_localization_guard], consumers: [safety_gate], minimum_rate_hz: 10.0, ttl_s: 0.25, queue_size: 1, stale_action: UNKNOWN_STOP}
+  - {name: /route/active, type: wheelchair_interfaces/ActiveRoute, sole_owner: wheelchair_mission, consumers: [wheelchair_route_safety, route_manager], heartbeat_rate_hz: 2.0, ttl_s: 0.75, queue_size: 1, authority: untrusted_request, stale_action: ROUTE_STOP}
+  - {name: /route/progress, type: wheelchair_interfaces/RouteProgress, sole_owner: route_manager, consumers: [wheelchair_mission, wheelchair_route_safety], minimum_rate_hz: 5.0, ttl_s: 0.50, queue_size: 1, authority: progress_only, stale_action: HOLD_CANCEL}
+  - {name: /route_safety/geofence_status, type: wheelchair_interfaces/GeofenceStatus, sole_owner: wheelchair_route_safety, consumers: [safety_gate, wheelchair_mission], nominal_rate_hz: 20.0, ttl_s: 0.25, queue_size: 1, stale_action: STOP}
+  - {name: /safety/geofence, type: wheelchair_interfaces/SafetySignal, sole_owner: wheelchair_route_safety, consumers: [safety_gate], nominal_rate_hz: 20.0, ttl_s: 0.25, queue_size: 1, stale_action: UNKNOWN_STOP}
+  - {name: /safety/collision_status, type: wheelchair_interfaces/CollisionStatus, sole_owner: collision_supervisor, consumers: [safety_gate, wheelchair_mission], nominal_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: BLIND_STOP}
+  - {name: /safety/collision, type: wheelchair_interfaces/SafetySignal, sole_owner: collision_supervisor, consumers: [safety_gate], nominal_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: UNKNOWN_STOP}
+  - {name: /safety/slope_status, type: wheelchair_interfaces/SlopeStatus, sole_owner: slope_supervisor, consumers: [safety_gate, wheelchair_mission], nominal_rate_hz: 50.0, ttl_s: 0.10, queue_size: 1, stale_action: UNKNOWN_STOP}
+  - {name: /safety/slope, type: wheelchair_interfaces/SafetySignal, sole_owner: slope_supervisor, consumers: [safety_gate], nominal_rate_hz: 50.0, ttl_s: 0.10, queue_size: 1, stale_action: UNKNOWN_STOP}
+  - {name: /decision/motion_intent, type: wheelchair_interfaces/MotionIntent, sole_owner: wheelchair_mission, consumers: [safety_gate, collision_supervisor], minimum_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: HOLD_STOP}
+  - {name: /cmd_vel_nav, type: geometry_msgs/Twist, sole_owner: move_base, consumers: [safety_gate, collision_supervisor], required_when: "motion_intent_in_[PROCEED,SLOW]", absent_during_hold_allowed: true, minimum_active_rate_hz: 10.0, ttl_s: 0.30, queue_size: 1, stale_action: ZERO_STOP}
+  - {name: /hardware/driver_status, type: wheelchair_interfaces/DriverStatus, sole_owner: profile_selected_driver_status_signal_owner, owner_alternatives_by_profile: {sim: [sim_evidence_bridge], replay: [play, rosbag, replay_evidence_bridge], hardware_shadow: [hardware_shadow_adapter]}, consumers: [safety_gate], minimum_rate_hz: 20.0, ttl_s: 0.15, queue_size: 1, hardware_authorized: false, stale_action: DISARM_STOP}
+  - {name: /safety/mode, type: wheelchair_interfaces/SafetySignal, sole_owner: profile_selected_driver_status_signal_owner, owner_alternatives_by_profile: {sim: [sim_evidence_bridge], replay: [play, rosbag, replay_evidence_bridge], hardware_shadow: [hardware_shadow_adapter]}, consumers: [safety_gate], minimum_rate_hz: 20.0, ttl_s: 0.15, queue_size: 1, hardware_authorized: false, stale_action: UNKNOWN_STOP}
+  - {name: /safety/driver, type: wheelchair_interfaces/SafetySignal, sole_owner: profile_selected_driver_status_signal_owner, owner_alternatives_by_profile: {sim: [sim_evidence_bridge], replay: [play, rosbag, replay_evidence_bridge], hardware_shadow: [hardware_shadow_adapter]}, consumers: [safety_gate], minimum_rate_hz: 20.0, ttl_s: 0.15, queue_size: 1, hardware_authorized: false, stale_action: UNKNOWN_STOP}
+  - {name: /safety/topology, type: wheelchair_interfaces/SafetySignal, sole_owner: topology_guard, consumers: [safety_gate], queue_size: 1, self_observation_required_for_clear: false, stale_action_at_safety_gate: UNKNOWN_STOP}
+  - {name: /safety/estop, type: std_msgs/Bool, sole_owner: verified_io_or_operator_source, consumers: [safety_gate], rate: event_plus_heartbeat_when_available, queue_size: 1, loss_action: NEVER_CLEAR_LATCH}
+  - {name: /safety/estop_reset, type: std_msgs/Bool, sole_owner: guarded_operator_request, consumers: [safety_gate], rate: event, queue_size: 1, invalid_action: RESET_REJECTED_KEEP_LATCHED}
+  - {name: /cmd_vel_safe, type: geometry_msgs/Twist, sole_owner: safety_gate, consumers: [collision_supervisor, profile_selected_simulation_or_shadow_or_verified_hardware_adapter], consumers_by_profile: {sim: [collision_supervisor, simulation_controller_adapter], replay: [collision_supervisor], hardware_shadow: [collision_supervisor, hardware_shadow_adapter]}, nominal_rate_hz: 50.0, ttl_s: 0.10, queue_size: 1, startup_value: exact_finite_zero, downstream_hold_allowed: false, safety_use: previous_safe_command_for_conservative_collision_envelope}
+  - {name: /wheelchair_base_controller/cmd_vel, type: geometry_msgs/Twist, profiles: [sim], sole_owner: simulation_controller_adapter, consumers: [gazebo], nominal_rate_hz: 50.0, ttl_s: 0.10, queue_size: 1, simulation_only: true, hardware_authorized: false, stale_action: CONTROLLER_ZERO}
+  - {name: actual_driver_topic, type: manifest_defined, sole_owner: direct_driver_or_verified_adapter, consumers: [physical_driver], rate: exact_manifest, ttl_s: null, hardware_authorized: false, missing_contract_action: BLOCK_LAUNCH}
+event_topics:
+  absence_semantics: optional_event_absence_never_grants_permission_never_clears_estop_or_arms
+  presence_semantics: exactly_one_trusted_owner_otherwise_topology_STOP
+  passive_observation_required: false
+  surfaces:
+    /safety/estop: [operator_io, verified_io, hardware_shadow_adapter, rc_fault_injector]
+    /safety/estop_reset: [operator_request, guarded_operator_request, rc_fault_injector]
+    /safety/arm: [operator_request, guarded_operator_request, rc_scenario_driver]
+    /safety/mission_cancelled:
+      owners: [wheelchair_mission]
+      consumers: [safety_gate, localization_guard]
+actions:
+  - {name: /move_base, type: move_base_msgs/MoveBaseAction, sole_server: move_base, sole_client: wheelchair_mission, failure_action: CANCEL_AND_HOLD}
+transforms:
+  - {parent: map, child: odom, sole_owner: exactly_one_profile_selected_localization_candidate_adapter, owner_alternatives_by_profile: {sim: [localization_adapter, selected_localization_adapter, base_model_localization_adapter], replay: [play, rosbag, replay_localization_adapter, localization_adapter], hardware_shadow: [localization_adapter, selected_localization_adapter, amcl]}, maximum_age_s: 0.25, map_identity_required: true, duplicate_or_stale_action: STOP}
+  - {parent: odom, child: base_footprint, sole_owner: selected_base_or_sim_source, maximum_age_s: 0.25, duplicate_or_stale_action: STOP}
+  - {parent: base_footprint, child: base_link, sole_owner: robot_state_publisher, kind: fixed, calibration: measured_required}
+  - {parent: base_link, child: lidar_link, sole_owner: robot_state_publisher, kind: fixed, calibration: measured_required}
+  - {parent: base_link, child: imu_link, sole_owner: robot_state_publisher, kind: fixed, calibration: measured_required}
+time_validation:
+  source_stamp_zero_permitted: fixed_tf_static_only
+  source_stamp_regression_action: STOP
+  receipt_age_regression_action: STOP
+  future_over_tolerance_action: STOP
+  replay_clock_reset_action: STOP_AND_EXPLICIT_REARM
+  impossible_age_action: STOP
+  status_signal_match_fields: [sequence, evaluation_stamp, source, reason_mask, policy_sha256]

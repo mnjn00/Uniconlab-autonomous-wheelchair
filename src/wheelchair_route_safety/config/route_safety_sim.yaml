@@ -1,0 +1,54 @@
+# SIMULATION-ONLY policy binding. This file grants no hardware or passenger authority.
+simulation_only: true
+hardware_motion_authorized: false
+passenger_operation_authorized: false
+manifest_path: ../../../contracts/wp0/route-safety-candidate.yaml
+schema_path: ../../../contracts/wp0/A06-route-safety-schema.json
+expected_manifest_sha256: eb26fbbe00b5514663dd0a9fb4cf5b3ce561961e0a0d17483b5937af205f9706
+expected_map_sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278
+expected_geometry_sha256: a1625f13ad0a7eb8fc199ed24bd898e67a0249d72c401c77b64dc738d23c3925
+expected_route_hashes:
+  hanyang_aegimun_engineering_outbound: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+  hanyang_engineering_aegimun_return: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+# Simulation dimensions come from map.metadata.json; they are not physical calibration.
+measured_footprint_length_m: 0.97
+measured_footprint_width_m: 0.60
+pose_ttl_s: 0.50
+status_ttl_s: 0.50
+transform_ttl_s: 0.50
+simulation_geometry:
+  immutable: true
+  runtime_mutation_allowed: false
+  widening_allowed: false
+  route_asset_path: ../../../data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml
+  route_asset_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+  navigation_route_manifest_path: ../../wheelchair_navigation/config/hanyang_routes.yaml
+  navigation_route_manifest_sha256: 1d8ea6fc5911493b2667eae45176372c26818431b646670853e2e7b0e0cec23a
+  recorded_corridor_margin_m: 0.20
+  footprint_clearance_margin_m: 0.20
+  localization_uncertainty_margin_m: 0.25
+  outside_corridor_action: STOP
+  nonfinite_geometry_action: REJECT_AND_STOP
+  route_bindings:
+    outbound:
+      route_id: hanyang_aegimun_engineering_outbound
+      asset_key: outbound_route
+    return:
+      route_id: hanyang_engineering_aegimun_return
+      asset_key: return_route
+simulation_zones:
+  - zone_id: candidate-unsurveyed
+    policy: simulation_allow
+    directions: [outbound, return]
+    max_linear_mps: 0.25
+    max_angular_rps: 0.60
+    simulation_only: true
+    hardware_authorized: false
+    passenger_authorized: false
+failure_policy:
+  map_hash_mismatch: STOP
+  route_hash_mismatch: STOP
+  safety_hash_mismatch: STOP
+  geometry_invalid: STOP
+  attempted_reload: STOP
+  attempted_widen: STOP

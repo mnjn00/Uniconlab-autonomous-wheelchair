@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://uniconlab.example/contracts/wp0/A11-driver-contract-schema-v1.json",
+  "title": "Appendix B hardware driver manifest v1",
+  "description": "Fail-closed driver contract. Stable validator errors: E_SCHEMA_VERSION, E_UNKNOWN_FIELD, E_REQUIRED, E_FORMAT, E_UNVERIFIED, E_EXAMPLE_ONLY, E_AUTHORIZATION_FALSE, E_PLATFORM_MISMATCH, E_BASE_MODEL_MISMATCH, E_SAFE_INPUT, E_NAV_BYPASS, E_DRIVER_TOPIC_MISSING, E_DRIVER_TYPE, E_DRIVER_MD5, E_ADAPTER_MODE, E_TRANSLATION_SPEC, E_RATE, E_TIMEOUT, E_TIMEOUT_OWNER, E_TIMEOUT_BEHAVIOR, E_AXIS, E_MODE_STATUS, E_MANUAL_OVERRIDE, E_ESTOP_CHAIN, E_ODOM_TF, E_EVIDENCE_HASH, E_APPROVAL, E_GRAPH. Runtime/platform and graph errors are checked after schema validation and before creating a real motor endpoint.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract_id", "verified", "example_only", "hardware_motion_authorized", "passenger_operation_authorized", "platform", "adapter", "command", "mode", "manual_override", "estop", "odometry", "evidence", "approval"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "contract_id": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "verified": {"type": "boolean"},
+    "example_only": {"type": "boolean"},
+    "hardware_motion_authorized": {"type": "boolean"},
+    "passenger_operation_authorized": {"type": "boolean"},
+    "platform": {"$ref": "#/definitions/platform"},
+    "adapter": {"$ref": "#/definitions/adapter"},
+    "command": {"$ref": "#/definitions/command"},
+    "mode": {"$ref": "#/definitions/mode"},
+    "manual_override": {"$ref": "#/definitions/manual_override"},
+    "estop": {"$ref": "#/definitions/estop"},
+    "odometry": {"$ref": "#/definitions/odometry"},
+    "evidence": {"$ref": "#/definitions/evidence"},
+    "approval": {"$ref": "#/definitions/approval"}
+  },
+  "definitions": {
+    "sha256_or_empty": {"type": "string", "pattern": "^(|[0-9a-f]{64})$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nonempty_no_nav": {"type": "string", "minLength": 1, "pattern": "^(?!.*cmd_vel_nav).+$"},
+    "platform": {
+      "type": "object", "additionalProperties": false,
+      "required": ["manufacturer", "model", "serial", "nuc_machine_id_sha256", "base_model_source_sha256"],
+      "properties": {
+        "manufacturer": {"type": "string"}, "model": {"type": "string"}, "serial": {"type": "string"},
+        "nuc_machine_id_sha256": {"$ref": "#/definitions/sha256_or_empty"},
+        "base_model_source_sha256": {"$ref": "#/definitions/sha256_or_empty"}
+      }
+    },
+    "adapter": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "ros_package", "executable", "translation_spec_sha256"],
+      "properties": {
+        "mode": {"enum": ["disabled", "direct_twist", "translated"]},
+        "ros_package": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"},
+        "executable": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"},
+        "translation_spec_sha256": {"$ref": "#/definitions/sha256_or_empty"}
+      }
+    },
+    "axis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["field", "unit", "positive", "minimum", "maximum"],
+      "properties": {
+        "field": {"type": "string"}, "unit": {"type": "string"}, "positive": {"type": "string"},
+        "minimum": {"type": "number"}, "maximum": {"type": "number"}
+      }
+    },
+    "command": {
+      "type": "object", "additionalProperties": false,
+      "required": ["safe_input_topic", "driver_topic", "message_type", "message_md5", "publish_rate_hz", "queue_size", "tcp_nodelay", "timeout_owner", "timeout_s", "timeout_behavior", "linear", "angular"],
+      "properties": {
+        "safe_input_topic": {"const": "/cmd_vel_safe"},
+        "driver_topic": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"},
+        "message_type": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"},
+        "message_md5": {"type": "string", "pattern": "^(|[0-9a-f]{32})$"},
+        "publish_rate_hz": {"type": "number", "minimum": 0},
+        "queue_size": {"const": 1}, "tcp_nodelay": {"const": true},
+        "timeout_owner": {"enum": ["none", "native_driver", "external_watchdog"]},
+        "timeout_s": {"type": "number", "minimum": 0},
+        "timeout_behavior": {"enum": ["unknown", "zero_output", "motor_disable", "verified_brake"]},
+        "linear": {"$ref": "#/definitions/axis"}, "angular": {"$ref": "#/definitions/axis"}
+      }
+    },
+    "mode": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status_topic", "message_type", "auto_value", "manual_value", "stale_timeout_s", "request_interface", "request_name"],
+      "properties": {
+        "status_topic": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"}, "message_type": {"type": "string"},
+        "auto_value": {"type": "string"}, "manual_value": {"type": "string"}, "stale_timeout_s": {"type": "number", "minimum": 0},
+        "request_interface": {"enum": ["operator_only", "topic", "service"]}, "request_name": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"}
+      }
+    },
+    "manual_override": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status_topic", "message_type", "active_value", "stale_timeout_s", "hardware_priority_verified"],
+      "properties": {
+        "status_topic": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"}, "message_type": {"type": "string"}, "active_value": {"type": "string"},
+        "stale_timeout_s": {"type": "number", "minimum": 0}, "hardware_priority_verified": {"type": "boolean"}
+      }
+    },
+    "estop": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status_topic", "message_type", "asserted_value", "stale_timeout_s", "physical_chain_independent"],
+      "properties": {
+        "status_topic": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"}, "message_type": {"type": "string"}, "asserted_value": {"type": "string"},
+        "stale_timeout_s": {"type": "number", "minimum": 0}, "physical_chain_independent": {"type": "boolean"}
+      }
+    },
+    "odometry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["topic", "message_type", "parent_frame", "child_frame", "minimum_rate_hz", "stale_timeout_s"],
+      "properties": {
+        "topic": {"type": "string", "pattern": "^(?!.*cmd_vel_nav).*$"}, "message_type": {"const": "nav_msgs/Odometry"},
+        "parent_frame": {"const": "odom"}, "child_frame": {"const": "base_footprint"},
+        "minimum_rate_hz": {"type": "number", "minimum": 0}, "stale_timeout_s": {"type": "number", "minimum": 0}
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["graph_snapshot_sha256", "command_polarity_report_sha256", "timeout_report_sha256", "mode_override_report_sha256", "estop_report_sha256", "odom_tf_report_sha256"],
+      "properties": {
+        "graph_snapshot_sha256": {"$ref": "#/definitions/sha256_or_empty"}, "command_polarity_report_sha256": {"$ref": "#/definitions/sha256_or_empty"},
+        "timeout_report_sha256": {"$ref": "#/definitions/sha256_or_empty"}, "mode_override_report_sha256": {"$ref": "#/definitions/sha256_or_empty"},
+        "estop_report_sha256": {"$ref": "#/definitions/sha256_or_empty"}, "odom_tf_report_sha256": {"$ref": "#/definitions/sha256_or_empty"}
+      }
+    },
+    "approval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contract_reviewer", "reviewed_at_utc", "hardware_safety_reviewer", "campus_approval_id"],
+      "properties": {
+        "contract_reviewer": {"type": "string"}, "reviewed_at_utc": {"type": "string"},
+        "hardware_safety_reviewer": {"type": "string"}, "campus_approval_id": {"type": "string"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verified": {"const": false}}},
+      "then": {
+        "properties": {
+          "hardware_motion_authorized": {"const": false}, "passenger_operation_authorized": {"const": false},
+          "adapter": {"properties": {"mode": {"const": "disabled"}, "ros_package": {"const": ""}, "executable": {"const": ""}, "translation_spec_sha256": {"const": ""}}},
+          "command": {"properties": {"driver_topic": {"const": ""}, "message_type": {"const": ""}, "message_md5": {"const": ""}, "publish_rate_hz": {"const": 0}, "timeout_owner": {"const": "none"}, "timeout_s": {"const": 0}, "timeout_behavior": {"const": "unknown"}, "linear": {"properties": {"minimum": {"const": 0}, "maximum": {"const": 0}}}, "angular": {"properties": {"minimum": {"const": 0}, "maximum": {"const": 0}}}}},
+          "evidence": {"properties": {"graph_snapshot_sha256": {"const": ""}, "command_polarity_report_sha256": {"const": ""}, "timeout_report_sha256": {"const": ""}, "mode_override_report_sha256": {"const": ""}, "estop_report_sha256": {"const": ""}, "odom_tf_report_sha256": {"const": ""}}},
+          "approval": {"properties": {"contract_reviewer": {"const": ""}, "reviewed_at_utc": {"const": ""}, "hardware_safety_reviewer": {"const": ""}, "campus_approval_id": {"const": ""}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"verified": {"const": true}}},
+      "then": {
+        "properties": {
+          "platform": {"properties": {"manufacturer": {"minLength": 1}, "model": {"minLength": 1}, "serial": {"minLength": 1}, "nuc_machine_id_sha256": {"$ref": "#/definitions/sha256"}, "base_model_source_sha256": {"$ref": "#/definitions/sha256"}}},
+          "adapter": {"properties": {"mode": {"enum": ["direct_twist", "translated"]}}},
+          "command": {"properties": {"driver_topic": {"$ref": "#/definitions/nonempty_no_nav"}, "message_type": {"$ref": "#/definitions/nonempty_no_nav"}, "message_md5": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "publish_rate_hz": {"exclusiveMinimum": 0}, "timeout_owner": {"enum": ["native_driver", "external_watchdog"]}, "timeout_s": {"exclusiveMinimum": 0, "maximum": 0.1}, "timeout_behavior": {"enum": ["zero_output", "motor_disable", "verified_brake"]}, "linear": {"properties": {"field": {"const": "linear.x"}, "unit": {"const": "m_s"}, "positive": {"const": "forward"}}, "required": ["field", "unit", "positive", "minimum", "maximum"]}, "angular": {"properties": {"field": {"const": "angular.z"}, "unit": {"const": "rad_s"}, "positive": {"const": "counterclockwise"}}, "required": ["field", "unit", "positive", "minimum", "maximum"]}}},
+          "mode": {"properties": {"status_topic": {"$ref": "#/definitions/nonempty_no_nav"}, "message_type": {"minLength": 1}, "auto_value": {"minLength": 1}, "manual_value": {"minLength": 1}, "stale_timeout_s": {"exclusiveMinimum": 0}, "request_name": {"minLength": 1}}},
+          "manual_override": {"properties": {"status_topic": {"$ref": "#/definitions/nonempty_no_nav"}, "message_type": {"minLength": 1}, "active_value": {"minLength": 1}, "stale_timeout_s": {"exclusiveMinimum": 0}, "hardware_priority_verified": {"const": true}}},
+          "estop": {"properties": {"status_topic": {"$ref": "#/definitions/nonempty_no_nav"}, "message_type": {"minLength": 1}, "asserted_value": {"minLength": 1}, "stale_timeout_s": {"exclusiveMinimum": 0}, "physical_chain_independent": {"const": true}}},
+          "odometry": {"properties": {"topic": {"$ref": "#/definitions/nonempty_no_nav"}, "minimum_rate_hz": {"exclusiveMinimum": 0}, "stale_timeout_s": {"exclusiveMinimum": 0}}},
+          "evidence": {"properties": {"graph_snapshot_sha256": {"$ref": "#/definitions/sha256"}, "command_polarity_report_sha256": {"$ref": "#/definitions/sha256"}, "timeout_report_sha256": {"$ref": "#/definitions/sha256"}, "mode_override_report_sha256": {"$ref": "#/definitions/sha256"}, "estop_report_sha256": {"$ref": "#/definitions/sha256"}, "odom_tf_report_sha256": {"$ref": "#/definitions/sha256"}}},
+          "approval": {"properties": {"contract_reviewer": {"minLength": 1}, "reviewed_at_utc": {"type": "string", "format": "date-time"}, "hardware_safety_reviewer": {"minLength": 1}}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"adapter": {"properties": {"mode": {"const": "direct_twist"}}}}},
+      "then": {"properties": {"adapter": {"properties": {"ros_package": {"const": ""}, "executable": {"const": ""}, "translation_spec_sha256": {"const": ""}}}, "command": {"properties": {"driver_topic": {"const": "/cmd_vel_safe"}, "message_type": {"const": "geometry_msgs/Twist"}, "message_md5": {"const": "9f195f881246fdfa2798d1d3eebca84a"}}}}}
+    },
+    {
+      "if": {"properties": {"adapter": {"properties": {"mode": {"const": "translated"}}}}},
+      "then": {"properties": {"adapter": {"properties": {"ros_package": {"$ref": "#/definitions/nonempty_no_nav"}, "executable": {"$ref": "#/definitions/nonempty_no_nav"}, "translation_spec_sha256": {"$ref": "#/definitions/sha256"}}}, "command": {"properties": {"driver_topic": {"allOf": [{"$ref": "#/definitions/nonempty_no_nav"}, {"not": {"const": "/cmd_vel_safe"}}]}}}}}
+    }
+  ]
+}

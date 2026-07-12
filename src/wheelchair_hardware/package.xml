@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>wheelchair_hardware</name>
+  <version>0.1.0</version>
+  <description>Fail-closed ROS1 wheelchair hardware contract boundary.</description>
+  <maintainer email="maintainer@example.com">GJC Scaffold Maintainer</maintainer>
+  <license>GPL-2.0-only</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>wheelchair_interfaces</depend>
+  <depend>message_runtime</depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-jsonschema</exec_depend>
+
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>python3-jsonschema</test_depend>
+
+  <export>
+    <architecture_independent/>
+  </export>
+</package>

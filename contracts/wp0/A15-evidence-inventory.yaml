@@ -1,0 +1,213 @@
+schema_version: 1
+artifact_id: A15-evidence-inventory
+owner: data-localization-owner/WP0-SW
+reviewer: safety-reviewer
+status: PARTIAL_BLOCKED
+provenance:
+  approved_consensus_plan:
+    source: .gjc session approved Stage-2 plan receipt
+    planner_revision_sha256: c8148c5f5d03a646c839e2966ee7fb5c57a433ab34a8cbfcce1d5ab69cc69068
+    architect_review_sha256: 7d91bb0e2182e38fc30b74cb096ab7ff2ea590ebe62934a5e6f8125bba2f8548
+    critic_review_sha256: 3844ab8a0594b888340459c57393c42bbd084c1282a34716ea6bdbfc59958d3a
+    intent_reconciliation_sha256: a31092d64375ae1958fa77ea8adb682ffd1232d11f01865109fcb0112fb3607f
+  repository_readme:
+    path: README.md
+    sha256: 1807de09c799ffe8917486e79535ac5496b0e691ce038f95d745270a8291a1b4
+    claim_scope: operator-reported source location, manual summary, and committed-artifact inventory
+  local_manual:
+    reported_path: /home/mnjn/다운로드/20230725_wheel_manual (2).pdf
+    repository_committed: false
+    inspected_in_this_artifact: false
+    provenance_type: README manual summary, not independently verified manual content
+    reported_facts:
+      - base_model launch workflow
+      - cartographer 2D SLAM and navigation launch workflow
+      - automode.py keys a=auto and m=manual
+      - NUC connections include 19V power, left/right LiDAR, IMU, and joystick
+    limitations:
+      - actual motor command topic, type, MD5, units, signs, and rate absent
+      - native timeout and held-last behavior absent
+      - physical e-stop circuit and manual/joystick priority absent
+      - manual facts cannot authorize hardware
+source_dataset:
+  dataset_id: hanyang_aegimun_loop_ros2_livox_full_bag_verified
+  evidence_tag: REPLAY_CONSISTENCY
+  metadata:
+    path: data/hanyang_aegimun_loop/livox_rosbag_metadata.yaml
+    sha256: 09bd5079347caa00fee2d5bcca856479c99eb66a4d2f581e2b7022e4caeb3b80
+    status: COMMITTED_METADATA_ONLY
+    rosbag2_metadata_version: 5
+    storage_identifier: sqlite3
+    serialization_format: cdr
+    duration_ns: 688225098527
+    duration_s: 688.225098527
+    starting_time_ns_since_epoch: 1783419450030603617
+    total_records: 144484
+    topics:
+      - {name: /livox/lidar, type: livox_ros_driver2/msg/CustomMsg, records: 6882}
+      - {name: /livox/imu, type: sensor_msgs/msg/Imu, records: 137602}
+    count_sum_check: {expected: 144484, observed_sum: 144484, status: PASS_METADATA_ONLY}
+  full_bag:
+    repository_committed: false
+    README_reported_location: /home/mnjn/다운로드/livox
+    source_metadata_path: /home/mnjn/다운로드/livox/metadata.yaml
+    metadata_declared_relative_file: livox_raw_20260707_191720_0.db3
+    metadata_declared_file:
+      path: /home/mnjn/다운로드/livox/livox_raw_20260707_191720_0.db3
+      exists: true
+      file_type: symbolic_link
+      link_target: livox_raw_20260707_191720_0-001.db3
+      lstat_size_bytes: 35
+      stat_size_bytes: 2813546496
+      resolved_path: /home/mnjn/다운로드/livox/livox_raw_20260707_191720_0-001.db3
+      status: PRE_EXISTING_SOURCE_REPAIR_ALIAS
+      verifier_mutated_source: false
+    actual_sqlite_segment:
+      path: /home/mnjn/다운로드/livox/livox_raw_20260707_191720_0-001.db3
+      filename: livox_raw_20260707_191720_0-001.db3
+      size_bytes: 2813546496
+      storage_identifier: sqlite3
+      readable: true
+      message_rows: 144484
+      topic_count: 2
+      topics:
+        - {name: /livox/lidar, type: livox_ros_driver2/msg/CustomMsg, records: 6882}
+        - {name: /livox/imu, type: sensor_msgs/msg/Imu, records: 137602}
+      sha256: {status: REQUIRED_IN_GENERATED_STAGING_MANIFEST, value: null, verification_status: VERIFIED, observed_value: f3773d88c9391e25e70b2019d0ffa1a9b2d48beebbb2afcbb9af5566ae8f4ae5}
+    filename_metadata_consistency:
+      status: PRE_EXISTING_ALIAS_EXPLICIT_STAGING_REQUIRED
+      observation: metadata.yaml names livox_raw_20260707_191720_0.db3, which is a pre-existing relative symlink to the populated livox_raw_20260707_191720_0-001.db3; alias and target resolve to the same physical file.
+      required_resolution: preserve the source alias and target unchanged, create a canonical declared-name symlink only in an explicit generated staging directory, and record the populated segment SHA-256 and alias provenance in the generated staging manifest before conversion
+      silently_accepted: false
+      source_repair_provenance: pre-existing; not created or modified by verifier or stager
+      original_data_mutation_allowed: false
+      fail_closed_behavior: no full-bag, zero-loss, deterministic-conversion, IDL, timing, or localization qualification claim until explicit staging is hashed and validated
+  full_bag_normalization:
+    evidence_path: artifacts/software_rc/full-bag-normalization.json
+    evidence_sha256: c646ac26bf9f125da12637bd970994809900b197d956b5faaec0f01e80cf7591
+    qualification: PASSED_INGESTION_REPLAY_CONSISTENCY_ONLY
+    source:
+      physical_sqlite_size_bytes: 2813546496
+      physical_sqlite_sha256: f3773d88c9391e25e70b2019d0ffa1a9b2d48beebbb2afcbb9af5566ae8f4ae5
+      source_alias_pre_existing: true
+      source_mutated: false
+      staging_manifest_sha256: bd90d38f16e8dd539c3dee0cd19c17aa4e78a5c932dfee7fd08f9847df1cb745
+    source_idl:
+      custom_msg_sha256: f42d6709db951b1fa307e929e742c0593cbf0d1b0ff977d2ed63ad8d7cee0a96
+      custom_point_sha256: b64b31a8edc8c8b3765d82b5d3ccd2d2e1f217b9525ef7007ab918674c619c59
+      composite_sha256: 8d51083a4570d6e81f3193c9b8c39e16d2d5fb2d776dd198a997c7c5c6f4aac7
+      local_checkout_revision_observed: 13eb05e4e6dd7a765b934d0c5fd6236676a57b49
+      recording_revision_proven: false
+    converter:
+      abi_sha256: 4f6ceb19697d06fe2b5e9935488c3c2f2d6a1cf59d4015d4622d1e7301c4e20b
+      frame_evidence_sha256: cad1fff9a4fcdd24e2d149dfb5157b9361128509080d87bfbe9581664ef21815
+      cdr_decoder: rosbags 0.10.11
+      typestore: Jazzy
+      typestore_is_recording_distribution_evidence: false
+    alignment: {model: identity, offset_ns: 0, verified: false}
+    repeatability:
+      independent_conversions: 3
+      byte_identical_outputs: true
+      normalized_bag_sha256: b317642b44140629b3447f5744adb068f74c57a58a3f6498df59ac582d8d8aa5
+      records_sha256: acbab2552c03908842c9226b70de81b12c7c03f93e6303c450a75425adb15270
+      report_sha256: a995a1bab9d48e8079cb60e075f475f665fe668619097c8f1877ac9c2e29d5f4
+      manifest_sha256: 40830cd7742c3a23e76fb8c09e7b9f248fe9115d5fa81ca98bf18a91f77152cb
+      semantic_stream_sha256: 425b564451cf124a78b2f872ea86cd6d10dd1a9bb8b88ac3c7d1ccbaab40bf9e
+    counts:
+      clouds: 6882
+      imus: 137602
+      total_records: 144484
+      points: 137594880
+      clouds_with_legitimate_source_order_interleaving: 6882
+      adjacent_offset_decreases: 910296
+      points_sorted: 0
+      points_dropped: 0
+      points_repaired: 0
+    independent_verifier: {status: ok, exact_counts_confirmed: true, exact_hashes_confirmed: true}
+    normalized_bag: {size_class: 3.1 GB, repository_committed: false}
+  absent_topics:
+    odometry: {present: false, consequence: cannot qualify motion consistency, wheel response, or odom-aided localization}
+    tf: {present: false, consequence: cannot qualify frame ownership, extrinsics, or map-to-odom behavior}
+    commands: {present: false, consequence: cannot qualify control tracking, command latency, or braking}
+    ground_truth: {present: false, consequence: cannot claim absolute map, route, localization, or control accuracy}
+    mode_driver_estop_override: {present: false, consequence: cannot qualify hardware authority or intervention behavior}
+  additional_blockers:
+    source_livox_idl_text_and_sha256: {status: VERIFIED, composite_sha256: 8d51083a4570d6e81f3193c9b8c39e16d2d5fb2d776dd198a997c7c5c6f4aac7}
+    source_recording_ros_distribution: {status: BLOCKED, value: UNKNOWN}
+    source_recording_storage_plugin_package_revision: {status: BLOCKED, value: UNKNOWN}
+    local_source_checkout_revision: {status: OBSERVED_NOT_RECORDING_PROOF, value: 13eb05e4e6dd7a765b934d0c5fd6236676a57b49}
+    lidar_imu_clock_alignment: {status: BLOCKED, value: UNKNOWN}
+    sensor_extrinsics: {status: BLOCKED, value: UNKNOWN}
+    corruption_and_cdr_decode_check: {status: PASS_FULL_BAG, decoder: rosbags 0.10.11, typestore: Jazzy, recording_distribution_proof: false}
+committed_map_candidate:
+  qualification: candidate
+  evidence_tag: REPLAY_CONSISTENCY
+  physical_authority: false
+  artifacts:
+    - {path: data/hanyang_aegimun_loop/map.yaml, sha256: 9f36ab2d3d35a667996570b45babb7cb3ba8bd1e706a971af22603da1220e7ff}
+    - {path: data/hanyang_aegimun_loop/map.pgm, sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278}
+    - {path: data/hanyang_aegimun_loop/map.metadata.json, sha256: 6b7a0b5bc6ccd38a35c83c08971e41959e0cb57c20ebd59fe04c4d4b0fb82642}
+  reported_generation_metadata:
+    resolution_m: 0.1
+    grid_width: 3220
+    grid_height: 2361
+    route_map_aligned: true
+    cleared_occupied_cells_in_recorded_corridor: 2399
+    route_poses: 732
+    grade:
+      formula: 100*abs(dz)/sqrt(dx^2+dy^2)
+      sample_count: 3632
+      max_grade_percent: 25.2214
+      p95_grade_percent: 13.1412
+      mean_grade_percent: 5.3517
+    loop_closure:
+      position_residual_m: 0.9760259268134223
+      target_m: 0.5
+      target_met: false
+  limitations:
+    - generated from a source trajectory without independent truth
+    - recorded-corridor clearing is navigation preprocessing, not survey or physical safety approval
+    - datum, survey accuracy, occupancy freshness, and clearance beyond the recorded corridor are unverified
+    - grade statistics are corrected candidate values, not measured hardware slope authority
+    - loop residual exceeds the candidate target and blocks loop qualification
+committed_route_candidate:
+  qualification: candidate
+  evidence_tag: REPLAY_CONSISTENCY
+  physical_authority: false
+  artifacts:
+    - {path: data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml, sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32}
+  reported_properties:
+    frame_id: map
+    manifest_id: hanyang-aegimun-generated-candidate-v1
+    directions:
+      outbound: {route_id: hanyang-aegimun-outbound, poses: 359}
+      return: {route_id: hanyang-aegimun-return, poses: 373}
+    total_poses: 732
+    map_sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278
+    route_map_aligned: true
+    automatic_runtime_reversal_allowed: false
+  limitations:
+    - unsurveyed candidate with explicit outbound and return routes; automatic runtime reversal is prohibited
+    - reviewed global geofence and campus approval remain absent
+    - no measured footprint/clearance, localization uncertainty, stopping envelope, or physical slope qualification
+    - loop residual is approximately 0.976 m and exceeds the 0.5 m target
+    - may be used for candidate planning and simulation tests only
+claim_limits:
+  allowed:
+    - full source inspection verified sqlite3/CDR, 688.225098527 seconds, 144484 message rows, 6882 Livox rows, 137602 IMU rows, two topics, and physical sqlite SHA-256 f3773d88c9391e25e70b2019d0ffa1a9b2d48beebbb2afcbb9af5566ae8f4ae5
+    - committed map and explicit outbound/return route files exist with the recorded hashes; all 732 route poses are map-aligned in the regenerated navigable recorded corridor
+    - corrected candidate grade evidence reports 25.2214% maximum, 13.1412% p95, and 5.3517% mean over 3632 samples
+    - source inspection found the metadata-declared pre-existing symlink alias and populated -001 target as one physical sqlite segment; the source alias was not mutated
+    - three independent full conversions and an independent verifier established zero-loss deterministic normalization for ingestion and replay consistency only
+    - all 137594880 points were preserved in source order; all 6882 clouds contain legitimate interleaving totaling 910296 adjacent offset decreases, with no sorting, dropping, or repair
+  prohibited:
+    - treating the observed local checkout revision as proof of the Livox driver revision used to record the bag
+    - treating the rosbags 0.10.11 Jazzy typestore conversion parameter as proof that the source bag was recorded on Jazzy
+    - asserting verified lidar-IMU time calibration, extrinsics, odometry, TF, commands, independent truth, fusion, or localization accuracy
+    - asserting absolute localization, control, braking, geofence, slope authority, loop qualification, route, hardware, campus, or passenger qualification
+  fail_closed_state:
+    wp2_full_conversion: PASSED_INGESTION_REPLAY_CONSISTENCY_ONLY
+    fusion_localization_qualification: BLOCKED
+    target_nuc_qualification: BLOCKED
+    hardware_motion_authorized: false
+    passenger_operation_authorized: false

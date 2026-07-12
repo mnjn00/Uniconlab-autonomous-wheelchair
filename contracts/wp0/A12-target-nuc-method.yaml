@@ -1,0 +1,130 @@
+schema_version: 1
+artifact_id: A12-target-nuc-method
+owner: platform-owner/WP0-HW
+reviewer: safety-reviewer
+status: BLOCKED
+provenance:
+  source: approved Stage-2 consensus plan, Target NUC resource and schedulability methodology
+  plan_sha256: c8148c5f5d03a646c839e2966ee7fb5c57a433ab34a8cbfcce1d5ab69cc69068
+  architect_review_sha256: 7d91bb0e2182e38fc30b74cb096ab7ff2ea590ebe62934a5e6f8125bba2f8548
+  critic_review_sha256: 3844ab8a0594b888340459c57393c42bbd084c1282a34716ea6bdbfc59958d3a
+qualification_scope: actual_physical_deployment_nuc_only
+workstation_substitution_allowed: false
+authority:
+  target_nuc_software_qualified: false
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+blocked_reason: actual deployment NUC is unavailable and has not been fingerprinted or profiled
+actual_target_fingerprint:
+  status: BLOCKED
+  captured_on_target: false
+  manufacturer: {status: BLOCKED, value: UNKNOWN}
+  model: {status: BLOCKED, value: UNKNOWN}
+  serial: {status: BLOCKED, value: UNKNOWN}
+  cpu_model: {status: BLOCKED, value: UNKNOWN}
+  cpu_microcode: {status: BLOCKED, value: UNKNOWN}
+  cpu_core_topology: {status: BLOCKED, value: UNKNOWN}
+  ram_bytes: {status: BLOCKED, value: UNKNOWN}
+  storage_model_and_capacity: {status: BLOCKED, value: UNKNOWN}
+  bios_version: {status: BLOCKED, value: UNKNOWN}
+  kernel: {status: BLOCKED, value: UNKNOWN}
+  machine_id_sha256: {status: BLOCKED, value: UNKNOWN}
+  power_governor: {status: BLOCKED, value: UNKNOWN}
+  base_model_revision: {status: BLOCKED, value: UNKNOWN}
+  ubuntu_release: {status: BLOCKED, value: UNKNOWN}
+  ros_distribution: {status: BLOCKED, value: UNKNOWN}
+  thermal_telemetry: {status: BLOCKED, value: UNKNOWN}
+  pre_existing_throttle_state: {status: BLOCKED, value: UNKNOWN}
+minimum_candidacy:
+  architecture: x86_64
+  physical_cpu_cores_min: 4
+  ram_gib_min: 8
+  storage_medium: SSD
+  operating_system: Ubuntu 20.04
+  ros_distribution: Noetic
+  thermal_telemetry_required: true
+  pre_existing_throttling_allowed: false
+  failure_behavior: BLOCKED
+baseline_services:
+  rule: Capture the complete enabled/running service and process set on the fingerprinted NUC; use the identical set for every profile and record all deviations.
+  required_runtime: [base_model, ros_master, time_source, safety_graph]
+  prohibited_runtime: [ros2, live_GLIM, ros_bridge, Nav2]
+  actual_manifest: {status: BLOCKED, value: UNKNOWN}
+tools:
+  fingerprint: ["lscpu --json", uname, "dmidecode -t system", "free -b", "lsblk --json", "cpupower frequency-info", "sensors -j", thermal_and_throttle_counters]
+  profiles: ["pidstat -u -r -d -w 1", "sar -u -r -q -W 1", "iostat -xz 1", "vmstat 1", per_process_monotonic_tracepoints, HdrHistogram, ROS_topic_statistics, bounded_stress-ng, isolated_test_volume_fio]
+  exact_versions_and_configs: {status: BLOCKED, value: UNKNOWN}
+  thermal_guard: stress must stop before the recorded thermal stop limit; an unknown limit blocks stress execution
+sampling_and_quantiles:
+  clock: monotonic
+  warmup_minutes: 5
+  resource_sampling_period_s: 1
+  loop_sample_source: one observation per loop execution; queue, compute, jitter, and end-to-end paths recorded separately
+  quantile_algorithm: nearest_rank
+  nearest_rank_index: ceil(q * sample_count), using one-based ascending samples
+  required_quantiles: [p99, p999]
+  p999_minimum_samples: 100000
+  p999_reference_window: 60-minute safety-gate window at 50 Hz
+  uncertainty: nonparametric bootstrap 95-percent upper confidence bound must be reported for p999
+  invalidation: missing samples, non-monotonic traces, sampling gaps, or merged profiles fail the affected profile
+profiles:
+  - id: os_base_model_idle
+    duration_minutes: 15
+    workload: OS plus required base_model idle baseline
+    status: BLOCKED
+  - id: hardware_shadow_or_replay
+    duration_minutes: 60
+    workload: full live read-only graph; if unavailable, exact 1x normalized replay on the NUC explicitly labeled substitute
+    status: BLOCKED
+  - id: full_runtime_mission
+    duration_minutes: 60
+    workload: full Noetic runtime with deterministic simulated or replayed mission and incident recording
+    status: BLOCKED
+  - id: fault_stress
+    duration_minutes: 60
+    workload: fault matrix with aggregate 80-percent CPU demand and bounded 50 MB/s isolated-volume I/O
+    status: BLOCKED
+  - id: overnight_soak
+    duration_hours: 8
+    workload: replay or idle soak before release
+    status: BLOCKED
+loop_budgets:
+  - {loop: safety_gate_evaluate_publish, nominal_rate_hz: 50, queue_depth: 1, compute_p99_ms_max: 2, compute_p999_ms_max: 5, jitter_p99_ms_max: 5, jitter_p999_ms_max: 10}
+  - {loop: collision_supervisor, nominal_rate_hz: 10, queue_depth: 1, compute_p99_ms_max: 25, compute_p999_ms_max: 50, start_jitter_p99_ms_max: 10, start_jitter_p999_ms_max: 20}
+  - {loop: route_safety_evaluator, nominal_rate_hz: 20, queue_depth: 1, compute_p99_ms_max: 5, compute_p999_ms_max: 10, jitter_p99_ms_max: 10, jitter_p999_ms_max: 20}
+  - {loop: localization_guard, nominal_rate_hz: 20, queue_depth: 1, compute_p99_ms_max: 10, compute_p999_ms_max: 20, jitter_p99_ms_max: 10, jitter_p999_ms_max: 20}
+  - {loop: slope_supervisor, nominal_rate_hz: 50, queue_depth: 1, compute_p99_ms_max: 3, compute_p999_ms_max: 6, start_jitter_p99_ms_max: 5, start_jitter_p999_ms_max: 10}
+  - {loop: hardware_adapter_direct_guard, nominal_rate_hz: 50, queue_depth: 1, compute_p99_ms_max: 3, compute_p999_ms_max: 5, jitter_p99_ms_max: 5, jitter_p999_ms_max: 10}
+  - {loop: diagnostics_event_aggregator, nominal_rate_hz: 1, compute_p99_ms_max: 50, compute_p999_ms_max: 100, safety_authoritative: false}
+end_to_end_budgets:
+  estop_receipt_to_first_safe_zero_ms: {p99_max: 30, p999_max: 50}
+  stop_signal_receipt_to_safe_zero_ms: {p99_max: 25, p999_max: 40}
+  cloud_source_stamp_to_collision_zero_ms: {p99_max: 180, p999_max: 250}
+  stale_input_zero_bound: TTL_plus_40_ms_at_p999
+  safe_output_to_translated_driver_publication_ms: {p99_max: 5, p999_max: 10, excludes_native_driver_and_wheel_latency: true}
+  timer_gap_ms_max: 40
+  nonzero_after_deadline_or_ttl_allowed: 0
+  dropped_stop_or_estop_events_allowed: 0
+pass_rules:
+  apply_to_every_required_profile: true
+  aggregate_cpu_idle_p95_percent_min: 30
+  safety_affined_core_utilization_p99_percent_max: 70
+  available_ram_min: max(25_percent_physical,1_GiB)
+  oom_allowed: false
+  swap_use_increase_allowed: false
+  pswpin_allowed: 0
+  pswpout_allowed: 0
+  sustained_major_faults_allowed: false
+  disk_await_p99_ms_max: 20
+  safety_callback_disk_coupling_allowed: false
+  loop_budget_violation_allowed: false
+  peak_package_temperature_c_max: min(85,Tjmax_minus_15)
+  thermal_or_core_throttle_counter_increase_allowed: false
+  heat_sustained_frequency_percent_of_recorded_nominal_min: 80
+  safety_ttl_or_deadline_violations_allowed: 0
+failure_handling:
+  any_failed_or_missing_profile: BLOCKED
+  different_machine_or_fingerprint: BLOCKED
+  workstation_result: REJECTED
+  permitted_remediation: reduce non-safety features or log rates and repeat the complete affected profile
+  forbidden_remediation: [relax_safety_TTLs, relax_velocity_caps, interpolate_missing_samples, promote_partial_profile]

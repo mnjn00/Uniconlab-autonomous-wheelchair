@@ -1,6 +1,15 @@
 <launch>
   <arg name="use_sim_time" default="false"/>
-  <arg name="base_controller_cmd_topic" default="/base_controller/cmd_vel"/>
+  <arg name="hardware_profile" default="hardware_shadow"/>
+  <arg name="driver_manifest" default="$(find wheelchair_hardware)/config/driver-unverified.yaml"/>
+  <arg name="release_authority" default="$(find wheelchair_hardware)/../../contracts/wp0/A16-release-authority.yaml"/>
+  <arg name="hardware_enable" default="false"/>
+  <arg name="platform_matches" default="false"/>
+  <arg name="base_model_matches" default="false"/>
+  <arg name="graph_valid" default="false"/>
+  <arg name="localization_policy" default="$(find wheelchair_navigation)/config/localization_confidence.yaml"/>
+  <arg name="localization_policy_file_sha256" default="7c876d311ca3cd52881c93af0f3f8dc9410b64f090ac856052781ad123031829"/>
+  <arg name="localization_map" default="$(find wheelchair_navigation)/../../data/hanyang_aegimun_loop/map.yaml"/>
 
   <param name="/use_sim_time" value="$(arg use_sim_time)"/>
   <rosparam command="load" file="$(find wheelchair_bringup)/config/params.yaml"/>
@@ -14,9 +23,32 @@
   <include file="$(find wheelchair_safety)/launch/safety.launch">
     <arg name="input_cmd_topic" value="/cmd_vel_nav"/>
     <arg name="output_cmd_topic" value="/cmd_vel_safe"/>
+    <arg name="slope_operation_mode" value="hardware_shadow"/>
+    <arg name="slope_stationary_calibration_enabled" value="false"/>
+    <arg name="slope_transform_label" value="unverified_hardware_shadow"/>
+    <arg name="slope_transform_verified" value="false"/>
+    <arg name="localization_policy" value="$(arg localization_policy)"/>
+    <arg name="localization_policy_file_sha256" value="$(arg localization_policy_file_sha256)"/>
+    <arg name="localization_map" value="$(arg localization_map)"/>
+    <arg name="localization_map_file_sha256" value="9f36ab2d3d35a667996570b45babb7cb3ba8bd1e706a971af22603da1220e7ff"/>
+    <arg name="localization_map_image_sha256" value="c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"/>
   </include>
 
-  <!-- Replace this relay with the hardware driver on the Intel NUC. The driver must consume /cmd_vel_safe. -->
-  <node pkg="topic_tools" type="relay" name="cmd_vel_safe_to_base_controller"
-        args="/cmd_vel_safe $(arg base_controller_cmd_topic)" output="screen"/>
+  <group if="$(eval arg('hardware_profile') == 'hardware_shadow')">
+    <include file="$(find wheelchair_bringup)/launch/hardware_shadow.launch">
+      <arg name="driver_manifest" value="$(arg driver_manifest)"/>
+      <arg name="release_authority" value="$(arg release_authority)"/>
+    </include>
+  </group>
+
+  <group if="$(eval arg('hardware_profile') == 'hardware_enabled')">
+    <include file="$(find wheelchair_bringup)/launch/hardware_enabled.launch">
+      <arg name="driver_manifest" value="$(arg driver_manifest)"/>
+      <arg name="release_authority" value="$(arg release_authority)"/>
+      <arg name="hardware_enable" value="$(arg hardware_enable)"/>
+      <arg name="platform_matches" value="$(arg platform_matches)"/>
+      <arg name="base_model_matches" value="$(arg base_model_matches)"/>
+      <arg name="graph_valid" value="$(arg graph_valid)"/>
+    </include>
+  </group>
 </launch>

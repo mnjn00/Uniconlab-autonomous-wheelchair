@@ -1,0 +1,251 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:uniconlab:wheelchair:wp0:collision-policy:v1",
+  "title": "WP0 collision, TTC, stopping-envelope policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "policy_id", "owner", "reviewer", "status", "qualification",
+    "provenance", "hashes", "authority", "frames", "input_contract", "geometry",
+    "velocity_selection", "prediction", "obstacle_classification", "stopping_model",
+    "visibility", "decision_thresholds", "hysteresis", "reverse_policy", "fail_closed"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "policy_id": { "$ref": "#/definitions/id" },
+    "owner": { "$ref": "#/definitions/id" },
+    "reviewer": { "$ref": "#/definitions/review" },
+    "status": { "enum": ["draft", "candidate", "approved_simulation", "hardware_blocked", "hardware_verified"] },
+    "qualification": { "enum": ["unqualified", "simulation_only", "replay_only", "hardware_verified"] },
+    "provenance": { "$ref": "#/definitions/provenance" },
+    "hashes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_sha256", "policy_sha256", "footprint_sha256", "extrinsics_sha256"],
+      "properties": {
+        "schema_sha256": { "$ref": "#/definitions/hashRecord" },
+        "policy_sha256": { "$ref": "#/definitions/hashRecord" },
+        "footprint_sha256": { "$ref": "#/definitions/hashRecord" },
+        "extrinsics_sha256": { "$ref": "#/definitions/hashRecord" }
+      }
+    },
+    "authority": { "$ref": "#/definitions/authority" },
+    "frames": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evaluation_frame", "x_positive", "y_positive", "z_positive", "length_unit", "time_unit", "linear_speed_unit", "angular_speed_unit"],
+      "properties": {
+        "evaluation_frame": { "const": "base_footprint" },
+        "x_positive": { "const": "forward" },
+        "y_positive": { "const": "left" },
+        "z_positive": { "const": "up" },
+        "length_unit": { "const": "m" },
+        "time_unit": { "const": "s" },
+        "linear_speed_unit": { "const": "m/s" },
+        "angular_speed_unit": { "const": "rad/s" }
+      }
+    },
+    "input_contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cloud_ttl_s", "odom_ttl_s", "command_ttl_s", "transform_at_cloud_source_stamp", "required_commands", "missing_stale_malformed_result"],
+      "properties": {
+        "cloud_ttl_s": { "$ref": "#/definitions/positiveSeconds" },
+        "odom_ttl_s": { "$ref": "#/definitions/positiveSeconds" },
+        "command_ttl_s": { "$ref": "#/definitions/positiveSeconds" },
+        "transform_at_cloud_source_stamp": { "const": true },
+        "required_commands": { "type": "array", "minItems": 2, "maxItems": 2, "uniqueItems": true, "items": { "enum": ["cmd_vel_nav", "previous_cmd_vel_safe"] }, "allOf": [{ "contains": { "const": "cmd_vel_nav" } }, { "contains": { "const": "previous_cmd_vel_safe" } }] },
+        "missing_stale_malformed_result": { "const": "STOP" }
+      }
+    },
+    "geometry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["footprint_source", "expansion_terms", "angular_sweep", "decision_geometry", "scalar_distance_role"],
+      "properties": {
+        "footprint_source": { "const": "measured_safety_footprint_not_navigation_costmap" },
+        "expansion_terms": { "type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": { "enum": ["localization", "transform", "point_noise", "fixed_policy"] } },
+        "angular_sweep": {
+          "type": "object", "additionalProperties": false,
+          "required": ["model", "max_sample_period_s", "max_boundary_motion_m", "selection"],
+          "properties": {
+            "model": { "const": "constant_twist_SE2" },
+            "max_sample_period_s": { "$ref": "#/definitions/positiveSeconds" },
+            "max_boundary_motion_m": { "$ref": "#/definitions/positiveMetres" },
+            "selection": { "const": "whichever_is_finer" }
+          }
+        },
+        "decision_geometry": { "const": "uncertainty_expanded_swept_polygon" },
+        "scalar_distance_role": { "const": "diagnostic_only" }
+      }
+    },
+    "velocity_selection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["method", "sources", "include_acceleration_to_hard_cap_during_latency", "all_sources_must_be_fresh", "invalid_result"],
+      "properties": {
+        "method": { "const": "maximum_direction_consistent_magnitude" },
+        "sources": { "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["odom_twist", "cmd_vel_nav", "previous_cmd_vel_safe"] } },
+        "include_acceleration_to_hard_cap_during_latency": { "const": true },
+        "all_sources_must_be_fresh": { "const": true },
+        "invalid_result": { "const": "STOP" }
+      }
+    },
+    "prediction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_horizon_s", "ttc_definition", "no_finite_ttc_sentinel", "sentinel_requires_observed_clear_path"],
+      "properties": {
+        "max_horizon_s": { "$ref": "#/definitions/positiveSeconds" },
+        "ttc_definition": { "const": "earliest_intersection_of_propagated_wheelchair_polygon_and_obstacle_envelope" },
+        "no_finite_ttc_sentinel": { "const": -1.0 },
+        "sentinel_requires_observed_clear_path": { "const": true }
+      }
+    },
+    "obstacle_classification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["static_speed_below_mps", "dynamic_speed_at_least_mps", "minimum_observations", "dynamic_covariance_required", "ambiguous_approach_speed_mps", "untracked_or_ambiguous_class"],
+      "properties": {
+        "static_speed_below_mps": { "$ref": "#/definitions/nonnegativeSpeed" },
+        "dynamic_speed_at_least_mps": { "$ref": "#/definitions/nonnegativeSpeed" },
+        "minimum_observations": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "dynamic_covariance_required": { "const": true },
+        "ambiguous_approach_speed_mps": { "$ref": "#/definitions/nonnegativeSpeed" },
+        "untracked_or_ambiguous_class": { "const": "AMBIGUOUS" }
+      }
+    },
+    "stopping_model": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gravity_mps2", "simulation_min_deceleration_mps2", "simulation_driver_latency_s", "compute_and_gate_budget_s", "fixed_uncertainty_margin_m", "equations", "nonpositive_effective_deceleration_result", "unverified_hardware_deceleration_result"],
+      "properties": {
+        "gravity_mps2": { "type": "number", "minimum": 9.7, "maximum": 9.9 },
+        "simulation_min_deceleration_mps2": { "$ref": "#/definitions/positiveAcceleration" },
+        "simulation_driver_latency_s": { "$ref": "#/definitions/nonnegativeSeconds" },
+        "compute_and_gate_budget_s": { "$ref": "#/definitions/nonnegativeSeconds" },
+        "fixed_uncertainty_margin_m": { "$ref": "#/definitions/nonnegativeMetres" },
+        "equations": {
+          "type": "object", "additionalProperties": false,
+          "required": ["t_reaction", "a_eff", "d_reaction", "d_brake", "d_required", "dynamic_stop_ttc"],
+          "properties": {
+            "t_reaction": { "const": "t_age + t_pipe" },
+            "a_eff": { "const": "a_policy - g * sin(max(0, -pitch_downhill))" },
+            "d_reaction": { "const": "v * t_reaction" },
+            "d_brake": { "const": "v^2 / (2 * a_eff)" },
+            "d_required": { "const": "d_reaction + d_brake + d_margin" },
+            "dynamic_stop_ttc": { "const": "t_reaction + v / a_eff + stop_ttc_margin_s" }
+          }
+        },
+        "nonpositive_effective_deceleration_result": { "const": "STOP" },
+        "unverified_hardware_deceleration_result": { "const": "STOP" }
+      }
+    },
+    "visibility": {
+      "type": "object", "additionalProperties": false,
+      "required": ["coverage_window_s", "coverage_bins", "coverage_min_frames", "coverage_max_frames", "coverage_max_frame_gap_s", "coverage_elevation_bins", "coverage_min_elevation_rad", "coverage_max_elevation_rad", "coverage_motion_linear_tolerance_mps", "coverage_motion_angular_tolerance_rps", "required_forward_coverage_fraction", "bin_dimensions", "coverage_region", "empty_cloud_result", "missing_corridor_bin_result", "below_coverage_result", "transform_failure_result", "occlusion_rule", "occlusion_result"],
+      "properties": {
+        "coverage_window_s": { "$ref": "#/definitions/positiveSeconds" },
+        "coverage_bins": { "type": "integer", "minimum": 1, "maximum": 720 },
+        "coverage_min_frames": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "coverage_max_frames": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "coverage_max_frame_gap_s": { "$ref": "#/definitions/positiveSeconds" },
+        "coverage_elevation_bins": { "type": "integer", "minimum": 1, "maximum": 180 },
+        "coverage_min_elevation_rad": { "type": "number", "minimum": -1.5707963267948966, "maximum": 1.5707963267948966 },
+        "coverage_max_elevation_rad": { "type": "number", "minimum": -1.5707963267948966, "maximum": 1.5707963267948966 },
+        "coverage_motion_linear_tolerance_mps": { "$ref": "#/definitions/nonnegativeSpeed" },
+        "coverage_motion_angular_tolerance_rps": { "type": "number", "minimum": 0, "maximum": 100 },
+        "required_forward_coverage_fraction": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "bin_dimensions": { "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["azimuth", "elevation", "time"] } },
+        "coverage_region": { "const": "travel_direction_swept_envelope" },
+        "empty_cloud_result": { "const": "BLIND_STOP" },
+        "missing_corridor_bin_result": { "const": "BLIND_STOP" },
+        "below_coverage_result": { "const": "BLIND_STOP" },
+        "transform_failure_result": { "const": "BLIND_STOP" },
+        "occlusion_rule": { "const": "near_return_occludes_unobserved_space_inside_d_required" },
+        "occlusion_result": { "const": "OCCLUDED_STOP" }
+      }
+    },
+    "decision_thresholds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["static_stop", "dynamic_or_ambiguous_stop", "caution_ttc_s", "caution_clearance_margin_m", "caution_max_linear_mps", "caution_cannot_clear_other_stop"],
+      "properties": {
+        "static_stop": { "const": "swept_envelope_intersection OR clearance <= d_required" },
+        "dynamic_or_ambiguous_stop": { "const": "swept_envelope_intersection OR TTC <= dynamic_stop_ttc" },
+        "caution_ttc_s": { "$ref": "#/definitions/positiveSeconds" },
+        "caution_clearance_margin_m": { "$ref": "#/definitions/nonnegativeMetres" },
+        "caution_max_linear_mps": { "$ref": "#/definitions/nonnegativeSpeed" },
+        "caution_cannot_clear_other_stop": { "const": true }
+      }
+    },
+    "hysteresis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stop_entry_frames", "clear_consecutive_frames", "clear_hold_s", "clearance_strictly_above_margin_m", "ttc_strictly_above_s", "require_no_ambiguous_track", "require_all_other_permissions"],
+      "properties": {
+        "stop_entry_frames": { "const": 1 },
+        "clear_consecutive_frames": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "clear_hold_s": { "$ref": "#/definitions/positiveSeconds" },
+        "clearance_strictly_above_margin_m": { "$ref": "#/definitions/nonnegativeMetres" },
+        "ttc_strictly_above_s": { "$ref": "#/definitions/positiveSeconds" },
+        "require_no_ambiguous_track": { "const": true },
+        "require_all_other_permissions": { "const": true }
+      }
+    },
+    "reverse_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["autonomous_reverse_requires_separately_qualified_rear_coverage", "absent_rear_coverage_result"],
+      "properties": {
+        "autonomous_reverse_requires_separately_qualified_rear_coverage": { "const": true },
+        "absent_rear_coverage_result": { "const": "STOP_REVERSE_PROHIBITED" }
+      }
+    },
+    "fail_closed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clear_requires_all_evidence_valid_fresh_calibrated", "unknown_blind_occluded_stale_malformed_result", "status_signal_mismatch_result"],
+      "properties": {
+        "clear_requires_all_evidence_valid_fresh_calibrated": { "const": true },
+        "unknown_blind_occluded_stale_malformed_result": { "const": "STOP" },
+        "status_signal_mismatch_result": { "const": "STOP" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "qualification": { "enum": ["simulation_only", "replay_only", "unqualified"] } } },
+      "then": { "properties": { "authority": { "properties": { "hardware_motion_authorized": { "const": false }, "passenger_operation_authorized": { "const": false }, "transferable_to_hardware": { "const": false } } } } }
+    }
+  ],
+  "definitions": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "hashRecord": {
+      "type": "object", "additionalProperties": false, "required": ["value", "status"],
+      "properties": {
+        "value": { "oneOf": [{ "$ref": "#/definitions/sha256" }, { "type": "null" }] },
+        "status": { "enum": ["verified", "candidate", "blocked_unknown"] },
+        "scope": { "type": "string", "minLength": 1, "maxLength": 160 }
+      },
+      "allOf": [{ "if": { "properties": { "status": { "const": "verified" } } }, "then": { "properties": { "value": { "$ref": "#/definitions/sha256" } } } }]
+    },
+    "review": {
+      "type": "object", "additionalProperties": false, "required": ["name", "status"],
+      "properties": { "name": { "$ref": "#/definitions/id" }, "status": { "enum": ["pending", "approved", "rejected", "blocked"] }, "reviewed_at": { "type": ["string", "null"], "format": "date-time" } }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false, "required": ["source", "stage", "generated_at", "evidence_level"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "stage": { "const": "Stage-2" },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "evidence_level": { "enum": ["contract_only", "simulation", "replay", "measured_hardware"] }
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false, "required": ["hardware_motion_authorized", "passenger_operation_authorized", "transferable_to_hardware", "hardware_policy_requirement"],
+      "properties": {
+        "hardware_motion_authorized": { "type": "boolean" },
+        "passenger_operation_authorized": { "type": "boolean" },
+        "transferable_to_hardware": { "type": "boolean" },
+        "hardware_policy_requirement": { "const": "separate_WP7_measured_signed_policy" }
+      }
+    },
+    "positiveSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+    "nonnegativeSeconds": { "type": "number", "minimum": 0, "maximum": 3600 },
+    "positiveMetres": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 },
+    "nonnegativeMetres": { "type": "number", "minimum": 0, "maximum": 1000 },
+    "nonnegativeSpeed": { "type": "number", "minimum": 0, "maximum": 100 },
+    "positiveAcceleration": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+  }
+}

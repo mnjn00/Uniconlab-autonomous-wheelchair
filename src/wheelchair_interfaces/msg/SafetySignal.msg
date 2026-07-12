@@ -1,0 +1,9 @@
+uint8 UNKNOWN=0
+uint8 CLEAR=1
+uint8 STOP=2
+std_msgs/Header header
+uint32 sequence
+uint8 state
+uint64 reason_mask
+string source
+string policy_sha256

@@ -1,0 +1,137 @@
+schema_version: 1
+policy_id: collision-sim-v1
+owner: wheelchair-safety
+reviewer:
+  name: independent-safety-review
+  status: pending
+  reviewed_at: null
+status: approved_simulation
+qualification: simulation_only
+provenance:
+  source: approved-stage-2-wp0-plan
+  stage: Stage-2
+  generated_at: '2026-07-11T00:00:00Z'
+  evidence_level: simulation
+hashes:
+  schema_sha256:
+    value: 6f3f0c3ae804c6c45fd38a60d5862164e26ada17f0c786260b1f4288fc5fe85d
+    status: verified
+    scope: raw-bytes-of-A07-collision-policy-schema.json
+  policy_sha256:
+    value: 4a273958bab3cb8f8321afde3f0e8cc5454199df275a2dd59087cb00c49e37bc
+    status: verified
+    scope: canonical-JSON-sorted-keys-compact-UTF8-excluding-hashes.policy_sha256
+  footprint_sha256:
+    value: null
+    status: blocked_unknown
+    scope: measured-safety-footprint-required-before-hardware
+  extrinsics_sha256:
+    value: null
+    status: blocked_unknown
+    scope: measured-lidar-to-base-extrinsics-required-before-hardware
+authority:
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  transferable_to_hardware: false
+  hardware_policy_requirement: separate_WP7_measured_signed_policy
+frames:
+  evaluation_frame: base_footprint
+  x_positive: forward
+  y_positive: left
+  z_positive: up
+  length_unit: m
+  time_unit: s
+  linear_speed_unit: m/s
+  angular_speed_unit: rad/s
+input_contract:
+  cloud_ttl_s: 0.30
+  odom_ttl_s: 0.20
+  command_ttl_s: 0.30
+  transform_at_cloud_source_stamp: true
+  required_commands: [cmd_vel_nav, previous_cmd_vel_safe]
+  missing_stale_malformed_result: STOP
+geometry:
+  footprint_source: measured_safety_footprint_not_navigation_costmap
+  expansion_terms: [localization, transform, point_noise, fixed_policy]
+  angular_sweep:
+    model: constant_twist_SE2
+    max_sample_period_s: 0.020
+    max_boundary_motion_m: 0.020
+    selection: whichever_is_finer
+  decision_geometry: uncertainty_expanded_swept_polygon
+  scalar_distance_role: diagnostic_only
+velocity_selection:
+  method: maximum_direction_consistent_magnitude
+  sources: [odom_twist, cmd_vel_nav, previous_cmd_vel_safe]
+  include_acceleration_to_hard_cap_during_latency: true
+  all_sources_must_be_fresh: true
+  invalid_result: STOP
+prediction:
+  max_horizon_s: 4.0
+  ttc_definition: earliest_intersection_of_propagated_wheelchair_polygon_and_obstacle_envelope
+  no_finite_ttc_sentinel: -1.0
+  sentinel_requires_observed_clear_path: true
+obstacle_classification:
+  static_speed_below_mps: 0.20
+  dynamic_speed_at_least_mps: 0.20
+  minimum_observations: 3
+  dynamic_covariance_required: true
+  ambiguous_approach_speed_mps: 1.50
+  untracked_or_ambiguous_class: AMBIGUOUS
+stopping_model:
+  gravity_mps2: 9.80665
+  simulation_min_deceleration_mps2: 0.50
+  simulation_driver_latency_s: 0.05
+  compute_and_gate_budget_s: 0.09
+  fixed_uncertainty_margin_m: 0.20
+  equations:
+    t_reaction: t_age + t_pipe
+    a_eff: a_policy - g * sin(max(0, -pitch_downhill))
+    d_reaction: v * t_reaction
+    d_brake: v^2 / (2 * a_eff)
+    d_required: d_reaction + d_brake + d_margin
+    dynamic_stop_ttc: t_reaction + v / a_eff + stop_ttc_margin_s
+  nonpositive_effective_deceleration_result: STOP
+  unverified_hardware_deceleration_result: STOP
+visibility:
+  coverage_window_s: 0.20
+  coverage_bins: 36
+  coverage_min_frames: 3
+  coverage_max_frames: 3
+  coverage_max_frame_gap_s: 0.11
+  coverage_elevation_bins: 2
+  coverage_min_elevation_rad: -0.10
+  coverage_max_elevation_rad: 0.10
+  coverage_motion_linear_tolerance_mps: 0.05
+  coverage_motion_angular_tolerance_rps: 0.05
+  required_forward_coverage_fraction: 0.95
+  bin_dimensions: [azimuth, elevation, time]
+  coverage_region: travel_direction_swept_envelope
+  empty_cloud_result: BLIND_STOP
+  missing_corridor_bin_result: BLIND_STOP
+  below_coverage_result: BLIND_STOP
+  transform_failure_result: BLIND_STOP
+  occlusion_rule: near_return_occludes_unobserved_space_inside_d_required
+  occlusion_result: OCCLUDED_STOP
+decision_thresholds:
+  static_stop: swept_envelope_intersection OR clearance <= d_required
+  dynamic_or_ambiguous_stop: swept_envelope_intersection OR TTC <= dynamic_stop_ttc
+  caution_ttc_s: 3.0
+  caution_clearance_margin_m: 0.25
+  caution_max_linear_mps: 0.10
+  caution_cannot_clear_other_stop: true
+hysteresis:
+  stop_entry_frames: 1
+  clear_consecutive_frames: 5
+  clear_hold_s: 0.50
+  clearance_strictly_above_margin_m: 0.25
+  ttc_strictly_above_s: 3.0
+  require_no_ambiguous_track: true
+  require_all_other_permissions: true
+reverse_policy:
+  autonomous_reverse_requires_separately_qualified_rear_coverage: true
+  absent_rear_coverage_result: STOP_REVERSE_PROHIBITED
+fail_closed:
+  clear_requires_all_evidence_valid_fresh_calibrated: true
+  unknown_blind_occluded_stale_malformed_result: STOP
+  status_signal_mismatch_result: STOP

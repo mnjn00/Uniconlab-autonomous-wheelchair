@@ -1,0 +1,9 @@
+<launch>
+  <arg name="driver_manifest" default="$(find wheelchair_hardware)/config/driver-unverified.yaml"/>
+  <arg name="release_authority" default="$(find wheelchair_hardware)/../../contracts/wp0/A16-release-authority.yaml"/>
+
+  <!-- Shadow is a read-only sink: it observes /cmd_vel_safe and reports status only. -->
+  <node pkg="wheelchair_hardware" type="hardware_adapter.py" name="hardware_shadow_adapter"
+        args="--profile hardware_shadow --manifest $(arg driver_manifest) --release-authority $(arg release_authority)"
+        output="screen" required="true"/>
+</launch>

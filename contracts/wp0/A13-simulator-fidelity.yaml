@@ -1,0 +1,107 @@
+schema_version: 1
+artifact_id: A13-simulator-fidelity
+owner: simulation-owner/WP5
+reviewer: safety-reviewer
+status: SOFTWARE_ONLY
+provenance:
+  source: approved Stage-2 consensus plan, Simulator-fidelity and claim matrix
+  plan_sha256: c8148c5f5d03a646c839e2966ee7fb5c57a433ab34a8cbfcce1d5ab69cc69068
+  architect_review_sha256: 7d91bb0e2182e38fc30b74cb096ab7ff2ea590ebe62934a5e6f8125bba2f8548
+  critic_review_sha256: 3844ab8a0594b888340459c57393c42bbd084c1282a34716ea6bdbfc59958d3a
+authority:
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  simulation_can_promote_physical_authority: false
+  overclaim_behavior: REJECT_RELEASE
+claim_tags_in_ascending_authority:
+  - UNIT_ONLY
+  - REPLAY_CONSISTENCY
+  - SIMULATION_ONLY
+  - TARGET_NUC_SOFTWARE
+  - HIL_INERT
+  - CLOSED_COURSE_NO_PASSENGER
+  - CAMPUS_APPROVED
+  - PASSENGER_APPROVED
+rules:
+  - Every metric and release claim must carry exactly one evidence tag.
+  - A validator must reject a claim whose asserted authority exceeds its evidence tag.
+  - Replay consistency does not establish truth, physical dynamics, or control performance.
+  - Simulation and target-NUC software evidence do not authorize physical motion.
+  - Physical authority is cumulative and requires separately reviewed replacement evidence.
+gazebo_imu_anti_alias:
+  evidence_tag: SIMULATION_ONLY
+  scope: Gazebo Classic raw IMU canonicalizer boundary only; real and replay IMU paths are unchanged.
+  filter: Componentwise arithmetic mean of linear acceleration and angular velocity over 20 consecutive monotonic samples; latest validated unit orientation and all latest source covariances are retained unchanged.
+  continuity: A full window is required before publication and the window resets on non-finite input, timestamp regression or equality, receipt-clock regression, or a source gap above 10000000 ns.
+  bounded_latency: 20 samples at 200 Hz span 0.10 s; a sustained step fully replaces the moving window within 20 samples and is not masked indefinitely.
+  claim_limit: Filtering deterministic Gazebo contact-solver aliasing creates no physical sensor, vibration, slope, stability, or hardware calibration evidence and cannot transfer to hardware or passenger-operation claims.
+claims:
+  - id: software_abi_topology_watchdog
+    maximum_current_tag: SIMULATION_ONLY
+    supported: ABI, graph cardinality, state transitions, no-bypass checks, and watchdog zero behavior
+    limitations: Actual base graph, driver, and physical stop path are not exercised.
+    replacement_evidence: verified platform graph audit and HIL inert driver tests
+  - id: move_base_path_and_collision
+    maximum_current_tag: SIMULATION_ONLY
+    supported: deterministic algorithm regression and scripted-world metrics
+    limitations: World, map, obstacle, and model bias prohibit campus success or incident-probability claims.
+    replacement_evidence: surveyed closed course with no passenger, then campus approval
+  - id: native_localization
+    maximum_current_tag: SIMULATION_ONLY
+    supported: error and recovery against Gazebo truth
+    limitations: Geometry and noise are idealized; replay bag has no independent truth.
+    replacement_evidence: surveyed reference truth and a hardware qualification bag
+  - id: livox_conversion_and_replay
+    maximum_current_tag: REPLAY_CONSISTENCY
+    supported: CustomMsg/IMU ABI conversion, counts, ordering, and deterministic replay after full source validation
+    limitations: Current metadata has no truth; Gazebo sensor is not demonstrated to reproduce Livox nonrepetitive scan pattern, motion distortion, reflectivity, rain, multipath, or occlusion.
+    replacement_evidence: calibrated Livox hardware bag with source IDL, timing, extrinsics, environment, and reference truth
+  - id: collision_ttc_dynamic_obstacles
+    maximum_current_tag: SIMULATION_ONLY
+    supported: equations, state transitions, injected faults, and scripted stop behavior
+    limitations: Pedestrian intent and classification, real blind zones, reflectivity, and occlusion fidelity are unqualified.
+    replacement_evidence: instrumented closed-course dynamic-obstacle and blind-zone measurements
+  - id: caster_contact_friction_slip_curb
+    maximum_current_tag: SIMULATION_ONLY
+    supported: coarse controller regression only
+    limitations: Gazebo Classic contact, caster, friction, slip, and curb dynamics do not establish stability, curb traversal, grade limits, or stopping performance.
+    replacement_evidence: measured no-passenger physical stability tests over approved surface and grade envelopes
+  - id: braking_latency_distance
+    maximum_current_tag: SIMULATION_ONLY
+    supported: software zero-command publication timing only
+    limitations: No claim covers driver, motors, mechanical brake, wheel response, battery state, payload, surface, temperature, uphill, downhill, or cross-slope.
+    replacement_evidence: WP7 command-to-wheel/brake and p99 stopping measurements across payload, battery, surface, temperature, and grade with approved margin
+  - id: slope_policy
+    maximum_current_tag: SIMULATION_ONLY
+    supported: IMU mathematics, state machine, stale/calibration faults, and replay consistency
+    limitations: Gravity alignment, vibration, wheel slip, physical grade limits, and cross-slope stability are unqualified; simulation thresholds have zero hardware authority.
+    replacement_evidence: stationary calibration and closed-course grade/cross-slope measurements
+  - id: payload_and_battery
+    maximum_current_tag: SIMULATION_ONLY
+    supported: parameterized software scenarios only
+    limitations: No actual mass distribution, center of gravity, battery voltage/state, motor torque, thermal derating, acceleration, or braking envelope has been measured.
+    replacement_evidence: WP7 repeated inert and closed-course tests across the approved payload and battery envelope
+  - id: estop_manual_joystick_driver_watchdog
+    maximum_current_tag: SIMULATION_ONLY
+    supported: logical topic, state, latch, reset, timeout, and fail-closed tests
+    limitations: Physical e-stop circuit, joystick priority, manual path, native command timeout, driver sign/units, and end-to-end latency are unknown.
+    replacement_evidence: verified contract and at least 20 HIL inert repetitions of each override, timeout, mode transition, restart, and e-stop case
+  - id: target_nuc_resources
+    maximum_current_tag: UNIT_ONLY
+    supported: methodology and schema checks only
+    limitations: Developer workstation and Gazebo host observations cannot qualify the deployment NUC.
+    replacement_evidence: all A12 profiles on the fingerprinted physical target NUC
+  - id: committed_map_route_geofence
+    maximum_current_tag: UNIT_ONLY
+    supported: file hash, schema, and internal consistency checks
+    limitations: Current map and waypoints are unsurveyed candidates and do not establish corridor, geofence, slope, clearance, or direction authority.
+    replacement_evidence: reviewed survey, independent route-safety manifest, closed course, and campus approval
+  - id: passenger_safety
+    maximum_current_tag: UNIT_ONLY
+    supported: no passenger claim
+    limitations: Software, replay, simulation, target-NUC, HIL, and no-passenger course results cannot authorize passengers.
+    replacement_evidence: institutional/campus approval and a distinct passenger protocol after every prior gate
+physical_claim_gate:
+  current_status: BLOCKED
+  fail_closed_action: keep hardware launch rejected, command sink inert, and both authorization flags false
+  required_progression: [TARGET_NUC_SOFTWARE, HIL_INERT, CLOSED_COURSE_NO_PASSENGER, CAMPUS_APPROVED, PASSENGER_APPROVED]

@@ -1,0 +1,12 @@
+uint8 DIRECTION_NONE=0
+uint8 DIRECTION_OUTBOUND=1
+uint8 DIRECTION_RETURN=2
+std_msgs/Header header
+uint32 activation_sequence
+uint8 direction
+string mission_id
+string route_id
+string map_id
+string map_sha256
+string route_manifest_sha256
+string safety_manifest_sha256

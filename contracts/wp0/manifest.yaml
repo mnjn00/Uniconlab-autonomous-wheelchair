@@ -1,0 +1,53 @@
+schema_version: 1
+artifact_id: wp0-contract-manifest-v1
+algorithm: sha256
+scope: contracts/wp0 regular contract files excluding manifest.yaml
+artifacts:
+  - path: A00-review-lineage.md
+    sha256: a4293a2afbc8ec8fc15929faa5284b6934664dbef77ecfee5782a0dd13c66821
+  - path: A01-adr-noetic-localization.md
+    sha256: b25e9baf9ea8a00a972bf6bd08f4689c7c169065346e06229b4720065736e853
+  - path: A02-interface-abi-v1.md
+    sha256: be34063bdc8521a72a08512519b7c315ae66c0b80161aa2603d367680aaf531d
+  - path: A03-topic-tf-time-ownership.yaml
+    sha256: b5560136e1ba74ca54b80b90c5068aa10aa9abf89c6e39af09f0b6a5a337b84c
+  - path: A04-safety-reason-registry.yaml
+    sha256: 9ab82c36d470776ce3a69bb75bdb90b449235f8773a149b5be87ceab54b5baa7
+  - path: A05-route-schema.json
+    sha256: bc86cd13a0cabb1fac5f25bf4190f0518d2b3d5150d94c9e930386a40abff841
+  - path: A06-route-safety-schema.json
+    sha256: dc1457f637a31aea7a90ee20cb177de05a68cdcacc89a9fb29b04a34c19f3982
+  - path: A07-collision-policy-schema.json
+    sha256: 6f3f0c3ae804c6c45fd38a60d5862164e26ada17f0c786260b1f4288fc5fe85d
+  - path: A08-slope-policy-schema.json
+    sha256: fb312577bcfa48c75c549f975fe51ad916123fde649863ed8f3a5aa36b4fd3a0
+  - path: A09-localization-confidence-schema.json
+    sha256: 0c23dfc37bbe412173ff30bd47808cf4a87d6ba770c0a0c54afcd193ec79dfc5
+  - path: A10-conversion-abi-v1.md
+    sha256: 4f6ceb19697d06fe2b5e9935488c3c2f2d6a1cf59d4015d4622d1e7301c4e20b
+  - path: A11-driver-contract-schema.json
+    sha256: 03704ce6d6a9ce48d70027d14adfc3770efc303e044233eb67d2d140bb9a8d02
+  - path: A12-target-nuc-method.yaml
+    sha256: d08a47fe31bfc011d9886d297c4e6d91b69d2cc3f600ca8a62429e8d73bbf1fc
+  - path: A13-simulator-fidelity.yaml
+    sha256: f7984b85d8ccf7d0f481f7daa73135109440209ca8c62847c57095da47604123
+  - path: A14-hazard-log.yaml
+    sha256: e52a198c74bc4331f8f1ad8a51ed7c72be9f6117469bd98e8a681eb825428a74
+  - path: A15-evidence-inventory.yaml
+    sha256: 8171706bbe38046dea985046b5bb4d3c6e42b5d69f08da917c15cf0dc642306f
+  - path: A16-release-authority.yaml
+    sha256: 519622195bcbeee1472615014b81978198286105aa3425561167ac53347024fb
+  - path: A17-verification-matrix.yaml
+    sha256: 6f9b3773fa2e66e2d04ac9e262d8f8e85cb4db400927e36ca3a61fb402748aca
+  - path: collision-simulation-policy.yaml
+    sha256: 312534ae7f05cbd94dbed1a12e3deb9b9b2dcc7e3f57c11de76d62a1b0a51984
+  - path: driver-unverified.yaml
+    sha256: 98eb37a28caf76eab078bf895edd9c9c189c3c12fafd4dcc5b8e37116d7e5055
+  - path: driver-verified-fixture.yaml
+    sha256: 30744d2bc964433f30e705e6c92e9d61285c4b37cc9cc1f30c69be1245ad4d91
+  - path: route-safety-candidate.yaml
+    sha256: eb26fbbe00b5514663dd0a9fb4cf5b3ce561961e0a0d17483b5937af205f9706
+  - path: slope-simulation-policy.yaml
+    sha256: 9eb3d7fe81b16a432cbcbcc68d6159bb3945bb3b00d23fa2ee02affe445d35af
+  - path: time-alignment-schema.json
+    sha256: a4644e8885d9148ceaa6b5100e66643f9b6c14c781d5b9a6016a881af81b1249

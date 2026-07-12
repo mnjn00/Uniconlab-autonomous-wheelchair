@@ -3,66 +3,109 @@ import importlib.util
 
 ROOT = Path(__file__).resolve().parents[3]
 SAFETY_GATE = ROOT / "src" / "wheelchair_safety" / "scripts" / "safety_gate.py"
-
 spec = importlib.util.spec_from_file_location("safety_gate", SAFETY_GATE)
 safety_gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(safety_gate)
 
 VelocityCommand = safety_gate.VelocityCommand
+SignalEvidence = safety_gate.SignalEvidence
 SafetyConfig = safety_gate.SafetyConfig
 GateInputs = safety_gate.GateInputs
 SafetyGateCore = safety_gate.SafetyGateCore
 
 
-def test_e_stop_latches_until_explicit_reset():
-    core = SafetyGateCore(SafetyConfig())
-    decision = core.evaluate(GateInputs(cmd=VelocityCommand(0.2, 0.1), cmd_age_s=0.0, e_stop=True))
-    assert decision.command.is_zero()
-    assert decision.reason == "e_stop_latched"
-    assert decision.e_stop_latched is True
-
-    decision = core.evaluate(GateInputs(cmd=VelocityCommand(0.2, 0.1), cmd_age_s=0.0, e_stop=False))
-    assert decision.command.is_zero()
-    assert decision.reason == "e_stop_latched"
-
-    decision = core.evaluate(GateInputs(cmd=VelocityCommand(0.2, 0.1), cmd_age_s=0.0, e_stop_reset=True))
-    assert decision.reason == "nominal"
-    assert decision.e_stop_latched is False
-    assert decision.command == VelocityCommand(0.2, 0.1)
+def clear(name, stamp=10.0, **kwargs):
+    policy = "" if name == "intent" else safety_gate._DEFAULT_POLICY_SHA256[name]
+    source = "topology_guard" if name == "topology" else name
+    return SignalEvidence(state=safety_gate.CLEAR, source_stamp_s=stamp,
+                          receipt_stamp_s=stamp, source=source, sequence=1,
+                          policy_sha256=policy, **kwargs)
 
 
-def test_stale_watchdog_stops_missing_or_old_commands():
-    core = SafetyGateCore(SafetyConfig(stale_timeout_s=0.30))
-    assert core.evaluate(GateInputs(cmd=None, cmd_age_s=None)).reason == "stale_watchdog"
-    old = core.evaluate(GateInputs(cmd=VelocityCommand(0.2, 0.0), cmd_age_s=0.31))
-    assert old.reason == "stale_watchdog"
-    assert old.command.is_zero()
-
-
-def test_priority_orders_geofence_before_collision_and_speed_cap():
-    core = SafetyGateCore(SafetyConfig(max_linear_speed=0.55, max_angular_speed=0.85))
-    decision = core.evaluate(
-        GateInputs(
-            cmd=VelocityCommand(2.0, 3.0),
-            cmd_age_s=0.0,
-            geofence_ok=False,
-            collision_stop=True,
-        )
+def valid_inputs(**changes):
+    values = dict(
+        cmd=VelocityCommand(0.2, 0.1), now_s=10.0,
+        cmd_source_stamp_s=10.0, cmd_receipt_stamp_s=10.0,
+        motion_intent=clear("intent", max_linear_mps=0.5, max_angular_rps=0.8),
+        geofence=clear("geofence"), collision=clear("collision"),
+        slope=clear("slope"), localization=clear("localization"),
+        mode=clear("mode"), driver=clear("driver"), topology=clear("topology"),
+        e_stop=False,
+        manual_or_disarmed=True, stationary=True, mission_cancelled=True,
+        graph_valid=True,
     )
-    assert decision.reason == "geofence_or_mode_violation"
+    values.update(changes)
+    return GateInputs(**values)
+
+
+def arm(core):
+    decision = core.evaluate(valid_inputs(arm_request=True))
+    assert decision.armed
+    return decision
+
+
+def test_startup_is_unknown_disarmed_and_zero():
+    decision = SafetyGateCore().evaluate(GateInputs())
+    assert decision.command == VelocityCommand()
+    assert not decision.armed
+    assert decision.reason_mask & safety_gate.INPUT_UNKNOWN
+    assert decision.reason_mask & safety_gate.STARTUP
+
+
+def test_e_stop_reset_is_guarded_and_never_rearms():
+    core = SafetyGateCore()
+    arm(core)
+    stopped = core.evaluate(valid_inputs(e_stop=True))
+    assert stopped.command.is_zero() and stopped.e_stop_latched
+
+    rejected = core.evaluate(valid_inputs(e_stop=False, e_stop_reset=True, stationary=False))
+    assert rejected.reason_mask & safety_gate.RESET_REJECTED
+    assert rejected.e_stop_latched
+
+    reset = core.evaluate(valid_inputs(e_stop=False, e_stop_reset=True))
+    assert reset.command.is_zero()
+    assert not reset.e_stop_latched and not reset.armed
+    assert reset.reason_mask == safety_gate.STARTUP
+
+    rearmed = core.evaluate(valid_inputs(arm_request=True))
+    assert rearmed.armed and rearmed.command == VelocityCommand(0.2, 0.1)
+
+
+def test_stale_watchdog_stops_at_above_but_not_equal_ttl():
+    cfg = SafetyConfig(stale_timeout_s=0.30)
+    equal = SafetyGateCore(cfg).evaluate(valid_inputs(
+        cmd_source_stamp_s=9.70, cmd_receipt_stamp_s=9.70, arm_request=True))
+    assert equal.armed
+    old = SafetyGateCore(cfg).evaluate(valid_inputs(
+        cmd_source_stamp_s=9.699999, cmd_receipt_stamp_s=9.70, arm_request=True))
+    assert old.reason_mask & safety_gate.STALE_CMD
+    assert old.command.is_zero() and not old.armed
+
+
+def test_stop_evidence_cannot_be_masked_by_clear_inputs():
+    core = SafetyGateCore()
+    collision = SignalEvidence(state=safety_gate.STOP, source_stamp_s=10.0,
+                               receipt_stamp_s=10.0, reason_mask=safety_gate.COLLISION_TTC,
+                               source="collision", policy_sha256="0" * 64, sequence=1)
+    decision = core.evaluate(valid_inputs(collision=collision, arm_request=True))
     assert decision.command.is_zero()
-
-    decision = core.evaluate(GateInputs(cmd=VelocityCommand(2.0, 3.0), cmd_age_s=0.0, collision_stop=True))
-    assert decision.reason == "collision_stop"
-    assert decision.command.is_zero()
+    assert decision.reason_mask & safety_gate.COLLISION_TTC
+    assert not decision.armed
 
 
-def test_speed_cap_limits_nominal_commands_without_zeroing():
+def test_speed_cap_is_minimum_of_hard_and_intent_caps():
     core = SafetyGateCore(SafetyConfig(max_linear_speed=0.55, max_angular_speed=0.85))
-    decision = core.evaluate(GateInputs(cmd=VelocityCommand(0.80, -1.20), cmd_age_s=0.0))
+    intent = clear("intent", max_linear_mps=0.3, max_angular_rps=0.4)
+    decision = core.evaluate(valid_inputs(cmd=VelocityCommand(0.8, -1.2),
+                                          motion_intent=intent, arm_request=True))
     assert decision.reason == "speed_cap"
-    assert decision.command == VelocityCommand(0.55, -0.85)
+    assert decision.command == VelocityCommand(0.3, -0.4)
 
-    decision = core.evaluate(GateInputs(cmd=VelocityCommand(0.30, 0.20), cmd_age_s=0.0))
-    assert decision.reason == "nominal"
-    assert decision.command == VelocityCommand(0.30, 0.20)
+
+def test_legacy_boole_do_not_supply_missing_permissions():
+    decision = SafetyGateCore().evaluate(GateInputs(
+        cmd=VelocityCommand(0.1, 0.0), cmd_age_s=0.0,
+        geofence_ok=True, mode_allowed=True, collision_stop=False,
+        e_stop=False, graph_valid=True, arm_request=True))
+    assert decision.command.is_zero()
+    assert decision.reason_mask & safety_gate.INPUT_UNKNOWN

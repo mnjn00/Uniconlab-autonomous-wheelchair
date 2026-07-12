@@ -1,0 +1,70 @@
+schema_version: 1
+policy_id: slope-sim-v1
+policy_sha256: 69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62
+qualification: simulation_only
+operation_mode: simulation
+authority:
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  transferable_to_hardware: false
+frames:
+  output: base_link
+  input: imu_link
+  transform: base_link_to_imu_link
+  transform_provenance_allowed: [measured, simulation]
+  measured_transform_required_for_hardware: true
+  convention: REP-103
+input:
+  source_ttl_s: 0.10
+  receipt_ttl_s: 0.10
+  transform_ttl_s: 0.10
+  verified_time_required: true
+calibration:
+  output_during_calibration: unknown_stop
+  input_provenance_required: true
+  stationary_duration_s: 10.0
+  nominal_rate_hz: 200.0
+  minimum_expected_sample_fraction: 0.95
+  p95_gyro_norm_max_radps: 0.02
+  mean_gravity_mps2: 9.80665
+  mean_acceleration_tolerance_mps2: 0.15
+  pitch_roll_stddev_max_deg: 0.25
+  verified_extrinsic_required: true
+  verified_time_alignment_required: true
+  zero_stamp_transform_allowed_only_when_explicitly_static: true
+  hash_fields: [derived_acceleration_bias, derived_gyro_bias, verified_extrinsic, input_provenance, sample_count, window]
+  replay_hardware_unverified_result: uncalibrated_stop
+gravity_estimation:
+  fallback: first_order_low_pass_acceleration_vector
+  low_pass_time_constant_s: 1.0
+  fallback_acceleration_magnitude_tolerance_mps2: 0.25
+  fallback_gyro_norm_max_radps: 0.05
+  orientation_gravity_agreement_max_deg: 3.0
+  dynamic_residual_max_mps2: 0.75
+  dynamic_residual_duration_s: 0.10
+  fallback_hold_max_s: 0.50
+thresholds_deg:
+  clear:
+    pitch_min: -5.0
+    pitch_max: 7.0
+    absolute_roll_max: 4.0
+  slow:
+    pitch_min: -7.0
+    pitch_max: 10.0
+    absolute_roll_max: 6.0
+  slow_max_linear_mps: 0.10
+hysteresis:
+  release_hold_s: 1.0
+  tighten_each_boundary_deg: 1.0
+route_zones:
+  normal: evaluate_slope_policy
+  manual_only: stop_autonomy
+  degraded_stop: stop
+  unknown: stop
+downhill_stopping_coupling:
+  downhill_factor: sin(max(0, -pitch_rad))
+  equation: a_eff = a_policy - g * downhill_factor
+  nonpositive_effective_deceleration: stop
+fail_closed:
+  stale_uncalibrated_bad_tf_bad_time_dynamic_unknown_zone: stop
+  slow_only_lowers_speed: true

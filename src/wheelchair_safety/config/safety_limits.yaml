@@ -1,13 +1,41 @@
+# Immutable software-RC safety-gate envelope. Hardware/passenger authority remains false.
 input_cmd_topic: /cmd_vel_nav
 output_cmd_topic: /cmd_vel_safe
+intent_topic: /decision/motion_intent
+geofence_topic: /safety/geofence
+collision_topic: /safety/collision
+slope_topic: /safety/slope
+localization_topic: /safety/localization
+mode_topic: /safety/mode
+driver_topic: /hardware/driver_status
+topology_topic: /safety/topology
 estop_topic: /safety/estop
 estop_reset_topic: /safety/estop_reset
-geofence_ok_topic: /safety/geofence_ok
-mode_allowed_topic: /safety/mode_allowed
-collision_stop_topic: /safety/collision_stop
-status_topic: /safety/status
-publish_rate_hz: 20.0
-stale_timeout_s: 0.30
+arm_topic: /safety/arm
+mission_cancelled_topic: /safety/mission_cancelled
+state_topic: /safety/state
+diagnostics_topic: /diagnostics
+publish_rate_hz: 50.0
+command_ttl_s: 0.30
+intent_ttl_s: 0.30
+geofence_ttl_s: 0.25
+collision_ttl_s: 0.30
+slope_ttl_s: 0.10
+localization_ttl_s: 0.25
+mode_ttl_s: 0.15
+driver_ttl_s: 0.15
+future_tolerance_s: 0.05
+deadline_limit_s: 0.05
 max_linear_speed: 0.55
 max_angular_speed: 0.85
-collision_stop_distance_m: 0.45
+expected_policy_sha256:
+  geofence: eb26fbbe00b5514663dd0a9fb4cf5b3ce561961e0a0d17483b5937af205f9706
+  collision: 9534bfafded0191e9434ca0d16a7d1ae8caa32c1ff0f6bf6d85f0a21ba27e9db
+  slope: 69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62
+  localization: 5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8
+  mode: 5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8
+  driver: 5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8
+  topology: 93941ad3312c3f3c26da99863c785a1034aa283cd89d1db65d675cc4dbfb6f80
+release_manifest_sha256: ""
+hardware_motion_authorized: false
+passenger_operation_authorized: false

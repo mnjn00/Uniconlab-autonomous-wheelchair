@@ -1,0 +1,147 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:uniconlab:wp0:A06-route-safety-schema:v1",
+  "title": "Immutable route safety manifest v1",
+  "x-owner": "WP0-SW-route-safety-owner",
+  "x-reviewer": "WP0-architect-and-critic",
+  "x-status": "candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "manifest_id", "owner", "reviewer", "status", "provenance", "qualification", "map", "footprint", "geometry_semantics", "global_allowed_polygon", "global_exclusion_polygons", "approved_routes", "localization_zones", "authority", "failure_policy", "runtime_mutation_allowed", "reload_allowed", "widening_allowed"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "manifest_id": {"$ref": "#/definitions/id"},
+    "owner": {"$ref": "#/definitions/id"},
+    "reviewer": {"$ref": "#/definitions/id"},
+    "status": {"enum": ["candidate", "reviewed", "rejected"]},
+    "provenance": {"$ref": "#/definitions/provenance"},
+    "qualification": {"enum": ["candidate", "simulation_qualified", "closed_course_qualified", "campus_approved"]},
+    "map": {"$ref": "#/definitions/mapBinding"},
+    "footprint": {"$ref": "#/definitions/footprint"},
+    "geometry_semantics": {"$ref": "#/definitions/geometrySemantics"},
+    "global_allowed_polygon": {"$ref": "#/definitions/outerPolygon"},
+    "global_exclusion_polygons": {"type": "array", "maxItems": 64, "items": {"$ref": "#/definitions/exclusionPolygon"}},
+    "approved_routes": {"type": "array", "minItems": 2, "maxItems": 128, "items": {"$ref": "#/definitions/approvedRoute"}, "allOf": [{"contains": {"type": "object", "required": ["direction"], "properties": {"direction": {"const": "outbound"}}}}, {"contains": {"type": "object", "required": ["direction"], "properties": {"direction": {"const": "return"}}}}]},
+    "localization_zones": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/definitions/zone"}},
+    "authority": {"$ref": "#/definitions/authority"},
+    "failure_policy": {"$ref": "#/definitions/failurePolicy"},
+    "runtime_mutation_allowed": {"const": false},
+    "reload_allowed": {"const": false},
+    "widening_allowed": {"const": false}
+  },
+  "definitions": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "finiteCoordinate": {"type": "number", "minimum": -1000000, "maximum": 1000000},
+    "point": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/definitions/finiteCoordinate"}},
+    "outerPolygon": {"type": "array", "minItems": 3, "maxItems": 256, "items": {"$ref": "#/definitions/point"}},
+    "exclusionPolygon": {"type": "array", "minItems": 3, "maxItems": 256, "items": {"$ref": "#/definitions/point"}},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "map_source_path", "map_source_sha256", "route_source_path", "route_source_sha256", "evidence_level", "surveyed_geofence"],
+      "properties": {
+        "source": {"const": "Stage-2-approved-plan"},
+        "map_source_path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "map_source_sha256": {"$ref": "#/definitions/sha256"},
+        "route_source_path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "route_source_sha256": {"$ref": "#/definitions/sha256"},
+        "evidence_level": {"enum": ["candidate", "simulation_only", "closed_course", "campus_survey"]},
+        "surveyed_geofence": {"type": "boolean"}
+      }
+    },
+    "mapBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["map_id", "sha256", "frame_id"],
+      "properties": {
+        "map_id": {"$ref": "#/definitions/id"},
+        "sha256": {"$ref": "#/definitions/sha256"},
+        "frame_id": {"const": "map"}
+      }
+    },
+    "footprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["geometry_sha256", "calibration_id", "calibration_status", "localization_uncertainty_margin_m", "fixed_boundary_margin_m"],
+      "properties": {
+        "geometry_sha256": {"$ref": "#/definitions/sha256"},
+        "calibration_id": {"$ref": "#/definitions/id"},
+        "calibration_status": {"enum": ["UNMEASURED", "MEASURED"]},
+        "localization_uncertainty_margin_m": {"type": "number", "minimum": 0, "maximum": 100},
+        "fixed_boundary_margin_m": {"type": "number", "minimum": 0, "maximum": 100}
+      }
+    },
+    "geometrySemantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinate_frame", "unit", "closure", "outer_orientation", "exclusion_orientation", "topology", "unknown_or_nonfinite_action"],
+      "properties": {
+        "coordinate_frame": {"const": "map"},
+        "unit": {"const": "m"},
+        "closure": {"const": "implicit"},
+        "outer_orientation": {"const": "counter_clockwise"},
+        "exclusion_orientation": {"const": "clockwise"},
+        "topology": {"const": "simple_non_self_intersecting_three_unique_vertices"},
+        "unknown_or_nonfinite_action": {"const": "REJECT_AND_STOP"}
+      }
+    },
+    "approvedRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route_id", "direction", "route_manifest_sha256", "safety_manifest_binding", "corridor_polygon", "corridor_margin_m", "segment_ids", "localization_zone_ids", "max_linear_mps", "max_angular_rps", "hardware_authorized"],
+      "properties": {
+        "route_id": {"$ref": "#/definitions/id"},
+        "direction": {"enum": ["outbound", "return"]},
+        "route_manifest_sha256": {"$ref": "#/definitions/sha256"},
+        "safety_manifest_binding": {"const": "self_sha256_from_signed_release_bundle"},
+        "corridor_polygon": {"$ref": "#/definitions/outerPolygon"},
+        "corridor_margin_m": {"type": "number", "minimum": 0, "maximum": 100},
+        "segment_ids": {"type": "array", "minItems": 1, "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
+        "localization_zone_ids": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
+        "max_linear_mps": {"type": "number", "minimum": 0, "maximum": 10},
+        "max_angular_rps": {"type": "number", "minimum": 0, "maximum": 10},
+        "hardware_authorized": {"const": false}
+      }
+    },
+    "zone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zone_id", "polygon", "policy", "max_linear_mps", "max_angular_rps", "hardware_authorized"],
+      "properties": {
+        "zone_id": {"$ref": "#/definitions/id"},
+        "polygon": {"$ref": "#/definitions/outerPolygon"},
+        "policy": {"enum": ["normal", "degraded_stop", "manual_only"]},
+        "max_linear_mps": {"type": "number", "minimum": 0, "maximum": 10},
+        "max_angular_rps": {"type": "number", "minimum": 0, "maximum": 10},
+        "hardware_authorized": {"const": false}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["simulation_only", "hardware_authorized", "passenger_authorized", "surveyed_geofence_approved"],
+      "properties": {
+        "simulation_only": {"type": "boolean"},
+        "hardware_authorized": {"const": false},
+        "passenger_authorized": {"const": false},
+        "surveyed_geofence_approved": {"const": false}
+      }
+    },
+    "failurePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unknown", "stale", "map_hash_mismatch", "route_hash_mismatch", "safety_hash_mismatch", "geometry_invalid", "attempted_reload", "attempted_widen"],
+      "properties": {
+        "unknown": {"const": "STOP"},
+        "stale": {"const": "STOP"},
+        "map_hash_mismatch": {"const": "STOP"},
+        "route_hash_mismatch": {"const": "STOP"},
+        "safety_hash_mismatch": {"const": "STOP"},
+        "geometry_invalid": {"const": "STOP"},
+        "attempted_reload": {"const": "STOP"},
+        "attempted_widen": {"const": "STOP"}
+      }
+    }
+  }
+}

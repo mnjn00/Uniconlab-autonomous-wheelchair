@@ -1,0 +1,79 @@
+schema_version: 1
+mode: observe_only
+output_dir: /var/lib/wheelchair/incidents
+
+# Hard bounds. The ring is process-local and can never exceed the WP6 64 MiB cap.
+bounds:
+  pre_event_s: 10.0
+  post_event_s: 10.0
+  max_memory_bytes: 67108864
+  max_record_bytes: 65536
+  max_evidence_bytes: 16777216
+  max_write_queue: 4
+  rate_limit_s: 1.0
+  poll_s: 0.05
+  max_string_chars: 2048
+  max_collection_items: 256
+  max_gap_s: 1.0
+
+topics:
+  diagnostics: /diagnostics
+  lidar: /sensors/lidar/points
+  imu: /sensors/imu/data
+  odom: /odom
+  localization: /localization/status
+  route: /route/progress
+  mission: /mission/state
+  safety_state: /safety/state
+  driver: /hardware/driver_status
+  nav_command: /cmd_vel_nav
+  safe_command: /cmd_vel_safe
+
+# Only these names may arm persistence. Repeated names are limited to 1 Hz.
+safety_events:
+  - ESTOP
+  - STALE_CMD
+  - MODE
+  - GEOFENCE
+  - COLLISION
+  - LOCALIZATION
+  - DRIVER
+  - INVALID_CMD
+  - CLOCK
+  - STALE_INTENT
+  - INTERNAL_FAULT
+  - STARTUP
+  - SENSOR_STALE
+  - COLLISION_BLIND
+  - COLLISION_TTC
+  - COLLISION_DISTANCE
+  - SLOPE
+  - IMU_UNCALIBRATED
+  - ROUTE_MANIFEST
+  - GRAPH_TOPOLOGY
+  - TF
+  - BACKPRESSURE
+  - DEADLINE_MISS
+  - MANUAL_OVERRIDE
+  - HARDWARE_UNVERIFIED
+  - MAP_MISMATCH
+  - COLLISION_OCCLUDED
+  - LOCALIZATION_INCONSISTENT
+  - RESOURCE
+  - CORRUPT_DATA
+  - RESET_REJECTED
+  - INPUT_UNKNOWN
+  - ROUTE_STATE
+  - ODOM_STALE
+  - IMU_STALE
+  - LIDAR_STALE
+  - POLICY_MISMATCH
+  - SAFETY_STOPPED
+  - SAFETY_LATCHED
+  - SAFETY_FAULT
+
+authority:
+  publishes_motion: false
+  grants_permission: false
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false

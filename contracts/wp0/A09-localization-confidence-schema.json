@@ -1,0 +1,220 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:uniconlab:wheelchair:wp0:localization-confidence:v1",
+  "title": "WP0 independent localization-confidence policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy_id", "owner", "reviewer", "status", "qualification", "provenance", "hashes", "authority", "runtime_boundary", "calibration", "holdout", "thresholds", "ok_gate", "initialization", "relocalization", "degraded_zones", "plausible_wrong_rejections", "fail_closed"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "policy_id": { "$ref": "#/definitions/id" },
+    "owner": { "$ref": "#/definitions/id" },
+    "reviewer": { "$ref": "#/definitions/review" },
+    "status": { "enum": ["draft", "candidate", "approved_software_rc", "hardware_blocked", "hardware_verified"] },
+    "qualification": { "enum": ["unqualified", "simulation_only", "replay_only", "software_rc", "hardware_verified"] },
+    "provenance": { "$ref": "#/definitions/provenance" },
+    "hashes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_sha256", "policy_sha256", "map_sha256", "localizer_sha256", "localizer_config_sha256", "calibration_dataset_sha256", "holdout_dataset_sha256", "threshold_tool_sha256"],
+      "properties": {
+        "schema_sha256": { "$ref": "#/definitions/hashRecord" },
+        "policy_sha256": { "$ref": "#/definitions/hashRecord" },
+        "map_sha256": { "$ref": "#/definitions/hashRecord" },
+        "localizer_sha256": { "$ref": "#/definitions/hashRecord" },
+        "localizer_config_sha256": { "$ref": "#/definitions/hashRecord" },
+        "calibration_dataset_sha256": { "$ref": "#/definitions/hashRecord" },
+        "holdout_dataset_sha256": { "$ref": "#/definitions/hashRecord" },
+        "threshold_tool_sha256": { "$ref": "#/definitions/hashRecord" }
+      }
+    },
+    "authority": { "$ref": "#/definitions/authority" },
+    "runtime_boundary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runtime_option", "candidate_is_untrusted", "candidate_may_publish_safety", "independent_guard_is_sole_safety_publisher", "guard_inputs", "map_frame", "single_map_to_odom_authority", "guard_may_broadcast_map_to_odom"],
+      "properties": {
+        "runtime_option": { "const": "offline_ROS2_GLIM_native_Noetic_runtime" },
+        "candidate_is_untrusted": { "const": true },
+        "candidate_may_publish_safety": { "const": false },
+        "independent_guard_is_sole_safety_publisher": { "const": true },
+        "guard_inputs": { "type": "array", "minItems": 6, "maxItems": 6, "uniqueItems": true, "items": { "enum": ["candidate_pose_covariance", "canonical_cloud", "immutable_map_hash", "odom_prediction", "tf_graph", "independent_scan_map_consistency"] } },
+        "map_frame": { "const": "map" },
+        "single_map_to_odom_authority": { "const": true },
+        "guard_may_broadcast_map_to_odom": { "const": false }
+      }
+    },
+    "calibration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["method", "calibration_fraction", "holdout_fraction", "scenario_disjoint", "thresholds_frozen_before_holdout", "map_resolution_m", "tool_version", "author", "required_truth", "uncalibrated_result"],
+      "properties": {
+        "method": { "const": "calibration_holdout_split" },
+        "calibration_fraction": { "const": 0.70 },
+        "holdout_fraction": { "const": 0.30 },
+        "scenario_disjoint": { "const": true },
+        "thresholds_frozen_before_holdout": { "const": true },
+        "map_resolution_m": { "$ref": "#/definitions/positiveMetres" },
+        "tool_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "author": { "$ref": "#/definitions/id" },
+        "required_truth": { "const": true },
+        "uncalibrated_result": { "const": "LOST_STOP" }
+      }
+    },
+    "holdout": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minimum_decorrelated_windows", "window_duration_s", "maximum_false_ok_windows", "false_ok_planar_error_above_m", "false_ok_yaw_error_above_deg", "claim_limit"],
+      "properties": {
+        "minimum_decorrelated_windows": { "type": "integer", "minimum": 10000, "maximum": 1000000000 },
+        "window_duration_s": { "const": 1.0 },
+        "maximum_false_ok_windows": { "const": 0 },
+        "false_ok_planar_error_above_m": { "type": "number", "minimum": 0.50, "maximum": 0.50 },
+        "false_ok_yaw_error_above_deg": { "type": "number", "minimum": 15, "maximum": 15 },
+        "claim_limit": { "const": "software_evidence_not_hardware_probability" }
+      }
+    },
+    "thresholds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidate_age_max_s", "tf_age_max_s", "planar_covariance", "reported_planar_stddev_max_m", "reported_yaw_stddev_max_deg", "odom_innovation_nis_max", "odom_nis_dof", "odom_nis_probability", "scan_selection", "scan_map_residual", "inlier_fraction", "ambiguity_ratio_min", "continuity_planar_max_m", "continuity_yaw_max_deg", "continuity_jump_exception", "map_identity", "reset_count", "frozen_pose_detection"],
+      "properties": {
+        "candidate_age_max_s": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.25 },
+        "tf_age_max_s": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.25 },
+        "planar_covariance": { "const": "finite_positive_definite" },
+        "reported_planar_stddev_max_m": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.20 },
+        "reported_yaw_stddev_max_deg": { "type": "number", "exclusiveMinimum": 0, "maximum": 5.0 },
+        "odom_innovation_nis_max": { "type": "number", "exclusiveMinimum": 0, "maximum": 12.84 },
+        "odom_nis_dof": { "const": 3 },
+        "odom_nis_probability": { "const": 0.995 },
+        "scan_selection": {
+          "type": "object", "additionalProperties": false,
+          "required": ["candidate_samples", "minimum_selected_points", "maximum_selected_points", "planar_range_min_m", "planar_range_max_m", "base_z_min_m", "base_z_max_m"],
+          "properties": {
+            "candidate_samples": { "const": 1024 },
+            "minimum_selected_points": { "const": 16 },
+            "maximum_selected_points": { "const": 128 },
+            "planar_range_min_m": { "const": 0.5 },
+            "planar_range_max_m": { "const": 20.0 },
+            "base_z_min_m": { "const": 0.15 },
+            "base_z_max_m": { "const": 2.0 }
+          }
+        },
+        "scan_map_residual": {
+          "type": "object", "additionalProperties": false,
+          "required": ["statistic", "threshold_rule", "software_rc_ceiling_m"],
+          "properties": {
+            "statistic": { "const": "robust_median_point_to_nearest_occupied_map" },
+            "threshold_rule": { "const": "min(calibrated_p99_good, software_rc_ceiling_m)" },
+            "software_rc_ceiling_m": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.20 }
+          }
+        },
+        "inlier_fraction": {
+          "type": "object", "additionalProperties": false,
+          "required": ["distance_m", "threshold_rule", "software_rc_floor"],
+          "properties": {
+            "distance_m": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.20 },
+            "threshold_rule": { "const": "max(calibrated_p1_good, software_rc_floor)" },
+            "software_rc_floor": { "type": "number", "minimum": 0.65, "maximum": 1.0 }
+          }
+        },
+        "ambiguity_ratio_min": { "type": "number", "minimum": 1.50, "maximum": 1000000 },
+        "continuity_planar_max_m": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.25 },
+        "continuity_yaw_max_deg": { "type": "number", "exclusiveMinimum": 0, "maximum": 10.0 },
+        "continuity_jump_exception": { "const": "explicit_RELOCALIZING_only" },
+        "map_identity": { "const": "exact_map_id_and_sha256" },
+        "reset_count": { "const": "monotonic" },
+        "frozen_pose_detection": { "const": "pose_must_not_remain_frozen_while_odom_moves" }
+      }
+    },
+    "ok_gate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["all_thresholds_required", "independent_scan_map_check_required", "fresh_required_odom_missing_result", "one_tf_authority_required", "consecutive_samples", "minimum_span_s", "any_unknown_invalid_or_mismatch_result"],
+      "properties": {
+        "all_thresholds_required": { "const": true },
+        "independent_scan_map_check_required": { "const": true },
+        "fresh_required_odom_missing_result": { "const": "LOST_STOP" },
+        "one_tf_authority_required": { "const": true },
+        "consecutive_samples": { "type": "integer", "minimum": 20, "maximum": 1000000 },
+        "minimum_span_s": { "type": "number", "minimum": 2.0, "maximum": 3600 },
+        "any_unknown_invalid_or_mismatch_result": { "const": "LOST_STOP" }
+      }
+    },
+    "initialization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operator_pose_allowed", "mission_must_be_canceled", "stationary_linear_speed_below_mps", "stationary_angular_speed_below_radps", "stationary_hold_s", "passing_samples", "passing_span_s", "success_state", "automatic_motion_resume"],
+      "properties": {
+        "operator_pose_allowed": { "const": true },
+        "mission_must_be_canceled": { "const": true },
+        "stationary_linear_speed_below_mps": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.01 },
+        "stationary_angular_speed_below_radps": { "type": "number", "exclusiveMinimum": 0, "maximum": 0.02 },
+        "stationary_hold_s": { "type": "number", "minimum": 2.0, "maximum": 3600 },
+        "passing_samples": { "type": "integer", "minimum": 20, "maximum": 1000000 },
+        "passing_span_s": { "type": "number", "minimum": 2.0, "maximum": 3600 },
+        "success_state": { "const": "READY_DISARMED" },
+        "automatic_motion_resume": { "const": false }
+      }
+    },
+    "relocalization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stationary_required", "explicit_operator_request_required", "reset_count_increment_required", "passing_samples", "minimum_span_s", "no_ambiguity_required", "success_state", "old_goal_resume"],
+      "properties": {
+        "stationary_required": { "const": true },
+        "explicit_operator_request_required": { "const": true },
+        "reset_count_increment_required": { "const": true },
+        "passing_samples": { "type": "integer", "minimum": 30, "maximum": 1000000 },
+        "minimum_span_s": { "type": "number", "minimum": 3.0, "maximum": 3600 },
+        "no_ambiguity_required": { "const": true },
+        "success_state": { "const": "READY_DISARMED" },
+        "old_goal_resume": { "const": false }
+      }
+    },
+    "degraded_zones": {
+      "type": "object", "additionalProperties": false,
+      "required": ["DEGRADED", "degraded_stop", "manual_only", "unknown_zone", "future_low_speed_policy_requirement"],
+      "properties": {
+        "DEGRADED": { "const": "STOP" },
+        "degraded_stop": { "const": "STOP" },
+        "manual_only": { "const": "STOP_AUTONOMY" },
+        "unknown_zone": { "const": "STOP" },
+        "future_low_speed_policy_requirement": { "const": "new_safety_ADR_and_hardware_evidence" }
+      }
+    },
+    "plausible_wrong_rejections": {
+      "type": "object", "additionalProperties": false,
+      "required": ["required_fixtures", "raw_ok_or_tiny_covariance_may_override_guard", "every_fixture_result"],
+      "properties": {
+        "required_fixtures": {
+          "type": "array", "minItems": 9, "maxItems": 9, "uniqueItems": true,
+          "items": { "enum": ["map_shift_1m_tiny_covariance", "yaw_alias_20deg_symmetric_corridor", "frozen_pose_while_odom_moves", "wrong_map_id_or_hash", "zero_or_singular_covariance", "good_raw_score_poor_scan_residual", "stale_tf_fresh_pose", "duplicate_map_to_odom", "relocalization_jump"] }
+        },
+        "raw_ok_or_tiny_covariance_may_override_guard": { "const": false },
+        "every_fixture_result": { "const": "LOST_STOP" }
+      }
+    },
+    "fail_closed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clear_requires_calibrated_independent_consistent_fresh_evidence", "missing_stale_malformed_uncalibrated_result", "map_or_policy_hash_mismatch_result", "lost_action", "lost_requires_zero", "automatic_resume_after_lost"],
+      "properties": {
+        "clear_requires_calibrated_independent_consistent_fresh_evidence": { "const": true },
+        "missing_stale_malformed_uncalibrated_result": { "const": "LOST_STOP" },
+        "map_or_policy_hash_mismatch_result": { "const": "LOST_STOP" },
+        "lost_action": { "const": "cancel_move_base" },
+        "lost_requires_zero": { "const": true },
+        "automatic_resume_after_lost": { "const": false }
+      }
+    }
+  },
+  "allOf": [{
+    "if": { "properties": { "qualification": { "enum": ["unqualified", "simulation_only", "replay_only", "software_rc"] } } },
+    "then": { "properties": { "authority": { "properties": { "hardware_motion_authorized": { "const": false }, "passenger_operation_authorized": { "const": false }, "transferable_to_hardware": { "const": false } } } } }
+  }],
+  "definitions": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "hashRecord": {
+      "type": "object", "additionalProperties": false, "required": ["value", "status"],
+      "properties": { "value": { "oneOf": [{ "$ref": "#/definitions/sha256" }, { "type": "null" }] }, "status": { "enum": ["verified", "candidate", "blocked_unknown"] }, "scope": { "type": "string", "minLength": 1, "maxLength": 160 } },
+      "allOf": [{ "if": { "properties": { "status": { "const": "verified" } } }, "then": { "properties": { "value": { "$ref": "#/definitions/sha256" } } } }]
+    },
+    "review": { "type": "object", "additionalProperties": false, "required": ["name", "status"], "properties": { "name": { "$ref": "#/definitions/id" }, "status": { "enum": ["pending", "approved", "rejected", "blocked"] }, "reviewed_at": { "type": ["string", "null"], "format": "date-time" } } },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["source", "stage", "generated_at", "evidence_level"], "properties": { "source": { "type": "string", "minLength": 1, "maxLength": 256 }, "stage": { "const": "Stage-2" }, "generated_at": { "type": "string", "format": "date-time" }, "evidence_level": { "enum": ["contract_only", "simulation", "replay", "software_rc", "measured_hardware"] } } },
+    "authority": { "type": "object", "additionalProperties": false, "required": ["hardware_motion_authorized", "passenger_operation_authorized", "transferable_to_hardware", "hardware_policy_requirement"], "properties": { "hardware_motion_authorized": { "type": "boolean" }, "passenger_operation_authorized": { "type": "boolean" }, "transferable_to_hardware": { "type": "boolean" }, "hardware_policy_requirement": { "const": "separate_WP7_measured_signed_policy" } } },
+    "positiveMetres": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 }
+  }
+}

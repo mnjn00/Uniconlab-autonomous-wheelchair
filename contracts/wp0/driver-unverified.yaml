@@ -1,0 +1,27 @@
+schema_version: 1
+contract_id: base-model-UNVERIFIED
+verified: false
+example_only: false
+hardware_motion_authorized: false
+passenger_operation_authorized: false
+platform: {manufacturer: UNKNOWN, model: UNKNOWN, serial: UNKNOWN, nuc_machine_id_sha256: '', base_model_source_sha256: ''}
+adapter: {mode: disabled, ros_package: '', executable: '', translation_spec_sha256: ''}
+command:
+  safe_input_topic: /cmd_vel_safe
+  driver_topic: ''
+  message_type: ''
+  message_md5: ''
+  publish_rate_hz: 0.0
+  queue_size: 1
+  tcp_nodelay: true
+  timeout_owner: none
+  timeout_s: 0.0
+  timeout_behavior: unknown
+  linear: {field: linear.x, unit: m_s, positive: forward, minimum: 0.0, maximum: 0.0}
+  angular: {field: angular.z, unit: rad_s, positive: counterclockwise, minimum: 0.0, maximum: 0.0}
+mode: {status_topic: '', message_type: '', auto_value: '', manual_value: '', stale_timeout_s: 0.0, request_interface: operator_only, request_name: ''}
+manual_override: {status_topic: '', message_type: '', active_value: '', stale_timeout_s: 0.0, hardware_priority_verified: false}
+estop: {status_topic: '', message_type: '', asserted_value: '', stale_timeout_s: 0.0, physical_chain_independent: false}
+odometry: {topic: '', message_type: nav_msgs/Odometry, parent_frame: odom, child_frame: base_footprint, minimum_rate_hz: 0.0, stale_timeout_s: 0.0}
+evidence: {graph_snapshot_sha256: '', command_polarity_report_sha256: '', timeout_report_sha256: '', mode_override_report_sha256: '', estop_report_sha256: '', odom_tf_report_sha256: ''}
+approval: {contract_reviewer: '', reviewed_at_utc: '', hardware_safety_reviewer: '', campus_approval_id: ''}

@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://uniconlab.example/contracts/wp0/time-alignment-schema-v1.json",
+  "title": "Livox and IMU time alignment manifest v1",
+  "description": "A signed release-bundle artifact. Validation is fail closed; unknown fields and data-dependent or per-message time warps are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifact_id", "owner", "reviewer", "status", "provenance", "method", "lidar_offset_ns", "imu_offset_ns", "calibration_evidence_sha256", "verified", "p99_cross_sensor_residual_ms", "drift_ms_per_min"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "artifact_id": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "owner": {"type": "string", "minLength": 1},
+    "reviewer": {"type": "string", "minLength": 1},
+    "status": {"enum": ["candidate", "reviewed", "blocked", "qualified"]},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_bag_manifest_sha256", "converter_abi_sha256", "calibration_method"],
+      "properties": {
+        "source_bag_manifest_sha256": {"type": "string", "pattern": "^(|[0-9a-f]{64})$"},
+        "converter_abi_sha256": {"type": "string", "pattern": "^(|[0-9a-f]{64})$"},
+        "calibration_method": {"type": "string", "minLength": 1}
+      }
+    },
+    "method": {"enum": ["identity", "fixed_offset_ns"]},
+    "lidar_offset_ns": {"type": "integer"},
+    "imu_offset_ns": {"type": "integer"},
+    "calibration_evidence_sha256": {"type": "string", "pattern": "^(|[0-9a-f]{64})$"},
+    "verified": {"type": "boolean"},
+    "p99_cross_sensor_residual_ms": {"type": ["number", "null"], "minimum": 0},
+    "drift_ms_per_min": {"type": ["number", "null"], "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"method": {"const": "identity"}}},
+      "then": {"properties": {"lidar_offset_ns": {"const": 0}, "imu_offset_ns": {"const": 0}}}
+    },
+    {
+      "if": {"properties": {"verified": {"const": false}}},
+      "then": {"properties": {"status": {"enum": ["candidate", "reviewed", "blocked"]}}}
+    },
+    {
+      "if": {"properties": {"verified": {"const": true}}},
+      "then": {
+        "properties": {
+          "status": {"const": "qualified"},
+          "calibration_evidence_sha256": {"pattern": "^[0-9a-f]{64}$"},
+          "p99_cross_sensor_residual_ms": {"type": "number", "minimum": 0, "maximum": 2},
+          "drift_ms_per_min": {"type": "number", "minimum": 0, "maximum": 0.5},
+          "provenance": {
+            "properties": {
+              "source_bag_manifest_sha256": {"pattern": "^[0-9a-f]{64}$"},
+              "converter_abi_sha256": {"pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

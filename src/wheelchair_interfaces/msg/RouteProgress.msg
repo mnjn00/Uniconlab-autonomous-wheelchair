@@ -1,0 +1,16 @@
+uint8 INACTIVE=0
+uint8 ACTIVE=1
+uint8 AT_STOP=2
+uint8 COMPLETE=3
+uint8 INVALID=4
+std_msgs/Header header
+uint32 sequence
+uint8 state
+string mission_id
+string route_id
+string map_id
+string segment_id
+uint32 waypoint_index
+float32 along_track_m
+float32 cross_track_error_m
+float32 distance_remaining_m

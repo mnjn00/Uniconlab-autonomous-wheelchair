@@ -1,0 +1,13 @@
+<launch>
+  <arg name="hardware_enable" default="false"/>
+  <arg name="driver_manifest" default="$(find wheelchair_hardware)/config/driver-unverified.yaml"/>
+  <arg name="release_authority" default="$(find wheelchair_hardware)/../../contracts/wp0/A16-release-authority.yaml"/>
+  <arg name="platform_matches" default="false"/>
+  <arg name="base_model_matches" default="false"/>
+  <arg name="graph_valid" default="false"/>
+
+  <!-- The adapter completes verified preflight before constructing any ROS publisher. -->
+  <node pkg="wheelchair_hardware" type="hardware_adapter.py" name="hardware_enabled_adapter"
+        args="--profile hardware_enabled --manifest $(arg driver_manifest) --release-authority $(arg release_authority) --hardware-enable $(arg hardware_enable) --platform-matches $(arg platform_matches) --base-model-matches $(arg base_model_matches) --graph-valid $(arg graph_valid)"
+        output="screen" required="true"/>
+</launch>

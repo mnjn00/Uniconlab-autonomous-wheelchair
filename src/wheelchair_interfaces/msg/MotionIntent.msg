@@ -1,0 +1,11 @@
+uint8 HOLD=0
+uint8 PROCEED=1
+uint8 SLOW=2
+uint8 STOP=3
+std_msgs/Header header
+uint32 sequence
+uint8 behavior
+uint64 reason_mask
+string mission_id
+float32 max_linear_mps
+float32 max_angular_rps

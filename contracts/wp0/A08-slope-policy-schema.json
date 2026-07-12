@@ -1,0 +1,162 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:uniconlab:wheelchair:wp0:slope-policy:v1",
+  "title": "WP0 runtime slope and gravity-alignment policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy_id", "owner", "reviewer", "status", "qualification", "provenance", "hashes", "authority", "conventions", "input_contract", "calibration", "gravity_estimation", "simulation_thresholds", "hysteresis", "route_zone_policy", "downhill_stopping_coupling", "fail_closed"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "policy_id": { "$ref": "#/definitions/id" },
+    "owner": { "$ref": "#/definitions/id" },
+    "reviewer": { "$ref": "#/definitions/review" },
+    "status": { "enum": ["draft", "candidate", "approved_simulation", "hardware_blocked", "hardware_verified"] },
+    "qualification": { "enum": ["unqualified", "simulation_only", "replay_only", "hardware_verified"] },
+    "provenance": { "$ref": "#/definitions/provenance" },
+    "hashes": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_sha256", "policy_sha256", "calibration_sha256", "extrinsics_sha256", "input_dataset_sha256"],
+      "properties": {
+        "schema_sha256": { "$ref": "#/definitions/hashRecord" },
+        "policy_sha256": { "$ref": "#/definitions/hashRecord" },
+        "calibration_sha256": { "$ref": "#/definitions/hashRecord" },
+        "extrinsics_sha256": { "$ref": "#/definitions/hashRecord" },
+        "input_dataset_sha256": { "$ref": "#/definitions/hashRecord" }
+      }
+    },
+    "authority": { "$ref": "#/definitions/authority" },
+    "conventions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["standard", "frame", "pitch_positive", "roll_positive", "angle_unit", "acceleration_unit", "angular_speed_unit"],
+      "properties": {
+        "standard": { "const": "REP-103" },
+        "frame": { "const": "base_link" },
+        "pitch_positive": { "const": "nose_up_uphill_in_positive_x" },
+        "roll_positive": { "const": "left_side_up" },
+        "angle_unit": { "const": "deg" },
+        "acceleration_unit": { "const": "m/s^2" },
+        "angular_speed_unit": { "const": "rad/s" }
+      }
+    },
+    "input_contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["imu_source_ttl_s", "transform", "transform_must_be_measured_verified", "time_alignment_must_be_verified", "bad_tf_or_time_result", "stale_result"],
+      "properties": {
+        "imu_source_ttl_s": { "$ref": "#/definitions/positiveSeconds" },
+        "transform": { "const": "base_link_to_imu_link" },
+        "transform_must_be_measured_verified": { "const": true },
+        "time_alignment_must_be_verified": { "const": true },
+        "bad_tf_or_time_result": { "const": "UNKNOWN_STOP" },
+        "stale_result": { "const": "UNKNOWN_STOP" }
+      }
+    },
+    "calibration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stationary_duration_s", "minimum_expected_sample_fraction", "p95_gyro_norm_max_radps", "mean_gravity_mps2", "mean_acceleration_tolerance_mps2", "pitch_roll_stddev_max_deg", "verified_imu_to_base_rotation_required", "verified_time_alignment_required", "hash_components", "absent_or_unverified_result"],
+      "properties": {
+        "stationary_duration_s": { "$ref": "#/definitions/positiveSeconds" },
+        "minimum_expected_sample_fraction": { "$ref": "#/definitions/fraction" },
+        "p95_gyro_norm_max_radps": { "$ref": "#/definitions/nonnegativeAngularSpeed" },
+        "mean_gravity_mps2": { "type": "number", "minimum": 9.7, "maximum": 9.9 },
+        "mean_acceleration_tolerance_mps2": { "$ref": "#/definitions/nonnegativeAcceleration" },
+        "pitch_roll_stddev_max_deg": { "$ref": "#/definitions/nonnegativeAngle" },
+        "verified_imu_to_base_rotation_required": { "const": true },
+        "verified_time_alignment_required": { "const": true },
+        "hash_components": { "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["bias", "extrinsic", "input"] } },
+        "absent_or_unverified_result": { "const": "UNKNOWN_STOP" }
+      }
+    },
+    "gravity_estimation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["orientation_unavailable_fallback", "low_pass_time_constant_s", "fallback_acceleration_magnitude_tolerance_mps2", "fallback_gyro_norm_max_radps", "orientation_gravity_agreement_max_deg", "dynamic_residual_max_mps2", "dynamic_residual_duration_s", "filter_hold_max_s", "violation_result"],
+      "properties": {
+        "orientation_unavailable_fallback": { "const": "first_order_low_pass_acceleration_vector" },
+        "low_pass_time_constant_s": { "$ref": "#/definitions/positiveSeconds" },
+        "fallback_acceleration_magnitude_tolerance_mps2": { "$ref": "#/definitions/nonnegativeAcceleration" },
+        "fallback_gyro_norm_max_radps": { "$ref": "#/definitions/nonnegativeAngularSpeed" },
+        "orientation_gravity_agreement_max_deg": { "$ref": "#/definitions/nonnegativeAngle" },
+        "dynamic_residual_max_mps2": { "$ref": "#/definitions/nonnegativeAcceleration" },
+        "dynamic_residual_duration_s": { "$ref": "#/definitions/nonnegativeSeconds" },
+        "filter_hold_max_s": { "$ref": "#/definitions/nonnegativeSeconds" },
+        "violation_result": { "const": "UNKNOWN_STOP" }
+      }
+    },
+    "simulation_thresholds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clear", "slow", "stop", "unknown", "slow_max_linear_mps", "entry_debounce_s"],
+      "properties": {
+        "clear": { "$ref": "#/definitions/simulationClearBand" },
+        "slow": { "$ref": "#/definitions/simulationSlowBand" },
+        "stop": { "$ref": "#/definitions/simulationStopBand" },
+        "unknown": { "const": "STOP" },
+        "slow_max_linear_mps": { "$ref": "#/definitions/nonnegativeSpeed" },
+        "entry_debounce_s": { "const": 0 }
+      }
+    },
+    "hysteresis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["leave_stop_or_slow_hold_s", "tighten_each_boundary_deg", "fresh_calibrated_required", "automatic_resume"],
+      "properties": {
+        "leave_stop_or_slow_hold_s": { "$ref": "#/definitions/positiveSeconds" },
+        "tighten_each_boundary_deg": { "$ref": "#/definitions/nonnegativeAngle" },
+        "fresh_calibrated_required": { "const": true },
+        "automatic_resume": { "const": false }
+      }
+    },
+    "route_zone_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["normal", "degraded_stop", "manual_only", "unknown_zone"],
+      "properties": {
+        "normal": { "const": "evaluate_slope_policy" },
+        "degraded_stop": { "const": "STOP" },
+        "manual_only": { "const": "STOP_AUTONOMY" },
+        "unknown_zone": { "const": "STOP" }
+      }
+    },
+    "downhill_stopping_coupling": {
+      "type": "object", "additionalProperties": false,
+      "required": ["equation", "measured_pitch_required", "nonpositive_effective_deceleration_result", "cross_slope_may_increase_speed_cap"],
+      "properties": {
+        "equation": { "const": "a_eff = a_policy - g * sin(max(0, -pitch_downhill))" },
+        "measured_pitch_required": { "const": true },
+        "nonpositive_effective_deceleration_result": { "const": "STOP" },
+        "cross_slope_may_increase_speed_cap": { "const": false }
+      }
+    },
+    "fail_closed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clear_requires_fresh_calibrated_consistent_input", "uncalibrated_stale_dynamic_ambiguous_result", "candidate_policy_cannot_grant_hardware_authority"],
+      "properties": {
+        "clear_requires_fresh_calibrated_consistent_input": { "const": true },
+        "uncalibrated_stale_dynamic_ambiguous_result": { "const": "UNKNOWN_STOP" },
+        "candidate_policy_cannot_grant_hardware_authority": { "const": true }
+      }
+    }
+  },
+  "allOf": [{
+    "if": { "properties": { "qualification": { "enum": ["unqualified", "simulation_only", "replay_only"] } } },
+    "then": { "properties": { "authority": { "properties": { "hardware_motion_authorized": { "const": false }, "passenger_operation_authorized": { "const": false }, "transferable_to_hardware": { "const": false } } } } }
+  }],
+  "definitions": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "hashRecord": {
+      "type": "object", "additionalProperties": false, "required": ["value", "status"],
+      "properties": { "value": { "oneOf": [{ "$ref": "#/definitions/sha256" }, { "type": "null" }] }, "status": { "enum": ["verified", "candidate", "blocked_unknown"] }, "scope": { "type": "string", "minLength": 1, "maxLength": 160 } },
+      "allOf": [{ "if": { "properties": { "status": { "const": "verified" } } }, "then": { "properties": { "value": { "$ref": "#/definitions/sha256" } } } }]
+    },
+    "review": { "type": "object", "additionalProperties": false, "required": ["name", "status"], "properties": { "name": { "$ref": "#/definitions/id" }, "status": { "enum": ["pending", "approved", "rejected", "blocked"] }, "reviewed_at": { "type": ["string", "null"], "format": "date-time" } } },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["source", "stage", "generated_at", "evidence_level"], "properties": { "source": { "type": "string", "minLength": 1, "maxLength": 256 }, "stage": { "const": "Stage-2" }, "generated_at": { "type": "string", "format": "date-time" }, "evidence_level": { "enum": ["contract_only", "simulation", "replay", "measured_hardware"] } } },
+    "authority": { "type": "object", "additionalProperties": false, "required": ["hardware_motion_authorized", "passenger_operation_authorized", "transferable_to_hardware", "hardware_policy_requirement"], "properties": { "hardware_motion_authorized": { "type": "boolean" }, "passenger_operation_authorized": { "type": "boolean" }, "transferable_to_hardware": { "type": "boolean" }, "hardware_policy_requirement": { "const": "separate_WP7_measured_signed_policy" } } },
+    "simulationClearBand": { "type": "object", "additionalProperties": false, "required": ["pitch_min_deg", "pitch_max_deg", "absolute_roll_max_deg", "result"], "properties": { "pitch_min_deg": { "const": -5 }, "pitch_max_deg": { "const": 7 }, "absolute_roll_max_deg": { "const": 4 }, "result": { "const": "CLEAR" } } },
+    "simulationSlowBand": { "type": "object", "additionalProperties": false, "required": ["pitch_rule", "absolute_roll_rule", "combination", "result"], "properties": { "pitch_rule": { "const": "-7 <= pitch < -5 OR 7 < pitch <= 10" }, "absolute_roll_rule": { "const": "4 < abs(roll) <= 6" }, "combination": { "const": "OR" }, "result": { "const": "SLOW" } } },
+    "simulationStopBand": { "type": "object", "additionalProperties": false, "required": ["pitch_rule", "absolute_roll_rule", "combination", "result"], "properties": { "pitch_rule": { "const": "pitch < -7 OR pitch > 10" }, "absolute_roll_rule": { "const": "abs(roll) > 6" }, "combination": { "const": "OR" }, "result": { "const": "STOP" } } },
+    "fraction": { "type": "number", "minimum": 0, "maximum": 1 },
+    "positiveSeconds": { "type": "number", "exclusiveMinimum": 0, "maximum": 3600 },
+    "nonnegativeSeconds": { "type": "number", "minimum": 0, "maximum": 3600 },
+    "nonnegativeAngle": { "type": "number", "minimum": 0, "maximum": 360 },
+    "nonnegativeAcceleration": { "type": "number", "minimum": 0, "maximum": 100 },
+    "nonnegativeAngularSpeed": { "type": "number", "minimum": 0, "maximum": 100 },
+    "nonnegativeSpeed": { "type": "number", "minimum": 0, "maximum": 100 }
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:uniconlab:wp0:A05-route-schema:v1",
+  "title": "Immutable outbound and return route manifest v1",
+  "x-owner": "WP0-SW-route-owner",
+  "x-reviewer": "WP0-architect-and-critic",
+  "x-status": "candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "manifest_id", "owner", "reviewer", "status", "provenance", "immutable", "map", "safety_manifest_sha256", "geometry_semantics", "outbound_route", "return_route"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "manifest_id": {"$ref": "#/definitions/id"},
+    "owner": {"$ref": "#/definitions/id"},
+    "reviewer": {"$ref": "#/definitions/id"},
+    "status": {"enum": ["candidate", "simulation_qualified", "closed_course_qualified", "campus_approved"]},
+    "provenance": {"$ref": "#/definitions/provenance"},
+    "immutable": {"const": true},
+    "map": {"$ref": "#/definitions/mapBinding"},
+    "safety_manifest_sha256": {"$ref": "#/definitions/sha256"},
+    "geometry_semantics": {"$ref": "#/definitions/geometrySemantics"},
+    "outbound_route": {"allOf": [{"$ref": "#/definitions/route"}, {"properties": {"direction": {"const": "outbound"}}}]},
+    "return_route": {"allOf": [{"$ref": "#/definitions/route"}, {"properties": {"direction": {"const": "return"}}}]}
+  },
+  "definitions": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "finite": {"type": "number", "minimum": -1000000, "maximum": 1000000},
+    "nonnegativeFinite": {"type": "number", "minimum": 0, "maximum": 1000000},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_path", "source_sha256", "evidence_level", "surveyed"],
+      "properties": {
+        "source_path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "source_sha256": {"$ref": "#/definitions/sha256"},
+        "evidence_level": {"enum": ["candidate", "simulation_only", "closed_course", "campus_survey"]},
+        "surveyed": {"type": "boolean"}
+      }
+    },
+    "mapBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["map_id", "sha256", "frame_id"],
+      "properties": {
+        "map_id": {"$ref": "#/definitions/id"},
+        "sha256": {"$ref": "#/definitions/sha256"},
+        "frame_id": {"const": "map"}
+      }
+    },
+    "geometrySemantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coordinate_frame", "linear_unit", "angular_unit", "point_order", "unknown_geometry_action", "nonfinite_geometry_action"],
+      "properties": {
+        "coordinate_frame": {"const": "map"},
+        "linear_unit": {"const": "m"},
+        "angular_unit": {"const": "rad"},
+        "point_order": {"const": "ordered_centerline"},
+        "unknown_geometry_action": {"const": "STOP"},
+        "nonfinite_geometry_action": {"const": "REJECT_AND_STOP"}
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x_m", "y_m", "yaw_rad"],
+      "properties": {
+        "x_m": {"$ref": "#/definitions/finite"},
+        "y_m": {"$ref": "#/definitions/finite"},
+        "yaw_rad": {"type": "number", "minimum": -3.141592653589793, "maximum": 3.141592653589793}
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["segment_id", "start_waypoint_index", "end_waypoint_index", "corridor_margin_m", "zone_ids", "max_linear_mps", "max_angular_rps", "hardware_authorized"],
+      "properties": {
+        "segment_id": {"$ref": "#/definitions/id"},
+        "start_waypoint_index": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "end_waypoint_index": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "corridor_margin_m": {"type": "number", "minimum": 0, "maximum": 100},
+        "zone_ids": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/definitions/id"}},
+        "max_linear_mps": {"type": "number", "minimum": 0, "maximum": 10},
+        "max_angular_rps": {"type": "number", "minimum": 0, "maximum": 10},
+        "hardware_authorized": {"const": false}
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["route_id", "direction", "route_manifest_sha256", "waypoints", "segments"],
+      "properties": {
+        "route_id": {"$ref": "#/definitions/id"},
+        "direction": {"enum": ["outbound", "return"]},
+        "route_manifest_sha256": {"$ref": "#/definitions/sha256"},
+        "waypoints": {"type": "array", "minItems": 2, "maxItems": 65536, "items": {"$ref": "#/definitions/point"}},
+        "segments": {"type": "array", "minItems": 1, "maxItems": 512, "items": {"$ref": "#/definitions/segment"}}
+      }
+    }
+  }
+}

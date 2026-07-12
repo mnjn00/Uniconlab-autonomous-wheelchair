@@ -1,25 +1,72 @@
 <launch>
   <arg name="input_cmd_topic" default="/cmd_vel_nav"/>
   <arg name="output_cmd_topic" default="/cmd_vel_safe"/>
+  <arg name="profile"/>
+  <arg name="collision_policy" default="$(find wheelchair_safety)/config/collision_policy.yaml"/>
+  <arg name="slope_policy" default="$(find wheelchair_safety)/config/slope_policy.yaml"/>
+  <arg name="collision_transform_lookup_timeout_s" default="0.05"/>
+  <arg name="collision_max_transform_age_s" default="0.10"/>
+  <arg name="slope_operation_mode" default="simulation"/>
+  <arg name="slope_stationary_calibration_enabled" default="true"/>
+  <arg name="slope_transform_label" default="simulation"/>
+  <arg name="slope_transform_verified" default="true"/>
+  <arg name="slope_transform_is_static" default="true"/>
+  <arg name="slope_input_provenance" default="gazebo:/sensors/imu/data:imu_link"/>
+  <arg name="slope_initial_route_zone_policy" default="unknown"/>
+  <arg name="localization_policy"/>
+  <arg name="localization_policy_file_sha256"/>
+  <arg name="localization_map"/>
+  <arg name="localization_map_file_sha256"/>
+  <arg name="localization_map_image_sha256"/>
 
+  <!-- The gate is the sole autonomous command publisher. Supervisors only emit evidence. -->
   <rosparam command="load" file="$(find wheelchair_safety)/config/safety_limits.yaml" ns="safety_gate"/>
-
-  <node pkg="wheelchair_safety" type="safety_gate.py" name="safety_gate" output="screen">
+  <node pkg="wheelchair_safety" type="safety_gate.py" name="safety_gate" output="screen" required="true">
     <param name="input_cmd_topic" value="$(arg input_cmd_topic)"/>
     <param name="output_cmd_topic" value="$(arg output_cmd_topic)"/>
+    <param name="publish_rate_hz" value="50.0"/>
   </node>
 
-  <node pkg="wheelchair_safety" type="mode_manager.py" name="mode_manager" output="screen">
-    <rosparam param="modes">
-      sidewalk:
-        max_linear_speed: 0.55
-        max_angular_speed: 0.85
-        requires_geofence: true
-      road_free_space:
-        max_linear_speed: 0.70
-        max_angular_speed: 1.00
-        requires_geofence: true
-    </rosparam>
-    <param name="default_mode" value="sidewalk"/>
+  <node pkg="wheelchair_safety" type="collision_supervisor.py" name="collision_supervisor" output="screen" required="true">
+    <param name="policy_file" value="$(arg collision_policy)"/>
+    <param name="status_topic" value="/safety/collision_status"/>
+    <param name="signal_topic" value="/safety/collision"/>
+    <param name="cloud_topic" value="/sensors/lidar/points"/>
+    <param name="transform_lookup_timeout_s" value="$(arg collision_transform_lookup_timeout_s)"/>
+    <param name="max_transform_age_s" value="$(arg collision_max_transform_age_s)"/>
+    <param name="odom_topic" value="/odom"/>
+    <param name="intent_topic" value="/decision/motion_intent"/>
+    <param name="nav_topic" value="/cmd_vel_nav"/>
+    <param name="safe_topic" value="/cmd_vel_safe"/>
+  </node>
+
+  <node pkg="wheelchair_safety" type="slope_supervisor.py" name="slope_supervisor" output="screen" required="true">
+    <param name="policy" value="$(arg slope_policy)"/>
+    <param name="status_topic" value="/safety/slope_status"/>
+    <param name="signal_topic" value="/safety/slope"/>
+    <param name="operation_mode" value="$(arg slope_operation_mode)"/>
+    <param name="stationary_calibration_enabled" value="$(arg slope_stationary_calibration_enabled)"/>
+    <param name="transform_label" value="$(arg slope_transform_label)"/>
+    <param name="transform_verified" value="$(arg slope_transform_verified)"/>
+    <param name="transform_is_static" value="$(arg slope_transform_is_static)"/>
+    <param name="input_provenance" value="$(arg slope_input_provenance)"/>
+    <param name="initial_route_zone_policy" value="$(arg slope_initial_route_zone_policy)"/>
+  </node>
+
+  <!-- This independent guard is the sole localization confidence/status publisher. -->
+  <node pkg="wheelchair_safety" type="localization_guard.py" name="localization_guard" output="screen" required="true">
+    <param name="policy_file" value="$(arg localization_policy)"/>
+    <param name="expected_policy_file_sha256" value="$(arg localization_policy_file_sha256)"/>
+    <param name="map_file" value="$(arg localization_map)"/>
+    <param name="expected_map_file_sha256" value="$(arg localization_map_file_sha256)"/>
+    <param name="expected_map_image_sha256" value="$(arg localization_map_image_sha256)"/>
+  </node>
+
+  <node pkg="wheelchair_safety" type="topology_guard.py" name="topology_guard" output="screen" required="true">
+    <param name="profile" value="$(arg profile)"/>
+    <param name="input_cmd_topic" value="$(arg input_cmd_topic)"/>
+    <param name="output_cmd_topic" value="$(arg output_cmd_topic)"/>
+    <param name="signal_topic" value="/safety/topology"/>
+    <param name="diagnostics_topic" value="/diagnostics"/>
   </node>
 </launch>

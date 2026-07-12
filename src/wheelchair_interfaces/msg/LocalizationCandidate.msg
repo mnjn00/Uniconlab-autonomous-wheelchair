@@ -1,0 +1,12 @@
+uint8 RAW_UNINITIALIZED=0
+uint8 RAW_INITIALIZING=1
+uint8 RAW_OK=2
+uint8 RAW_DEGRADED=3
+uint8 RAW_LOST=4
+geometry_msgs/PoseWithCovarianceStamped pose
+uint8 raw_state
+uint32 reset_count
+string map_id
+string map_sha256
+string source
+float32 raw_score

@@ -1,0 +1,27 @@
+<launch>
+  <!-- Authority allow-list: dictionary lookup makes every other value, including hardware_enabled, a launch error. -->
+  <arg name="profile" default="sim" doc="Authorized values: sim, replay, hardware_shadow"/>
+  <arg name="driver_manifest" default="$(find wheelchair_hardware)/config/driver-unverified.yaml"/>
+  <arg name="release_authority" default="$(find wheelchair_hardware)/../../contracts/wp0/A16-release-authority.yaml"/>
+
+  <param name="/wheelchair_bringup/profile"
+         value="$(eval {'sim':'sim','replay':'replay','hardware_shadow':'hardware_shadow'}[arg('profile')])"/>
+  <param name="/hardware_motion_authorized" value="false"/>
+  <param name="/passenger_operation_authorized" value="false"/>
+  <param name="/wheelchair_bringup/startup_mode" value="DISARMED"/>
+
+  <group if="$(eval arg('profile') == 'sim')">
+    <include file="$(find wheelchair_bringup)/launch/sim_bringup.launch"/>
+  </group>
+
+  <group if="$(eval arg('profile') == 'replay')">
+    <include file="$(find wheelchair_bringup)/launch/replay_bringup.launch"/>
+  </group>
+
+  <group if="$(eval arg('profile') == 'hardware_shadow')">
+    <include file="$(find wheelchair_bringup)/launch/hardware_shadow.launch">
+      <arg name="driver_manifest" value="$(arg driver_manifest)"/>
+      <arg name="release_authority" value="$(arg release_authority)"/>
+    </include>
+  </group>
+</launch>

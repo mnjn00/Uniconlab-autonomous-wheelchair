@@ -1,0 +1,57 @@
+schema_version: 1
+artifact_id: A04-safety-reason-registry-v1
+owner: WP0-SW-interface-owner
+reviewer: WP0-architect-and-critic
+status: candidate
+provenance:
+  source: Stage-2-Appendix-A-SafetyReason-v1
+mask_type: uint64
+defined_bits: {first: 0, last: 36, count: 37}
+reserved_bits: {first: 37, last: 63, required_value: 0, violation_maps_to: INTERNAL_FAULT}
+unknown_bits_action: INTERNAL_FAULT
+unknown_reason_action: STOP
+combination_semantics: bitwise_or
+clear_requires_mask: 0
+reasons:
+  - {bit: 0, name: ESTOP, value: 1, diagnostic: physical_or_latched_estop, action: STOP_DISARM}
+  - {bit: 1, name: STALE_CMD, value: 2, diagnostic: command_source_or_receipt_ttl, action: STOP}
+  - {bit: 2, name: MODE, value: 4, diagnostic: mode_not_permissive, action: STOP}
+  - {bit: 3, name: GEOFENCE, value: 8, diagnostic: outside_or_unknown_geofence, action: STOP}
+  - {bit: 4, name: COLLISION, value: 16, diagnostic: collision_permission_denied, action: STOP}
+  - {bit: 5, name: LOCALIZATION, value: 32, diagnostic: localization_not_ok, action: STOP}
+  - {bit: 6, name: DRIVER, value: 64, diagnostic: driver_not_ready, action: STOP_DISARM}
+  - {bit: 7, name: INVALID_CMD, value: 128, diagnostic: nonfinite_or_unsupported_axis_command, action: STOP}
+  - {bit: 8, name: CLOCK, value: 256, diagnostic: future_regressing_reset_or_wrong_clock, action: STOP_DISARM}
+  - {bit: 9, name: STALE_INTENT, value: 512, diagnostic: motion_intent_source_or_receipt_ttl, action: STOP}
+  - {bit: 10, name: INTERNAL_FAULT, value: 1024, diagnostic: exception_unknown_or_reserved_reason, action: STOP_DISARM}
+  - {bit: 11, name: STARTUP, value: 2048, diagnostic: startup_or_rearm_incomplete, action: STOP_DISARM}
+  - {bit: 12, name: SENSOR_STALE, value: 4096, diagnostic: required_sensor_stale, action: STOP}
+  - {bit: 13, name: COLLISION_BLIND, value: 8192, diagnostic: collision_visibility_insufficient, action: STOP}
+  - {bit: 14, name: COLLISION_TTC, value: 16384, diagnostic: ttc_threshold_violated, action: STOP}
+  - {bit: 15, name: COLLISION_DISTANCE, value: 32768, diagnostic: distance_envelope_violated, action: STOP}
+  - {bit: 16, name: SLOPE, value: 65536, diagnostic: slope_permission_denied, action: STOP}
+  - {bit: 17, name: IMU_UNCALIBRATED, value: 131072, diagnostic: gravity_or_imu_calibration_unknown, action: STOP}
+  - {bit: 18, name: ROUTE_MANIFEST, value: 262144, diagnostic: route_manifest_missing_stale_or_mismatched, action: STOP}
+  - {bit: 19, name: GRAPH_TOPOLOGY, value: 524288, diagnostic: publisher_tf_or_forbidden_edge_mismatch, action: STOP_DISARM}
+  - {bit: 20, name: TF, value: 1048576, diagnostic: transform_missing_stale_duplicate_or_invalid, action: STOP}
+  - {bit: 21, name: BACKPRESSURE, value: 2097152, diagnostic: queue_growth_blocking_or_recorder_coupling, action: STOP}
+  - {bit: 22, name: DEADLINE_MISS, value: 4194304, diagnostic: safety_loop_deadline_or_timer_gap, action: STOP_DISARM}
+  - {bit: 23, name: MANUAL_OVERRIDE, value: 8388608, diagnostic: manual_override_active_or_unknown, action: STOP_DISARM}
+  - {bit: 24, name: HARDWARE_UNVERIFIED, value: 16777216, diagnostic: hardware_contract_or_authority_unverified, action: BLOCK_HARDWARE}
+  - {bit: 25, name: MAP_MISMATCH, value: 33554432, diagnostic: map_id_or_sha256_mismatch, action: STOP}
+  - {bit: 26, name: COLLISION_OCCLUDED, value: 67108864, diagnostic: collision_path_occluded, action: STOP}
+  - {bit: 27, name: LOCALIZATION_INCONSISTENT, value: 134217728, diagnostic: independent_localization_evidence_disagrees, action: STOP}
+  - {bit: 28, name: RESOURCE, value: 268435456, diagnostic: resource_or_thermal_budget_violated, action: STOP}
+  - {bit: 29, name: CORRUPT_DATA, value: 536870912, diagnostic: malformed_nonfinite_or_integrity_failure, action: STOP}
+  - {bit: 30, name: RESET_REJECTED, value: 1073741824, diagnostic: reset_precondition_failed, action: KEEP_LATCHED}
+  - {bit: 31, name: INPUT_UNKNOWN, value: 2147483648, diagnostic: required_input_unknown_or_missing, action: STOP}
+  - {bit: 32, name: ROUTE_STATE, value: 4294967296, diagnostic: route_direction_segment_or_state_invalid, action: STOP}
+  - {bit: 33, name: ODOM_STALE, value: 8589934592, diagnostic: odometry_source_or_receipt_ttl, action: STOP}
+  - {bit: 34, name: IMU_STALE, value: 17179869184, diagnostic: imu_source_or_receipt_ttl, action: STOP}
+  - {bit: 35, name: LIDAR_STALE, value: 34359738368, diagnostic: lidar_source_or_receipt_ttl, action: STOP}
+  - {bit: 36, name: POLICY_MISMATCH, value: 68719476736, diagnostic: policy_id_or_sha256_mismatch, action: STOP}
+invariants:
+  reserved_or_unknown_bits_can_never_clear: true
+  missing_stale_or_hash_mismatch_can_never_clear: true
+  diagnostic_and_signal_registry_identical: true
+  clear_can_never_mask_stop: true

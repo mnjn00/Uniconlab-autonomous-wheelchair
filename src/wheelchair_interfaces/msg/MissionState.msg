@@ -1,0 +1,16 @@
+uint8 DISARMED=0
+uint8 LOCALIZING=1
+uint8 READY=2
+uint8 NAVIGATING=3
+uint8 PAUSED_OBSTACLE=4
+uint8 PAUSED_SAFETY=5
+uint8 GOAL_REACHED=6
+uint8 ABORTED=7
+uint8 FAULT=8
+std_msgs/Header header
+uint32 sequence
+uint8 state
+uint64 reason_mask
+string mission_id
+string route_id
+string map_id

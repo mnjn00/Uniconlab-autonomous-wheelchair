@@ -1,0 +1,54 @@
+schema_version: 1
+artifact_id: A16-release-authority
+owner: WP0 release governance owner
+reviewer_role: independent safety authority
+status: software_contract_only
+source_plan_sha256: bd1b9454bc34f68714e6b986e80466535f817a42c25f662db0990adc79ca601e
+provenance: approved RALPLAN release-authority boundary
+additional_properties_allowed: false
+release_scope:
+  runtime_target: Ubuntu 20.04 + ROS 1 Noetic
+  localization_option: offline_ros2_glim_native_noetic_runtime
+  authority_level: software_contracts
+  software_release_candidate_authorized: false
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  campus_operation_authorized: false
+  team_selected: false
+  execution_mode: ultragoal_native_executor_slices
+allowed_profiles:
+  - sim
+  - replay
+  - hardware_shadow
+blocked_profiles:
+  hardware_enabled:
+    allowed: false
+    fail_closed: true
+    reason: WP7 measured hardware evidence and separate authorization are absent
+    required_action: reject launch before any real driver topic is advertised or subscribed
+profile_constraints:
+  sim:
+    claim_limit: software_and_simulation_only
+    real_motor_path_allowed: false
+  replay:
+    claim_limit: software_and_replay_only
+    real_motor_path_allowed: false
+  hardware_shadow:
+    claim_limit: read_only_inert_evidence_only
+    real_motor_path_allowed: false
+    cmd_vel_safe_sink: recorder_or_null_sink_only
+fail_closed_rules:
+  - Missing, stale, malformed, contradictory, or unauthorized evidence continuously yields finite zero velocity and DISARMED.
+  - No profile has a default real motor topic.
+  - A verified-looking manifest cannot override any false authorization flag.
+  - Simulation, replay, workstation, map, route, GLIM, or software-RC evidence cannot authorize hardware or passenger operation.
+  - Unknown driver, platform, target-NUC, braking, extrinsic, route-survey, override, or e-stop facts remain blockers.
+  - Restart and rollback begin DISARMED and require localization plus a separate explicit arm; mission resume is never automatic.
+blocked_evidence:
+  physical_driver_contract: not_measured
+  target_nuc_qualification: not_measured
+  braking_and_stopping_envelope: not_measured
+  sensor_extrinsics_and_time_offsets: not_measured
+  manual_override_and_estop_latency: not_measured
+  surveyed_route_and_campus_approval: not_approved
+  passenger_protocol: not_approved

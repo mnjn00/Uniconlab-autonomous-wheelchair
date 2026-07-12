@@ -1,0 +1,97 @@
+schema_version: 1
+manifest_id: hanyang-route-safety-candidate-v1
+owner: WP0-SW-route-safety-owner
+reviewer: WP0-architect-and-critic
+status: candidate
+provenance:
+  source: Stage-2-approved-plan
+  map_source_path: data/hanyang_aegimun_loop/map.pgm
+  map_source_sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278
+  route_source_path: data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml
+  route_source_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+  evidence_level: simulation_only
+  surveyed_geofence: false
+qualification: candidate
+map:
+  map_id: hanyang_aegimun_loop
+  sha256: c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278
+  frame_id: map
+footprint:
+  geometry_sha256: a1625f13ad0a7eb8fc199ed24bd898e67a0249d72c401c77b64dc738d23c3925
+  calibration_id: UNMEASURED
+  calibration_status: UNMEASURED
+  localization_uncertainty_margin_m: 0.25
+  fixed_boundary_margin_m: 0.20
+geometry_semantics:
+  coordinate_frame: map
+  unit: m
+  closure: implicit
+  outer_orientation: counter_clockwise
+  exclusion_orientation: clockwise
+  topology: simple_non_self_intersecting_three_unique_vertices
+  unknown_or_nonfinite_action: REJECT_AND_STOP
+# Unsurveyed simulation-only placeholder intersection around the committed route origin.
+# It grants no physical motion because all route/zone speeds are zero and manual-only.
+# The regenerated route is map-aligned and explicitly bidirectional, but its 0.976 m
+# loop residual exceeds the 0.5 m target and remains a release blocker.
+global_allowed_polygon:
+  - [-0.50, -0.50]
+  - [0.50, -0.50]
+  - [0.00, 0.50]
+global_exclusion_polygons: []
+approved_routes:
+  - route_id: hanyang_aegimun_engineering_outbound
+    direction: outbound
+    route_manifest_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+    safety_manifest_binding: self_sha256_from_signed_release_bundle
+    corridor_polygon:
+      - [-0.50, -0.50]
+      - [0.50, -0.50]
+      - [0.00, 0.50]
+    corridor_margin_m: 0.0
+    segment_ids: [outbound-candidate-seg-000]
+    localization_zone_ids: [zone-manual-only-candidate]
+    max_linear_mps: 0.0
+    max_angular_rps: 0.0
+    hardware_authorized: false
+  - route_id: hanyang_engineering_aegimun_return
+    direction: return
+    route_manifest_sha256: 96c7849a54f56ded4e5f862e3bcd9cf737c4e65e88e4e4c47745cf4e0bcf4e32
+    safety_manifest_binding: self_sha256_from_signed_release_bundle
+    corridor_polygon:
+      - [-0.50, -0.50]
+      - [0.50, -0.50]
+      - [0.00, 0.50]
+    corridor_margin_m: 0.0
+    segment_ids: [return-candidate-seg-000]
+    localization_zone_ids: [zone-manual-only-candidate]
+    max_linear_mps: 0.0
+    max_angular_rps: 0.0
+    hardware_authorized: false
+localization_zones:
+  - zone_id: zone-manual-only-candidate
+    polygon:
+      - [-0.50, -0.50]
+      - [0.50, -0.50]
+      - [0.00, 0.50]
+    policy: manual_only
+    max_linear_mps: 0.0
+    max_angular_rps: 0.0
+    hardware_authorized: false
+authority:
+  simulation_only: true
+  hardware_authorized: false
+  passenger_authorized: false
+  surveyed_geofence_approved: false
+failure_policy:
+  unknown: STOP
+  stale: STOP
+  map_hash_mismatch: STOP
+  route_hash_mismatch: STOP
+  safety_hash_mismatch: STOP
+  geometry_invalid: STOP
+  attempted_reload: STOP
+  attempted_widen: STOP
+runtime_mutation_allowed: false
+reload_allowed: false
+widening_allowed: false

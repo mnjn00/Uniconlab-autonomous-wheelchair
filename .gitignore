@@ -10,6 +10,7 @@ logs/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.gjc/
 
 # ROS/Gazebo runtime
 .ros/

@@ -1,0 +1,115 @@
+schema_version: 1
+policy_id: slope-sim-v1
+owner: wheelchair-safety
+reviewer:
+  name: independent-safety-review
+  status: pending
+  reviewed_at: null
+status: approved_simulation
+qualification: simulation_only
+provenance:
+  source: approved-stage-2-wp0-plan
+  stage: Stage-2
+  generated_at: '2026-07-11T00:00:00Z'
+  evidence_level: simulation
+hashes:
+  schema_sha256:
+    value: fb312577bcfa48c75c549f975fe51ad916123fde649863ed8f3a5aa36b4fd3a0
+    status: verified
+    scope: raw-bytes-of-A08-slope-policy-schema.json
+  policy_sha256:
+    value: 69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62
+    status: verified
+    scope: canonical-JSON-sorted-keys-compact-UTF8-excluding-hashes.policy_sha256
+  calibration_sha256:
+    value: null
+    status: blocked_unknown
+    scope: bias-extrinsic-input-hashes
+  extrinsics_sha256:
+    value: null
+    status: blocked_unknown
+    scope: measured-base-link-to-imu-link-rotation
+  input_dataset_sha256:
+    value: null
+    status: blocked_unknown
+    scope: stationary-calibration-input
+
+authority:
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  transferable_to_hardware: false
+  hardware_policy_requirement: separate_WP7_measured_signed_policy
+conventions:
+  standard: REP-103
+  frame: base_link
+  pitch_positive: nose_up_uphill_in_positive_x
+  roll_positive: left_side_up
+  angle_unit: deg
+  acceleration_unit: m/s^2
+  angular_speed_unit: rad/s
+input_contract:
+  imu_source_ttl_s: 0.10
+  transform: base_link_to_imu_link
+  transform_must_be_measured_verified: true
+  time_alignment_must_be_verified: true
+  bad_tf_or_time_result: UNKNOWN_STOP
+  stale_result: UNKNOWN_STOP
+calibration:
+  stationary_duration_s: 10.0
+  minimum_expected_sample_fraction: 0.95
+  p95_gyro_norm_max_radps: 0.02
+  mean_gravity_mps2: 9.80665
+  mean_acceleration_tolerance_mps2: 0.15
+  pitch_roll_stddev_max_deg: 0.25
+  verified_imu_to_base_rotation_required: true
+  verified_time_alignment_required: true
+  hash_components: [bias, extrinsic, input]
+  absent_or_unverified_result: UNKNOWN_STOP
+gravity_estimation:
+  orientation_unavailable_fallback: first_order_low_pass_acceleration_vector
+  low_pass_time_constant_s: 1.0
+  fallback_acceleration_magnitude_tolerance_mps2: 0.25
+  fallback_gyro_norm_max_radps: 0.05
+  orientation_gravity_agreement_max_deg: 3.0
+  dynamic_residual_max_mps2: 0.75
+  dynamic_residual_duration_s: 0.10
+  filter_hold_max_s: 0.50
+  violation_result: UNKNOWN_STOP
+simulation_thresholds:
+  clear:
+    pitch_min_deg: -5
+    pitch_max_deg: 7
+    absolute_roll_max_deg: 4
+    result: CLEAR
+  slow:
+    pitch_rule: '-7 <= pitch < -5 OR 7 < pitch <= 10'
+    absolute_roll_rule: '4 < abs(roll) <= 6'
+    combination: OR
+    result: SLOW
+  stop:
+    pitch_rule: 'pitch < -7 OR pitch > 10'
+    absolute_roll_rule: 'abs(roll) > 6'
+    combination: OR
+    result: STOP
+  unknown: STOP
+  slow_max_linear_mps: 0.10
+  entry_debounce_s: 0
+hysteresis:
+  leave_stop_or_slow_hold_s: 1.0
+  tighten_each_boundary_deg: 1.0
+  fresh_calibrated_required: true
+  automatic_resume: false
+route_zone_policy:
+  normal: evaluate_slope_policy
+  degraded_stop: STOP
+  manual_only: STOP_AUTONOMY
+  unknown_zone: STOP
+downhill_stopping_coupling:
+  equation: a_eff = a_policy - g * sin(max(0, -pitch_downhill))
+  measured_pitch_required: true
+  nonpositive_effective_deceleration_result: STOP
+  cross_slope_may_increase_speed_cap: false
+fail_closed:
+  clear_requires_fresh_calibrated_consistent_input: true
+  uncalibrated_stale_dynamic_ambiguous_result: UNKNOWN_STOP
+  candidate_policy_cannot_grant_hardware_authority: true

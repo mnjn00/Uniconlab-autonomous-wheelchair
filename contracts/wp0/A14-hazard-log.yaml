@@ -1,0 +1,141 @@
+schema_version: 1
+artifact_id: A14-hazard-log
+owner: safety-owner/WP0-SW
+reviewer: independent-safety-reviewer
+status: SOFTWARE_ONLY_OPEN_HAZARDS
+provenance:
+  source: approved Stage-2 consensus plan, pre-mortem and risks
+  plan_sha256: c8148c5f5d03a646c839e2966ee7fb5c57a433ab34a8cbfcce1d5ab69cc69068
+  architect_review_sha256: 7d91bb0e2182e38fc30b74cb096ab7ff2ea590ebe62934a5e6f8125bba2f8548
+  critic_review_sha256: 3844ab8a0594b888340459c57393c42bbd084c1282a34716ea6bdbfc59958d3a
+severity_scale:
+  CATASTROPHIC: death or serious injury is credible
+  HIGH: collision, fall, uncontrolled motion, or safety-boundary violation is credible
+  MEDIUM: loss of mission or invalid evidence without direct motion hazard
+  LOW: recoverable degradation without safety-authority impact
+authorization_policy:
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  high_or_catastrophic_rule: detection must cause zero/disarm or block launch/promotion; missing evidence keeps the gate BLOCKED
+  residual_gate: hardware requires WP0-HW, target NUC, HIL inert, measured physical envelope, no-passenger closed course, and written campus approval; passenger operation requires a separate approved protocol
+hazards:
+  - id: H01
+    hazard: navigation widens or forges geofence permission
+    owner: route-safety-owner
+    severity: CATASTROPHIC
+    detection: publisher cardinality, map/route/policy hash mismatch, or an outside pose reported CLEAR
+    mitigation: independent immutable route-safety loader, untrusted activation, intersection-only geometry, and anti-widening tests
+    evidence: software property, graph, hash, and negative fixtures
+    fail_closed_control: route-safety STOP, zero, disarm, refuse reload while armed, and restore signed bundle
+    residual_risk: physical footprint, survey, and localization uncertainty remain unqualified
+    authorization_gate: surveyed route plus closed-course and campus approval; BLOCKED
+  - id: H02
+    hazard: collision/TTC clears while blind, occluded, stale, or using the wrong velocity
+    owner: collision-safety-owner
+    severity: CATASTROPHIC
+    detection: coverage below 0.95, stale cloud/odom/command, ambiguous track, or envelope/status mismatch
+    mitigation: conservative maximum velocity, structured matched status, coverage bins, and blind/occluded/dynamic fixtures
+    evidence: formula, unit, replay, and simulation evidence only
+    fail_closed_control: collision STOP and zero; release requires five clear frames spanning at least 0.50 s and 0.25 m margin; no automatic resume
+    residual_risk: real blind zones, braking, and pedestrian behavior are unknown
+    authorization_gate: calibrated sensor and closed-course stopping evidence; BLOCKED
+  - id: H03
+    hazard: Livox conversion shifts point or IMU time while record counts still match
+    owner: data-localization-owner
+    severity: HIGH
+    detection: IDL/hash mismatch, header/timebase/storage residual, semantic hash change, or GLIM variance
+    mitigation: exact ABI/time layout, per-record index, golden/corrupt fixtures, alignment gate, and transactional output
+    evidence: committed metadata only; full source bag and actual IDL are unavailable
+    fail_closed_control: reject derived bag/map, publish no accepted output, retain source immutable, and prohibit runtime promotion
+    residual_risk: source clocks, full-bag integrity, and IDL remain unverified
+    authorization_gate: full deterministic conversion and reviewed alignment; BLOCKED
+  - id: H04
+    hazard: dynamic acceleration is mistaken for a safe slope
+    owner: slope-safety-owner
+    severity: CATASTROPHIC
+    detection: gravity residual, orientation disagreement, filter hold, stale IMU, or calibration hash failure
+    mitigation: stationary calibration, quaternion/gravity cross-check, dynamic-residual STOP, and negative fixtures
+    evidence: unit, replay, and simulation evidence only
+    fail_closed_control: slope STOP, exact zero, disarm, and stationary recalibration; hardware thresholds remain unauthorized
+    residual_risk: vibration, slip, payload, grade, and cross-slope stability are unknown
+    authorization_gate: physical calibration and closed-course grade envelope; BLOCKED
+  - id: H05
+    hazard: localizer reports plausible but wrong confidence in repetitive geometry
+    owner: localization-safety-owner
+    severity: CATASTROPHIC
+    detection: scan-map residual, inlier/NIS/ambiguity failure, frozen pose, duplicate TF, or independent truth error
+    mitigation: independent localization guard, holdout and plausible-wrong fixtures, and degraded-stop zones
+    evidence: simulation truth and replay consistency; current real bag has no truth/odom/TF
+    fail_closed_control: LOST, cancel goal, zero, disarm, and explicit stationary relocalization without mission resume
+    residual_risk: campus localization accuracy is unmeasured
+    authorization_gate: calibrated hardware truth bag and closed-course evidence; BLOCKED
+  - id: H06
+    hazard: heat, CPU, memory, swap, or I/O starvation delays safety callbacks
+    owner: platform-owner
+    severity: CATASTROPHIC
+    detection: queue growth, deadline/TTL count, jitter, thermal/throttle, swap, run-queue, and disk traces
+    mitigation: separate processes, queue depth one, no callback I/O, and A12 p99/p999 stress/soak rules
+    evidence: method only; no target NUC measurements
+    fail_closed_control: RESOURCE/deadline STOP and zero; shed only non-safety load or roll back; never lengthen TTL
+    residual_risk: actual NUC fingerprint and thermal behavior are unknown
+    authorization_gate: all A12 target profiles pass; BLOCKED
+  - id: H07
+    hazard: wrong driver topic, type, sign, units, timeout, mode, or held-last command causes uncontrolled motion
+    owner: platform-owner/WP0-HW
+    severity: CATASTROPHIC
+    detection: manifest/platform/graph mismatch and inert wrong-direction/timeout evidence
+    mitigation: no default motor topic, verified exact schema, graph audit, native/external watchdog, and repeated inert tests
+    evidence: manual describes workflow and mode keys but not the motor API or priority/timeout behavior
+    fail_closed_control: reject hardware launch before creating a motor path, remain DISARMED/zero, use physical e-stop/manual priority, and return to shadow
+    residual_risk: entire real driver and physical stop contract is unverified
+    authorization_gate: WP0-HW plus HIL inert repetitions and measured stop; BLOCKED
+  - id: H08
+    hazard: e-stop or manual joystick fails to override autonomy
+    owner: hardware-safety-owner/WP7
+    severity: CATASTROPHIC
+    detection: physical priority, circuit continuity, latency, state heartbeat, and reset-negative tests
+    mitigation: physical priority independent of ROS, latched stop, guarded reset, and no automatic re-arm
+    evidence: manual mentions joystick and automode a/m only; physical implementation and latency are unknown
+    fail_closed_control: hardware_enabled remains rejected; missing/stale/contradictory state is STOP, exact zero, and disarm
+    residual_risk: physical circuit and non-ROS manual path are unverified
+    authorization_gate: verified circuit plus 20 inert repetitions per case; BLOCKED
+  - id: H09
+    hazard: Gazebo or replay success is promoted as braking, localization, campus, or passenger proof
+    owner: release-owner
+    severity: HIGH
+    detection: asserted claim tag exceeds its evidence source or an authorization flag is true without cumulative receipts
+    mitigation: A13 machine-readable claim matrix and release-manifest validator
+    evidence: software-only claim tags
+    fail_closed_control: reject release/approval statement and keep hardware/passenger authorization false
+    residual_risk: organizational pressure to overclaim remains
+    authorization_gate: required physical evidence at each cumulative authority level; BLOCKED
+  - id: H10
+    hazard: mixed, unsurveyed, or stale map/route bundle permits an unsafe mission
+    owner: route-safety-owner
+    severity: CATASTROPHIC
+    detection: hash mismatch, route outside occupancy/corridor, missing direction, or landmark residual
+    mitigation: atomic signed bundle, candidate label, independent validators, and route survey
+    evidence: committed map and closed-loop waypoints are candidate artifacts only
+    fail_closed_control: refuse mission, zero/disarm, and atomic rollback; candidate geometry cannot grant physical geofence authority
+    residual_risk: map datum, corridor, exclusions, crossings, slopes, and direction-specific intent are unsurveyed
+    authorization_gate: separate reviewed outbound/return assets, survey, closed course, and campus approval; BLOCKED
+  - id: H11
+    hazard: physical slope, payload, battery, surface, weather, or braking exceeds the simulation policy
+    owner: hardware-safety-owner/WP7
+    severity: CATASTROPHIC
+    detection: measured stopping or stability envelope failure, battery/thermal derating, or environmental mismatch
+    mitigation: dry staged measurements with payload/battery/surface/temperature/grade matrix and approved margin
+    evidence: no physical qualification; simulation-policy values have zero physical authority
+    fail_closed_control: do not authorize or expand the envelope; remain shadow/inert and no passenger
+    residual_risk: all physical envelope values are unknown
+    authorization_gate: reviewed WP7 envelope and campus approval; BLOCKED
+  - id: H12
+    hazard: ROS/NUC common-mode software failure defeats software safety
+    owner: hardware-safety-owner/WP7
+    severity: CATASTROPHIC
+    detection: process/master death, watchdog loss, physical e-stop tests, and incident evidence
+    mitigation: native watchdog, physical e-stop/manual priority, low-speed staged course, and independent human operator
+    evidence: software kill/fault tests cannot certify physical functional safety
+    fail_closed_control: command timeout to physical stop; until independently verified, hardware launch is blocked
+    residual_risk: software safety is not certified functional safety
+    authorization_gate: measured independent physical stop path and institutional review; BLOCKED

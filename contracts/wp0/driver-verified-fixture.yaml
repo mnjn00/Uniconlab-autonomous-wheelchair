@@ -1,0 +1,39 @@
+# CI SCHEMA FIXTURE ONLY. NEVER physical evidence, deployment authorization, or permission to move hardware.
+schema_version: 1
+contract_id: ci-fixture-direct-twist-v1
+verified: true
+example_only: true
+hardware_motion_authorized: false
+passenger_operation_authorized: false
+platform:
+  manufacturer: GJC_TEST_FIXTURE
+  model: SIMULATED_BASE
+  serial: FIXTURE-0001
+  nuc_machine_id_sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  base_model_source_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+adapter: {mode: direct_twist, ros_package: '', executable: '', translation_spec_sha256: ''}
+command:
+  safe_input_topic: /cmd_vel_safe
+  driver_topic: /cmd_vel_safe
+  message_type: geometry_msgs/Twist
+  message_md5: 9f195f881246fdfa2798d1d3eebca84a
+  publish_rate_hz: 50.0
+  queue_size: 1
+  tcp_nodelay: true
+  timeout_owner: native_driver
+  timeout_s: 0.10
+  timeout_behavior: zero_output
+  linear: {field: linear.x, unit: m_s, positive: forward, minimum: -0.10, maximum: 0.10}
+  angular: {field: angular.z, unit: rad_s, positive: counterclockwise, minimum: -0.20, maximum: 0.20}
+mode: {status_topic: /fixture/mode, message_type: std_msgs/String, auto_value: auto, manual_value: manual, stale_timeout_s: 0.15, request_interface: operator_only, request_name: automode_fixture}
+manual_override: {status_topic: /fixture/manual_override, message_type: std_msgs/Bool, active_value: 'true', stale_timeout_s: 0.15, hardware_priority_verified: true}
+estop: {status_topic: /fixture/estop, message_type: std_msgs/Bool, asserted_value: 'true', stale_timeout_s: 0.15, physical_chain_independent: true}
+odometry: {topic: /fixture/odom, message_type: nav_msgs/Odometry, parent_frame: odom, child_frame: base_footprint, minimum_rate_hz: 20.0, stale_timeout_s: 0.20}
+evidence:
+  graph_snapshot_sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  command_polarity_report_sha256: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  timeout_report_sha256: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  mode_override_report_sha256: ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  estop_report_sha256: '1111111111111111111111111111111111111111111111111111111111111111'
+  odom_tf_report_sha256: '2222222222222222222222222222222222222222222222222222222222222222'
+approval: {contract_reviewer: CI_FIXTURE, reviewed_at_utc: '2026-01-01T00:00:00Z', hardware_safety_reviewer: CI_FIXTURE, campus_approval_id: ''}

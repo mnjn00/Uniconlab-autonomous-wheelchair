@@ -1,0 +1,164 @@
+schema_version: 1
+artifact_id: A17-verification-matrix
+owner: WP0 verification owner
+reviewer_role: independent safety verification critic
+status: contract_defined_evidence_pending
+source_plan_sha256: bd1b9454bc34f68714e6b986e80466535f817a42c25f662db0990adc79ca601e
+provenance: approved RALPLAN acceptance and verification requirements
+additional_properties_allowed: false
+evidence_policy:
+  no_physical_evidence_claimed: true
+  hardware_motion_authorized: false
+  passenger_operation_authorized: false
+  rule: A named test is a requirement, not evidence; status remains pending until its immutable artifact exists and is reviewed.
+requirements:
+  - requirement_id: WP0-ABI-001
+    area: interfaces
+    requirement: Exact A02 v1 source inventory, field order, constants, constraints, and canonical ABI hash must match generated ROS interfaces.
+    owner: wheelchair_interfaces owner
+    positive_test: test_abi_v1_golden_sources_and_canonical_hash
+    adversarial_test: test_abi_v1_rejects_reorder_constant_change_unknown_file_and_reserved_reason_bit
+    fixture: interfaces/abi_v1_golden
+    metric: zero byte or inventory differences
+    expected_artifact: evidence/contracts/abi-v1-report.json
+    evidence_status: pending
+  - requirement_id: WP1-TOPOLOGY-001
+    area: command_topology
+    requirement: Only move_base publishes /cmd_vel_nav, only safety_gate publishes /cmd_vel_safe, and no navigation, decision, replay, ROS 2, or diagnostic path reaches a real driver.
+    owner: wheelchair_bringup owner
+    positive_test: test_single_command_path_all_allowed_profiles
+    adversarial_test: test_duplicate_publisher_remap_bypass_and_real_driver_path_force_zero_and_disarm
+    fixture: topology/profile_graphs
+    metric: exactly one expected publisher per command topic and zero bypass paths
+    expected_artifact: evidence/topology/command-graph-report.json
+    evidence_status: pending
+  - requirement_id: WP1-GEOFENCE-001
+    area: geofence_anti_widening
+    requirement: Independent route_safety is sole geofence authority and runtime changes cannot widen the startup hash-pinned safety intersection.
+    owner: route-safety owner
+    positive_test: test_original_manifest_inside_clearance_emits_inside_and_matching_clear
+    adversarial_test: test_navigation_polygon_param_route_hash_map_tf_manifest_reload_and_publisher_mutations_cannot_widen
+    fixture: route_safety/anti_widening
+    metric: every pose outside original intersection remains STOP and publisher cardinality equals one
+    expected_artifact: evidence/route-safety/anti-widening-report.json
+    evidence_status: pending
+  - requirement_id: WP1-COLLISION-001
+    area: collision_ttc
+    requirement: Independent collision supervision enforces swept-footprint distance, TTC, coverage, occlusion, immediate stop, and five-frame/0.50 s release hysteresis.
+    owner: collision safety owner
+    positive_test: test_static_dynamic_clearance_and_release_hysteresis_golden_cases
+    adversarial_test: test_wall_pole_curb_crossing_approaching_ambiguous_empty_blind_occluded_reverse_and_dropped_track_stop
+    fixture: collision/static_dynamic_visibility
+    metric: exact state/reason fields; stop in one frame; release only after five valid frames spanning at least 0.50 s with 0.25 m margin
+    expected_artifact: evidence/safety/collision-ttc-report.json
+    evidence_status: pending
+  - requirement_id: WP1-SLOPE-001
+    area: slope
+    requirement: Independent slope supervision uses calibrated gravity/TF evidence and simulation-policy thresholds without asserting physical braking capability.
+    owner: slope safety owner
+    positive_test: test_calibrated_fresh_static_gravity_threshold_and_hysteresis_boundaries
+    adversarial_test: test_stale_uncalibrated_dynamic_acceleration_orientation_disagreement_manual_only_and_nonpositive_downhill_deceleration_stop
+    fixture: slope/gravity_and_faults
+    metric: exact CLEAR/SLOW/STOP state and reason mask at each frozen boundary
+    expected_artifact: evidence/safety/slope-policy-report.json
+    evidence_status: pending_simulation_policy_only
+  - requirement_id: WP3-LOCALIZATION-001
+    area: localization_confidence
+    requirement: Only the independent guard grants localization permission from calibrated candidate, scan-map, odom NIS, ambiguity, TF, map, and zone evidence.
+    owner: data/localization owner
+    positive_test: test_holdout_calibration_initialization_relocalization_and_single_map_odom_owner
+    adversarial_test: test_raw_ok_tiny_covariance_wrong_pose_map_mismatch_tf_duplicate_stale_jump_and_repetitive_scene_stop
+    fixture: localization/holdout_and_plausible_wrong
+    metric: zero false OK across at least 10000 holdout windows where truth error exceeds 0.50 m or 15 deg
+    expected_artifact: evidence/localization/confidence-holdout-report.json
+    evidence_status: pending
+  - requirement_id: WP2-CONVERSION-001
+    area: bag_conversion
+    requirement: Exact source IDL/hash and deterministic canonical point cloud/IMU, clock, ordering, record-index, and transactional conversion contracts are enforced.
+    owner: data/localization owner
+    positive_test: test_three_run_byte_semantic_manifest_and_record_index_determinism
+    adversarial_test: test_idl_cdr_count_nan_time_frame_quaternion_storage_and_duration_corruption_returns_stable_error_and_no_accepted_bag
+    fixture: conversion/golden_and_corrupt
+    metric: three identical runs; zero silent drop repair sort clamp interpolation or substitution
+    expected_artifact: evidence/conversion/determinism-and-corruption-report.json
+    evidence_status: pending_source_idl_hash
+  - requirement_id: WP4-MISSION-001
+    area: mission_control
+    requirement: Mission FSM alone orchestrates ActiveRoute and move_base; every state except NAVIGATING emits HOLD or STOP and no decision component emits Twist.
+    owner: mission/decision owner
+    positive_test: test_disarmed_localizing_ready_navigating_pause_goal_and_cancel_transitions
+    adversarial_test: test_missing_hash_stale_progress_abort_restart_estop_and_safety_loss_cancel_before_result_without_auto_resume
+    fixture: mission/fsm_sequences
+    metric: deterministic state/intent/action trace and zero decision Twist publishers
+    expected_artifact: evidence/mission/fsm-contract-report.json
+    evidence_status: pending
+  - requirement_id: WP1-CONTROL-001
+    area: safety_control
+    requirement: Startup and every invalid permission publish exact finite zero at 50 Hz; reset never arms and hazard zero bypasses comfort ramps.
+    owner: safety gate owner
+    positive_test: test_all_fresh_matching_clear_explicit_arm_and_bounded_command_output
+    adversarial_test: test_unknown_stale_nan_inf_unsupported_axis_clock_reset_policy_mismatch_estop_reset_and_deadline_fault_zero
+    fixture: safety_gate/permission_matrix
+    metric: zero post-fault nonzero outputs; timeout edges immediately below equal and above 0.30 s
+    expected_artifact: evidence/safety/gate-permission-matrix.json
+    evidence_status: pending
+  - requirement_id: WP6-TIMING-001
+    area: timing_resource
+    requirement: Safety loops meet frozen p99/p999 compute, jitter, queue, and end-to-end stop budgets without diagnostic or recorder backpressure.
+    owner: target-NUC performance owner
+    positive_test: test_60_minute_target_nuc_profile_rate_latency_queue_and_headroom
+    adversarial_test: test_cpu_io_memory_thermal_queue_sensor_burst_and_recorder_pressure_fail_closed
+    fixture: performance/frozen_profiles
+    metric: all frozen p99/p999 budgets pass; zero post-deadline nonzero outputs; no swap or thermal invalidation
+    expected_artifact: evidence/performance/target-nuc-60min-report.json
+    evidence_status: blocked_target_nuc_fingerprint_unknown
+  - requirement_id: WP6-SIMCLAIM-001
+    area: simulator_claims
+    requirement: Every result is labeled software-only, replay, simulation, HIL, closed-course, campus, or passenger authority and cannot promote itself above its evidence source.
+    owner: simulator fidelity owner
+    positive_test: test_simulator_claim_matrix_accepts_software_replay_and_simulation_labels
+    adversarial_test: test_gazebo_replay_workstation_and_candidate_map_cannot_claim_hardware_campus_or_passenger_authority
+    fixture: claims/simulator_fidelity
+    metric: zero claim-level escalations and explicit limitations on every metric
+    expected_artifact: evidence/simulation/fidelity-claim-report.json
+    evidence_status: pending
+  - requirement_id: WP6-ROLLBACK-001
+    area: rollback
+    requirement: Rollback is atomic to one previously signed bundle and restarts DISARMED with UNKNOWN permissions, localization required, and no mission resume.
+    owner: release/bringup owner
+    positive_test: test_signed_bundle_atomic_restore_hash_crosscheck_and_explicit_rearm
+    adversarial_test: test_partial_mixed_unsigned_corrupt_policy_map_route_binary_and_interrupted_restore_refused
+    fixture: release/rollback_bundles
+    metric: no mixed-bundle startup; exact zero until independent permissions and explicit arm
+    expected_artifact: evidence/release/rollback-drill-report.json
+    evidence_status: pending
+  - requirement_id: WP0-HWGATE-NEG-001
+    area: hardware_gate_negative
+    requirement: hardware_enabled remains unavailable while authorization is false or any verified driver/platform/evidence/preflight fact is absent or mismatched.
+    owner: platform owner
+    positive_test: test_sim_replay_and_hardware_shadow_have_no_real_motor_path
+    adversarial_test: test_hardware_enabled_rejects_false_authority_example_unverified_missing_topic_md5_timeout_mode_override_estop_odom_platform_or_graph_match
+    fixture: hardware/manifests_and_profiles
+    metric: launch rejected before advertising or subscribing to any real driver topic
+    expected_artifact: evidence/hardware/hardware-gate-negative-report.json
+    evidence_status: required_negative_only_physical_facts_blocked
+  - requirement_id: WP0-PASSENGER-NEG-001
+    area: passenger_authority_negative
+    requirement: No WP0-WP6 software, replay, simulation, shadow, HIL, or future closed-course result can be interpreted as passenger authorization.
+    owner: release governance owner
+    positive_test: test_release_metadata_preserves_passenger_operation_authorized_false
+    adversarial_test: test_claim_merge_profile_override_manifest_and_successful_software_rc_cannot_set_passenger_authority
+    fixture: release/authority_mutations
+    metric: passenger_operation_authorized remains false and passenger profile is absent
+    expected_artifact: evidence/release/passenger-authority-negative-report.json
+    evidence_status: pending
+  - requirement_id: WP7-PHYSICAL-001
+    area: physical_gate
+    requirement: Driver, extrinsic, braking, override, e-stop, dry closed-course, campus, and passenger evidence require separate measured protocols and approval.
+    owner: hardware safety owner
+    positive_test: not_applicable_until_separately_authorized_wp7
+    adversarial_test: test_missing_or_nonphysical_evidence_cannot_promote_any_physical_authority
+    fixture: release/authority_mutations
+    metric: every absent physical receipt is a blocking gate
+    expected_artifact: evidence/hardware/separate-wp7-authorization-receipt.yaml
+    evidence_status: blocked_not_authorized_no_physical_evidence

@@ -1,21 +1,314 @@
 #!/usr/bin/env python3
-"""ROS1 safety gate for wheelchair cmd_vel arbitration.
+"""Fail-closed ROS1 velocity gate with a ROS-independent decision core."""
 
-The pure-Python SafetyGateCore is intentionally independent of rospy so unit tests can run
-on hosts without ROS Noetic installed.
-"""
+from dataclasses import dataclass, field
+import math
+import re
+import threading
+from typing import Dict, Optional, Tuple
 
-from dataclasses import dataclass
-from typing import Optional
+UNKNOWN, CLEAR, STOP, HOLD = 0, 1, 2, 3
+DISARMED, STATE_CLEAR, STOPPED, LATCHED, FAULT = range(5)
+
+_REASON_NAMES = (
+    "ESTOP", "STALE_CMD", "MODE", "GEOFENCE", "COLLISION", "LOCALIZATION",
+    "DRIVER", "INVALID_CMD", "CLOCK", "STALE_INTENT", "INTERNAL_FAULT",
+    "STARTUP", "SENSOR_STALE", "COLLISION_BLIND", "COLLISION_TTC",
+    "COLLISION_DISTANCE", "SLOPE", "IMU_UNCALIBRATED", "ROUTE_MANIFEST",
+    "GRAPH_TOPOLOGY", "TF", "BACKPRESSURE", "DEADLINE_MISS", "MANUAL_OVERRIDE",
+    "HARDWARE_UNVERIFIED", "MAP_MISMATCH", "COLLISION_OCCLUDED",
+    "LOCALIZATION_INCONSISTENT", "RESOURCE", "CORRUPT_DATA", "RESET_REJECTED",
+    "INPUT_UNKNOWN", "ROUTE_STATE", "ODOM_STALE", "IMU_STALE", "LIDAR_STALE",
+    "POLICY_MISMATCH",
+)
+REASONS = {name: 1 << bit for bit, name in enumerate(_REASON_NAMES)}
+DEFINED_REASON_MASK = (1 << 37) - 1
+for _name, _value in REASONS.items():
+    globals()[_name] = _value
+
+_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+TOPOLOGY_TTL_S = 0.75
+_REQUIRED_POLICY_KEYS = frozenset(
+    ("geofence", "collision", "slope", "localization", "mode", "driver", "topology"))
+_DEFAULT_POLICY_SHA256 = {
+    "geofence": "eb26fbbe00b5514663dd0a9fb4cf5b3ce561961e0a0d17483b5937af205f9706",
+    "collision": "9534bfafded0191e9434ca0d16a7d1ae8caa32c1ff0f6bf6d85f0a21ba27e9db",
+    "slope": "69dc84b5b08985b008e9a8e55cdcbe16f2020245f786bb17f56888d7372e1c62",
+    "localization": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
+    "mode": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
+    "driver": "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8",
+    "topology": "93941ad3312c3f3c26da99863c785a1034aa283cd89d1db65d675cc4dbfb6f80",
+}
+
 
 
 @dataclass(frozen=True)
 class VelocityCommand:
     linear_x: float = 0.0
     angular_z: float = 0.0
+    linear_y: float = 0.0
+    linear_z: float = 0.0
+    angular_x: float = 0.0
+    angular_y: float = 0.0
 
     def is_zero(self) -> bool:
-        return self.linear_x == 0.0 and self.angular_z == 0.0
+        return all(value == 0.0 for value in self.values())
+
+    def values(self) -> Tuple[float, ...]:
+        return (self.linear_x, self.linear_y, self.linear_z,
+                self.angular_x, self.angular_y, self.angular_z)
+
+
+@dataclass(frozen=True)
+class SignalEvidence:
+    """Untrusted permission with independently checked source and receipt times."""
+
+    state: int = UNKNOWN
+    source_stamp_s: Optional[float] = None
+    receipt_stamp_s: Optional[float] = None
+    reason_mask: int = 0
+    source: str = ""
+    policy_sha256: str = ""
+    sequence: Optional[int] = None
+    max_linear_mps: Optional[float] = None
+    max_angular_rps: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class StructuredEvidence:
+    """ROS-independent subset of an authoritative structured status."""
+
+    sequence: int
+    clear: bool
+    source_stamp_s: float
+    evaluation_stamp_s: float
+    receipt_stamp_s: float
+    reason_mask: int
+    source: str
+    policy_sha256: str
+    max_linear_mps: Optional[float] = None
+    max_angular_rps: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class GenericEvidence:
+    """ROS-independent subset of a generic SafetySignal."""
+
+    sequence: int
+    state: int
+    stamp_s: float
+    receipt_stamp_s: float
+    reason_mask: int
+    source: str
+    policy_sha256: str
+
+
+class EvidencePairBuffer:
+    """Bounded latest-sequence join which never reuses previously clear evidence."""
+
+    def __init__(self, signal_names, ttl_s, future_tolerance_s, stamp_semantics):
+        self.signal_names = tuple(signal_names)
+        self.ttl_s = ttl_s
+        self.future_tolerance_s = future_tolerance_s
+        self.stamp_semantics = stamp_semantics
+        self.sequence = None
+        self.status = None
+        self.signals = {name: None for name in self.signal_names}
+        self._last_sequences = {"status": None}
+        self._last_sequences.update({name: None for name in self.signal_names})
+        self.poisoned = False
+        self.committed_status = None
+        self.committed_signals = {name: None for name in self.signal_names}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _sequence(value):
+        return (isinstance(value, int) and not isinstance(value, bool) and
+                0 <= value <= 0xffffffff)
+
+    def _accept_sequence(self, stream, value):
+        sequence = value.sequence
+        if not self._sequence(sequence):
+            self.reject()
+            return False
+        previous_sequence = self._last_sequences[stream]
+        previous_value = self.status if stream == "status" else self.signals[stream]
+        if previous_sequence is not None and sequence < previous_sequence:
+            self.reject()
+            return False
+        if previous_sequence == sequence:
+            if previous_value != value:
+                self.reject()
+                return False
+            return not self.poisoned
+
+        self._last_sequences[stream] = sequence
+        if stream == "status":
+            self.status = value
+        else:
+            self.signals[stream] = value
+        if self.sequence is None or sequence > self.sequence:
+            self.sequence = sequence
+            self.poisoned = False
+        return not self.poisoned
+
+    def reject(self):
+        with self._lock:
+            self.poisoned = True
+            self.status = None
+            self.signals = {name: None for name in self.signal_names}
+            self.committed_status = None
+            self.committed_signals = {name: None for name in self.signal_names}
+
+    def update_status(self, status):
+        with self._lock:
+            try:
+                self._accept_sequence("status", status)
+            except Exception:
+                self.reject()
+
+    def update_signal(self, name, signal):
+        with self._lock:
+            try:
+                if name not in self.signals:
+                    self.reject()
+                    return
+                self._accept_sequence(name, signal)
+            except Exception:
+                self.reject()
+
+    @staticmethod
+    def _text_valid(value):
+        return (isinstance(value, str) and bool(value) and
+                len(value.encode("utf-8")) <= 64 and
+                not any(ord(char) < 32 or ord(char) == 127 for char in value))
+
+    def _unknown(self, receipt=None):
+        return SignalEvidence(
+            UNKNOWN, None, receipt, CORRUPT_DATA | INPUT_UNKNOWN, "pairing_invalid",
+            "0" * 64, self.sequence)
+
+    def evidence(self, now_s):
+        with self._lock:
+            return self._evidence_unlocked(now_s)
+
+    def diagnostic_snapshot(self):
+        with self._lock:
+            return {
+                "sequence": self.sequence,
+                "status": None if self.status is None else self.status.sequence,
+                "signals": {
+                    name: None if signal is None else signal.sequence
+                    for name, signal in self.signals.items()
+                },
+                "committed_status": (
+                    None if self.committed_status is None
+                    else self.committed_status.sequence
+                ),
+                "committed_signals": {
+                    name: None if signal is None else signal.sequence
+                    for name, signal in self.committed_signals.items()
+                },
+                "poisoned": self.poisoned,
+            }
+
+    def _evidence_unlocked(self, now_s):
+        status = self.status
+        signals = tuple(self.signals.values())
+        pending_complete = (
+            status is not None
+            and status.sequence == self.sequence
+            and all(
+                signal is not None and signal.sequence == self.sequence
+                for signal in signals
+            )
+        )
+        if self.poisoned:
+            receipts = (
+                [status.receipt_stamp_s] if status is not None else []
+            ) + [
+                signal.receipt_stamp_s
+                for signal in signals
+                if signal is not None
+            ]
+            return self._unknown(min(receipts) if receipts else None)
+        using_pending = pending_complete
+        if not pending_complete:
+            committed_status = self.committed_status
+            committed_signals = tuple(self.committed_signals.values())
+            committed_complete = (
+                committed_status is not None
+                and all(signal is not None for signal in committed_signals)
+            )
+            if not committed_complete:
+                receipts = (
+                    [status.receipt_stamp_s] if status is not None else []
+                ) + [
+                    signal.receipt_stamp_s
+                    for signal in signals
+                    if signal is not None
+                ]
+                return self._unknown(min(receipts) if receipts else None)
+            status = committed_status
+            signals = committed_signals
+        try:
+            numeric = (now_s, status.source_stamp_s, status.evaluation_stamp_s,
+                       status.receipt_stamp_s, status.reason_mask)
+            if (not all(_finite(value) for value in numeric[:4]) or
+                    any(value <= 0.0 for value in numeric[:4]) or
+                    not isinstance(status.reason_mask, int) or
+                    status.reason_mask < 0 or status.reason_mask & ~DEFINED_REASON_MASK or
+                    not isinstance(status.clear, bool) or
+                    not self._text_valid(status.source) or
+                    not _HASH_RE.fullmatch(status.policy_sha256)):
+                self.reject()
+                return self._unknown()
+            expected_stamp = (status.evaluation_stamp_s if self.stamp_semantics == "evaluation"
+                              else status.source_stamp_s)
+            expected_state = CLEAR if status.clear else STOP
+            receipts = [status.receipt_stamp_s]
+            for signal in signals:
+                receipts.append(signal.receipt_stamp_s)
+                if (signal.sequence != status.sequence or
+                        signal.state != expected_state or
+                        signal.reason_mask != status.reason_mask or
+                        signal.source != status.source or
+                        signal.policy_sha256 != status.policy_sha256 or
+                        signal.stamp_s != expected_stamp or
+                        not all(_finite(value) for value in
+                                (signal.stamp_s, signal.receipt_stamp_s)) or
+                        signal.stamp_s <= 0.0 or signal.receipt_stamp_s <= 0.0):
+                    self.reject()
+                    return self._unknown()
+            oldest_receipt = min(receipts)
+            if (not _finite(now_s) or
+                    now_s - status.evaluation_stamp_s > self.ttl_s + 1e-12 or
+                    now_s - expected_stamp > self.ttl_s + 1e-12 or
+                    now_s - oldest_receipt > self.ttl_s + 1e-12 or
+                    status.evaluation_stamp_s - now_s >
+                    self.future_tolerance_s + 1e-12 or
+                    expected_stamp - now_s > self.future_tolerance_s + 1e-12 or
+                    oldest_receipt - now_s > self.future_tolerance_s + 1e-12):
+                self.reject()
+                return self._unknown()
+            for cap in (status.max_linear_mps, status.max_angular_rps):
+                if cap is not None and (not _finite(cap) or cap < 0.0):
+                    self.reject()
+                    return self._unknown()
+            result = SignalEvidence(
+                expected_state, expected_stamp, oldest_receipt,
+                status.reason_mask, status.source, status.policy_sha256,
+                status.sequence, status.max_linear_mps, status.max_angular_rps)
+            if using_pending:
+                self.committed_status = status
+                self.committed_signals = {
+                    name: signal
+                    for name, signal in zip(self.signal_names, signals)
+                }
+            return result
+        except Exception:
+            self.reject()
+            return self._unknown()
 
 
 @dataclass(frozen=True)
@@ -23,17 +316,89 @@ class SafetyConfig:
     stale_timeout_s: float = 0.30
     max_linear_speed: float = 0.55
     max_angular_speed: float = 0.85
+    command_ttl_s: Optional[float] = None
+    intent_ttl_s: float = 0.30
+    geofence_ttl_s: float = 0.25
+    collision_ttl_s: float = 0.30
+    slope_ttl_s: float = 0.10
+    localization_ttl_s: float = 0.25
+    mode_ttl_s: float = 0.15
+    driver_ttl_s: float = 0.15
+    future_tolerance_s: float = 0.05
+    publication_period_s: float = 0.02
+    deadline_limit_s: float = 0.05
+    stationary_linear_mps: float = 0.01
+    stationary_angular_rps: float = 0.02
+    expected_policy_sha256: Dict[str, str] = field(
+        default_factory=lambda: dict(_DEFAULT_POLICY_SHA256))
+    release_manifest_sha256: str = ""
+
+    def __post_init__(self):
+        if not (0.0 < self.max_linear_speed <= 0.55 and
+                0.0 < self.max_angular_speed <= 0.85):
+            raise ValueError("configured caps may not exceed immutable software-RC caps")
+        values = (self.stale_timeout_s,
+                  self.stale_timeout_s if self.command_ttl_s is None else self.command_ttl_s,
+                  self.intent_ttl_s, self.geofence_ttl_s, self.collision_ttl_s,
+                  self.slope_ttl_s, self.localization_ttl_s, self.mode_ttl_s,
+                  self.driver_ttl_s, self.future_tolerance_s,
+                  self.publication_period_s, self.deadline_limit_s)
+        if not all(math.isfinite(v) and v > 0.0 for v in values):
+            raise ValueError("timeouts and periods must be finite and positive")
+        keys = set(self.expected_policy_sha256)
+        if keys != _REQUIRED_POLICY_KEYS:
+            missing = sorted(_REQUIRED_POLICY_KEYS - keys)
+            unknown = sorted(keys - _REQUIRED_POLICY_KEYS)
+            raise ValueError("expected policy hashes require exact keys; missing=%s unknown=%s" %
+                             (missing, unknown))
+        if any(not _HASH_RE.fullmatch(value)
+               for value in self.expected_policy_sha256.values()):
+            raise ValueError("expected policy hashes must be lowercase SHA-256")
+
+    @property
+    def cmd_ttl_s(self) -> float:
+        return self.stale_timeout_s if self.command_ttl_s is None else self.command_ttl_s
+
+    @property
+    def activation_grace_s(self) -> float:
+        """Bounded first-command grace after HOLD releases motion authority."""
+        return 0.10
+
+    @property
+    def topology_ttl_s(self) -> float:
+        """Topology evidence lifetime is an immutable software-RC boundary."""
+        return TOPOLOGY_TTL_S
 
 
 @dataclass(frozen=True)
 class GateInputs:
-    cmd: Optional[VelocityCommand]
-    cmd_age_s: Optional[float]
-    e_stop: bool = False
+    cmd: Optional[VelocityCommand] = None
+    cmd_age_s: Optional[float] = None  # compatibility; source and receipt use this age
+    now_s: Optional[float] = None
+    cmd_source_stamp_s: Optional[float] = None
+    cmd_receipt_stamp_s: Optional[float] = None
+    motion_intent: Optional[SignalEvidence] = None
+    geofence: Optional[SignalEvidence] = None
+    collision: Optional[SignalEvidence] = None
+    slope: Optional[SignalEvidence] = None
+    localization: Optional[SignalEvidence] = None
+    mode: Optional[SignalEvidence] = None
+    driver: Optional[SignalEvidence] = None
+    topology: Optional[SignalEvidence] = None
+    e_stop: Optional[bool] = None
     e_stop_reset: bool = False
-    geofence_ok: bool = True
-    mode_allowed: bool = True
-    collision_stop: bool = False
+    arm_request: bool = False
+    manual_or_disarmed: bool = False
+    stationary: bool = False
+    mission_cancelled: bool = False
+    graph_valid: bool = False  # inert compatibility field; only fresh topology evidence grants
+    deadline_missed: bool = False
+    backpressure: bool = False
+    internal_fault: bool = False
+    # Removed permissive Bool API names remain accepted only as explicit STOP evidence.
+    geofence_ok: Optional[bool] = None
+    mode_allowed: Optional[bool] = None
+    collision_stop: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -41,169 +406,662 @@ class GateDecision:
     command: VelocityCommand
     reason: str
     e_stop_latched: bool
+    reason_mask: int = 0
+    state: int = DISARMED
+    armed: bool = False
+    ages: Dict[str, float] = field(default_factory=dict)
+    deadline_miss_count: int = 0
+    dropped_input_count: int = 0
 
 
 class SafetyGateCore:
-    """Priority gate: e-stop latch > stale watchdog > geofence/mode > collision > speed cap > nominal."""
+    """Stateful fail-closed authority. CLEAR never overrides a concurrently observed STOP."""
+
+    SIGNALS = (
+        ("motion_intent", STALE_INTENT), ("geofence", GEOFENCE),
+        ("collision", COLLISION), ("slope", SLOPE),
+        ("localization", LOCALIZATION), ("mode", MODE), ("driver", DRIVER),
+        ("topology", GRAPH_TOPOLOGY),
+    )
 
     def __init__(self, config: Optional[SafetyConfig] = None):
         self.config = config or SafetyConfig()
         self.e_stop_latched = False
+        self.armed = False
+        self.last_now_s = None
+        self.last_source_stamps = {}
+        self.last_receipt_stamps = {}
+        self.last_sequences = {}
+        self.deadline_miss_count = 0
+        self.dropped_input_count = 0
+        self.last_backpressure_input = ""
+        self.last_backpressure_previous = None
+        self.last_backpressure_current = None
+        self.last_motion_intent_state = None
+        self.activation_started_s = None
+        self.activation_command_floor_s = None
+        self.awaiting_first_command = False
 
     def reset(self) -> None:
+        """Administrative test reset; runtime reset must use guarded GateInputs."""
         self.e_stop_latched = False
+        self.armed = False
+        self.last_now_s = None
+        self.last_source_stamps.clear()
+        self.last_receipt_stamps.clear()
+        self.last_sequences.clear()
+        self.last_backpressure_input = ""
+        self.last_backpressure_previous = None
+        self.last_backpressure_current = None
+        self.last_motion_intent_state = None
+        self.activation_started_s = None
+        self.activation_command_floor_s = None
+        self.awaiting_first_command = False
 
     def evaluate(self, inputs: GateInputs) -> GateDecision:
-        if inputs.e_stop:
+        try:
+            return self._evaluate(inputs)
+        except Exception:
+            self.armed = False
+            return self._stop(INTERNAL_FAULT | CORRUPT_DATA | STARTUP, {})
+
+    def _evaluate(self, inputs: GateInputs) -> GateDecision:
+        now = inputs.now_s
+        mask = 0
+        ages = {}
+        if now is not None and (not _finite(now) or
+                                (self.last_now_s is not None and now < self.last_now_s)):
+            mask |= CLOCK
+        elif now is not None:
+            self.last_now_s = now
+
+        if inputs.e_stop is True:
             self.e_stop_latched = True
-        elif inputs.e_stop_reset:
-            self.e_stop_latched = False
+            self.armed = False
+        elif inputs.e_stop is None:
+            mask |= ESTOP | INPUT_UNKNOWN
+
+        if inputs.internal_fault:
+            mask |= INTERNAL_FAULT
+        if inputs.deadline_missed:
+            self.deadline_miss_count += 1
+            mask |= DEADLINE_MISS
+        if inputs.backpressure:
+            mask |= BACKPRESSURE
+
+        intent_faults = 0
+        for name, base_reason in self.SIGNALS:
+            evidence = getattr(inputs, name)
+            faults = self._evidence_faults(name, evidence, base_reason, now, ages)
+            mask |= faults
+            if name == "motion_intent":
+                intent_faults = faults
+
+        intent = inputs.motion_intent
+        intent_state = (intent.state if intent is not None and intent_faults == 0
+                        else None)
+        if intent_state == HOLD:
+            self.activation_started_s = None
+            self.activation_command_floor_s = None
+            self.awaiting_first_command = False
+        elif intent_state == CLEAR and self.last_motion_intent_state == HOLD:
+            self.activation_started_s = now
+            self.activation_command_floor_s = max(intent.source_stamp_s,
+                                                  intent.receipt_stamp_s)
+            self.awaiting_first_command = True
+        elif intent_state != CLEAR:
+            self.activation_started_s = None
+            self.activation_command_floor_s = None
+            self.awaiting_first_command = False
+        self.last_motion_intent_state = intent_state
+
+        activation_grace = False
+        if intent_state == HOLD:
+            if inputs.cmd is None:
+                ages["command"] = -1.0
+                command_faults = 0
+            else:
+                command_faults = self._command_faults(inputs, now, ages)
+                command_faults &= ~(STALE_CMD | INPUT_UNKNOWN)
+        else:
+            command_faults = self._command_faults(inputs, now, ages)
+            if self.awaiting_first_command:
+                if self._command_precedes_activation(inputs):
+                    command_faults |= STALE_CMD
+                only_unavailable = not command_faults & ~(STALE_CMD | INPUT_UNKNOWN)
+                within_grace = (
+                    _finite(now) and _finite(self.activation_started_s) and
+                    now - self.activation_started_s <=
+                    self.config.activation_grace_s + 1e-12
+                )
+                if command_faults == 0:
+                    self.awaiting_first_command = False
+                    self.activation_started_s = None
+                    self.activation_command_floor_s = None
+                elif only_unavailable and within_grace:
+                    command_faults = 0
+                    activation_grace = True
+        mask |= command_faults
+
+        # Legacy boolean fields can only add stops; absence never grants permission.
+        if inputs.geofence_ok is False:
+            mask |= GEOFENCE
+        if inputs.mode_allowed is False:
+            mask |= MODE
+        if inputs.collision_stop is True:
+            mask |= COLLISION
+
+        if mask & ~DEFINED_REASON_MASK:
+            mask = (mask & DEFINED_REASON_MASK) | INTERNAL_FAULT
+
+        all_clear = mask == 0
+        reset_requested = bool(inputs.e_stop_reset)
+        if reset_requested:
+            reset_ok = (self.e_stop_latched and inputs.e_stop is False and
+                        inputs.manual_or_disarmed and inputs.stationary and
+                        inputs.mission_cancelled and all_clear)
+            if reset_ok:
+                self.e_stop_latched = False
+                self.armed = False
+            else:
+                mask |= RESET_REJECTED
 
         if self.e_stop_latched:
-            return self._stop("e_stop_latched")
+            mask |= ESTOP
 
-        if inputs.cmd is None or inputs.cmd_age_s is None or inputs.cmd_age_s > self.config.stale_timeout_s:
-            return self._stop("stale_watchdog")
+        # Reset and arm are intentionally distinct evaluations.
+        if inputs.arm_request and not reset_requested and mask == 0:
+            self.armed = True
+        elif mask != 0:
+            self.armed = False
 
-        if not inputs.geofence_ok or not inputs.mode_allowed:
-            return self._stop("geofence_or_mode_violation")
+        if not self.armed:
+            if mask == 0:
+                return GateDecision(VelocityCommand(), "startup", False, STARTUP,
+                                    DISARMED, False, ages, self.deadline_miss_count,
+                                    self.dropped_input_count)
+            return self._stop(mask | STARTUP, ages)
 
-        if inputs.collision_stop:
-            return self._stop("collision_stop")
+        if intent_state == HOLD:
+            return GateDecision(VelocityCommand(), "hold", self.e_stop_latched, 0,
+                                STATE_CLEAR, True, ages, self.deadline_miss_count,
+                                self.dropped_input_count)
+        if activation_grace:
+            return GateDecision(VelocityCommand(), "activation_grace",
+                                self.e_stop_latched, 0, STATE_CLEAR, True, ages,
+                                self.deadline_miss_count, self.dropped_input_count)
 
-        capped = self._cap(inputs.cmd)
-        if capped != inputs.cmd:
-            return GateDecision(capped, "speed_cap", self.e_stop_latched)
-        return GateDecision(capped, "nominal", self.e_stop_latched)
+        capped = self._cap(inputs.cmd, inputs)
+        reason = "speed_cap" if capped != inputs.cmd else "nominal"
+        return GateDecision(capped, reason, self.e_stop_latched, 0, STATE_CLEAR,
+                            True, ages, self.deadline_miss_count,
+                            self.dropped_input_count)
 
-    def _stop(self, reason: str) -> GateDecision:
-        return GateDecision(VelocityCommand(), reason, self.e_stop_latched)
+    @staticmethod
+    def _command_shape_faults(command):
+        if command is None:
+            return 0
+        if not all(_finite(value) for value in command.values()):
+            return INVALID_CMD | CORRUPT_DATA
+        if any(value != 0.0 for value in (command.linear_y, command.linear_z,
+                                          command.angular_x, command.angular_y)):
+            return INVALID_CMD
+        return 0
 
-    def _cap(self, cmd: VelocityCommand) -> VelocityCommand:
-        return VelocityCommand(
-            linear_x=_clamp(cmd.linear_x, -self.config.max_linear_speed, self.config.max_linear_speed),
-            angular_z=_clamp(cmd.angular_z, -self.config.max_angular_speed, self.config.max_angular_speed),
-        )
+    def _command_precedes_activation(self, inputs):
+        if inputs.cmd is None or self.activation_command_floor_s is None:
+            return True
+        if inputs.cmd_age_s is not None:
+            return False
+        return (inputs.cmd_source_stamp_s is None or
+                inputs.cmd_receipt_stamp_s is None or
+                inputs.cmd_source_stamp_s < self.activation_command_floor_s or
+                inputs.cmd_receipt_stamp_s < self.activation_command_floor_s)
+
+    def _command_faults(self, inputs, now, ages):
+        if inputs.cmd is None:
+            ages["command"] = -1.0
+            return STALE_CMD | INPUT_UNKNOWN
+        shape_faults = self._command_shape_faults(inputs.cmd)
+        if shape_faults:
+            return shape_faults
+        if inputs.cmd_age_s is not None:
+            if not _finite(inputs.cmd_age_s) or inputs.cmd_age_s < 0.0:
+                return CLOCK | STALE_CMD
+            ages["command"] = inputs.cmd_age_s
+            return STALE_CMD if inputs.cmd_age_s > self.config.cmd_ttl_s + 1e-12 else 0
+        return self._timestamps("command", inputs.cmd_source_stamp_s,
+                                inputs.cmd_receipt_stamp_s, now,
+                                self.config.cmd_ttl_s, STALE_CMD, ages)
+
+    def _evidence_faults(self, name, evidence, base_reason, now, ages):
+        if evidence is None:
+            ages[name] = -1.0
+            return base_reason | INPUT_UNKNOWN
+        mask = self._timestamps(name, evidence.source_stamp_s,
+                                evidence.receipt_stamp_s, now,
+                                getattr(self.config, name.replace("motion_intent", "intent") + "_ttl_s"),
+                                (base_reason if name in ("motion_intent", "topology")
+                                 else SENSOR_STALE),
+                                ages)
+        if evidence.state not in (UNKNOWN, CLEAR, STOP, HOLD):
+            mask |= CORRUPT_DATA | base_reason
+        elif evidence.state == UNKNOWN:
+            mask |= INPUT_UNKNOWN | base_reason | evidence.reason_mask
+        elif evidence.state == STOP:
+            mask |= evidence.reason_mask or base_reason
+        elif evidence.reason_mask != 0:
+            mask |= CORRUPT_DATA | evidence.reason_mask
+        if evidence.reason_mask & ~DEFINED_REASON_MASK:
+            mask |= INTERNAL_FAULT
+        if (not evidence.source or len(evidence.source.encode("utf-8")) > 64 or
+                any(ord(char) < 32 or ord(char) == 127 for char in evidence.source)):
+            mask |= CORRUPT_DATA | base_reason
+        if name == "topology" and evidence.source != "topology_guard":
+            mask |= CORRUPT_DATA | GRAPH_TOPOLOGY
+        expected = self.config.expected_policy_sha256.get(name)
+        if name != "motion_intent" and (
+                expected is None or not _HASH_RE.fullmatch(evidence.policy_sha256) or
+                evidence.policy_sha256 != expected):
+            mask |= POLICY_MISMATCH
+        for cap in (evidence.max_linear_mps, evidence.max_angular_rps):
+            if cap is not None and (not _finite(cap) or cap < 0.0):
+                mask |= CORRUPT_DATA | base_reason
+        if name == "motion_intent" and (
+                evidence.max_linear_mps is None or evidence.max_angular_rps is None):
+            mask |= CORRUPT_DATA | STALE_INTENT
+        if (name == "motion_intent" and evidence.state == HOLD and
+                (evidence.max_linear_mps != 0.0 or
+                 evidence.max_angular_rps != 0.0)):
+            mask |= CORRUPT_DATA | STALE_INTENT
+        if name != "motion_intent" and evidence.state == HOLD:
+            mask |= CORRUPT_DATA | base_reason
+        if evidence.sequence is not None:
+            previous = self.last_sequences.get(name)
+            if previous is not None:
+                if evidence.sequence < previous:
+                    mask |= CLOCK
+                elif evidence.sequence > previous + 1:
+                    self.dropped_input_count += evidence.sequence - previous - 1
+                    self.last_backpressure_input = name
+                    self.last_backpressure_previous = previous
+                    self.last_backpressure_current = evidence.sequence
+                    # Queue size one is intentionally latest-only. A fresh
+                    # complete sample may skip obsolete generations; stale and
+                    # deadline checks remain the fail-closed overload boundary.
+            self.last_sequences[name] = evidence.sequence
+        return mask
+
+    def _timestamps(self, name, source, receipt, now, ttl, stale_reason, ages):
+        if now is None or source is None or receipt is None:
+            ages[name] = -1.0
+            return stale_reason | INPUT_UNKNOWN
+        if not all(_finite(v) for v in (source, receipt, now)):
+            ages[name] = -1.0
+            return CLOCK | stale_reason
+        if source <= 0.0 or receipt <= 0.0:
+            ages[name] = -1.0
+            return CLOCK | stale_reason
+        source_age, receipt_age = now - source, now - receipt
+        ages[name] = max(source_age, receipt_age)
+        mask = 0
+        if source_age < -self.config.future_tolerance_s - 1e-12 or receipt_age < -self.config.future_tolerance_s - 1e-12:
+            mask |= CLOCK
+        if source_age > ttl + 1e-12 or receipt_age > ttl + 1e-12:
+            mask |= stale_reason
+        previous_source = self.last_source_stamps.get(name)
+        previous_receipt = self.last_receipt_stamps.get(name)
+        if previous_source is not None and source < previous_source:
+            mask |= CLOCK
+        if previous_receipt is not None and receipt < previous_receipt:
+            mask |= CLOCK
+        self.last_source_stamps[name] = source
+        self.last_receipt_stamps[name] = receipt
+        return mask
+
+    def _cap(self, cmd, inputs):
+        linear, angular = self.config.max_linear_speed, self.config.max_angular_speed
+        for evidence in (inputs.motion_intent, inputs.collision, inputs.slope):
+            if evidence.max_linear_mps is not None:
+                if not _finite(evidence.max_linear_mps) or evidence.max_linear_mps < 0.0:
+                    return VelocityCommand()
+                linear = min(linear, evidence.max_linear_mps)
+            if evidence.max_angular_rps is not None:
+                if not _finite(evidence.max_angular_rps) or evidence.max_angular_rps < 0.0:
+                    return VelocityCommand()
+                angular = min(angular, evidence.max_angular_rps)
+        return VelocityCommand(_clamp(cmd.linear_x, -linear, linear),
+                               _clamp(cmd.angular_z, -angular, angular))
+
+    def _stop(self, mask, ages):
+        fault_bits = INTERNAL_FAULT | CLOCK | DEADLINE_MISS | GRAPH_TOPOLOGY
+        state = LATCHED if self.e_stop_latched else (FAULT if mask & fault_bits else STOPPED)
+        return GateDecision(VelocityCommand(), _reason_string(mask), self.e_stop_latched,
+                            mask, state, False, ages, self.deadline_miss_count,
+                            self.dropped_input_count)
 
 
-def _clamp(value: float, low: float, high: float) -> float:
+def _finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _clamp(value, low, high):
     return max(low, min(high, value))
 
 
-def _twist_to_command(msg) -> VelocityCommand:
-    return VelocityCommand(linear_x=float(msg.linear.x), angular_z=float(msg.angular.z))
+def _reason_string(mask):
+    names = [name.lower() for name in _REASON_NAMES if mask & REASONS[name]]
+    return "|".join(names) if names else "nominal"
 
 
-def _command_to_twist(command: VelocityCommand):
+def _twist_to_command(msg):
+    return VelocityCommand(float(msg.linear.x), float(msg.angular.z),
+                           float(msg.linear.y), float(msg.linear.z),
+                           float(msg.angular.x), float(msg.angular.y))
+
+
+def _command_to_twist(command):
     from geometry_msgs.msg import Twist
-
     msg = Twist()
-    msg.linear.x = command.linear_x
-    msg.angular.z = command.angular_z
+    msg.linear.x, msg.angular.z = command.linear_x, command.angular_z
     return msg
 
 
 class SafetyGateRosNode:
+    """Thin queue-one ROS adapter; callbacks never publish authority directly."""
+
     def __init__(self):
         import rospy
+        from diagnostic_msgs.msg import DiagnosticArray
         from geometry_msgs.msg import Twist
-        from std_msgs.msg import Bool, String
+        from std_msgs.msg import Bool
+        from wheelchair_interfaces.msg import (CollisionStatus, DriverStatus, GeofenceStatus,
+                                                LocalizationStatus, MotionIntent, SafetySignal,
+                                                SafetyState, SlopeStatus)
 
+        p = rospy.get_param
+        hashes = p("~expected_policy_sha256", {})
         cfg = SafetyConfig(
-            stale_timeout_s=float(rospy.get_param("~stale_timeout_s", 0.30)),
-            max_linear_speed=float(rospy.get_param("~max_linear_speed", 0.55)),
-            max_angular_speed=float(rospy.get_param("~max_angular_speed", 0.85)),
+            stale_timeout_s=float(p("~command_ttl_s", 0.30)),
+            max_linear_speed=float(p("~max_linear_speed", 0.55)),
+            max_angular_speed=float(p("~max_angular_speed", 0.85)),
+            intent_ttl_s=float(p("~intent_ttl_s", 0.30)),
+            geofence_ttl_s=float(p("~geofence_ttl_s", 0.25)),
+            collision_ttl_s=float(p("~collision_ttl_s", 0.15)),
+            slope_ttl_s=float(p("~slope_ttl_s", 0.10)),
+            localization_ttl_s=float(p("~localization_ttl_s", 0.25)),
+            mode_ttl_s=float(p("~mode_ttl_s", 0.15)),
+            driver_ttl_s=float(p("~driver_ttl_s", 0.15)),
+            expected_policy_sha256=dict(hashes),
+            release_manifest_sha256=str(p("~release_manifest_sha256", "")),
         )
-        self.core = SafetyGateCore(cfg)
-        self.last_cmd = None
-        self.last_cmd_time = None
-        self.e_stop = False
-        self.e_stop_reset_requested = False
-        self.geofence_ok = True
-        self.mode_allowed = True
-        self.collision_stop = False
+        self.core, self.cfg = SafetyGateCore(cfg), cfg
+        self.evidence = {
+            name: None for name, _ in self.core.SIGNALS if name != "topology"
+        }
+        self.pairs = {
+            "geofence": EvidencePairBuffer(("geofence",), cfg.geofence_ttl_s,
+                                           cfg.future_tolerance_s, "evaluation"),
+            "collision": EvidencePairBuffer(("collision",), cfg.collision_ttl_s,
+                                            cfg.future_tolerance_s, "evaluation"),
+            "slope": EvidencePairBuffer(("slope",), cfg.slope_ttl_s,
+                                        cfg.future_tolerance_s, "evaluation"),
+            "localization": EvidencePairBuffer(("localization",), cfg.localization_ttl_s,
+                                               cfg.future_tolerance_s, "evaluation"),
+            "driver": EvidencePairBuffer(("mode", "driver"), cfg.driver_ttl_s,
+                                         cfg.future_tolerance_s, "source"),
+        }
+        self.last_cmd = self.cmd_source = self.cmd_receipt = None
+        self.estop = None
+        self.reset_requested = self.arm_requested = False
+        self.manual_or_disarmed = self.stationary = self.mission_cancelled = False
+        self.topology_evidence = None
+        self.internal_fault = self.backpressure = False
+        self.last_tick = None
+        self.sequence = 0
 
-        input_cmd_topic = rospy.get_param("~input_cmd_topic", "/cmd_vel_nav")
-        output_cmd_topic = rospy.get_param("~output_cmd_topic", "/cmd_vel_safe")
-        estop_topic = rospy.get_param("~estop_topic", "/safety/estop")
-        estop_reset_topic = rospy.get_param("~estop_reset_topic", "/safety/estop_reset")
-        geofence_ok_topic = rospy.get_param("~geofence_ok_topic", "/safety/geofence_ok")
-        mode_allowed_topic = rospy.get_param("~mode_allowed_topic", "/safety/mode_allowed")
-        collision_stop_topic = rospy.get_param("~collision_stop_topic", "/safety/collision_stop")
-        status_topic = rospy.get_param("~status_topic", "/safety/status")
-        publish_rate_hz = float(rospy.get_param("~publish_rate_hz", 20.0))
+        self.pub = rospy.Publisher(p("~output_cmd_topic", "/cmd_vel_safe"), Twist, queue_size=1)
+        self.state_pub = rospy.Publisher(p("~state_topic", "/safety/state"), SafetyState, queue_size=1, latch=True)
+        self.diag_pub = rospy.Publisher(p("~diagnostics_topic", "/diagnostics"), DiagnosticArray, queue_size=1)
+        rospy.Subscriber(p("~input_cmd_topic", "/cmd_vel_nav"), Twist, self._cmd_cb, queue_size=1)
+        rospy.Subscriber(p("~intent_topic", "/decision/motion_intent"), MotionIntent, self._intent_cb, queue_size=1)
+        for name in ("geofence", "collision", "slope", "localization", "mode"):
+            rospy.Subscriber(p("~%s_topic" % name, "/safety/%s" % name), SafetySignal,
+                             lambda msg, n=name: self._signal_cb(n, msg), queue_size=1)
+        rospy.Subscriber(p("~driver_signal_topic", "/safety/driver"), SafetySignal,
+                         lambda msg: self._signal_cb("driver", msg), queue_size=1)
+        rospy.Subscriber(p("~geofence_status_topic", "/route_safety/geofence_status"),
+                         GeofenceStatus, self._geofence_status_cb, queue_size=1)
+        rospy.Subscriber(p("~collision_status_topic", "/safety/collision_status"),
+                         CollisionStatus, self._collision_status_cb, queue_size=1)
+        rospy.Subscriber(p("~slope_status_topic", "/safety/slope_status"),
+                         SlopeStatus, self._slope_status_cb, queue_size=1)
+        rospy.Subscriber(p("~localization_status_topic", "/localization/status"),
+                         LocalizationStatus, self._localization_status_cb, queue_size=1)
+        rospy.Subscriber(p("~driver_topic", "/hardware/driver_status"),
+                         DriverStatus, self._driver_cb, queue_size=1)
+        rospy.Subscriber(p("~estop_topic", "/safety/estop"), Bool, self._estop_cb, queue_size=1)
+        rospy.Subscriber(p("~estop_reset_topic", "/safety/estop_reset"), Bool, self._reset_cb, queue_size=1)
+        rospy.Subscriber(p("~arm_topic", "/safety/arm"), Bool, self._arm_cb, queue_size=1)
+        rospy.Subscriber(p("~mission_cancelled_topic", "/safety/mission_cancelled"), Bool, self._mission_cb, queue_size=1)
+        rospy.Subscriber(p("~topology_topic", "/safety/topology"), SafetySignal,
+                         self._topology_cb, queue_size=1)
+        rate = float(p("~publish_rate_hz", 50.0))
+        if rate < 50.0:
+            raise ValueError("safety gate publication must be at least 50 Hz")
+        rospy.Timer(rospy.Duration(1.0 / rate), self._timer_cb)
 
-        self.pub = rospy.Publisher(output_cmd_topic, Twist, queue_size=1)
-        self.status_pub = rospy.Publisher(status_topic, String, queue_size=1, latch=True)
-        rospy.Subscriber(input_cmd_topic, Twist, self._cmd_cb, queue_size=1)
-        rospy.Subscriber(estop_topic, Bool, self._estop_cb, queue_size=1)
-        rospy.Subscriber(estop_reset_topic, Bool, self._estop_reset_cb, queue_size=1)
-        rospy.Subscriber(geofence_ok_topic, Bool, self._geofence_ok_cb, queue_size=1)
-        rospy.Subscriber(mode_allowed_topic, Bool, self._mode_allowed_cb, queue_size=1)
-        rospy.Subscriber(collision_stop_topic, Bool, self._collision_stop_cb, queue_size=1)
-        rospy.Timer(rospy.Duration(1.0 / publish_rate_hz), self._timer_cb)
-
-        rospy.loginfo(
-            "safety_gate routing %s -> %s with stale_timeout_s=%.3f max_linear=%.3f max_angular=%.3f",
-            input_cmd_topic,
-            output_cmd_topic,
-            cfg.stale_timeout_s,
-            cfg.max_linear_speed,
-            cfg.max_angular_speed,
-        )
+    @staticmethod
+    def _now():
+        import rospy
+        return rospy.Time.now().to_sec()
 
     def _cmd_cb(self, msg):
-        import rospy
+        now = self._now()
+        try:
+            self.last_cmd = _twist_to_command(msg)
+            self.cmd_source = self.cmd_receipt = now
+        except Exception:
+            self.internal_fault = True
 
-        self.last_cmd = _twist_to_command(msg)
-        self.last_cmd_time = rospy.Time.now()
+    def _from_signal(self, msg, receipt):
+        return SignalEvidence(msg.state, msg.header.stamp.to_sec(), receipt,
+                              int(msg.reason_mask), str(msg.source),
+                              str(msg.policy_sha256), int(msg.sequence))
+
+    def _signal_cb(self, name, msg):
+        pair_name = "driver" if name in ("mode", "driver") else name
+        try:
+            signal = GenericEvidence(
+                int(msg.sequence), int(msg.state), msg.header.stamp.to_sec(), self._now(),
+                int(msg.reason_mask), str(msg.source), str(msg.policy_sha256))
+            self.pairs[pair_name].update_signal(name, signal)
+        except Exception:
+            self.pairs[pair_name].reject()
+
+    def _status(self, msg, clear, policy, receipt, max_linear_mps=None):
+        return StructuredEvidence(
+            int(msg.sequence), bool(clear), msg.header.stamp.to_sec(),
+            msg.evaluation_stamp.to_sec(), receipt, int(msg.reason_mask),
+            str(msg.source), str(policy), max_linear_mps)
+
+    def _geofence_status_cb(self, msg):
+        try:
+            status = self._status(
+                msg, msg.state == msg.INSIDE, msg.manifest_sha256, self._now())
+            self.pairs["geofence"].update_status(status)
+        except Exception:
+            self.pairs["geofence"].reject()
+
+    def _collision_status_cb(self, msg):
+        try:
+            cap = float(msg.recommended_max_linear_mps)
+            status = self._status(
+                msg, msg.state in (msg.STATE_CLEAR, msg.STATE_CAUTION),
+                msg.policy_sha256, self._now(),
+                None if cap < 0.0 else cap)
+            self.pairs["collision"].update_status(status)
+        except Exception:
+            self.pairs["collision"].reject()
+
+    def _slope_status_cb(self, msg):
+        try:
+            cap = float(msg.recommended_max_linear_mps)
+            status = self._status(
+                msg, msg.state in (msg.STATE_CLEAR, msg.STATE_SLOW),
+                msg.policy_sha256, self._now(), None if cap < 0.0 else cap)
+            self.pairs["slope"].update_status(status)
+        except Exception:
+            self.pairs["slope"].reject()
+
+    def _localization_status_cb(self, msg):
+        try:
+            status = self._status(
+                msg, msg.state == msg.OK, msg.policy_sha256, self._now())
+            self.pairs["localization"].update_status(status)
+        except Exception:
+            self.pairs["localization"].reject()
+
+    def _intent_cb(self, msg):
+        try:
+            if msg.behavior in (msg.PROCEED, msg.SLOW):
+                state = CLEAR
+            elif msg.behavior == msg.HOLD:
+                state = HOLD
+            else:
+                state = STOP
+            self.evidence["motion_intent"] = SignalEvidence(
+                state, msg.header.stamp.to_sec(), self._now(), int(msg.reason_mask),
+                "motion_intent", "", int(msg.sequence), float(msg.max_linear_mps),
+                float(msg.max_angular_rps))
+        except Exception:
+            self.internal_fault = True
+
+    def _driver_cb(self, msg):
+        try:
+            clear = (msg.state == msg.AUTO_READY and msg.enabled and
+                     not msg.manual_override_active and not msg.physical_estop_asserted and
+                     msg.watchdog_verified)
+            status = StructuredEvidence(
+                int(msg.sequence), bool(clear), msg.header.stamp.to_sec(),
+                msg.header.stamp.to_sec(), self._now(), int(msg.reason_mask),
+                str(msg.source), str(msg.contract_sha256))
+            self.pairs["driver"].update_status(status)
+            self.estop = bool(msg.physical_estop_asserted)
+            self.manual_or_disarmed = msg.state in (msg.MANUAL, msg.AUTO_DISABLED)
+            self.stationary = (_finite(msg.measured_linear_mps) and _finite(msg.measured_angular_rps) and
+                               abs(msg.measured_linear_mps) < self.cfg.stationary_linear_mps and
+                               abs(msg.measured_angular_rps) < self.cfg.stationary_angular_rps)
+        except Exception:
+            self.pairs["driver"].reject()
 
     def _estop_cb(self, msg):
-        self.e_stop = bool(msg.data)
+        self.estop = bool(msg.data)
 
-    def _estop_reset_cb(self, msg):
-        if bool(msg.data):
-            self.e_stop_reset_requested = True
+    def _reset_cb(self, msg):
+        self.reset_requested |= bool(msg.data)
 
-    def _geofence_ok_cb(self, msg):
-        self.geofence_ok = bool(msg.data)
+    def _arm_cb(self, msg):
+        self.arm_requested |= bool(msg.data)
 
-    def _mode_allowed_cb(self, msg):
-        self.mode_allowed = bool(msg.data)
+    def _mission_cb(self, msg):
+        self.mission_cancelled = bool(msg.data)
 
-    def _collision_stop_cb(self, msg):
-        self.collision_stop = bool(msg.data)
+    def _topology_cb(self, msg):
+        try:
+            self.topology_evidence = self._from_signal(msg, self._now())
+        except Exception:
+            self.topology_evidence = None
+            self.internal_fault = True
 
     def _timer_cb(self, _event):
         import rospy
-        from std_msgs.msg import String
-
-        now = rospy.Time.now()
-        if self.last_cmd_time is None:
-            cmd_age_s = None
-        else:
-            cmd_age_s = (now - self.last_cmd_time).to_sec()
-
-        reset_requested = self.e_stop_reset_requested
-        self.e_stop_reset_requested = False
-        decision = self.core.evaluate(
-            GateInputs(
-                cmd=self.last_cmd,
-                cmd_age_s=cmd_age_s,
-                e_stop=self.e_stop,
-                e_stop_reset=reset_requested,
-                geofence_ok=self.geofence_ok,
-                mode_allowed=self.mode_allowed,
-                collision_stop=self.collision_stop,
-            )
-        )
+        from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
+        from wheelchair_interfaces.msg import SafetyState
+        now = self._now()
+        deadline = self.last_tick is not None and now - self.last_tick > self.cfg.deadline_limit_s
+        self.last_tick = now
+        reset, arm = self.reset_requested, self.arm_requested
+        self.reset_requested = self.arm_requested = False
+        paired = {name: pair.evidence(now) for name, pair in self.pairs.items()}
+        self.evidence.update({
+            "geofence": paired["geofence"], "collision": paired["collision"],
+            "slope": paired["slope"], "localization": paired["localization"],
+            "mode": paired["driver"], "driver": paired["driver"],
+        })
+        decision = self.core.evaluate(GateInputs(
+            cmd=self.last_cmd, now_s=now, cmd_source_stamp_s=self.cmd_source,
+            cmd_receipt_stamp_s=self.cmd_receipt, e_stop=self.estop,
+            e_stop_reset=reset, arm_request=arm, manual_or_disarmed=self.manual_or_disarmed,
+            stationary=self.stationary, mission_cancelled=self.mission_cancelled,
+            topology=self.topology_evidence, deadline_missed=deadline,
+            backpressure=self.backpressure, internal_fault=self.internal_fault,
+            **self.evidence))
         self.pub.publish(_command_to_twist(decision.command))
-        self.status_pub.publish(String(data=decision.reason))
+        self.sequence += 1
+        state = SafetyState()
+        state.header.stamp = rospy.Time.from_sec(now)
+        state.header.frame_id = "base_footprint"
+        state.sequence, state.state, state.reason_mask = self.sequence, decision.state, decision.reason_mask
+        state.armed, state.estop_latched = decision.armed, decision.e_stop_latched
+        state.requested_command = _command_to_twist(self.last_cmd or VelocityCommand())
+        state.output_command = _command_to_twist(decision.command)
+        for attr, key in (("command_age_s", "command"), ("intent_age_s", "motion_intent"),
+                          ("geofence_age_s", "geofence"), ("collision_age_s", "collision"),
+                          ("localization_age_s", "localization"), ("slope_age_s", "slope"),
+                          ("mode_age_s", "mode"), ("driver_age_s", "driver")):
+            setattr(state, attr, float(decision.ages.get(key, -1.0)))
+        state.deadline_miss_count = decision.deadline_miss_count
+        state.dropped_input_count = decision.dropped_input_count
+        state.release_manifest_sha256 = self.cfg.release_manifest_sha256
+        self.state_pub.publish(state)
+        diag = DiagnosticArray()
+        diag.header.stamp = state.header.stamp
+        status = DiagnosticStatus(level=DiagnosticStatus.OK if decision.armed else DiagnosticStatus.ERROR,
+                                  name="wheelchair_safety/gate", message=decision.reason,
+                                  hardware_id="software_rc_inert")
+        collision_pair = self.pairs["collision"].diagnostic_snapshot()
+        status.values = [
+            KeyValue("reason_mask", str(decision.reason_mask)),
+            KeyValue("armed", str(decision.armed).lower()),
+            KeyValue("last_backpressure_input", self.core.last_backpressure_input),
+            KeyValue(
+                "last_backpressure_previous",
+                "" if self.core.last_backpressure_previous is None
+                else str(self.core.last_backpressure_previous),
+            ),
+            KeyValue(
+                "last_backpressure_current",
+                "" if self.core.last_backpressure_current is None
+                else str(self.core.last_backpressure_current),
+            ),
+        ]
+        status.values.extend([
+            KeyValue("collision_pair_sequence", str(collision_pair["sequence"])),
+            KeyValue("collision_pair_status", str(collision_pair["status"])),
+            KeyValue(
+                "collision_pair_signal",
+                str(collision_pair["signals"].get("collision")),
+            ),
+            KeyValue(
+                "collision_pair_committed_status",
+                str(collision_pair["committed_status"]),
+            ),
+            KeyValue(
+                "collision_pair_committed_signal",
+                str(collision_pair["committed_signals"].get("collision")),
+            ),
+            KeyValue(
+                "collision_pair_poisoned",
+                str(collision_pair["poisoned"]).lower(),
+            ),
+        ])
+        diag.status = [status]
+        self.diag_pub.publish(diag)
 
 
-def run_ros_node() -> None:
+def run_ros_node():
     import rospy
-
     rospy.init_node("safety_gate")
     SafetyGateRosNode()
     rospy.spin()
