@@ -266,14 +266,10 @@ class CloudPreprocessorTracker:
                 raise ValueError("malformed_sensor_origin")
             cells = self._visibility_cells(raw, origin)
             if self._coverage_frames:
-                previous_stamp, previous_linear, previous_angular, _ = self._coverage_frames[-1]
+                previous_stamp, _, _, _ = self._coverage_frames[-1]
                 reset = (
                     stamp_s <= previous_stamp
                     or stamp_s - previous_stamp > self.policy.coverage_max_frame_gap_s
-                    or abs(linear_speed_mps - previous_linear)
-                    > self.policy.coverage_motion_linear_tolerance_mps
-                    or abs(angular_speed_rps - previous_angular)
-                    > self.policy.coverage_motion_angular_tolerance_rps
                 )
                 if reset:
                     self._coverage_frames.clear()

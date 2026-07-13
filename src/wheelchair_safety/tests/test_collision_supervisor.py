@@ -1309,17 +1309,17 @@ def test_coverage_holes_and_single_snapshot_remain_blind():
     assert first.observed_coverage_bins == 0
 
 
-def test_coverage_regression_and_turn_geometry_change_reset_evidence():
-    processor = cs.CloudPreprocessorTracker(policy())
+def test_coverage_timestamp_regression_and_frame_gap_reset_evidence():
     full = full_ground_cloud()
+    processor = cs.CloudPreprocessorTracker(policy())
     for stamp in (1.0, 1.1, 1.2):
         complete = processor.process(full, stamp, 0.5, 0.0)
     assert complete.coverage_fraction == 1.0
 
-    regressed = processor.process(full, 1.15, 0.5, 0.0)
+    regressed = processor.process(full, 1.15, 0.9, 0.4)
     assert regressed.coverage_fraction == 0.0
-    changed_turn = processor.process(full, 1.25, 0.5, 0.2)
-    assert changed_turn.coverage_fraction == 0.0
+    assert len(processor._coverage_frames) == 1
+
     gap_processor = cs.CloudPreprocessorTracker(policy())
     for stamp in (2.0, 2.1, 2.2):
         complete = gap_processor.process(full, stamp, 0.5, 0.0)
@@ -1355,47 +1355,89 @@ def test_coverage_uses_bounded_latest_suffix_across_nominal_jitter():
     )
 
 
-def test_coverage_gap_motion_and_missing_cell_boundaries_remain_stops():
+def test_full_coverage_remains_qualified_across_motion_changes():
+    processor = cs.CloudPreprocessorTracker(policy())
     full = full_ground_cloud()
+    linear, angular = 0.4, -0.3
+    assert 0.2 > policy().coverage_motion_linear_tolerance_mps
+    assert 0.3 > policy().coverage_motion_angular_tolerance_rps
 
-    gapped = cs.CloudPreprocessorTracker(policy())
-    gapped.process(full, 3.000, 0.5, 0.0)
-    gapped.process(full, 3.100, 0.5, 0.0)
-    result = gapped.process(full, 3.211001, 0.5, 0.0)
-    assert result.coverage_fraction == 0.0
-    assert len(gapped._coverage_frames) == 1
+    processor.process(full, 1.0, 0.0, 0.0)
+    processor.process(full, 1.1, 0.2, 0.3)
+    result = processor.process(full, 1.2, linear, angular)
 
-    linear_tolerance = policy().coverage_motion_linear_tolerance_mps
-    stable_linear = cs.CloudPreprocessorTracker(policy())
-    stable_linear.process(full, 4.000, 0.0, 0.0)
-    stable_linear.process(full, 4.100, linear_tolerance, 0.0)
-    result = stable_linear.process(full, 4.200, linear_tolerance, 0.0)
-    assert result.coverage_fraction == 1.0
-    result = stable_linear.process(
-        full, 4.300, 2.0 * linear_tolerance + 1e-6, 0.0
+    expected = processor._required_coverage_cells(linear, angular)
+    retained_cells = set.intersection(
+        *(set(frame[3]) for frame in processor._coverage_suffix())
     )
-    assert result.coverage_fraction == 0.0
-
-    angular_tolerance = policy().coverage_motion_angular_tolerance_rps
-    stable_angular = cs.CloudPreprocessorTracker(policy())
-    stable_angular.process(full, 5.000, 0.0, 0.0)
-    stable_angular.process(full, 5.100, 0.0, angular_tolerance)
-    result = stable_angular.process(full, 5.200, 0.0, angular_tolerance)
+    assert len(processor._coverage_frames) == 3
+    assert expected <= retained_cells
+    assert result.expected_coverage_bins == len(expected)
+    assert result.observed_coverage_bins == result.expected_coverage_bins
     assert result.coverage_fraction == 1.0
-    result = stable_angular.process(
-        full, 5.300, 0.0, 2.0 * angular_tolerance + 1e-6
-    )
-    assert result.coverage_fraction == 0.0
 
-    corridor_hole = tuple(
+
+def test_motion_change_keeps_missing_retained_required_cell_insufficient():
+    processor = cs.CloudPreprocessorTracker(policy())
+    full = full_ground_cloud()
+    linear, angular = 0.4, 0.3
+    assert linear > policy().coverage_motion_linear_tolerance_mps
+    assert angular > policy().coverage_motion_angular_tolerance_rps
+    required = processor._required_coverage_cells(linear, angular)
+    missing_cell = next(iter(required))
+    missing = tuple(
         point for point in full
-        if abs(math.atan2(point.y, point.x)) > 0.4
+        if missing_cell not in processor._visibility_cells((point,), (0.0, 0.0, 0.0))
     )
-    missing = cs.CloudPreprocessorTracker(policy())
-    for stamp in (6.000, 6.101, 6.201):
-        result = missing.process(corridor_hole, stamp, 0.5, 0.0)
+    assert missing_cell not in processor._visibility_cells(
+        missing, (0.0, 0.0, 0.0)
+    )
+
+    processor.process(missing, 1.0, 0.0, 0.0)
+    processor.process(full, 1.1, linear, angular)
+    result = processor.process(full, 1.2, linear, angular)
+
+    retained_cells = set.intersection(
+        *(set(frame[3]) for frame in processor._coverage_suffix())
+    )
+    assert missing_cell in processor._required_coverage_cells(linear, angular)
+    assert missing_cell not in retained_cells
     assert result.observed_coverage_bins < result.expected_coverage_bins
-    assert result.coverage_fraction < policy().required_forward_coverage_fraction
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=result.points,
+        speed=linear,
+        raw_point_count=result.raw_point_count,
+        expected_coverage_bins=result.expected_coverage_bins,
+        observed_coverage_bins=result.observed_coverage_bins,
+        coverage_fraction=result.coverage_fraction,
+    ))
+    assert decision.state == cs.STOP
+    assert decision.visibility == cs.VIS_BLIND
+    assert decision.reason_mask & cs.COLLISION_BLIND
+
+
+def test_hold_to_proceed_ground_returns_remain_qualified_at_10hz():
+    processor = cs.CloudPreprocessorTracker(policy())
+    origin = (0.22, 0.0, 0.621)
+    ground_returns = gazebo_144x4_ground_returns(origin)
+    assert 0.2 > policy().coverage_motion_linear_tolerance_mps
+    assert 0.3 > policy().coverage_motion_angular_tolerance_rps
+
+    for stamp in (1.0, 1.1):
+        result = processor.process(
+            ground_returns, stamp, 0.0, 0.0, sensor_origin=origin,
+        )
+        assert result.coverage_fraction == 0.0
+    established = processor.process(
+        ground_returns, 1.2, 0.0, 0.0, sensor_origin=origin,
+    )
+    proceed = processor.process(
+        ground_returns, 1.3, 0.2, 0.3, sensor_origin=origin,
+    )
+
+    assert established.coverage_fraction == 1.0
+    assert proceed.observed_coverage_bins == proceed.expected_coverage_bins
+    assert proceed.coverage_fraction == 1.0
 
 
 def test_adequate_temporal_coverage_clears_only_after_existing_hysteresis():
