@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="#overview">Overview</a> ·
-  <a href="#visual-route-replay">Route replay</a> ·
+  <a href="#gazebo-driving-demo">Gazebo drive</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#verification">Verification</a> ·
@@ -57,20 +57,27 @@ fails closed to finite zero and `DISARMED`.
 | Actual target NUC | Not fingerprinted or qualified | Blocked |
 | Real driver, e-stop, braking envelope | Not measured and not approved | Hardware locked |
 
-## Visual route replay
+## Gazebo driving demo
 
 <p align="center">
-  <a href="docs/assets/route-replay.mp4">
-    <img src="docs/assets/route-replay.gif" alt="Animated outbound and return route replay" width="100%" />
+  <a href="docs/assets/gazebo-drive.mp4">
+    <img src="docs/assets/gazebo-drive.gif" alt="Thirty-second Gazebo Classic simulation drive" width="100%" />
   </a>
 </p>
 
 <p align="center">
   <sub>
-    Deterministic visualization of the committed map and route geometry. This is not physical-driving footage.
-    Select the animation to open the MP4 version.
+    30 seconds of the repository wheelchair model moving in Gazebo Classic 11.
+    Select the animation to open the 1280×720 MP4.
   </sub>
 </p>
+
+This is a real Gazebo runtime capture of the URDF, differential-drive controller, and simulation-only controller
+adapter—not a map animation. A bounded demo publisher drove only `/cmd_vel_safe` inside the isolated simulator;
+the real motor endpoint remained disconnected. The footage is presentation evidence, not target-hardware,
+route-clearance, safety-qualification, campus-operation, or passenger-operation evidence.
+
+### Candidate route geometry
 
 <p align="center">
   <img src="docs/assets/route-overview.webp" alt="Aegimun to Engineering Center outbound and return routes" width="100%" />
