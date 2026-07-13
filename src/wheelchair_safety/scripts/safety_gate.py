@@ -108,7 +108,7 @@ class GenericEvidence:
 
 
 class EvidencePairBuffer:
-    """Bounded latest-sequence join which never reuses previously clear evidence."""
+    """Bounded latest-sequence join with a fail-closed committed CLEAR hold."""
 
     def __init__(self, signal_names, ttl_s, future_tolerance_s, stamp_semantics):
         self.signal_names = tuple(signal_names)
@@ -227,6 +227,114 @@ class EvidencePairBuffer:
                 "poisoned": self.poisoned,
             }
 
+    def _pair_evidence(self, status, signals, now_s, update_stamps):
+        numeric = (now_s, status.source_stamp_s, status.evaluation_stamp_s,
+                   status.receipt_stamp_s, status.reason_mask)
+        if (not all(_finite(value) for value in numeric[:4]) or
+                any(value <= 0.0 for value in numeric[:4]) or
+                not isinstance(status.reason_mask, int) or
+                status.reason_mask < 0 or status.reason_mask & ~DEFINED_REASON_MASK or
+                not isinstance(status.clear, bool) or
+                not self._text_valid(status.source) or
+                not _HASH_RE.fullmatch(status.policy_sha256)):
+            raise ValueError("invalid status")
+        expected_stamp = (status.evaluation_stamp_s if self.stamp_semantics == "evaluation"
+                          else status.source_stamp_s)
+        expected_state = CLEAR if status.clear else STOP
+        timestamps = {
+            "status_source": status.source_stamp_s,
+            "status_evaluation": status.evaluation_stamp_s,
+            "status_receipt": status.receipt_stamp_s,
+        }
+        for name, signal in zip(self.signal_names, signals):
+            if (signal.sequence != status.sequence or
+                    signal.state != expected_state or
+                    signal.reason_mask != status.reason_mask or
+                    signal.source != status.source or
+                    signal.policy_sha256 != status.policy_sha256 or
+                    signal.stamp_s != expected_stamp or
+                    not all(_finite(value) for value in
+                            (signal.stamp_s, signal.receipt_stamp_s)) or
+                    signal.stamp_s <= 0.0 or signal.receipt_stamp_s <= 0.0):
+                raise ValueError("pair mismatch")
+            timestamps["%s_stamp" % name] = signal.stamp_s
+            timestamps["%s_receipt" % name] = signal.receipt_stamp_s
+        if not _finite(now_s):
+            raise ValueError("invalid clock")
+        for key, stamp in timestamps.items():
+            if (now_s - stamp > self.ttl_s + 1e-12 or
+                    stamp - now_s > self.future_tolerance_s + 1e-12 or
+                    (self._last_stamps[key] is not None and
+                     stamp < self._last_stamps[key])):
+                raise ValueError("invalid timestamp")
+        for cap in (status.max_linear_mps, status.max_angular_rps):
+            if cap is not None and (not _finite(cap) or cap < 0.0):
+                raise ValueError("invalid cap")
+        if update_stamps:
+            self._last_stamps.update(timestamps)
+        return SignalEvidence(
+            expected_state, expected_stamp, min(timestamps[key] for key in timestamps
+                                                if key.endswith("receipt")),
+            status.reason_mask, status.source, status.policy_sha256,
+            status.sequence, status.max_linear_mps, status.max_angular_rps)
+
+    def _partial_member_permissive(self, value, is_status, name, now_s,
+                                   committed_status):
+        if (not self._sequence(value.sequence) or value.sequence != self.sequence or
+                value.reason_mask != 0 or value.source != committed_status.source or
+                value.policy_sha256 != committed_status.policy_sha256 or
+                not self._text_valid(value.source) or
+                not _HASH_RE.fullmatch(value.policy_sha256) or not _finite(now_s)):
+            return False
+        if is_status:
+            if (value.clear is not True or
+                    not all(_finite(stamp) and stamp > 0.0 for stamp in
+                            (value.source_stamp_s, value.evaluation_stamp_s,
+                             value.receipt_stamp_s)) or
+                    any(cap is not None and (not _finite(cap) or cap < 0.0)
+                        for cap in (value.max_linear_mps, value.max_angular_rps))):
+                return False
+            timestamps = {
+                "status_source": value.source_stamp_s,
+                "status_evaluation": value.evaluation_stamp_s,
+                "status_receipt": value.receipt_stamp_s,
+            }
+        else:
+            if (value.state != CLEAR or
+                    not all(_finite(stamp) and stamp > 0.0 for stamp in
+                            (value.stamp_s, value.receipt_stamp_s))):
+                return False
+            timestamps = {
+                "%s_stamp" % name: value.stamp_s,
+                "%s_receipt" % name: value.receipt_stamp_s,
+            }
+        return all(
+            now_s - stamp <= self.ttl_s + 1e-12 and
+            stamp - now_s <= self.future_tolerance_s + 1e-12 and
+            (self._last_stamps[key] is None or stamp >= self._last_stamps[key])
+            for key, stamp in timestamps.items())
+
+    def _held_committed_evidence(self, now_s):
+        committed_status = self.committed_status
+        committed_signals = tuple(self.committed_signals.values())
+        if (committed_status is None or
+                any(signal is None for signal in committed_signals) or
+                self.sequence is None or self.sequence <= committed_status.sequence):
+            return None
+        members = [(self.status, True, "status")]
+        members.extend((signal, False, name)
+                       for name, signal in self.signals.items())
+        for value, is_status, name in members:
+            if value is not None and value.sequence > committed_status.sequence:
+                if not self._partial_member_permissive(
+                        value, is_status, name, now_s, committed_status):
+                    raise ValueError("unsafe partial generation")
+        result = self._pair_evidence(
+            committed_status, committed_signals, now_s, update_stamps=False)
+        if result.state != CLEAR or result.reason_mask != 0:
+            return None
+        return result
+
     def _evidence_unlocked(self, now_s):
         status = self.status
         signals = tuple(self.signals.values())
@@ -240,64 +348,11 @@ class EvidencePairBuffer:
         )
         if self.poisoned:
             return self._unknown()
-        # Once a stream advances, its older committed CLEAR cannot cross that
-        # generation boundary.  Incomplete generations are therefore unknown.
-        if not complete:
-            return self._unknown()
         try:
-            numeric = (now_s, status.source_stamp_s, status.evaluation_stamp_s,
-                       status.receipt_stamp_s, status.reason_mask)
-            if (not all(_finite(value) for value in numeric[:4]) or
-                    any(value <= 0.0 for value in numeric[:4]) or
-                    not isinstance(status.reason_mask, int) or
-                    status.reason_mask < 0 or status.reason_mask & ~DEFINED_REASON_MASK or
-                    not isinstance(status.clear, bool) or
-                    not self._text_valid(status.source) or
-                    not _HASH_RE.fullmatch(status.policy_sha256)):
-                self.reject()
-                return self._unknown()
-            expected_stamp = (status.evaluation_stamp_s if self.stamp_semantics == "evaluation"
-                              else status.source_stamp_s)
-            expected_state = CLEAR if status.clear else STOP
-            timestamps = {
-                "status_source": status.source_stamp_s,
-                "status_evaluation": status.evaluation_stamp_s,
-                "status_receipt": status.receipt_stamp_s,
-            }
-            for name, signal in zip(self.signal_names, signals):
-                if (signal.sequence != status.sequence or
-                        signal.state != expected_state or
-                        signal.reason_mask != status.reason_mask or
-                        signal.source != status.source or
-                        signal.policy_sha256 != status.policy_sha256 or
-                        signal.stamp_s != expected_stamp or
-                        not all(_finite(value) for value in
-                                (signal.stamp_s, signal.receipt_stamp_s)) or
-                        signal.stamp_s <= 0.0 or signal.receipt_stamp_s <= 0.0):
-                    self.reject()
-                    return self._unknown()
-                timestamps["%s_stamp" % name] = signal.stamp_s
-                timestamps["%s_receipt" % name] = signal.receipt_stamp_s
-            if not _finite(now_s):
-                self.reject()
-                return self._unknown()
-            for key, stamp in timestamps.items():
-                if (now_s - stamp > self.ttl_s + 1e-12 or
-                        stamp - now_s > self.future_tolerance_s + 1e-12 or
-                        (self._last_stamps[key] is not None and
-                         stamp < self._last_stamps[key])):
-                    self.reject()
-                    return self._unknown()
-            for cap in (status.max_linear_mps, status.max_angular_rps):
-                if cap is not None and (not _finite(cap) or cap < 0.0):
-                    self.reject()
-                    return self._unknown()
-            self._last_stamps.update(timestamps)
-            result = SignalEvidence(
-                expected_state, expected_stamp, min(timestamps[key] for key in timestamps
-                                                    if key.endswith("receipt")),
-                status.reason_mask, status.source, status.policy_sha256,
-                status.sequence, status.max_linear_mps, status.max_angular_rps)
+            if not complete:
+                held = self._held_committed_evidence(now_s)
+                return self._unknown() if held is None else held
+            result = self._pair_evidence(status, signals, now_s, update_stamps=True)
             self.committed_status = status
             self.committed_signals = {
                 name: signal for name, signal in zip(self.signal_names, signals)

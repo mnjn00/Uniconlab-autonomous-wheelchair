@@ -632,40 +632,72 @@ def test_pair_reconciles_only_complete_matching_sequence_in_both_arrival_orders(
 
 
 
-def test_newer_partial_generation_invalidates_prior_clear_immediately():
-    pair = pair_buffer(("mode", "driver"), "source")
+@pytest.mark.parametrize("status_first", [True, False])
+def test_benign_newer_partial_generation_holds_committed_clear(status_first):
+    pair = pair_buffer()
     pair.update_status(pair_status())
-    pair.update_signal("mode", pair_signal())
-    pair.update_signal("driver", pair_signal())
+    pair.update_signal("permission", pair_signal())
     assert pair.evidence(100.0).sequence == 7
 
-    pair.update_status(pair_status(
-        sequence=8,
-        source_stamp=100.05,
-        evaluation_stamp=100.05,
-        receipt=100.05,
-    ))
-    first_partial = pair.evidence(100.05)
-    assert first_partial.state == gate.UNKNOWN
-    assert first_partial.reason_mask & gate.INPUT_UNKNOWN
+    status = pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05)
+    signal = pair_signal(sequence=8, stamp=100.05, receipt=100.05)
+    updates = ((pair.update_status, status),
+               (lambda value: pair.update_signal("permission", value), signal))
+    if not status_first:
+        updates = tuple(reversed(updates))
+    updates[0][0](updates[0][1])
+    held = pair.evidence(100.05)
+    assert held.state == gate.CLEAR
+    assert held.sequence == 7
 
-    pair.update_signal("mode", pair_signal(
-        sequence=8,
-        stamp=100.05,
-        receipt=100.05,
-    ))
-    second_partial = pair.evidence(100.05)
-    assert second_partial.state == gate.UNKNOWN
-
-    pair.update_signal("driver", pair_signal(
-        sequence=8,
-        stamp=100.05,
-        receipt=100.05,
-    ))
+    updates[1][0](updates[1][1])
     joined = pair.evidence(100.05)
     assert joined.state == gate.CLEAR
     assert joined.sequence == 8
 
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        lambda pair: pair.update_status(pair_status(
+            sequence=8, clear=False, source_stamp=100.05,
+            evaluation_stamp=100.05, receipt=100.05)),
+        lambda pair: pair.update_signal("permission", pair_signal(
+            sequence=8, state=gate.STOP, stamp=100.05, receipt=100.05)),
+    ],
+)
+def test_restrictive_newer_partial_generation_revokes_committed_clear(update):
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    assert pair.evidence(100.0).state == gate.CLEAR
+
+    update(pair)
+    result = pair.evidence(100.05)
+    assert result.state == gate.UNKNOWN
+    assert result.reason_mask & gate.CORRUPT_DATA
+    assert result.reason_mask & gate.INPUT_UNKNOWN
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        lambda pair: pair.update_status(pair_status(
+            sequence=8, source="other", source_stamp=100.05,
+            evaluation_stamp=100.05, receipt=100.05)),
+        lambda pair: pair.update_signal("permission", pair_signal(
+            sequence=8, policy="b" * 64, stamp=100.05, receipt=100.05)),
+    ],
+)
+def test_inconsistent_newer_partial_generation_revokes_committed_clear(update):
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    assert pair.evidence(100.0).state == gate.CLEAR
+
+    update(pair)
+    assert pair.evidence(100.05).state == gate.UNKNOWN
 
 def test_pair_updates_and_reads_are_serialized_across_ros_callback_threads():
     pair = pair_buffer()
@@ -708,8 +740,8 @@ def test_pair_updates_and_reads_are_serialized_across_ros_callback_threads():
 
     assert not writer.is_alive()
     assert not reader.is_alive()
-    assert observed[0].state == gate.UNKNOWN
-    assert observed[0].reason_mask & gate.INPUT_UNKNOWN
+    assert observed[0].state == gate.CLEAR
+    assert observed[0].sequence == 7
 
 
 def test_incomplete_generation_cannot_outlive_committed_pair_ttl():
