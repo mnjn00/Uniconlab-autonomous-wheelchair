@@ -633,6 +633,177 @@ def test_pair_reconciles_only_complete_matching_sequence_in_both_arrival_orders(
     assert result.sequence == 7
     assert result.source_stamp_s == 100.0
 
+@pytest.mark.parametrize("status_first", [True, False])
+def test_callback_commits_complete_clear_before_next_evidence_tick(status_first):
+    pair = pair_buffer()
+    status, signal = pair_status(), pair_signal()
+    updates = ((pair.update_status, status),
+               (lambda value: pair.update_signal("permission", value), signal))
+    if not status_first:
+        updates = tuple(reversed(updates))
+
+    updates[0][0](updates[0][1])
+    updates[1][0](updates[1][1])
+    committed = pair.diagnostic_snapshot()
+    assert committed["committed_status"] == 7
+    assert not committed["hold_latched"]
+
+    pair.update_status(pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05))
+    held = pair.evidence(100.05)
+    assert held.state == gate.CLEAR
+    assert held.sequence == 7
+    assert not pair.diagnostic_snapshot()["hold_latched"]
+
+
+def test_callback_commits_two_signal_clear_and_holds_during_newer_partial():
+    pair = pair_buffer(("mode", "driver"), "source")
+    pair.update_status(pair_status())
+    pair.update_signal("driver", pair_signal())
+    pair.update_signal("mode", pair_signal())
+    assert pair.diagnostic_snapshot()["committed_status"] == 7
+
+    pair.update_signal("mode", pair_signal(
+        sequence=8, stamp=100.05, receipt=100.05))
+    held = pair.evidence(100.05)
+    assert held.state == gate.CLEAR
+    assert held.sequence == 7
+    assert not pair.diagnostic_snapshot()["hold_latched"]
+
+
+def test_callback_commit_latches_overwritten_incomplete_generation_until_exact_join():
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    assert pair.diagnostic_snapshot()["committed_status"] == 7
+
+    pair.update_status(pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05))
+    pair.update_signal("permission", pair_signal(
+        sequence=9, stamp=100.06, receipt=100.06))
+    snapshot = pair.diagnostic_snapshot()
+    assert snapshot["committed_status"] == 7
+    assert snapshot["hold_latched"]
+    assert pair.evidence(100.06).state == gate.UNKNOWN
+
+    pair.update_status(pair_status(
+        sequence=9, source_stamp=100.06, evaluation_stamp=100.06, receipt=100.06))
+    joined = pair.evidence(100.06)
+    assert joined.state == gate.CLEAR
+    assert joined.sequence == 9
+    assert not pair.diagnostic_snapshot()["hold_latched"]
+
+
+def test_callback_does_not_hide_complete_restrictive_generation_with_newer_partial():
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    assert pair.diagnostic_snapshot()["committed_status"] == 7
+
+    pair.update_status(pair_status(
+        sequence=8, clear=False, reason=gate.MODE, source_stamp=100.05,
+        evaluation_stamp=100.05, receipt=100.05))
+    pair.update_signal("permission", pair_signal(
+        sequence=8, state=gate.STOP, reason=gate.MODE, stamp=100.05, receipt=100.05))
+    assert pair.diagnostic_snapshot()["committed_status"] == 7
+
+    pair.update_status(pair_status(
+        sequence=9, source_stamp=100.06, evaluation_stamp=100.06, receipt=100.06))
+    assert pair.diagnostic_snapshot()["hold_latched"]
+    assert pair.evidence(100.06).state == gate.UNKNOWN
+
+    pair.update_signal("permission", pair_signal(
+        sequence=9, stamp=100.06, receipt=100.06))
+    assert pair.evidence(100.06).sequence == 9
+
+
+@pytest.mark.parametrize(
+    "status,signal",
+    [
+        (pair_status(policy="not-a-hash"), pair_signal(policy="not-a-hash")),
+        (pair_status(), pair_signal(source="other")),
+        (pair_status(clear=1), pair_signal()),
+        (pair_status(reason=0.0), pair_signal()),
+        (pair_status(), pair_signal(state=True)),
+        (pair_status(), pair_signal(reason=0.0)),
+        (pair_status(source_stamp=99.74, evaluation_stamp=99.74, receipt=100.0),
+         pair_signal(stamp=99.74, receipt=100.0)),
+        (pair_status(source_stamp=100.051, evaluation_stamp=100.051, receipt=100.0),
+         pair_signal(stamp=100.051, receipt=100.0)),
+    ],
+)
+def test_callback_does_not_commit_nonpermissive_or_invalid_complete_candidates(status, signal):
+    pair = pair_buffer()
+    pair.update_status(status)
+    pair.update_signal("permission", signal)
+    assert pair.diagnostic_snapshot()["committed_status"] is None
+    assert pair.evidence(100.0).state == gate.UNKNOWN
+
+
+def test_callback_conflicting_duplicate_poison_clears_committed_authority():
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    assert pair.diagnostic_snapshot()["committed_status"] == 7
+
+    pair.update_signal("permission", pair_signal(state=gate.STOP))
+    snapshot = pair.diagnostic_snapshot()
+    assert snapshot["poisoned"]
+    assert snapshot["committed_status"] is None
+
+
+def test_callback_commits_exact_tighter_cap_and_partial_tighter_cap_revokes():
+    pair = pair_buffer()
+    pair.update_status(pair_status(max_linear_mps=0.5))
+    pair.update_signal("permission", pair_signal())
+    pair.update_status(pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05,
+        max_linear_mps=0.2))
+    pair.update_signal("permission", pair_signal(
+        sequence=8, stamp=100.05, receipt=100.05))
+    assert pair.diagnostic_snapshot()["committed_status"] == 8
+
+    pair.update_status(pair_status(
+        sequence=9, source_stamp=100.06, evaluation_stamp=100.06, receipt=100.06))
+    held = pair.evidence(100.06)
+    assert held.sequence == 8
+    assert held.max_linear_mps == 0.2
+
+    revoking = pair_buffer()
+    revoking.update_status(pair_status(max_linear_mps=0.2))
+    revoking.update_signal("permission", pair_signal())
+    revoking.update_status(pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05,
+        max_linear_mps=0.1))
+    assert revoking.evidence(100.05).state == gate.UNKNOWN
+
+
+def test_callback_committed_clear_is_revalidated_after_its_ttl():
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    assert pair.diagnostic_snapshot()["committed_status"] == 7
+
+    assert pair.evidence(100.251).state == gate.UNKNOWN
+
+
+def test_pending_arm_waits_for_newer_partial_and_completes_only_in_timer_snapshot():
+    pair = pair_buffer()
+    pair.update_status(pair_status())
+    pair.update_signal("permission", pair_signal())
+    node = pending_arm_node(pair)
+
+    pair.update_status(pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05))
+    assert not consume_pending_arm(node, now=100.05)
+    assert node.arm_pending_wall == 10.0
+
+    pair.update_signal("permission", pair_signal(
+        sequence=8, stamp=100.05, receipt=100.05))
+    assert pair.diagnostic_snapshot()["committed_status"] == 8
+    assert node.arm_pending_wall == 10.0
+    assert consume_pending_arm(node, now=100.05)
+    assert node.arm_pending_wall is None
 
 
 @pytest.mark.parametrize("status_first", [True, False])
@@ -951,9 +1122,18 @@ def test_stale_future_and_malformed_pairs_are_unknown(status, signal, now):
     assert result.state == gate.UNKNOWN
     assert result.reason_mask & gate.CORRUPT_DATA
     assert result.reason_mask & gate.INPUT_UNKNOWN
-    pair.update_status(pair_status(sequence=8))
-    pair.update_signal("permission", pair_signal(sequence=8))
-    assert pair.evidence(100.0).state == gate.CLEAR
+    recovery = max(
+        timestamp for timestamp in (
+            status.source_stamp_s, status.evaluation_stamp_s, status.receipt_stamp_s,
+            signal.stamp_s, signal.receipt_stamp_s, now,
+        ) if gate._finite(timestamp)
+    ) + 0.01
+    pair.update_status(pair_status(
+        sequence=8, source_stamp=recovery, evaluation_stamp=recovery,
+        receipt=recovery))
+    pair.update_signal("permission", pair_signal(
+        sequence=8, stamp=recovery, receipt=recovery))
+    assert pair.evidence(recovery).state == gate.CLEAR
 
 
 @pytest.mark.parametrize(

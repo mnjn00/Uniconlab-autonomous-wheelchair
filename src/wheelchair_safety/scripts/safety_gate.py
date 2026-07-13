@@ -186,7 +186,8 @@ class EvidencePairBuffer:
     def update_status(self, status):
         with self._lock:
             try:
-                self._accept_sequence("status", status)
+                if self._accept_sequence("status", status):
+                    self._commit_complete_clear_unlocked()
             except Exception:
                 self.reject()
 
@@ -196,9 +197,46 @@ class EvidencePairBuffer:
                 if name not in self.signals:
                     self.reject()
                     return
-                self._accept_sequence(name, signal)
+                if self._accept_sequence(name, signal):
+                    self._commit_complete_clear_unlocked()
             except Exception:
                 self.reject()
+
+    def _commit_complete_clear_unlocked(self):
+        try:
+            status = self.status
+            signals = tuple(self.signals[name] for name in self.signal_names)
+            if (self.poisoned or status is None or
+                    status.sequence != self.sequence or
+                    any(signal is None or signal.sequence != self.sequence
+                        for signal in signals)):
+                return
+            if (status.clear is not True or
+                    not isinstance(status.reason_mask, int) or
+                    isinstance(status.reason_mask, bool) or
+                    status.reason_mask != 0):
+                return
+            if any(not isinstance(signal.state, int) or
+                   isinstance(signal.state, bool) or
+                   signal.state != CLEAR or
+                   not isinstance(signal.reason_mask, int) or
+                   isinstance(signal.reason_mask, bool) or
+                   signal.reason_mask != 0
+                   for signal in signals):
+                return
+            receipts = (status.receipt_stamp_s,) + tuple(
+                signal.receipt_stamp_s for signal in signals)
+            result = self._pair_evidence(
+                status, signals, max(receipts), update_stamps=True)
+            if result.state != CLEAR or result.reason_mask != 0:
+                return
+            self.committed_status = status
+            self.committed_signals = {
+                name: signal for name, signal in zip(self.signal_names, signals)
+            }
+            self.hold_latched = False
+        except Exception:
+            self.reject()
 
     @staticmethod
     def _text_valid(value):
