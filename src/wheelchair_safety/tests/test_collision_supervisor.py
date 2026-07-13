@@ -419,7 +419,7 @@ def test_input_callback_does_not_wait_for_cloud_decision_lock(monkeypatch):
     assert node.slope_evidence[-1].valid is True
 
 
-def test_snapshot_is_immutable_and_uses_only_copied_slope_evidence(monkeypatch):
+def test_snapshot_is_immutable_and_postprocess_copies_slope_evidence(monkeypatch):
     node = _slope_callback_node("a" * 64)
     node.slope_evidence.append(_evidence(0.90, valid=True))
     monkeypatch.setitem(
@@ -434,15 +434,63 @@ def test_snapshot_is_immutable_and_uses_only_copied_slope_evidence(monkeypatch):
 
     snapshot = node._take_input_snapshot()
     node.slope_evidence.append(_evidence(0.95, valid=False))
+    now_s, slope_evidence = node._take_postprocess_slope_snapshot(snapshot.now_s)
 
     assert snapshot.now_s == 1.0
-    assert isinstance(snapshot.slope_evidence, tuple)
-    assert cs._select_slope_evidence(snapshot.slope_evidence, 0.90, snapshot.now_s).valid
-    assert not cs._select_slope_evidence(
-        tuple(node.slope_evidence), 0.90, snapshot.now_s
-    ).valid
+    assert now_s == 1.0
+    assert isinstance(slope_evidence, tuple)
+    assert cs._select_slope_evidence(slope_evidence, 0.90, now_s).valid is False
     with pytest.raises(dataclasses.FrozenInstanceError):
         snapshot.now_s = 2.0
+
+
+@pytest.mark.parametrize(
+    "state, expected_valid",
+    (
+        (cs.CLEAR, True),
+        (cs.STOP, False),
+    ),
+)
+def test_postprocess_slope_snapshot_observes_callback_after_input_snapshot(
+    monkeypatch, state, expected_valid
+):
+    node = _slope_callback_node("a" * 64)
+    clock = iter((1.00, 1.04, 1.05))
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(
+                    to_sec=lambda: next(clock)
+                )
+            )
+        ),
+    )
+
+    snapshot = node._take_input_snapshot()
+    node._slope_cb(_slope_message(0.95, 0.96, "a" * 64, state))
+    now_s, slope_evidence = node._take_postprocess_slope_snapshot(snapshot.now_s)
+    selected = cs._select_slope_evidence(slope_evidence, 0.90, now_s)
+
+    assert selected is not None
+    assert selected.source_s == pytest.approx(0.95)
+    assert selected.receipt_s == pytest.approx(1.04)
+    assert selected.valid is expected_valid
+    assert selected.source_s == pytest.approx(0.90 + cs.CLOCK_FUTURE_TOLERANCE_S)
+    assert 0.90 - selected.source_s <= 0.10
+    assert now_s - selected.receipt_s == pytest.approx(0.01)
+    if not selected.valid:
+        decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+            now=now_s,
+            points=(static_point(10.0),),
+            cloud_stamp_s=0.90,
+            slope_stamp_s=selected.source_s,
+            slope_receipt_s=selected.receipt_s,
+            slope_valid=selected.valid,
+        ))
+        assert decision.state == cs.STOP
+        assert decision.reason == "invalid_slope_evidence"
 
 
 def test_postprocess_fake_clock_uses_later_time_for_decision_ages():
@@ -1814,9 +1862,16 @@ def test_ros_adapter_uses_queue_one_and_two_lock_ownership_contract():
     assert "with self._decision_lock:" in cloud_callback
     assert "with self._decision_lock:" in watchdog_callback
     assert "self._decision_lock" not in input_callbacks
+    postprocess_snapshot = source[
+        source.index("    def _take_postprocess_slope_snapshot"):
+        source.index("    def _cloud_cb")
+    ]
+    assert "with self._input_lock:" in postprocess_snapshot
+    assert "self._decision_lock" not in postprocess_snapshot
+    assert "_postprocess_evaluation_time(" in postprocess_snapshot
     evaluation = source[source.index("    def _evaluate_cloud"):source.index("    def _schedule_cloud_deadline")]
     assert evaluation.index("self.preprocessor.process(") < evaluation.index(
-        "_postprocess_evaluation_time("
+        "self._take_postprocess_slope_snapshot("
     ) < evaluation.index("inputs = CollisionInputs(")
 
 def reference_clusters(points, cluster_policy):

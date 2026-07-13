@@ -1450,7 +1450,6 @@ class CollisionInputSnapshot:
     safe: Optional[Tuple[float, float]]
     safe_stamp: Optional[float]
     intent: Optional[Tuple[float, int, float, float]]
-    slope_evidence: Tuple[SlopeEvidence, ...]
 def _buffer_slope_evidence(
     evidence: Deque[SlopeEvidence], entry: SlopeEvidence
 ) -> None:
@@ -1710,8 +1709,15 @@ class CollisionSupervisorRosNode:
                 safe=self.safe,
                 safe_stamp=self.safe_stamp,
                 intent=self.intent,
-                slope_evidence=tuple(self.slope_evidence),
             )
+
+    def _take_postprocess_slope_snapshot(self, snapshot_now_s):
+        import rospy
+        with self._input_lock:
+            now_s = _postprocess_evaluation_time(
+                snapshot_now_s, rospy.Time.now().to_sec()
+            )
+            return now_s, tuple(self.slope_evidence)
 
     def _cloud_cb(self, msg):
         with self._decision_lock:
@@ -1783,12 +1789,10 @@ class CollisionSupervisorRosNode:
                 1.0, "Collision cloud rejected: %s",
                 result.reason if not result.ok else processing.reason,
             )
-        now = _postprocess_evaluation_time(
-            snapshot.now_s, rospy.Time.now().to_sec()
-        )
+        now, slope_evidence = self._take_postprocess_slope_snapshot(snapshot.now_s)
         if self.watchdog.observe_cloud(stamp, now):
             self._schedule_cloud_deadline(now, stamp)
-        slope_entry = _select_slope_evidence(snapshot.slope_evidence, stamp, now)
+        slope_entry = _select_slope_evidence(slope_evidence, stamp, now)
         slope_source, slope_evaluation, slope_receipt, pitch, slope_policy, slope_valid = (
             (slope_entry.source_s, slope_entry.evaluation_s, slope_entry.receipt_s,
              slope_entry.pitch_rad, slope_entry.policy_sha256, slope_entry.valid)
