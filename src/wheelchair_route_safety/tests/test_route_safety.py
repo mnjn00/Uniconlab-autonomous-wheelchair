@@ -295,31 +295,36 @@ def test_status_chronology_accepts_newer_status_for_unchanged_candidate_identity
 
 def test_active_route_requires_strict_stamp_sequence_and_identity_chronology():
     first = _active_route(10.0)
-    selection, chronology = route_safety.select_active_route(first, 10.0, None)
+    selection, chronology = route_safety.select_active_route(
+        first, 10.0, None, receipt_stamp=10.0,
+    )
     assert selection is not None
     assert selection.route_id == "route"
 
     heartbeat = _active_route(10.1)
-    selection, chronology = route_safety.select_active_route(heartbeat, 10.1, chronology)
+    selection, chronology = route_safety.select_active_route(
+        heartbeat, 10.1, chronology, receipt_stamp=10.1,
+    )
     assert selection is not None
 
     higher_activation = _active_route(
         10.2, activation_sequence=2, mission_id="mission-next", route_id="route-next",
     )
     selection, chronology = route_safety.select_active_route(
-        higher_activation, 10.2, chronology,
+        higher_activation, 10.2, chronology, receipt_stamp=10.2,
     )
     assert selection is not None
     assert selection.route_id == "route-next"
 
     selection, unchanged = route_safety.select_active_route(
-        higher_activation, 10.2, chronology,
+        higher_activation, 10.2, chronology, receipt_stamp=10.2,
     )
     assert selection is None
     assert unchanged == chronology
 
     selection, unchanged = route_safety.select_active_route(
         _active_route(10.3, activation_sequence=1), 10.3, chronology,
+        receipt_stamp=10.3,
     )
     assert selection is None
     assert unchanged == chronology
@@ -329,7 +334,7 @@ def test_active_route_requires_strict_stamp_sequence_and_identity_chronology():
             10.4, activation_sequence=2, mission_id="mission-next",
             route_id="identity-mutated",
         ),
-        10.4, chronology,
+        10.4, chronology, receipt_stamp=10.4,
     )
     assert selection is None
     assert unchanged == chronology
@@ -345,9 +350,38 @@ def test_active_route_rejects_malformed_stale_and_future_bindings():
             _active_route(9.24),
             _active_route(10.051)):
         now_s = 10.0
-        selection, chronology = route_safety.select_active_route(route, now_s, None)
+        selection, chronology = route_safety.select_active_route(
+            route, now_s, None, receipt_stamp=now_s,
+        )
         assert selection is None
         assert chronology is None
+
+def test_active_route_requires_independent_source_and_receipt_freshness():
+    delayed_receipt_route = _active_route(0.05)
+    selection, chronology = route_safety.select_active_route(
+        delayed_receipt_route, 0.75, None, receipt_stamp=0.0,
+    )
+    assert selection is not None
+    assert chronology is not None
+
+    selection, chronology = route_safety.select_active_route(
+        delayed_receipt_route, 0.750000001, None, receipt_stamp=0.0,
+    )
+    assert selection is None
+    assert chronology is None
+
+    future_receipt_route = _active_route(0.0)
+    selection, chronology = route_safety.select_active_route(
+        future_receipt_route, 0.0, None, receipt_stamp=0.05,
+    )
+    assert selection is not None
+    assert chronology is not None
+
+    selection, chronology = route_safety.select_active_route(
+        future_receipt_route, 0.0, None, receipt_stamp=0.050000001,
+    )
+    assert selection is None
+    assert chronology is None
 
 def test_newer_restrictive_status_revokes_prior_permissive_pair():
     evidence = _evidence_buffer()

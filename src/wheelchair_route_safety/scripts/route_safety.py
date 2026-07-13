@@ -325,17 +325,21 @@ def _valid_sha256_identity(value: Any) -> bool:
     )
 
 
-def active_route_is_fresh(now_s: float, route_stamp: float) -> bool:
+def active_route_is_fresh(now_s: float, route_stamp: float,
+                          receipt_stamp: float) -> bool:
     return (
         _is_finite_number(now_s)
         and _is_finite_number(route_stamp)
+        and _is_finite_number(receipt_stamp)
         and -FUTURE_TOLERANCE_S <= now_s - route_stamp <= ACTIVE_ROUTE_TTL_S
+        and -FUTURE_TOLERANCE_S <= now_s - receipt_stamp <= ACTIVE_ROUTE_TTL_S
     )
 
 
 def select_active_route(
         route_msg: Any, now_s: float,
         previous: Optional[Tuple[int, Tuple[Any, ...], float]],
+        receipt_stamp: float,
 ) -> Tuple[Optional[ActiveRouteSelection], Optional[Tuple[int, Tuple[Any, ...], float]]]:
     """Accept only fresh, strictly chronological ActiveRoute bindings."""
     try:
@@ -347,7 +351,7 @@ def select_active_route(
             route_msg.route_manifest_sha256, route_msg.safety_manifest_sha256,
         )
         if (
-                not active_route_is_fresh(now_s, route_stamp)
+                not active_route_is_fresh(now_s, route_stamp, receipt_stamp)
                 or not _valid_nonnegative_int(activation_sequence)
                 or activation_sequence <= 0
                 or not isinstance(identity[0], int)
@@ -1072,9 +1076,12 @@ def run_ros_node() -> None:
     def receive_status(msg: Any) -> None:
         status_message[0] += 1
         evidence.add_status((msg, rospy.Time.now().to_sec(), status_message[0]))
+
     def receive_route(msg: Any) -> None:
         route_message_id[0] += 1
-        latest["route"] = (route_message_id[0], msg)
+        latest["route"] = (
+            route_message_id[0], msg, rospy.Time.now().to_sec(),
+        )
 
 
     rospy.Subscriber(
@@ -1095,12 +1102,13 @@ def run_ros_node() -> None:
             observed_revocation_generation[0] = evidence_snapshot.revocation_generation
         selection = None
         if route_evidence is not None:
-            current_route_message_id, route_msg = route_evidence
+            current_route_message_id, route_msg, route_receipt_stamp = route_evidence
             if current_route_message_id != observed_route_message_id[0]:
                 observed_route_message_id[0] = current_route_message_id
                 accepted_route[0] = None
                 candidate_selection, route_high_water = select_active_route(
                     route_msg, now_s, high_water["route"],
+                    receipt_stamp=route_receipt_stamp,
                 )
                 if candidate_selection is not None:
                     active_route = policy.route(candidate_selection.route_id)
@@ -1113,12 +1121,15 @@ def run_ros_node() -> None:
                         high_water["route"] = route_high_water
                         accepted_route[0] = (
                             current_route_message_id, candidate_selection,
-                            route_high_water[2],
+                            route_high_water[2], route_receipt_stamp,
                         )
             if accepted_route[0] is not None:
-                accepted_message_id, accepted_selection, accepted_stamp = accepted_route[0]
+                (accepted_message_id, accepted_selection, accepted_stamp,
+                 accepted_receipt_stamp) = accepted_route[0]
                 if (accepted_message_id == current_route_message_id
-                        and active_route_is_fresh(now_s, accepted_stamp)):
+                        and active_route_is_fresh(
+                            now_s, accepted_stamp, accepted_receipt_stamp,
+                        )):
                     selection = accepted_selection
                 else:
                     accepted_route[0] = None
