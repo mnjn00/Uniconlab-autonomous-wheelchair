@@ -5,4 +5,4 @@ navigation_manifest:
   sha256: 3861e21a6360fe7e32f833f867acb7dd50dccbf45a67f17d93699cea9cbe13c6
 route_safety_config:
   path: ../../wheelchair_route_safety/config/route_safety_sim.yaml
-  sha256: 471bc90f8d52e341d2d6d287992fd26bf4224b776c57a057c82796bb0506eb60
+  sha256: 6c9496802956c09ec5eb0cb8a02baf417ea426ce10a6409c33bd9532869a79c9

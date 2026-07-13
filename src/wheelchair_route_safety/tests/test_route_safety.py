@@ -25,8 +25,10 @@ ROUTE = ROOT / "data" / "hanyang_aegimun_loop" / "hanyang_aegimun_loop.waypoints
 MAP = ROOT / "data" / "hanyang_aegimun_loop" / "map.pgm"
 METADATA = ROOT / "data" / "hanyang_aegimun_loop" / "map.metadata.json"
 NAVIGATION_ROUTES = ROOT / "src" / "wheelchair_navigation" / "config" / "hanyang_routes.yaml"
-CONFIG_SHA256 = "471bc90f8d52e341d2d6d287992fd26bf4224b776c57a057c82796bb0506eb60"
+CONFIG_SHA256 = "6c9496802956c09ec5eb0cb8a02baf417ea426ce10a6409c33bd9532869a79c9"
 A03_FUTURE_TOLERANCE_S = 0.05
+CANDIDATE_SOURCE = "base_model"
+STATUS_SOURCE = "localization_guard"
 SPEC = importlib.util.spec_from_file_location("route_safety", SCRIPT)
 route_safety = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = route_safety
@@ -110,11 +112,16 @@ def test_sim_config_dynamically_binds_exact_candidate_map_and_route_bytes():
     assert config["localization_policy_sha256"] == (
         "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"
     )
+    assert config["localization_candidate_source"] == CANDIDATE_SOURCE
+    assert config["localization_status_source"] == STATUS_SOURCE
 
 def test_simulation_config_bytes_require_exact_sha256_before_policy_creation():
     assert _sha(CONFIG) == CONFIG_SHA256
     policy = route_safety.load_simulation_policy(CONFIG, CONFIG_SHA256)
     assert policy.simulation_only
+    assert (policy.localization_candidate_source, policy.localization_status_source) == (
+        CANDIDATE_SOURCE, STATUS_SOURCE,
+    )
 
     with pytest.raises(TypeError):
         route_safety.load_simulation_policy(CONFIG)
@@ -160,7 +167,8 @@ def test_ros_config_mismatch_fails_before_publishers_are_created(monkeypatch):
         route_safety.run_ros_node()
     assert publisher_calls == []
 def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 64,
-                           frame_id="map", policy_sha256="p" * 64, state="OK", sequence=1):
+                           frame_id="map", policy_sha256="p" * 64, state="OK", sequence=1,
+                           candidate_source=CANDIDATE_SOURCE, status_source=STATUS_SOURCE):
     header = types.SimpleNamespace(
         stamp=types.SimpleNamespace(to_sec=lambda: stamp),
         frame_id=frame_id,
@@ -171,6 +179,7 @@ def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 
         reset_count=reset_count,
         map_id=map_id,
         map_sha256=map_sha256,
+        source=candidate_source,
     )
     status = types.SimpleNamespace(
         header=header,
@@ -181,6 +190,7 @@ def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 
         map_id=map_id,
         map_sha256=map_sha256,
         policy_sha256=policy_sha256,
+        source=status_source,
         state=state,
         reason_mask=0,
         independent_check_passed=True,
@@ -188,8 +198,21 @@ def _localization_evidence(stamp, reset_count=1, map_id="map", map_sha256="a" * 
     return candidate, status
 
 
+def _evidence_buffer(limit=route_safety.LOCALIZATION_EVIDENCE_CACHE_SIZE):
+    return route_safety.LocalizationEvidenceBuffer(
+        CANDIDATE_SOURCE, STATUS_SOURCE, limit=limit,
+    )
+
+
+def _status_allows_pair_hold(status, receipt_stamp=10.01, now_s=10.01):
+    return route_safety.status_allows_pair_hold(
+        status, receipt_stamp, now_s, 0.25, 1, "map", "a" * 64, "map",
+        "p" * 64, STATUS_SOURCE, "OK",
+    )
+
+
 def test_localization_candidate_then_status_retains_prior_pair_until_new_pair_joins():
-    evidence = route_safety.LocalizationEvidenceBuffer()
+    evidence = _evidence_buffer()
     candidate_a, status_a = _localization_evidence(10.0, sequence=1)
     candidate_b, status_b = _localization_evidence(10.1, sequence=2)
     first_evidence = (status_a, 10.01, 1)
@@ -207,7 +230,7 @@ def test_localization_candidate_then_status_retains_prior_pair_until_new_pair_jo
 
 
 def test_localization_status_then_candidate_retains_prior_pair_until_new_pair_joins():
-    evidence = route_safety.LocalizationEvidenceBuffer()
+    evidence = _evidence_buffer()
     candidate_a, status_a = _localization_evidence(10.0, sequence=1)
     candidate_b, status_b = _localization_evidence(10.1, sequence=2)
     first_evidence = (status_a, 10.01, 1)
@@ -219,9 +242,7 @@ def test_localization_status_then_candidate_retains_prior_pair_until_new_pair_jo
 
     evidence.add_status(in_flight_evidence)
     assert evidence.snapshot() == (in_flight_evidence, None)
-    assert route_safety.status_allows_pair_hold(
-        status_b, 10.11, candidate_a.reset_count, "map", "a" * 64, "map", "p" * 64, "OK",
-    )
+    assert _status_allows_pair_hold(status_b, receipt_stamp=10.11, now_s=10.11)
 
     evidence.add_candidate(candidate_b)
     assert evidence.snapshot() == (in_flight_evidence, candidate_b)
@@ -235,7 +256,7 @@ def test_status_chronology_accepts_newer_status_for_unchanged_candidate_identity
     assert not route_safety.status_chronology_is_newer((1, 10.0, 10.03, 10.04), prior)
 
 def test_newer_restrictive_status_revokes_prior_permissive_pair():
-    evidence = route_safety.LocalizationEvidenceBuffer()
+    evidence = _evidence_buffer()
     candidate_a, status_a = _localization_evidence(10.0, sequence=1)
     candidate_b, restrictive_status = _localization_evidence(10.1, state="NOT_OK", sequence=2)
     first_evidence = (status_a, 10.01, 1)
@@ -248,12 +269,12 @@ def test_newer_restrictive_status_revokes_prior_permissive_pair():
     evidence.add_candidate(candidate_b)
     evidence.add_status(restrictive_evidence)
     assert evidence.snapshot() == (restrictive_evidence, candidate_b)
-    assert not route_safety.status_allows_pair_hold(
-        restrictive_status, 10.11, candidate_a.reset_count, "map", "a" * 64, "map", "p" * 64, "OK",
+    assert not _status_allows_pair_hold(
+        restrictive_status, receipt_stamp=10.11, now_s=10.11,
     )
 
 def test_localization_status_without_exact_candidate_match_fails_closed_then_promotes():
-    evidence = route_safety.LocalizationEvidenceBuffer()
+    evidence = _evidence_buffer()
     candidate, status = _localization_evidence(10.0)
     status_evidence = (status, 10.01, 1)
     evidence.add_status(status_evidence)
@@ -269,9 +290,43 @@ def test_localization_status_without_exact_candidate_match_fails_closed_then_pro
     evidence.add_candidate(candidate)
     assert evidence.snapshot() == (status_evidence, candidate)
 
+def test_localization_evidence_matches_only_exact_source_bindings():
+    evidence = _evidence_buffer()
+    candidate, status = _localization_evidence(10.0)
+    status_evidence = (status, 10.01, 1)
+
+    evidence.add_candidate(candidate)
+    evidence.add_status(status_evidence)
+
+    assert evidence.snapshot() == (status_evidence, candidate)
+
+
+@pytest.mark.parametrize(
+    ("candidate_source", "status_source"),
+    (
+        ("foreign_candidate", STATUS_SOURCE),
+        ("", STATUS_SOURCE),
+        (CANDIDATE_SOURCE, "foreign_status"),
+        (CANDIDATE_SOURCE, ""),
+    ),
+)
+def test_localization_evidence_rejects_foreign_or_empty_source(
+        candidate_source, status_source):
+    evidence = _evidence_buffer()
+    candidate, status = _localization_evidence(
+        10.0, candidate_source=candidate_source, status_source=status_source,
+    )
+    status_evidence = (status, 10.01, 1)
+
+    evidence.add_candidate(candidate)
+    evidence.add_status(status_evidence)
+
+    assert evidence.snapshot() == (status_evidence, None)
+
+
 
 def test_localization_evidence_caches_are_bounded_and_deterministic():
-    evidence = route_safety.LocalizationEvidenceBuffer(limit=2)
+    evidence = _evidence_buffer(limit=2)
     candidates = []
     for stamp in (1.0, 2.0, 3.0):
         candidate, status = _localization_evidence(stamp)
@@ -285,7 +340,7 @@ def test_localization_evidence_caches_are_bounded_and_deterministic():
 
 
 def test_localization_snapshot_recovers_only_with_newer_matching_evidence():
-    evidence = route_safety.LocalizationEvidenceBuffer()
+    evidence = _evidence_buffer()
     candidate_a, status_a = _localization_evidence(10.0)
     evidence.add_candidate(candidate_a)
     evidence.add_status((status_a, 10.01, 1))
@@ -302,15 +357,13 @@ def test_localization_snapshot_recovers_only_with_newer_matching_evidence():
     assert evidence.snapshot() == (recovered_evidence, candidate_b)
 def test_permissive_status_hold_rejects_restrictive_identity_and_timing_changes():
     _, status = _localization_evidence(10.0)
-    allowed = lambda value: route_safety.status_allows_pair_hold(
-        value, 10.01, 1, "map", "a" * 64, "map", "p" * 64, "OK",
-    )
+    allowed = _status_allows_pair_hold
     assert allowed(status)
     for field, value in (
             ("reset_count", 2), ("map_id", "other"), ("map_sha256", "b" * 64),
-            ("policy_sha256", "q" * 64), ("state", "NOT_OK"),
-            ("reason_mask", 1), ("independent_check_passed", False),
-            ("transform_age_s", -0.01)):
+            ("policy_sha256", "q" * 64), ("source", "foreign_status"),
+            ("source", ""), ("state", "NOT_OK"), ("reason_mask", 1),
+            ("independent_check_passed", False), ("transform_age_s", -0.01)):
         changed = types.SimpleNamespace(**vars(status))
         setattr(changed, field, value)
         assert not allowed(changed)
@@ -324,12 +377,18 @@ def test_permissive_status_hold_rejects_restrictive_identity_and_timing_changes(
 
 def test_status_hold_rejects_malformed_and_stale_prior_evidence():
     _, status = _localization_evidence(10.0)
-    assert not route_safety.status_allows_pair_hold(
-        object(), 10.01, 1, "map", "a" * 64, "map", "p" * 64, "OK",
-    )
-    assert not route_safety.status_allows_pair_hold(
-        status, 9.0, 1, "map", "a" * 64, "map", "p" * 64, "OK",
-    )
+    assert not _status_allows_pair_hold(object())
+    assert not _status_allows_pair_hold(status, receipt_stamp=9.0, now_s=10.01)
+
+def test_status_hold_receipt_age_accepts_exact_bounds_and_rejects_nanosecond_overruns():
+    _, status = _localization_evidence(0.0)
+
+    assert _status_allows_pair_hold(status, receipt_stamp=0.0, now_s=0.25)
+    assert not _status_allows_pair_hold(status, receipt_stamp=0.0, now_s=0.25 + 1e-9)
+    assert _status_allows_pair_hold(status, receipt_stamp=0.0, now_s=-0.05)
+    assert not _status_allows_pair_hold(status, receipt_stamp=0.0, now_s=-0.05 - 1e-9)
+
+
 
 
 
@@ -341,6 +400,9 @@ def test_ros_pairing_retains_existing_stamp_reset_map_and_policy_checks():
             "pose_msg.map_id == localization_msg.map_id == policy.map_id",
             "pose_msg.map_sha256 == localization_msg.map_sha256 == policy.map_sha256",
             "localization_msg.policy_sha256 == policy.localization_policy_sha256",
+            "pose_msg.source == policy.localization_candidate_source",
+            "localization_msg.source == policy.localization_status_source",
+            "-FUTURE_TOLERANCE_S <= now_s - receipt_stamp <= policy.status_ttl_s",
             "localization_msg.state == LocalizationStatus.OK",
             "localization_msg.reason_mask == 0",
             "localization_msg.independent_check_passed",
@@ -386,7 +448,7 @@ def test_ros_publish_snapshots_evidence_before_sampling_evaluation_clock():
 def test_snapshot_evidence_is_not_evaluated_with_a_pre_snapshot_clock():
     policy = _load(_manifest())
     candidate, status = _localization_evidence(10.10)
-    evidence = route_safety.LocalizationEvidenceBuffer()
+    evidence = _evidence_buffer()
     evidence.add_candidate(candidate)
     evidence.add_status((status, 10.10, 1))
 
@@ -567,6 +629,24 @@ def test_simulation_geometry_mutation_is_rejected_before_policy_creation(mutatio
         config["localization_policy_sha256"] = "0" * 64
     with pytest.raises(route_safety.ManifestError):
         route_safety._load_simulation_policy(config, CONFIG.resolve())
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("localization_candidate_source", ""),
+        ("localization_status_source", ""),
+        ("localization_candidate_source", "\u0085"),
+        ("localization_status_source", "x" * 65),
+        ("localization_candidate_source", "é" * 33),
+        ("localization_status_source", "\ud800"),
+    ),
+)
+def test_simulation_localization_source_bindings_reject_invalid_values(field, value):
+    config = _config()
+    config[field] = value
+
+    with pytest.raises(route_safety.ManifestError):
+        route_safety._load_simulation_policy(config, CONFIG.resolve())
+
 
 
 def test_tampered_navigation_manifest_and_pin_are_rejected():

@@ -16,7 +16,7 @@ SAFETY_LAUNCH = ROOT / "src" / "wheelchair_safety" / "launch" / "safety.launch"
 LOCALIZATION_POLICY = (
     ROOT / "src" / "wheelchair_navigation" / "config" / "localization_confidence_sim.yaml"
 )
-ROUTE_SAFETY_CONFIG_SHA256 = "471bc90f8d52e341d2d6d287992fd26bf4224b776c57a057c82796bb0506eb60"
+ROUTE_SAFETY_CONFIG_SHA256 = "6c9496802956c09ec5eb0cb8a02baf417ea426ce10a6409c33bd9532869a79c9"
 FORBIDDEN = ("ros2", "ament_", "GLIM", "glim", "/hardware/cmd_vel", "/motor/cmd")
 WAYPOINTS = (
     ROOT / "data" / "hanyang_aegimun_loop" / "hanyang_aegimun_loop.waypoints.yaml"

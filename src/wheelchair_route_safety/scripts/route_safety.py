@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import unicodedata
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -26,6 +27,7 @@ FUTURE_TOLERANCE_S = 0.05  # Frozen A03 clock contract.
 ACTIVE_ROUTE_TTL_S = 0.75  # Frozen mission route-authorization contract.
 LOCALIZATION_POLICY_SHA256 = "5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"
 LOCALIZATION_EVIDENCE_CACHE_SIZE = 8
+SOURCE_IDENTITY_MAX_BYTES = 64
 
 UNKNOWN = 0
 CLEAR = 1
@@ -46,19 +48,34 @@ REASON_INPUT_UNKNOWN = 1 << 31
 REASON_ROUTE_STATE = 1 << 32
 REASON_POLICY_MISMATCH = 1 << 36
 
+def _valid_source_identity(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    if any(unicodedata.category(character) == "Cc" for character in value):
+        return False
+    try:
+        return len(value.encode("utf-8")) <= SOURCE_IDENTITY_MAX_BYTES
+    except UnicodeEncodeError:
+        return False
+
+
 class LocalizationEvidenceBuffer:
     """Bounded candidate/status evidence matched only by immutable identity fields."""
 
-    def __init__(self, limit: int = LOCALIZATION_EVIDENCE_CACHE_SIZE) -> None:
+    def __init__(self, candidate_source: str, status_source: str,
+                 limit: int = LOCALIZATION_EVIDENCE_CACHE_SIZE) -> None:
+        if not _valid_source_identity(candidate_source) or not _valid_source_identity(status_source):
+            raise ValueError("localization evidence sources must be nonempty, at most 64 UTF-8 bytes, and control-free")
         if limit < 1:
             raise ValueError("localization evidence cache limit must be positive")
+        self._candidate_source = candidate_source
+        self._status_source = status_source
         self._limit = limit
         self._lock = Lock()
         self.candidates: List[Any] = []
         self.statuses: List[Any] = []
 
-    @staticmethod
-    def _matches(candidate: Any, status: Any) -> bool:
+    def _matches(self, candidate: Any, status: Any) -> bool:
         try:
             candidate_stamp = float(candidate.pose.header.stamp.to_sec())
             status_stamp = float(status.header.stamp.to_sec())
@@ -66,6 +83,10 @@ class LocalizationEvidenceBuffer:
                 math.isfinite(candidate_stamp)
                 and math.isfinite(status_stamp)
                 and abs(candidate_stamp - status_stamp) <= 1.0e-9
+                and isinstance(candidate.source, str)
+                and candidate.source == self._candidate_source
+                and isinstance(status.source, str)
+                and status.source == self._status_source
                 and candidate.reset_count == status.reset_count
                 and candidate.map_id == status.map_id
                 and candidate.map_sha256 == status.map_sha256
@@ -115,20 +136,26 @@ def status_chronology_is_newer(current: Tuple[int, float, float, float],
     )
 
 
-def status_allows_pair_hold(status: Any, receipt_stamp: float, prior_reset_count: Any,
+def status_allows_pair_hold(status: Any, receipt_stamp: float, now_s: float,
+                            status_ttl_s: float, prior_reset_count: Any,
                             map_id: str, map_sha256: str, frame_id: str,
-                            policy_sha256: str, ok_state: Any) -> bool:
+                            policy_sha256: str, status_source: str, ok_state: Any) -> bool:
     """Validate status-only evidence before retaining a prior exact pair."""
     try:
         source_stamp = float(status.header.stamp.to_sec())
         evaluation_stamp = float(status.evaluation_stamp.to_sec())
         transform_age = float(status.transform_age_s)
+        receipt_age = now_s - receipt_stamp
         return (
             int(status.sequence) >= 0
             and math.isfinite(source_stamp)
             and math.isfinite(evaluation_stamp)
             and math.isfinite(receipt_stamp)
+            and math.isfinite(now_s)
+            and math.isfinite(status_ttl_s)
+            and 0.0 < status_ttl_s <= 0.25
             and math.isfinite(transform_age)
+            and -FUTURE_TOLERANCE_S <= receipt_age <= status_ttl_s
             and source_stamp <= evaluation_stamp <= receipt_stamp + FUTURE_TOLERANCE_S
             and transform_age >= 0.0
             and status.reset_count == prior_reset_count
@@ -136,6 +163,8 @@ def status_allows_pair_hold(status: Any, receipt_stamp: float, prior_reset_count
             and status.map_sha256 == map_sha256
             and status.header.frame_id == frame_id
             and status.policy_sha256 == policy_sha256
+            and isinstance(status.source, str)
+            and status.source == status_source
             and status.state == ok_state
             and status.reason_mask == 0
             and status.independent_check_passed
@@ -190,6 +219,8 @@ class RouteSafetyPolicy:
     zones: Tuple[ZonePolicy, ...]
     simulation_only: bool = False
     localization_policy_sha256: str = ""
+    localization_candidate_source: str = ""
+    localization_status_source: str = ""
 
     def route(self, route_id: str) -> Optional[RoutePolicy]:
         return next((route for route in self.routes if route.route_id == route_id), None)
@@ -599,6 +630,12 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
     localization_policy_sha256 = config.get("localization_policy_sha256")
     if localization_policy_sha256 != LOCALIZATION_POLICY_SHA256:
         raise ManifestError("simulation localization policy SHA-256 must match the frozen policy identity")
+    localization_candidate_source = config.get("localization_candidate_source")
+    if not _valid_source_identity(localization_candidate_source):
+        raise ManifestError("simulation localization candidate source must be nonempty, at most 64 UTF-8 bytes, and control-free")
+    localization_status_source = config.get("localization_status_source")
+    if not _valid_source_identity(localization_status_source):
+        raise ManifestError("simulation localization status source must be nonempty, at most 64 UTF-8 bytes, and control-free")
     if config.get("active_route_ttl_s") != ACTIVE_ROUTE_TTL_S:
         raise ManifestError("simulation ActiveRoute TTL must be frozen at 0.75 seconds")
 
@@ -691,6 +728,8 @@ def _load_simulation_policy(config: Mapping[str, Any], config_path: Path) -> Rou
     return replace(
         base, routes=tuple(simulation_routes), simulation_only=True,
         localization_policy_sha256=localization_policy_sha256,
+        localization_candidate_source=localization_candidate_source,
+        localization_status_source=localization_status_source,
     )
 
 
@@ -883,7 +922,9 @@ def run_ros_node() -> None:
         "pose": None, "route": None, "status": None, "status_message": None,
         "status_message_valid": False,
     }
-    evidence = LocalizationEvidenceBuffer()
+    evidence = LocalizationEvidenceBuffer(
+        policy.localization_candidate_source, policy.localization_status_source,
+    )
     sequence = [0]
     status_message = [0]
     held_pair = [None]
@@ -950,9 +991,10 @@ def run_ros_node() -> None:
                             held_pair[0] is not None
                             and status_is_acceptable
                             and status_allows_pair_hold(
-                                localization_msg, receipt_stamp, held_pair[0][1],
-                                policy.map_id, policy.map_sha256, policy.frame_id,
-                                policy.localization_policy_sha256, LocalizationStatus.OK,
+                                localization_msg, receipt_stamp, now_s, policy.status_ttl_s,
+                                held_pair[0][1], policy.map_id, policy.map_sha256,
+                                policy.frame_id, policy.localization_policy_sha256,
+                                policy.localization_status_source, LocalizationStatus.OK,
                             )):
                         sample = held_pair[0][0]
                     else:
@@ -984,6 +1026,8 @@ def run_ros_node() -> None:
                     status_sequence >= 0
                     and status_is_acceptable
                     and abs(pose_stamp - status_source_stamp) <= 1.0e-9
+                    and pose_msg.source == policy.localization_candidate_source
+                    and localization_msg.source == policy.localization_status_source
                     and pose_msg.reset_count == localization_msg.reset_count
                     and pose_msg.map_id == localization_msg.map_id == policy.map_id
                     and pose_msg.map_sha256 == localization_msg.map_sha256 == policy.map_sha256
@@ -993,6 +1037,7 @@ def run_ros_node() -> None:
                     and localization_msg.state == LocalizationStatus.OK
                     and localization_msg.reason_mask == 0
                     and localization_msg.independent_check_passed
+                    and -FUTURE_TOLERANCE_S <= now_s - receipt_stamp <= policy.status_ttl_s
                     and pose_stamp <= status_evaluation_stamp <= receipt_stamp + FUTURE_TOLERANCE_S
                     and (high_water["pose"] is None or pose_stamp >= high_water["pose"])
                 )

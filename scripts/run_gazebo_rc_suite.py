@@ -159,7 +159,7 @@ BINDING_SOURCES = {
     ),
     "route_truth": (
         "src/wheelchair_gazebo/config/route_truth_outbound.yaml",
-        "ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70",
+        "a0a5fedcb3c31b9890af6ef449889edeaa63644a9ff5fc99c76586a8faabd247",
     ),
 }
 FROZEN_BINDING_OPTIONS = {

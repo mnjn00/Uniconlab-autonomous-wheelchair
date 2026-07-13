@@ -564,7 +564,7 @@ class MetricsCoreTest(unittest.TestCase):
     def test_static_truth_requires_hash_bound_references(self):
         truth = PACKAGE / "config" / "route_truth_outbound.yaml"
         loaded = collector.load_route_truth(
-            str(truth), "ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70",
+            str(truth), "a0a5fedcb3c31b9890af6ef449889edeaa63644a9ff5fc99c76586a8faabd247",
             "rc-0123456789abcdef01234567")
         self.assertEqual(loaded.mission_id, "rc-0123456789abcdef01234567")
         self.assertEqual(loaded.corridor_clearance_m, 0.2)

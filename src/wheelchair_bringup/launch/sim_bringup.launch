@@ -18,7 +18,7 @@
   <arg name="route_policy" default="$(find wheelchair_navigation)/config/hanyang_routes.yaml"/>
   <arg name="route_policy_sha256" default="3861e21a6360fe7e32f833f867acb7dd50dccbf45a67f17d93699cea9cbe13c6"/>
   <arg name="route_safety_policy" default="$(find wheelchair_route_safety)/config/route_safety_sim.yaml"/>
-  <arg name="route_safety_policy_sha256" default="471bc90f8d52e341d2d6d287992fd26bf4224b776c57a057c82796bb0506eb60"/>
+  <arg name="route_safety_policy_sha256" default="6c9496802956c09ec5eb0cb8a02baf417ea426ce10a6409c33bd9532869a79c9"/>
   <arg name="safety_manifest_sha256" default="93ca862dac1fbdd5914d93b2d2c325fe2742aef2a05289d44d0d4fe45989de57"/>
   <arg name="localization_policy" default="$(find wheelchair_navigation)/config/localization_confidence_sim.yaml"/>
   <arg name="localization_policy_sha256" default="5d84ea824c98a53639a480ed162a62f015600ca0a0460df7186d5839303d52e8"/>
@@ -31,7 +31,7 @@
   <arg name="map_sha256" default="c89d791f71fe3d1705ae04724acf8ff6ba0ccc351fc162fe996982f9469a0278"/>
   <arg name="route_sha256" default="adf11b569c043da3b617f908ad56b2bc0ca6d32a32c6dd83a33a322045a4d672"/>
   <arg name="route_truth" default="$(find wheelchair_gazebo)/config/route_truth_outbound.yaml"/>
-  <arg name="route_truth_sha256" default="ff3114d37755772d91c3d683c2b74785e5f86385608308ecaec9445e9a245b70"/>
+  <arg name="route_truth_sha256" default="a0a5fedcb3c31b9890af6ef449889edeaa63644a9ff5fc99c76586a8faabd247"/>
   <arg name="scenario_sha256" default=""/>
   <arg name="a13_sha256" default="f7984b85d8ccf7d0f481f7daa73135109440209ca8c62847c57095da47604123"/>
   <arg name="claim_tag" default="SIMULATION_ONLY"/>
