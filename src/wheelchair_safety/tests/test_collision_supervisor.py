@@ -66,15 +66,51 @@ def _slope_message(source, evaluation, policy_sha256, state):
 def _slope_callback_node(policy_sha256):
     node = object.__new__(cs.CollisionSupervisorRosNode)
     node._input_lock = threading.RLock()
+    node._slope_condition = threading.Condition(node._input_lock)
     node.slope = None
     node.slope_high_water = None
     node.slope_evidence = cs.deque()
+    node._slope_stream_valid = False
     node.slope_policy_sha256 = policy_sha256
     node.odom = node.nav = node.safe = node.intent = None
     node.odom_stamp = node.odom_receipt = node.odom_high_water = None
     node.odom_valid = False
     node.nav_stamp = node.safe_stamp = None
     return node
+
+
+def _install_steady_ros_clock(monkeypatch, now_s=1.0):
+    monkeypatch.setitem(
+        sys.modules,
+        "rospy",
+        types.SimpleNamespace(
+            Time=types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(to_sec=lambda: now_s)
+            )
+        ),
+    )
+
+
+def _start_waiting_slope_snapshot(node, monkeypatch, snapshot_now_s=1.0, cloud_stamp_s=0.90):
+    waiting = threading.Event()
+    wait_timeouts = []
+    original_wait = node._slope_condition.wait
+
+    def wait(timeout):
+        wait_timeouts.append(timeout)
+        waiting.set()
+        return original_wait(1.0)
+
+    monkeypatch.setattr(node._slope_condition, "wait", wait)
+    result = {}
+    worker = threading.Thread(
+        target=lambda: result.update(
+            snapshot=node._take_postprocess_slope_snapshot(snapshot_now_s, cloud_stamp_s)
+        )
+    )
+    worker.start()
+    assert waiting.wait(1.0)
+    return worker, result, wait_timeouts
 
 def _odom_message(source):
     return types.SimpleNamespace(
@@ -359,11 +395,13 @@ def test_slope_callback_clears_prior_evidence_after_malformed_callback(monkeypat
 
     assert node.slope[-1] is False
     assert not node.slope_evidence
+    assert node._slope_stream_valid is False
     assert cs._select_slope_evidence(node.slope_evidence, 1.0, 1.0) is None
 
     node._slope_cb(_slope_message(1.01, 1.01, "a" * 64, cs.CLEAR))
 
     assert node.slope_evidence[-1].valid is True
+    assert node._slope_stream_valid is True
 
 
 def test_slope_callback_receipt_is_sampled_after_input_lock_wait(monkeypatch):
@@ -434,7 +472,7 @@ def test_snapshot_is_immutable_and_postprocess_copies_slope_evidence(monkeypatch
 
     snapshot = node._take_input_snapshot()
     node.slope_evidence.append(_evidence(0.95, valid=False))
-    now_s, slope_evidence = node._take_postprocess_slope_snapshot(snapshot.now_s)
+    now_s, slope_evidence = node._take_postprocess_slope_snapshot(snapshot.now_s, 0.90)
 
     assert snapshot.now_s == 1.0
     assert now_s == 1.0
@@ -470,7 +508,7 @@ def test_postprocess_slope_snapshot_observes_callback_after_input_snapshot(
 
     snapshot = node._take_input_snapshot()
     node._slope_cb(_slope_message(0.95, 0.96, "a" * 64, state))
-    now_s, slope_evidence = node._take_postprocess_slope_snapshot(snapshot.now_s)
+    now_s, slope_evidence = node._take_postprocess_slope_snapshot(snapshot.now_s, 0.90)
     selected = cs._select_slope_evidence(slope_evidence, 0.90, now_s)
 
     assert selected is not None
@@ -491,6 +529,151 @@ def test_postprocess_slope_snapshot_observes_callback_after_input_snapshot(
         ))
         assert decision.state == cs.STOP
         assert decision.reason == "invalid_slope_evidence"
+
+
+def test_postprocess_slope_join_wakes_for_fresh_clear_callback(monkeypatch):
+    policy_sha256 = "a" * 64
+    node = _slope_callback_node(policy_sha256)
+    _install_steady_ros_clock(monkeypatch)
+    node._slope_cb(_slope_message(0.79, 0.79, policy_sha256, cs.CLEAR))
+
+    worker, result, wait_timeouts = _start_waiting_slope_snapshot(node, monkeypatch)
+    node._slope_cb(_slope_message(0.90, 1.00, policy_sha256, cs.CLEAR))
+    worker.join(timeout=0.1)
+
+    assert not worker.is_alive()
+    assert 0.0 < wait_timeouts[0] <= cs.SLOPE_EVIDENCE_JOIN_TIMEOUT_S
+    now_s, slope_evidence = result["snapshot"]
+    selected = cs._select_slope_evidence(slope_evidence, 0.90, now_s)
+    assert selected is not None
+    assert (selected.source_s, selected.receipt_s, selected.valid) == (0.90, 1.0, True)
+
+
+@pytest.mark.parametrize(
+    "callback_policy,state",
+    (
+        ("a" * 64, cs.STOP),
+        ("b" * 64, cs.CLEAR),
+    ),
+)
+def test_postprocess_slope_join_wakes_for_restrictive_callback(
+    monkeypatch, callback_policy, state
+):
+    expected_policy_sha256 = "a" * 64
+    node = _slope_callback_node(expected_policy_sha256)
+    _install_steady_ros_clock(monkeypatch)
+    node._slope_cb(_slope_message(0.79, 0.79, expected_policy_sha256, cs.CLEAR))
+
+    worker, result, _ = _start_waiting_slope_snapshot(node, monkeypatch)
+    node._slope_cb(_slope_message(0.90, 1.00, callback_policy, state))
+    worker.join(timeout=0.1)
+
+    assert not worker.is_alive()
+    now_s, slope_evidence = result["snapshot"]
+    selected = cs._select_slope_evidence(slope_evidence, 0.90, now_s)
+    assert selected is not None
+    assert selected.valid is False
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        now=now_s,
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_stamp_s=selected.source_s,
+        slope_receipt_s=selected.receipt_s,
+        slope_valid=selected.valid,
+    ))
+    assert (decision.state, decision.reason) == (cs.STOP, "invalid_slope_evidence")
+
+
+@pytest.mark.parametrize(
+    "source,evaluation",
+    (
+        (0.80, math.nan),
+        (0.78, 0.78),
+    ),
+)
+def test_postprocess_slope_join_wakes_fail_closed_on_malformed_or_regressing_callback(
+    monkeypatch, source, evaluation
+):
+    policy_sha256 = "a" * 64
+    node = _slope_callback_node(policy_sha256)
+    _install_steady_ros_clock(monkeypatch)
+    node._slope_cb(_slope_message(0.79, 0.79, policy_sha256, cs.CLEAR))
+
+    worker, result, _ = _start_waiting_slope_snapshot(node, monkeypatch)
+    node._slope_cb(_slope_message(source, evaluation, policy_sha256, cs.CLEAR))
+    worker.join(timeout=0.1)
+
+    assert not worker.is_alive()
+    assert node._slope_stream_valid is False
+    now_s, slope_evidence = result["snapshot"]
+    assert not slope_evidence
+    assert cs._select_slope_evidence(slope_evidence, 0.90, now_s) is None
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        now=now_s,
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_valid=False,
+    ))
+    assert (decision.state, decision.reason) == (cs.STOP, "invalid_slope_evidence")
+
+
+def test_postprocess_slope_join_timeout_returns_stale_evidence(monkeypatch):
+    policy_sha256 = "a" * 64
+    node = _slope_callback_node(policy_sha256)
+    _install_steady_ros_clock(monkeypatch)
+    node._slope_cb(_slope_message(0.79, 0.79, policy_sha256, cs.CLEAR))
+    monkeypatch.setattr(cs, "SLOPE_EVIDENCE_JOIN_TIMEOUT_S", 0.001)
+    wait_timeouts = []
+    original_wait = node._slope_condition.wait
+
+    def wait(timeout):
+        wait_timeouts.append(timeout)
+        return original_wait(timeout)
+
+    monkeypatch.setattr(node._slope_condition, "wait", wait)
+    now_s, slope_evidence = node._take_postprocess_slope_snapshot(1.0, 0.90)
+
+    assert len(wait_timeouts) == 1
+    assert 0.0 < wait_timeouts[0] <= cs.SLOPE_EVIDENCE_JOIN_TIMEOUT_S
+    selected = cs._select_slope_evidence(slope_evidence, 0.90, now_s)
+    assert selected is not None
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        now=now_s,
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_stamp_s=selected.source_s,
+        slope_receipt_s=selected.receipt_s,
+        slope_valid=selected.valid,
+    ))
+    assert (decision.state, decision.reason) == (
+        cs.STOP,
+        "stale_or_mismatched_slope_odom",
+    )
+
+
+def test_slope_condition_wait_releases_input_lock_for_callback(monkeypatch):
+    policy_sha256 = "a" * 64
+    node = _slope_callback_node(policy_sha256)
+    _install_steady_ros_clock(monkeypatch)
+    node._slope_cb(_slope_message(0.79, 0.79, policy_sha256, cs.CLEAR))
+
+    worker, result, _ = _start_waiting_slope_snapshot(node, monkeypatch)
+    callback_complete = threading.Event()
+    callback = threading.Thread(
+        target=lambda: (
+            node._slope_cb(_slope_message(0.90, 1.00, policy_sha256, cs.CLEAR)),
+            callback_complete.set(),
+        )
+    )
+    callback.start()
+    assert callback_complete.wait(0.1)
+    callback.join(timeout=0.1)
+    worker.join(timeout=0.1)
+
+    assert not callback.is_alive()
+    assert not worker.is_alive()
+    now_s, slope_evidence = result["snapshot"]
+    assert cs._select_slope_evidence(slope_evidence, 0.90, now_s) is not None
 
 
 def test_postprocess_fake_clock_uses_later_time_for_decision_ages():
@@ -1895,6 +2078,8 @@ def test_ros_adapter_uses_queue_one_and_two_lock_ownership_contract():
     assert "rospy.Timer(" in source
     assert "self._input_lock = threading.RLock()" in source
     assert "self._decision_lock = threading.RLock()" in source
+    assert "self._slope_condition = threading.Condition(self._input_lock)" in source
+    assert "self._slope_stream_valid = False" in source
     assert "with self._input_lock:" in source
     assert "with self._decision_lock:" in source
     assert "with self._lock:" not in source
@@ -1908,7 +2093,7 @@ def test_ros_adapter_uses_queue_one_and_two_lock_ownership_contract():
         source.index("    def _take_postprocess_slope_snapshot"):
         source.index("    def _cloud_cb")
     ]
-    assert "with self._input_lock:" in postprocess_snapshot
+    assert "with self._slope_condition:" in postprocess_snapshot
     assert "self._decision_lock" not in postprocess_snapshot
     assert "_postprocess_evaluation_time(" in postprocess_snapshot
     evaluation = source[source.index("    def _evaluate_cloud"):source.index("    def _schedule_cloud_deadline")]

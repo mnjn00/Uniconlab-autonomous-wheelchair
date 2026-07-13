@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import threading
+import time
 from typing import Any, Deque, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
@@ -18,6 +19,7 @@ IMMUTABLE_HARD_LINEAR_SPEED_MPS = 0.55
 CLOCK_FUTURE_TOLERANCE_S = 0.05
 SLOPE_EVIDENCE_BUFFER_HORIZON_S = 0.20
 SLOPE_EVIDENCE_BUFFER_MAXLEN = 16
+SLOPE_EVIDENCE_JOIN_TIMEOUT_S = 0.05
 
 UNKNOWN, CLEAR, CAUTION, STOP = 0, 1, 2, 3
 VIS_UNKNOWN, VIS_FULL, VIS_PARTIAL, VIS_BLIND = 0, 1, 2, 3
@@ -1558,6 +1560,7 @@ class CollisionSupervisorRosNode:
         self.core = CollisionSupervisorCore(CollisionPolicy.load(policy_path))
         self.preprocessor = CloudPreprocessorTracker(self.core.policy)
         self._input_lock = threading.RLock()
+        self._slope_condition = threading.Condition(self._input_lock)
         self._decision_lock = threading.RLock()
         self.watchdog = CollisionWatchdogState(self.core.policy.cloud_ttl_s)
         self.cloud_deadline_timer = None
@@ -1570,6 +1573,7 @@ class CollisionSupervisorRosNode:
         self.slope = None
         self.slope_high_water = None
         self.slope_evidence: Deque[SlopeEvidence] = deque()
+        self._slope_stream_valid = False
         self.slope_policy_sha256 = str(rospy.get_param("~slope_policy_sha256", ""))
         self.intent = None
         self.transform_lookup_timeout_s = float(rospy.get_param("~transform_lookup_timeout_s", 0.05))
@@ -1665,8 +1669,11 @@ class CollisionSupervisorRosNode:
             state = int(msg.state)
         except (AttributeError, TypeError, ValueError):
             evaluation, pitch, policy, state = math.nan, math.nan, "", UNKNOWN
-        with self._input_lock:
-            receipt = rospy.Time.now().to_sec()
+        with self._slope_condition:
+            try:
+                receipt = rospy.Time.now().to_sec()
+            except (AttributeError, TypeError, ValueError):
+                receipt = math.nan
             chronology_valid = _slope_chronology_valid(
                 source, evaluation, receipt, self.slope_high_water
             )
@@ -1679,11 +1686,14 @@ class CollisionSupervisorRosNode:
             self.slope = (source, evaluation, receipt, pitch, policy, valid)
             if not chronology_valid:
                 self.slope_evidence.clear()
+                self._slope_stream_valid = False
+                self._slope_condition.notify_all()
                 return
             entry = SlopeEvidence(source, evaluation, receipt, pitch, policy, valid)
             _buffer_slope_evidence(self.slope_evidence, entry)
+            self._slope_stream_valid = True
             self.slope_high_water = source
-
+            self._slope_condition.notify_all()
     def _safe_cb(self, msg):
         import rospy
         values = (float(msg.linear.x), float(msg.angular.z))
@@ -1707,13 +1717,31 @@ class CollisionSupervisorRosNode:
                 intent=self.intent,
             )
 
-    def _take_postprocess_slope_snapshot(self, snapshot_now_s):
+    def _take_postprocess_slope_snapshot(self, snapshot_now_s, cloud_stamp_s):
         import rospy
-        with self._input_lock:
-            now_s = _postprocess_evaluation_time(
-                snapshot_now_s, rospy.Time.now().to_sec()
-            )
-            return now_s, tuple(self.slope_evidence)
+        deadline = time.monotonic() + SLOPE_EVIDENCE_JOIN_TIMEOUT_S
+        with self._slope_condition:
+            while True:
+                now_s = _postprocess_evaluation_time(
+                    snapshot_now_s, rospy.Time.now().to_sec()
+                )
+                slope_evidence = tuple(self.slope_evidence)
+                if (not _finite(now_s) or not self._slope_stream_valid):
+                    return now_s, slope_evidence
+                if any(
+                    _slope_cloud_time_valid(
+                        entry.source_s, entry.evaluation_s, cloud_stamp_s, now_s
+                    )
+                    and _slope_timing_valid(
+                        entry.source_s, entry.receipt_s, cloud_stamp_s, now_s
+                    )
+                    for entry in slope_evidence
+                ):
+                    return now_s, slope_evidence
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return now_s, slope_evidence
+                self._slope_condition.wait(remaining)
 
     def _cloud_cb(self, msg):
         with self._decision_lock:
@@ -1785,7 +1813,7 @@ class CollisionSupervisorRosNode:
                 1.0, "Collision cloud rejected: %s",
                 result.reason if not result.ok else processing.reason,
             )
-        now, slope_evidence = self._take_postprocess_slope_snapshot(snapshot.now_s)
+        now, slope_evidence = self._take_postprocess_slope_snapshot(snapshot.now_s, stamp)
         if self.watchdog.observe_cloud(stamp, now):
             self._schedule_cloud_deadline(now, stamp)
         slope_entry = _select_slope_evidence(slope_evidence, stamp, now)
