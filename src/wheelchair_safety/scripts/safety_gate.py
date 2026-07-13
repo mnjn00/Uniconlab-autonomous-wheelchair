@@ -346,13 +346,7 @@ class EvidencePairBuffer:
                             (value.source_stamp_s, value.evaluation_stamp_s,
                              value.receipt_stamp_s)) or
                     any(cap is not None and (not _finite(cap) or cap < 0.0)
-                        for cap in (value.max_linear_mps, value.max_angular_rps)) or
-                    any(new_cap is not None and
-                        (new_cap <= 0.0 or old_cap is None or new_cap < old_cap)
-                        for new_cap, old_cap in zip(
-                            (value.max_linear_mps, value.max_angular_rps),
-                            (committed_status.max_linear_mps,
-                             committed_status.max_angular_rps)))):
+                        for cap in (value.max_linear_mps, value.max_angular_rps))):
                 return False
             timestamps = {
                 "status_source": value.source_stamp_s,
@@ -395,7 +389,25 @@ class EvidencePairBuffer:
             committed_status, committed_signals, now_s, update_stamps=False)
         if result.state != CLEAR or result.reason_mask != 0:
             return None
-        return result
+        partial_status = self.status
+        partial_caps = (
+            (partial_status.max_linear_mps, partial_status.max_angular_rps)
+            if partial_status is not None and
+            partial_status.sequence > committed_status.sequence else
+            (None, None)
+        )
+        effective_caps = tuple(
+            old_cap if new_cap is None else
+            new_cap if old_cap is None else
+            min(old_cap, new_cap)
+            for old_cap, new_cap in zip(
+                (committed_status.max_linear_mps, committed_status.max_angular_rps),
+                partial_caps)
+        )
+        return SignalEvidence(
+            result.state, result.source_stamp_s, result.receipt_stamp_s,
+            result.reason_mask, result.source, result.policy_sha256,
+            result.sequence, *effective_caps)
 
     def _evidence_unlocked(self, now_s):
         status = self.status

@@ -752,7 +752,7 @@ def test_callback_conflicting_duplicate_poison_clears_committed_authority():
     assert snapshot["committed_status"] is None
 
 
-def test_callback_commits_exact_tighter_cap_and_partial_tighter_cap_revokes():
+def test_callback_commits_exact_tighter_cap_and_partial_none_preserves_cap():
     pair = pair_buffer()
     pair.update_status(pair_status(max_linear_mps=0.5))
     pair.update_signal("permission", pair_signal())
@@ -766,42 +766,41 @@ def test_callback_commits_exact_tighter_cap_and_partial_tighter_cap_revokes():
     pair.update_status(pair_status(
         sequence=9, source_stamp=100.06, evaluation_stamp=100.06, receipt=100.06))
     held = pair.evidence(100.06)
+    assert held.state == gate.CLEAR
     assert held.sequence == 8
     assert held.max_linear_mps == 0.2
-
-    revoking = pair_buffer()
-    revoking.update_status(pair_status(max_linear_mps=0.2))
-    revoking.update_signal("permission", pair_signal())
-    revoking.update_status(pair_status(
-        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05,
-        max_linear_mps=0.1))
-    assert revoking.evidence(100.05).state == gate.UNKNOWN
+    assert held.max_angular_rps is None
 
 
 def test_callback_committed_clear_is_revalidated_after_its_ttl():
     pair = pair_buffer()
-    pair.update_status(pair_status())
+    pair.update_status(pair_status(max_linear_mps=0.2))
     pair.update_signal("permission", pair_signal())
+    assert pair.evidence(100.0).max_linear_mps == 0.2
     assert pair.diagnostic_snapshot()["committed_status"] == 7
 
     assert pair.evidence(100.251).state == gate.UNKNOWN
 
 
-def test_pending_arm_waits_for_newer_partial_and_completes_only_in_timer_snapshot():
+def test_pending_arm_waits_for_cap_only_partial_and_completes_after_exact_pair():
     pair = pair_buffer()
-    pair.update_status(pair_status())
+    pair.update_status(pair_status(max_linear_mps=0.5))
     pair.update_signal("permission", pair_signal())
     node = pending_arm_node(pair)
 
     pair.update_status(pair_status(
-        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05))
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05,
+        max_linear_mps=0.2))
+    held = pair.evidence(100.05)
+    assert held.state == gate.CLEAR
+    assert held.sequence == 7
+    assert held.max_linear_mps == 0.2
     assert not consume_pending_arm(node, now=100.05)
     assert node.arm_pending_wall == 10.0
 
     pair.update_signal("permission", pair_signal(
         sequence=8, stamp=100.05, receipt=100.05))
     assert pair.diagnostic_snapshot()["committed_status"] == 8
-    assert node.arm_pending_wall == 10.0
     assert consume_pending_arm(node, now=100.05)
     assert node.arm_pending_wall is None
 
@@ -862,9 +861,17 @@ def test_restrictive_newer_partial_generation_revokes_committed_clear(update):
             evaluation_stamp=100.05, receipt=100.05)),
         lambda pair: pair.update_signal("permission", pair_signal(
             sequence=8, policy="b" * 64, stamp=100.05, receipt=100.05)),
+        lambda pair: pair.update_status(pair_status(
+            sequence=8, source_stamp=99.74, evaluation_stamp=99.74, receipt=99.74)),
+        lambda pair: pair.update_status(pair_status(
+            sequence=8, source_stamp=100.101, evaluation_stamp=100.101,
+            receipt=100.101)),
+        lambda pair: pair.update_status(pair_status(
+            sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05,
+            max_linear_mps=math.nan)),
     ],
 )
-def test_inconsistent_newer_partial_generation_revokes_committed_clear(update):
+def test_invalid_newer_partial_generation_revokes_committed_clear(update):
     pair = pair_buffer()
     pair.update_status(pair_status())
     pair.update_signal("permission", pair_signal())
@@ -873,47 +880,91 @@ def test_inconsistent_newer_partial_generation_revokes_committed_clear(update):
     update(pair)
     assert pair.evidence(100.05).state == gate.UNKNOWN
 @pytest.mark.parametrize(
-    "committed,status",
+    "committed,status,expected_caps",
     [
         (pair_status(max_linear_mps=0.2),
          pair_status(sequence=8, source_stamp=100.05, evaluation_stamp=100.05,
-                     receipt=100.05, max_linear_mps=0.1)),
+                     receipt=100.05, max_linear_mps=0.1), (0.1, None)),
         (pair_status(),
          pair_status(sequence=8, source_stamp=100.05, evaluation_stamp=100.05,
-                     receipt=100.05, max_angular_rps=0.1)),
-        (pair_status(max_angular_rps=0.2),
-         pair_status(sequence=8, source_stamp=100.05, evaluation_stamp=100.05,
-                     receipt=100.05, max_angular_rps=0.1)),
+                     receipt=100.05, max_linear_mps=0.1), (0.1, None)),
         (pair_status(max_linear_mps=0.2),
          pair_status(sequence=8, source_stamp=100.05, evaluation_stamp=100.05,
-                     receipt=100.05, max_linear_mps=0.0)),
+                     receipt=100.05, max_linear_mps=0.0), (0.0, None)),
+        (pair_status(max_linear_mps=0.2),
+         pair_status(sequence=8, source_stamp=100.05, evaluation_stamp=100.05,
+                     receipt=100.05, max_linear_mps=0.3), (0.2, None)),
+        (pair_status(max_linear_mps=0.2, max_angular_rps=0.3),
+         pair_status(sequence=8, source_stamp=100.05, evaluation_stamp=100.05,
+                     receipt=100.05), (0.2, 0.3)),
+        (pair_status(max_linear_mps=0.5, max_angular_rps=0.3),
+         pair_status(sequence=8, source_stamp=100.05, evaluation_stamp=100.05,
+                     receipt=100.05, max_linear_mps=0.2, max_angular_rps=0.8),
+         (0.2, 0.3)),
     ],
 )
-def test_tighter_partial_cap_revokes_committed_clear(committed, status):
+def test_safe_partial_status_cap_merges_monotonically(
+        committed, status, expected_caps):
     pair = pair_buffer()
     pair.update_status(committed)
     pair.update_signal("permission", pair_signal())
     assert pair.evidence(100.0).state == gate.CLEAR
+    committed_stamps = dict(pair._last_stamps)
 
     pair.update_status(status)
-    assert pair.evidence(100.05).state == gate.UNKNOWN
+    held = pair.evidence(100.05)
+    assert held.state == gate.CLEAR
+    assert held.sequence == 7
+    assert (held.max_linear_mps, held.max_angular_rps) == expected_caps
+    assert pair._last_stamps == committed_stamps
+
+
+@pytest.mark.parametrize("names", [("permission",), ("mode", "driver")])
+def test_partial_status_cap_holds_until_exact_pair_joins_for_each_signal_count(names):
+    pair = pair_buffer(names)
+    pair.update_status(pair_status(max_linear_mps=0.5))
+    for name in names:
+        pair.update_signal(name, pair_signal())
+    assert pair.diagnostic_snapshot()["committed_status"] == 7
+
+    pair.update_status(pair_status(
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05,
+        max_linear_mps=0.2))
+    held = pair.evidence(100.05)
+    assert (held.state, held.sequence, held.max_linear_mps) == (gate.CLEAR, 7, 0.2)
+
+    for index, name in enumerate(names):
+        pair.update_signal(name, pair_signal(
+            sequence=8, stamp=100.05, receipt=100.05))
+        current = pair.evidence(100.05)
+        if index + 1 < len(names):
+            assert (current.state, current.sequence, current.max_linear_mps) == (
+                gate.CLEAR, 7, 0.2)
+        else:
+            assert (current.state, current.sequence, current.max_linear_mps) == (
+                gate.CLEAR, 8, 0.2)
 
 
 def test_gap_or_overwrite_latches_hold_until_exact_pair_joins():
     pair = pair_buffer()
-    pair.update_status(pair_status())
+    pair.update_status(pair_status(max_linear_mps=0.5))
     pair.update_signal("permission", pair_signal())
     assert pair.evidence(100.0).state == gate.CLEAR
 
     pair.update_status(pair_status(
-        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05))
-    assert pair.evidence(100.05).state == gate.CLEAR
+        sequence=8, source_stamp=100.05, evaluation_stamp=100.05, receipt=100.05,
+        max_linear_mps=0.1))
+    held = pair.evidence(100.05)
+    assert (held.state, held.max_linear_mps) == (gate.CLEAR, 0.1)
     pair.update_signal("permission", pair_signal(sequence=9, stamp=100.06, receipt=100.06))
     assert pair.evidence(100.06).state == gate.UNKNOWN
 
     pair.update_status(pair_status(
-        sequence=9, source_stamp=100.06, evaluation_stamp=100.06, receipt=100.06))
-    assert pair.evidence(100.06).state == gate.CLEAR
+        sequence=9, source_stamp=100.06, evaluation_stamp=100.06, receipt=100.06,
+        max_linear_mps=0.1))
+    joined = pair.evidence(100.06)
+    assert (joined.state, joined.sequence, joined.max_linear_mps) == (
+        gate.CLEAR, 9, 0.1)
 
 
 def test_two_signal_partial_overwrite_latches_hold_until_exact_pair_joins():
