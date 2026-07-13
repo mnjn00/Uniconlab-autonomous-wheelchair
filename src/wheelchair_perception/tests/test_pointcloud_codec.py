@@ -169,9 +169,9 @@ class PointCloudCodecTests(unittest.TestCase):
         with self.assertRaisesRegex(codec.PointCloudCodecError, "E_CLOCK_FUTURE"):
             codec.decode_pointcloud2(canonical_cloud(10.1), now_s=10.0, max_future_s=0.05)
 
-    def test_imu_cache_aligns_by_source_stamp_not_arrival_order(self):
+    def test_imu_cache_aligns_by_monotonic_source_stamp_and_rejects_regression(self):
         cache = codec.ImuCache(max_skew_s=0.02, capacity=3)
-        for stamp in (10.03, 9.99):
+        for stamp in (9.99, 10.03):
             message = Imu()
             message.header = types.SimpleNamespace(stamp=Stamp(stamp), frame_id="imu_link")
             message.orientation = types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
@@ -180,6 +180,16 @@ class PointCloudCodecTests(unittest.TestCase):
             cache.add(message)
         self.assertEqual(cache.aligned(10.0).stamp_s, 9.99)
         self.assertIsNone(cache.aligned(10.2))
+
+        regressing = Imu()
+        regressing.header = types.SimpleNamespace(stamp=Stamp(9.98), frame_id="imu_link")
+        regressing.orientation = types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
+        regressing.linear_acceleration = types.SimpleNamespace(x=0.0, y=0.0, z=9.81)
+        regressing.angular_velocity = types.SimpleNamespace(x=0.1, y=-0.2, z=0.3)
+        with self.assertRaisesRegex(
+            codec.PointCloudCodecError, "E_IMU_SOURCE_CHRONOLOGY"
+        ):
+            cache.add(regressing)
 
 
 if __name__ == "__main__":
