@@ -123,6 +123,7 @@ class EvidencePairBuffer:
         self.poisoned = False
         self.committed_status = None
         self.committed_signals = {name: None for name in self.signal_names}
+        self.hold_latched = False
         self._lock = threading.RLock()
         self._last_stamps = {
             "status_source": None,
@@ -156,7 +157,14 @@ class EvidencePairBuffer:
                 self.reject()
                 return False
             return not self.poisoned
-
+        incomplete = self.sequence is not None and (
+            self.status is None or self.status.sequence != self.sequence or
+            any(signal is None or signal.sequence != self.sequence
+                for signal in self.signals.values()))
+        if ((self.committed_status is not None and
+             sequence > self.committed_status.sequence + 1) or
+                (self.sequence is not None and sequence > self.sequence and incomplete)):
+            self.hold_latched = True
         self._last_sequences[stream] = sequence
         if stream == "status":
             self.status = value
@@ -225,6 +233,7 @@ class EvidencePairBuffer:
                     for name, signal in self.committed_signals.items()
                 },
                 "poisoned": self.poisoned,
+                "hold_latched": self.hold_latched,
             }
 
     def _pair_evidence(self, status, signals, now_s, update_stamps):
@@ -233,6 +242,7 @@ class EvidencePairBuffer:
         if (not all(_finite(value) for value in numeric[:4]) or
                 any(value <= 0.0 for value in numeric[:4]) or
                 not isinstance(status.reason_mask, int) or
+                isinstance(status.reason_mask, bool) or
                 status.reason_mask < 0 or status.reason_mask & ~DEFINED_REASON_MASK or
                 not isinstance(status.clear, bool) or
                 not self._text_valid(status.source) or
@@ -247,7 +257,11 @@ class EvidencePairBuffer:
             "status_receipt": status.receipt_stamp_s,
         }
         for name, signal in zip(self.signal_names, signals):
-            if (signal.sequence != status.sequence or
+            if (not isinstance(signal.state, int) or isinstance(signal.state, bool) or
+                    not isinstance(signal.reason_mask, int) or
+                    isinstance(signal.reason_mask, bool) or
+                    signal.reason_mask < 0 or signal.reason_mask & ~DEFINED_REASON_MASK or
+                    signal.sequence != status.sequence or
                     signal.state != expected_state or
                     signal.reason_mask != status.reason_mask or
                     signal.source != status.source or
@@ -281,7 +295,9 @@ class EvidencePairBuffer:
     def _partial_member_permissive(self, value, is_status, name, now_s,
                                    committed_status):
         if (not self._sequence(value.sequence) or value.sequence != self.sequence or
-                value.reason_mask != 0 or value.source != committed_status.source or
+                not isinstance(value.reason_mask, int) or
+                isinstance(value.reason_mask, bool) or value.reason_mask != 0 or
+                value.source != committed_status.source or
                 value.policy_sha256 != committed_status.policy_sha256 or
                 not self._text_valid(value.source) or
                 not _HASH_RE.fullmatch(value.policy_sha256) or not _finite(now_s)):
@@ -292,7 +308,13 @@ class EvidencePairBuffer:
                             (value.source_stamp_s, value.evaluation_stamp_s,
                              value.receipt_stamp_s)) or
                     any(cap is not None and (not _finite(cap) or cap < 0.0)
-                        for cap in (value.max_linear_mps, value.max_angular_rps))):
+                        for cap in (value.max_linear_mps, value.max_angular_rps)) or
+                    any(new_cap is not None and
+                        (new_cap <= 0.0 or old_cap is None or new_cap < old_cap)
+                        for new_cap, old_cap in zip(
+                            (value.max_linear_mps, value.max_angular_rps),
+                            (committed_status.max_linear_mps,
+                             committed_status.max_angular_rps)))):
                 return False
             timestamps = {
                 "status_source": value.source_stamp_s,
@@ -300,7 +322,8 @@ class EvidencePairBuffer:
                 "status_receipt": value.receipt_stamp_s,
             }
         else:
-            if (value.state != CLEAR or
+            if (not isinstance(value.state, int) or isinstance(value.state, bool) or
+                    value.state != CLEAR or
                     not all(_finite(stamp) and stamp > 0.0 for stamp in
                             (value.stamp_s, value.receipt_stamp_s))):
                 return False
@@ -319,7 +342,8 @@ class EvidencePairBuffer:
         committed_signals = tuple(self.committed_signals.values())
         if (committed_status is None or
                 any(signal is None for signal in committed_signals) or
-                self.sequence is None or self.sequence <= committed_status.sequence):
+                self.sequence is None or self.sequence <= committed_status.sequence or
+                self.hold_latched):
             return None
         members = [(self.status, True, "status")]
         members.extend((signal, False, name)
@@ -357,41 +381,53 @@ class EvidencePairBuffer:
             self.committed_signals = {
                 name: signal for name, signal in zip(self.signal_names, signals)
             }
+            self.hold_latched = False
             return result
         except Exception:
             self.reject()
             return self._unknown()
+    def evidence_and_pending_arm_state(self, now_s):
+        """Capture evidence and arm classification under one pair lock."""
+        with self._lock:
+            evidence = self._evidence_unlocked(now_s)
+            return evidence, self._pending_arm_state_unlocked(now_s, evidence)
+
     def pending_arm_state(self, now_s, evidence=None):
         """Classify this pair for an already edge-qualified pending arm request."""
         with self._lock:
             if evidence is None:
                 evidence = self._evidence_unlocked(now_s)
-            if self.poisoned or not _finite(now_s):
+            return self._pending_arm_state_unlocked(now_s, evidence)
+
+    def _pending_arm_state_unlocked(self, now_s, evidence):
+        if self.poisoned or not _finite(now_s):
+            return "drop"
+        status = self.status
+        signals = tuple(self.signals.values())
+        complete = (
+            status is not None
+            and status.sequence == self.sequence
+            and all(signal is not None and signal.sequence == self.sequence
+                    for signal in signals)
+        )
+        if complete:
+            return ("complete" if evidence.state == CLEAR and evidence.reason_mask == 0
+                    else "drop")
+        members = [(status, True, "status")]
+        members.extend((signal, False, name)
+                       for name, signal in self.signals.items())
+        for value, is_status, name in members:
+            if value is None or value.sequence != self.sequence:
+                continue
+            if not self._pending_arm_value_permissive(
+                    value, is_status, name, now_s):
                 return "drop"
-            status = self.status
-            signals = tuple(self.signals.values())
-            complete = (
-                status is not None
-                and status.sequence == self.sequence
-                and all(signal is not None and signal.sequence == self.sequence
-                        for signal in signals)
-            )
-            if complete:
-                return ("complete" if evidence.state == CLEAR and evidence.reason_mask == 0
-                        else "drop")
-            members = [(status, True, "status")]
-            members.extend((signal, False, name)
-                           for name, signal in self.signals.items())
-            for value, is_status, name in members:
-                if value is None or value.sequence != self.sequence:
-                    continue
-                if not self._pending_arm_value_permissive(
-                        value, is_status, name, now_s):
-                    return "drop"
-            return "wait"
+        return "wait"
 
     def _pending_arm_value_permissive(self, value, is_status, name, now_s):
-        if (not self._sequence(value.sequence) or value.reason_mask != 0 or
+        if (not self._sequence(value.sequence) or
+                not isinstance(value.reason_mask, int) or
+                isinstance(value.reason_mask, bool) or value.reason_mask != 0 or
                 not self._text_valid(value.source) or
                 not _HASH_RE.fullmatch(value.policy_sha256)):
             return False
@@ -408,7 +444,8 @@ class EvidencePairBuffer:
             }
             caps = (value.max_linear_mps, value.max_angular_rps)
         else:
-            if (value.state != CLEAR or
+            if (not isinstance(value.state, int) or isinstance(value.state, bool) or
+                    value.state != CLEAR or
                     not all(_finite(stamp) and stamp > 0.0 for stamp in
                             (value.stamp_s, value.receipt_stamp_s))):
                 return False
@@ -1215,7 +1252,7 @@ class SafetyGateRosNode:
             deadline += self._wall_period_s
             self._wall_stop.wait(max(0.0, deadline - time.monotonic()))
 
-    def _consume_pending_arm_request(self, wall_now, now, paired):
+    def _consume_pending_arm_request(self, wall_now, pair_states):
         """Return the one stored arm edge only after every pair has joined."""
         pending_wall = self.arm_pending_wall
         if pending_wall is None:
@@ -1225,8 +1262,7 @@ class SafetyGateRosNode:
                 wall_now - pending_wall > ARM_PENDING_TTL_S + 1e-12):
             self.arm_pending_wall = None
             return False
-        states = [pair.pending_arm_state(now, paired[name])
-                  for name, pair in self.pairs.items()]
+        states = [snapshot[1] for snapshot in pair_states.values()]
         if any(state == "drop" for state in states):
             self.arm_pending_wall = None
             return False
@@ -1252,8 +1288,12 @@ class SafetyGateRosNode:
                 self.last_ros_time, self.last_ros_wall = now, wall_now
             reset = self.reset_requested
             self.reset_requested = False
-            paired = {name: pair.evidence(now) for name, pair in self.pairs.items()}
-            arm = self._consume_pending_arm_request(wall_now, now, paired)
+            snapshots = {
+                name: pair.evidence_and_pending_arm_state(now)
+                for name, pair in self.pairs.items()
+            }
+            paired = {name: snapshot[0] for name, snapshot in snapshots.items()}
+            arm = self._consume_pending_arm_request(wall_now, snapshots)
             self.arm_requested = False
             self.evidence.update({
                 "geofence": paired["geofence"], "collision": paired["collision"],
