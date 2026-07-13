@@ -48,6 +48,15 @@ REASON_INPUT_UNKNOWN = 1 << 31
 REASON_ROUTE_STATE = 1 << 32
 REASON_POLICY_MISMATCH = 1 << 36
 
+def _is_finite_number(value: Any) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(float(value)))
+
+
+def _valid_nonnegative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _valid_source_identity(value: Any) -> bool:
     if not isinstance(value, str) or not value:
         return False
@@ -57,6 +66,15 @@ def _valid_source_identity(value: Any) -> bool:
         return len(value.encode("utf-8")) <= SOURCE_IDENTITY_MAX_BYTES
     except UnicodeEncodeError:
         return False
+
+
+@dataclass(frozen=True)
+class LocalizationEvidenceSnapshot:
+    """A paired evidence snapshot with its atomic source-revocation generation."""
+
+    status_evidence: Optional[Any]
+    candidate: Optional[Any]
+    revocation_generation: int
 
 
 class LocalizationEvidenceBuffer:
@@ -72,8 +90,27 @@ class LocalizationEvidenceBuffer:
         self._status_source = status_source
         self._limit = limit
         self._lock = Lock()
+        self._revocation_generation = 0
         self.candidates: List[Any] = []
         self.statuses: List[Any] = []
+
+    @staticmethod
+    def _has_expected_source(value: Any, expected_source: str) -> bool:
+        try:
+            source = value.source
+        except AttributeError:
+            return False
+        return _valid_source_identity(source) and source == expected_source
+
+    def _candidate_source_is_valid(self, candidate: Any) -> bool:
+        return self._has_expected_source(candidate, self._candidate_source)
+
+    def _status_source_is_valid(self, status_evidence: Any) -> bool:
+        try:
+            status = status_evidence[0]
+        except (IndexError, TypeError):
+            return False
+        return self._has_expected_source(status, self._status_source)
 
     def _matches(self, candidate: Any, status: Any) -> bool:
         try:
@@ -83,10 +120,10 @@ class LocalizationEvidenceBuffer:
                 math.isfinite(candidate_stamp)
                 and math.isfinite(status_stamp)
                 and abs(candidate_stamp - status_stamp) <= 1.0e-9
-                and isinstance(candidate.source, str)
-                and candidate.source == self._candidate_source
-                and isinstance(status.source, str)
-                and status.source == self._status_source
+                and self._candidate_source_is_valid(candidate)
+                and self._has_expected_source(status, self._status_source)
+                and _valid_nonnegative_int(candidate.reset_count)
+                and _valid_nonnegative_int(status.reset_count)
                 and candidate.reset_count == status.reset_count
                 and candidate.map_id == status.map_id
                 and candidate.map_sha256 == status.map_sha256
@@ -100,39 +137,74 @@ class LocalizationEvidenceBuffer:
         if len(cache) > limit:
             del cache[0:len(cache) - limit]
 
+    def _revoke(self) -> None:
+        self.candidates.clear()
+        self.statuses.clear()
+        self._revocation_generation += 1
+
     def add_candidate(self, candidate: Any) -> None:
         with self._lock:
+            if not self._candidate_source_is_valid(candidate):
+                self._revoke()
+                return
             self._append_bounded(self.candidates, candidate, self._limit)
 
     def add_status(self, status_evidence: Any) -> None:
         with self._lock:
+            if not self._status_source_is_valid(status_evidence):
+                self._revoke()
+                return
             self._append_bounded(self.statuses, status_evidence, self._limit)
 
-    def snapshot(self) -> Tuple[Optional[Any], Optional[Any]]:
-        """Return the newest status and its exact matching candidate atomically."""
+    def snapshot(self) -> LocalizationEvidenceSnapshot:
+        """Return the newest pair and source-revocation generation atomically."""
         with self._lock:
             status_evidence = self.statuses[-1] if self.statuses else None
             if status_evidence is None:
-                return None, None
+                return LocalizationEvidenceSnapshot(
+                    None, None, self._revocation_generation,
+                )
             status = status_evidence[0]
             candidate = next(
                 (candidate for candidate in reversed(self.candidates)
                  if self._matches(candidate, status)),
                 None,
             )
-            return status_evidence, candidate
-def status_chronology_is_newer(current: Tuple[int, float, float, float],
-                               previous: Optional[Tuple[int, float, float, float]]) -> bool:
-    """Accept a later status without treating an unchanged source identity as a regression."""
+            return LocalizationEvidenceSnapshot(
+                status_evidence, candidate, self._revocation_generation,
+            )
+
+
+def _valid_status_chronology(value: Any) -> bool:
+    if not isinstance(value, tuple) or len(value) != 5:
+        return False
+    sequence, source_stamp, evaluation_stamp, receipt_stamp, reset_count = value
+    return (
+        _valid_nonnegative_int(sequence)
+        and _valid_nonnegative_int(reset_count)
+        and all(_is_finite_number(stamp) for stamp in (
+            source_stamp, evaluation_stamp, receipt_stamp,
+        ))
+    )
+
+
+def status_chronology_is_newer(current: Tuple[int, float, float, float, int],
+                               previous: Optional[Tuple[int, float, float, float, int]]) -> bool:
+    """Accept only increasing status evidence without reset-count regression."""
+    if not _valid_status_chronology(current):
+        return False
     if previous is None:
         return True
-    current_sequence, current_source, current_evaluation, current_receipt = current
-    previous_sequence, previous_source, previous_evaluation, previous_receipt = previous
+    if not _valid_status_chronology(previous):
+        return False
+    current_sequence, current_source, current_evaluation, current_receipt, current_reset = current
+    previous_sequence, previous_source, previous_evaluation, previous_receipt, previous_reset = previous
     return (
         current_sequence > previous_sequence
         and current_source >= previous_source
         and current_evaluation >= previous_evaluation
         and current_receipt > previous_receipt
+        and current_reset >= previous_reset
     )
 
 
@@ -147,7 +219,9 @@ def status_allows_pair_hold(status: Any, receipt_stamp: float, now_s: float,
         transform_age = float(status.transform_age_s)
         receipt_age = now_s - receipt_stamp
         return (
-            int(status.sequence) >= 0
+            _valid_nonnegative_int(status.sequence)
+            and _valid_nonnegative_int(status.reset_count)
+            and _valid_nonnegative_int(prior_reset_count)
             and math.isfinite(source_stamp)
             and math.isfinite(evaluation_stamp)
             and math.isfinite(receipt_stamp)
@@ -163,7 +237,7 @@ def status_allows_pair_hold(status: Any, receipt_stamp: float, now_s: float,
             and status.map_sha256 == map_sha256
             and status.header.frame_id == frame_id
             and status.policy_sha256 == policy_sha256
-            and isinstance(status.source, str)
+            and _valid_source_identity(status.source)
             and status.source == status_source
             and status.state == ok_state
             and status.reason_mask == 0
@@ -241,6 +315,61 @@ class ActiveRouteSelection:
     segment_id: str
     zone_id: str
     mission_id: str = ""
+
+
+def _valid_sha256_identity(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == SHA256_LENGTH
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def select_active_route(
+        route_msg: Any, now_s: float,
+        previous: Optional[Tuple[int, Tuple[Any, ...], float]],
+) -> Tuple[Optional[ActiveRouteSelection], Optional[Tuple[int, Tuple[Any, ...], float]]]:
+    """Accept only fresh, strictly chronological ActiveRoute bindings."""
+    try:
+        route_stamp = float(route_msg.header.stamp.to_sec())
+        activation_sequence = route_msg.activation_sequence
+        identity = (
+            route_msg.direction, route_msg.mission_id, route_msg.route_id,
+            route_msg.map_id, route_msg.map_sha256,
+            route_msg.route_manifest_sha256, route_msg.safety_manifest_sha256,
+        )
+        if (
+                not _is_finite_number(now_s)
+                or not math.isfinite(route_stamp)
+                or not _valid_nonnegative_int(activation_sequence)
+                or activation_sequence <= 0
+                or not isinstance(identity[0], int)
+                or isinstance(identity[0], bool)
+                or identity[0] not in (1, 2)
+                or not all(isinstance(value, str) and value for value in identity[1:4])
+                or not all(_valid_sha256_identity(value) for value in identity[4:])
+                or not -FUTURE_TOLERANCE_S <= now_s - route_stamp <= ACTIVE_ROUTE_TTL_S
+        ):
+            return None, previous
+        if previous is not None:
+            previous_sequence, previous_identity, previous_stamp = previous
+            if (
+                    not _valid_nonnegative_int(previous_sequence)
+                    or previous_sequence <= 0
+                    or not _is_finite_number(previous_stamp)
+                    or route_stamp <= previous_stamp
+                    or activation_sequence < previous_sequence
+                    or (activation_sequence == previous_sequence and identity != previous_identity)
+            ):
+                return None, previous
+        selection = ActiveRouteSelection(
+            route_msg.route_id, route_msg.route_manifest_sha256,
+            route_msg.safety_manifest_sha256, route_msg.map_id,
+            route_msg.map_sha256, "", "", route_msg.mission_id,
+        )
+        return selection, (activation_sequence, identity, route_stamp)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None, previous
 
 
 @dataclass(frozen=True)
@@ -928,6 +1057,7 @@ def run_ros_node() -> None:
     sequence = [0]
     status_message = [0]
     held_pair = [None]
+    observed_revocation_generation = [0]
 
 
     def receive_status(msg: Any) -> None:
@@ -942,24 +1072,30 @@ def run_ros_node() -> None:
 
     def publish(_event: Any) -> None:
         route_msg = latest["route"]
-        status_evidence, pose_msg = evidence.snapshot()
+        evidence_snapshot = evidence.snapshot()
+        status_evidence = evidence_snapshot.status_evidence
+        pose_msg = evidence_snapshot.candidate
         now = rospy.Time.now()
         now_s = now.to_sec()
+        if evidence_snapshot.revocation_generation != observed_revocation_generation[0]:
+            held_pair[0] = None
+            observed_revocation_generation[0] = evidence_snapshot.revocation_generation
         selection = None
         if route_msg is not None:
-            try:
-                route_stamp = float(route_msg.header.stamp.to_sec())
-                chronology_ok = high_water["route"] is None or route_stamp >= high_water["route"]
-                fresh = -FUTURE_TOLERANCE_S <= now_s - route_stamp <= ACTIVE_ROUTE_TTL_S
-                if chronology_ok and fresh:
-                    selection = ActiveRouteSelection(
-                        route_msg.route_id, route_msg.route_manifest_sha256,
-                        route_msg.safety_manifest_sha256, route_msg.map_id,
-                        route_msg.map_sha256, "", "", route_msg.mission_id,
-                    )
-                    high_water["route"] = route_stamp
-            except (AttributeError, TypeError, ValueError):
-                selection = None
+            selection, route_high_water = select_active_route(
+                route_msg, now_s, high_water["route"],
+            )
+            if selection is not None:
+                active_route = policy.route(selection.route_id)
+                expected_direction = (
+                    1 if active_route is not None and active_route.direction == "outbound"
+                    else 2 if active_route is not None and active_route.direction == "return"
+                    else 0
+                )
+                if route_msg.direction == expected_direction:
+                    high_water["route"] = route_high_water
+                else:
+                    selection = None
         sample = None
         status_is_acceptable = False
         if status_evidence is not None:
@@ -968,9 +1104,13 @@ def run_ros_node() -> None:
                 status_source_stamp = float(localization_msg.header.stamp.to_sec())
                 status_evaluation_stamp = float(localization_msg.evaluation_stamp.to_sec())
                 receipt_stamp = float(receipt_stamp)
-                status_sequence = int(localization_msg.sequence)
+                if (not _valid_nonnegative_int(localization_msg.sequence)
+                        or not _valid_nonnegative_int(localization_msg.reset_count)):
+                    raise ValueError("invalid LocalizationStatus chronology fields")
+                status_sequence = localization_msg.sequence
                 status_high_water = (
-                    status_sequence, status_source_stamp, status_evaluation_stamp, receipt_stamp,
+                    status_sequence, status_source_stamp, status_evaluation_stamp,
+                    receipt_stamp, localization_msg.reset_count,
                 )
                 previous_status = high_water["status"]
                 is_new_status_message = status_message_id != high_water["status_message"]
@@ -1023,7 +1163,9 @@ def run_ros_node() -> None:
                     1.0 - 2.0 * (q.y * q.y + q.z * q.z),
                 )
                 paired = (
-                    status_sequence >= 0
+                    _valid_nonnegative_int(status_sequence)
+                    and _valid_nonnegative_int(pose_msg.reset_count)
+                    and _valid_nonnegative_int(localization_msg.reset_count)
                     and status_is_acceptable
                     and abs(pose_stamp - status_source_stamp) <= 1.0e-9
                     and pose_msg.source == policy.localization_candidate_source

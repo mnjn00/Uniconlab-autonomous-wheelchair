@@ -202,6 +202,22 @@ def _evidence_buffer(limit=route_safety.LOCALIZATION_EVIDENCE_CACHE_SIZE):
     return route_safety.LocalizationEvidenceBuffer(
         CANDIDATE_SOURCE, STATUS_SOURCE, limit=limit,
     )
+def _active_route(stamp, activation_sequence=1, direction=1, mission_id="mission",
+                  route_id="route", map_id="map", map_sha256="a" * 64,
+                  route_manifest_sha256="b" * 64, safety_manifest_sha256="c" * 64):
+    return types.SimpleNamespace(
+        header=types.SimpleNamespace(
+            stamp=types.SimpleNamespace(to_sec=lambda: stamp),
+        ),
+        activation_sequence=activation_sequence,
+        direction=direction,
+        mission_id=mission_id,
+        route_id=route_id,
+        map_id=map_id,
+        map_sha256=map_sha256,
+        route_manifest_sha256=route_manifest_sha256,
+        safety_manifest_sha256=safety_manifest_sha256,
+    )
 
 
 def _status_allows_pair_hold(status, receipt_stamp=10.01, now_s=10.01):
@@ -220,13 +236,22 @@ def test_localization_candidate_then_status_retains_prior_pair_until_new_pair_jo
 
     evidence.add_candidate(candidate_a)
     evidence.add_status(first_evidence)
-    assert evidence.snapshot() == (first_evidence, candidate_a)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is first_evidence
+    assert snapshot.candidate is candidate_a
+    assert snapshot.revocation_generation == 0
 
     evidence.add_candidate(candidate_b)
-    assert evidence.snapshot() == (first_evidence, candidate_a)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is first_evidence
+    assert snapshot.candidate is candidate_a
+    assert snapshot.revocation_generation == 0
 
     evidence.add_status(in_flight_evidence)
-    assert evidence.snapshot() == (in_flight_evidence, candidate_b)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is in_flight_evidence
+    assert snapshot.candidate is candidate_b
+    assert snapshot.revocation_generation == 0
 
 
 def test_localization_status_then_candidate_retains_prior_pair_until_new_pair_joins():
@@ -238,22 +263,91 @@ def test_localization_status_then_candidate_retains_prior_pair_until_new_pair_jo
 
     evidence.add_candidate(candidate_a)
     evidence.add_status(first_evidence)
-    assert evidence.snapshot() == (first_evidence, candidate_a)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is first_evidence
+    assert snapshot.candidate is candidate_a
+    assert snapshot.revocation_generation == 0
 
     evidence.add_status(in_flight_evidence)
-    assert evidence.snapshot() == (in_flight_evidence, None)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is in_flight_evidence
+    assert snapshot.candidate is None
+    assert snapshot.revocation_generation == 0
     assert _status_allows_pair_hold(status_b, receipt_stamp=10.11, now_s=10.11)
 
     evidence.add_candidate(candidate_b)
-    assert evidence.snapshot() == (in_flight_evidence, candidate_b)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is in_flight_evidence
+    assert snapshot.candidate is candidate_b
+    assert snapshot.revocation_generation == 0
 
 
 def test_status_chronology_accepts_newer_status_for_unchanged_candidate_identity():
-    prior = (1, 10.0, 10.01, 10.02)
-    assert route_safety.status_chronology_is_newer((2, 10.0, 10.03, 10.04), prior)
-    assert not route_safety.status_chronology_is_newer((2, 9.9, 10.03, 10.04), prior)
-    assert not route_safety.status_chronology_is_newer((2, 10.0, 10.0, 10.04), prior)
-    assert not route_safety.status_chronology_is_newer((1, 10.0, 10.03, 10.04), prior)
+    prior = (1, 10.0, 10.01, 10.02, 4)
+    assert route_safety.status_chronology_is_newer((2, 10.0, 10.03, 10.04, 4), prior)
+    assert route_safety.status_chronology_is_newer((2, 10.0, 10.03, 10.04, 5), prior)
+    assert not route_safety.status_chronology_is_newer((2, 10.0, 10.03, 10.04, 3), prior)
+    assert not route_safety.status_chronology_is_newer((2, 9.9, 10.03, 10.04, 4), prior)
+    assert not route_safety.status_chronology_is_newer((2, 10.0, 10.0, 10.04, 4), prior)
+    assert not route_safety.status_chronology_is_newer((1, 10.0, 10.03, 10.04, 4), prior)
+    assert not route_safety.status_chronology_is_newer((2, 10.0, 10.03, 10.04, True), prior)
+    assert not route_safety.status_chronology_is_newer((2, 10.0, 10.03, 10.04, -1), prior)
+
+def test_active_route_requires_strict_stamp_sequence_and_identity_chronology():
+    first = _active_route(10.0)
+    selection, chronology = route_safety.select_active_route(first, 10.0, None)
+    assert selection is not None
+    assert selection.route_id == "route"
+
+    heartbeat = _active_route(10.1)
+    selection, chronology = route_safety.select_active_route(heartbeat, 10.1, chronology)
+    assert selection is not None
+
+    higher_activation = _active_route(
+        10.2, activation_sequence=2, mission_id="mission-next", route_id="route-next",
+    )
+    selection, chronology = route_safety.select_active_route(
+        higher_activation, 10.2, chronology,
+    )
+    assert selection is not None
+    assert selection.route_id == "route-next"
+
+    selection, unchanged = route_safety.select_active_route(
+        higher_activation, 10.2, chronology,
+    )
+    assert selection is None
+    assert unchanged == chronology
+
+    selection, unchanged = route_safety.select_active_route(
+        _active_route(10.3, activation_sequence=1), 10.3, chronology,
+    )
+    assert selection is None
+    assert unchanged == chronology
+
+    selection, unchanged = route_safety.select_active_route(
+        _active_route(
+            10.4, activation_sequence=2, mission_id="mission-next",
+            route_id="identity-mutated",
+        ),
+        10.4, chronology,
+    )
+    assert selection is None
+    assert unchanged == chronology
+
+
+def test_active_route_rejects_malformed_stale_and_future_bindings():
+    for route in (
+            _active_route(10.0, activation_sequence=True),
+            _active_route(10.0, activation_sequence=0),
+            _active_route(10.0, direction=0),
+            _active_route(10.0, mission_id=""),
+            _active_route(10.0, map_sha256="not-a-sha"),
+            _active_route(9.24),
+            _active_route(10.051)):
+        now_s = 10.0
+        selection, chronology = route_safety.select_active_route(route, now_s, None)
+        assert selection is None
+        assert chronology is None
 
 def test_newer_restrictive_status_revokes_prior_permissive_pair():
     evidence = _evidence_buffer()
@@ -264,11 +358,17 @@ def test_newer_restrictive_status_revokes_prior_permissive_pair():
 
     evidence.add_candidate(candidate_a)
     evidence.add_status(first_evidence)
-    assert evidence.snapshot() == (first_evidence, candidate_a)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is first_evidence
+    assert snapshot.candidate is candidate_a
+    assert snapshot.revocation_generation == 0
 
     evidence.add_candidate(candidate_b)
     evidence.add_status(restrictive_evidence)
-    assert evidence.snapshot() == (restrictive_evidence, candidate_b)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is restrictive_evidence
+    assert snapshot.candidate is candidate_b
+    assert snapshot.revocation_generation == 0
     assert not _status_allows_pair_hold(
         restrictive_status, receipt_stamp=10.11, now_s=10.11,
     )
@@ -278,17 +378,26 @@ def test_localization_status_without_exact_candidate_match_fails_closed_then_pro
     candidate, status = _localization_evidence(10.0)
     status_evidence = (status, 10.01, 1)
     evidence.add_status(status_evidence)
-    assert evidence.snapshot() == (status_evidence, None)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is status_evidence
+    assert snapshot.candidate is None
+    assert snapshot.revocation_generation == 0
 
     wrong_stamp, _ = _localization_evidence(10.1)
     wrong_reset, _ = _localization_evidence(10.0, reset_count=2)
     wrong_map, _ = _localization_evidence(10.0, map_sha256="b" * 64)
     for invalid_candidate in (wrong_stamp, wrong_reset, wrong_map):
         evidence.add_candidate(invalid_candidate)
-    assert evidence.snapshot() == (status_evidence, None)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is status_evidence
+    assert snapshot.candidate is None
+    assert snapshot.revocation_generation == 0
 
     evidence.add_candidate(candidate)
-    assert evidence.snapshot() == (status_evidence, candidate)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is status_evidence
+    assert snapshot.candidate is candidate
+    assert snapshot.revocation_generation == 0
 
 def test_localization_evidence_matches_only_exact_source_bindings():
     evidence = _evidence_buffer()
@@ -297,8 +406,10 @@ def test_localization_evidence_matches_only_exact_source_bindings():
 
     evidence.add_candidate(candidate)
     evidence.add_status(status_evidence)
-
-    assert evidence.snapshot() == (status_evidence, candidate)
+    snapshot = evidence.snapshot()
+    assert snapshot.status_evidence is status_evidence
+    assert snapshot.candidate is candidate
+    assert snapshot.revocation_generation == 0
 
 
 @pytest.mark.parametrize(
@@ -321,7 +432,12 @@ def test_localization_evidence_rejects_foreign_or_empty_source(
     evidence.add_candidate(candidate)
     evidence.add_status(status_evidence)
 
-    assert evidence.snapshot() == (status_evidence, None)
+    snapshot = evidence.snapshot()
+    assert snapshot.candidate is None
+    assert snapshot.revocation_generation == 1
+    assert snapshot.status_evidence is (
+        status_evidence if status_source == STATUS_SOURCE else None
+    )
 
 
 
@@ -336,7 +452,68 @@ def test_localization_evidence_caches_are_bounded_and_deterministic():
 
     assert evidence.candidates == candidates[-2:]
     assert len(evidence.statuses) == 2
-    assert evidence.snapshot()[0][0].header.stamp.to_sec() == 3.0
+    snapshot = evidence.snapshot()
+    status_evidence = snapshot.status_evidence
+    assert status_evidence is not None
+    assert status_evidence[0].header.stamp.to_sec() == 3.0
+    assert snapshot.candidate is candidates[-1]
+    assert snapshot.revocation_generation == 0
+
+
+def test_invalid_candidate_source_revocation_clears_hidden_pair_before_recovery():
+    evidence = _evidence_buffer()
+    candidate_a, status_a = _localization_evidence(10.0, sequence=1)
+    first_evidence = (status_a, 10.01, 1)
+    evidence.add_candidate(candidate_a)
+    evidence.add_status(first_evidence)
+    first_snapshot = evidence.snapshot()
+    assert first_snapshot.status_evidence is first_evidence
+    assert first_snapshot.candidate is candidate_a
+    assert first_snapshot.revocation_generation == 0
+
+    evidence.add_candidate(types.SimpleNamespace(source=object()))
+    revoked_snapshot = evidence.snapshot()
+    assert revoked_snapshot.status_evidence is None
+    assert revoked_snapshot.candidate is None
+    assert revoked_snapshot.revocation_generation == first_snapshot.revocation_generation + 1
+    assert evidence.candidates == []
+    assert evidence.statuses == []
+
+    candidate_b, status_b = _localization_evidence(10.1, sequence=2)
+    recovered_evidence = (status_b, 10.11, 2)
+    evidence.add_candidate(candidate_b)
+    evidence.add_status(recovered_evidence)
+    recovered_snapshot = evidence.snapshot()
+    assert recovered_snapshot.status_evidence is recovered_evidence
+    assert recovered_snapshot.candidate is candidate_b
+    assert recovered_snapshot.revocation_generation == revoked_snapshot.revocation_generation
+
+
+def test_invalid_status_source_revocation_requires_a_new_exact_pair():
+    evidence = _evidence_buffer()
+    candidate_a, status_a = _localization_evidence(10.0, sequence=1)
+    first_evidence = (status_a, 10.01, 1)
+    evidence.add_candidate(candidate_a)
+    evidence.add_status(first_evidence)
+    first_snapshot = evidence.snapshot()
+    assert first_snapshot.status_evidence is first_evidence
+    assert first_snapshot.candidate is candidate_a
+    assert first_snapshot.revocation_generation == 0
+
+    evidence.add_status((types.SimpleNamespace(source=object()), 10.02, 2))
+    revoked_snapshot = evidence.snapshot()
+    assert revoked_snapshot.status_evidence is None
+    assert revoked_snapshot.candidate is None
+    assert revoked_snapshot.revocation_generation == first_snapshot.revocation_generation + 1
+
+    candidate_b, status_b = _localization_evidence(10.1, sequence=2)
+    recovered_evidence = (status_b, 10.11, 3)
+    evidence.add_candidate(candidate_b)
+    evidence.add_status(recovered_evidence)
+    recovered_snapshot = evidence.snapshot()
+    assert recovered_snapshot.status_evidence is recovered_evidence
+    assert recovered_snapshot.candidate is candidate_b
+    assert recovered_snapshot.revocation_generation == revoked_snapshot.revocation_generation
 
 
 def test_localization_snapshot_recovers_only_with_newer_matching_evidence():
@@ -344,23 +521,34 @@ def test_localization_snapshot_recovers_only_with_newer_matching_evidence():
     candidate_a, status_a = _localization_evidence(10.0)
     evidence.add_candidate(candidate_a)
     evidence.add_status((status_a, 10.01, 1))
-    assert evidence.snapshot()[1] is candidate_a
+    prior_snapshot = evidence.snapshot()
+    prior_status_evidence = prior_snapshot.status_evidence
+    assert prior_status_evidence is not None
+    assert prior_status_evidence[0] is status_a
+    assert prior_snapshot.candidate is candidate_a
+    assert prior_snapshot.revocation_generation == 0
 
-    malformed_evidence = (object(), 10.02, 2)
-    evidence.add_status(malformed_evidence)
-    assert evidence.snapshot() == (malformed_evidence, None)
+    evidence.add_status((object(), 10.02, 2))
+    revoked_snapshot = evidence.snapshot()
+    assert revoked_snapshot.status_evidence is None
+    assert revoked_snapshot.candidate is None
+    assert revoked_snapshot.revocation_generation == prior_snapshot.revocation_generation + 1
 
     candidate_b, status_b = _localization_evidence(10.1)
     recovered_evidence = (status_b, 10.11, 3)
     evidence.add_candidate(candidate_b)
     evidence.add_status(recovered_evidence)
-    assert evidence.snapshot() == (recovered_evidence, candidate_b)
+    recovered_snapshot = evidence.snapshot()
+    assert recovered_snapshot.status_evidence is recovered_evidence
+    assert recovered_snapshot.candidate is candidate_b
+    assert recovered_snapshot.revocation_generation == revoked_snapshot.revocation_generation
 def test_permissive_status_hold_rejects_restrictive_identity_and_timing_changes():
     _, status = _localization_evidence(10.0)
     allowed = _status_allows_pair_hold
     assert allowed(status)
     for field, value in (
-            ("reset_count", 2), ("map_id", "other"), ("map_sha256", "b" * 64),
+            ("reset_count", 2), ("reset_count", True), ("reset_count", -1),
+            ("map_id", "other"), ("map_sha256", "b" * 64),
             ("policy_sha256", "q" * 64), ("source", "foreign_status"),
             ("source", ""), ("state", "NOT_OK"), ("reason_mask", 1),
             ("independent_check_passed", False), ("transform_age_s", -0.01)):
@@ -429,10 +617,9 @@ def test_ros_publish_snapshots_evidence_before_sampling_evaluation_clock():
     snapshot_index = next(
         index for index, statement in enumerate(publish.body)
         if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
-            and isinstance(statement.targets[0], ast.Tuple)
-            and [element.id for element in statement.targets[0].elts] == [
-                "status_evidence", "pose_msg"
-            ] and isinstance(statement.value, ast.Call)
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == "evidence_snapshot"
+            and isinstance(statement.value, ast.Call)
             and isinstance(statement.value.func, ast.Attribute)
             and statement.value.func.attr == "snapshot"
             and isinstance(statement.value.func.value, ast.Name)
@@ -444,6 +631,156 @@ def test_ros_publish_snapshots_evidence_before_sampling_evaluation_clock():
         < assignments["now_s"]
     )
 
+def test_ros_revocation_generation_clears_status_only_held_pair(monkeypatch):
+    policy = route_safety.replace(
+        _load(_manifest()),
+        localization_policy_sha256="p" * 64,
+        localization_candidate_source=CANDIDATE_SOURCE,
+        localization_status_source=STATUS_SOURCE,
+    )
+    callbacks, timers, publishers = {}, [], {}
+
+    class FakeTime:
+        current_s = 10.0
+
+        def __init__(self, stamp_s=0.0):
+            self.stamp_s = stamp_s
+
+        @classmethod
+        def now(cls):
+            return cls(cls.current_s)
+
+        @classmethod
+        def from_sec(cls, stamp_s):
+            return cls(stamp_s)
+
+        def to_sec(self):
+            return self.stamp_s
+
+    class Header:
+        def __init__(self, stamp=None, frame_id=""):
+            self.stamp = FakeTime() if stamp is None else stamp
+            self.frame_id = frame_id
+
+    class Publisher:
+        def __init__(self):
+            self.messages = []
+
+        def publish(self, message):
+            self.messages.append(message)
+
+    def publisher(topic, *_args, **_kwargs):
+        if topic not in publishers:
+            publishers[topic] = Publisher()
+        return publishers[topic]
+
+    rospy = types.ModuleType("rospy")
+    rospy.Time = FakeTime
+    rospy.init_node = lambda _name: None
+    rospy.get_param = lambda name: "ignored" if name == "~config_path" else "hash"
+    rospy.Publisher = publisher
+    rospy.Subscriber = lambda topic, _type, callback, **_kwargs: callbacks.setdefault(
+        topic, callback,
+    )
+    rospy.Duration = lambda seconds: seconds
+    rospy.Timer = lambda _duration, callback: timers.append(callback)
+    rospy.spin = lambda: None
+
+    interfaces = types.ModuleType("wheelchair_interfaces")
+    interface_messages = types.ModuleType("wheelchair_interfaces.msg")
+    interface_messages.ActiveRoute = type("ActiveRoute", (), {})
+
+    class GeofenceStatus:
+        def __init__(self):
+            self.header = Header()
+            self.evaluation_stamp = FakeTime()
+
+    interface_messages.GeofenceStatus = GeofenceStatus
+    interface_messages.LocalizationCandidate = type("LocalizationCandidate", (), {})
+    interface_messages.LocalizationStatus = type("LocalizationStatus", (), {"OK": "OK"})
+    interface_messages.SafetySignal = type("SafetySignal", (), {})
+    interfaces.msg = interface_messages
+    std_msgs = types.ModuleType("std_msgs")
+    std_messages = types.ModuleType("std_msgs.msg")
+    std_messages.Header = Header
+    std_msgs.msg = std_messages
+    monkeypatch.setattr(route_safety, "load_simulation_policy", lambda *_args: policy)
+    monkeypatch.setitem(sys.modules, "rospy", rospy)
+    monkeypatch.setitem(sys.modules, "wheelchair_interfaces", interfaces)
+    monkeypatch.setitem(sys.modules, "wheelchair_interfaces.msg", interface_messages)
+    monkeypatch.setitem(sys.modules, "std_msgs", std_msgs)
+    monkeypatch.setitem(sys.modules, "std_msgs.msg", std_messages)
+
+    def localization_pair(stamp, sequence, candidate_source=CANDIDATE_SOURCE):
+        header = types.SimpleNamespace(
+            stamp=types.SimpleNamespace(to_sec=lambda: stamp),
+            frame_id=policy.frame_id,
+        )
+        candidate = types.SimpleNamespace(
+            pose=types.SimpleNamespace(
+                header=header,
+                pose=types.SimpleNamespace(
+                    covariance=[0.0] * 36,
+                    pose=types.SimpleNamespace(
+                        position=types.SimpleNamespace(x=0.0, y=0.0),
+                        orientation=types.SimpleNamespace(w=1.0, x=0.0, y=0.0, z=0.0),
+                    ),
+                ),
+            ),
+            reset_count=1,
+            map_id=policy.map_id,
+            map_sha256=policy.map_sha256,
+            source=candidate_source,
+        )
+        status = types.SimpleNamespace(
+            header=header,
+            evaluation_stamp=types.SimpleNamespace(to_sec=lambda: stamp),
+            transform_age_s=0.0,
+            position_std_m=0.01,
+            sequence=sequence,
+            reset_count=1,
+            map_id=policy.map_id,
+            map_sha256=policy.map_sha256,
+            policy_sha256=policy.localization_policy_sha256,
+            source=STATUS_SOURCE,
+            state="OK",
+            reason_mask=0,
+            independent_check_passed=True,
+        )
+        return candidate, status
+
+    route = policy.routes[0]
+    active = _active_route(
+        10.0, direction=1 if route.direction == "outbound" else 2,
+        route_id=route.route_id, map_id=policy.map_id,
+        map_sha256=policy.map_sha256,
+        route_manifest_sha256=route.route_manifest_sha256,
+        safety_manifest_sha256=policy.manifest_sha256,
+    )
+    route_safety.run_ros_node()
+    candidate, status = localization_pair(10.0, 1)
+    callbacks["/localization/candidate"](candidate)
+    callbacks["/localization/status"](status)
+    callbacks["/route/active"](active)
+    timers[0](None)
+    status_messages = publishers["/route_safety/geofence_status"].messages
+    assert status_messages[-1].header.stamp.to_sec() == 10.0
+
+    FakeTime.current_s = 10.1
+    invalid_candidate, _ = localization_pair(10.1, 2, candidate_source="foreign")
+    _, status_only = localization_pair(10.1, 2)
+    callbacks["/localization/candidate"](invalid_candidate)
+    callbacks["/localization/status"](status_only)
+    timers[0](None)
+    assert status_messages[-1].header.stamp.to_sec() == 0.0
+
+    FakeTime.current_s = 10.2
+    recovered_candidate, recovered_status = localization_pair(10.2, 3)
+    callbacks["/localization/candidate"](recovered_candidate)
+    callbacks["/localization/status"](recovered_status)
+    timers[0](None)
+    assert status_messages[-1].header.stamp.to_sec() == 10.2
+
 
 def test_snapshot_evidence_is_not_evaluated_with_a_pre_snapshot_clock():
     policy = _load(_manifest())
@@ -452,7 +789,10 @@ def test_snapshot_evidence_is_not_evaluated_with_a_pre_snapshot_clock():
     evidence.add_candidate(candidate)
     evidence.add_status((status, 10.10, 1))
 
-    status_evidence, snapshot_candidate = evidence.snapshot()
+    snapshot = evidence.snapshot()
+    status_evidence = snapshot.status_evidence
+    snapshot_candidate = snapshot.candidate
+    assert snapshot.revocation_generation == 0
     snapshot_status, receipt_stamp, _ = status_evidence
     evaluation_stamp = snapshot_status.evaluation_stamp.to_sec()
     snapshot_sample = _pose(
