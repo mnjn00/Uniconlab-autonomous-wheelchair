@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="760" viewBox="0 0 1600 760" role="img" aria-labelledby="title desc">
+  <title id="title">UniconLab autonomous wheelchair software architecture</title>
+  <desc id="desc">ROS 1 Noetic data flow from Livox sensors through perception, navigation, independent safety authorities, and a fail-closed command gate. Simulation is active while hardware output remains blocked.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="1" stop-color="#111c31"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" x2="1">
+      <stop offset="0" stop-color="#06b6d4"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="rose" x1="0" x2="1">
+      <stop offset="0" stop-color="#f43f5e"/>
+      <stop offset="1" stop-color="#fb7185"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#020617" flood-opacity="0.45"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .title { font: 700 38px Inter, system-ui, sans-serif; fill: #f8fafc; }
+      .subtitle { font: 400 19px Inter, system-ui, sans-serif; fill: #94a3b8; }
+      .label { font: 700 19px Inter, system-ui, sans-serif; fill: #f8fafc; }
+      .body { font: 400 15px Inter, system-ui, sans-serif; fill: #cbd5e1; }
+      .mono { font: 600 14px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #94a3b8; }
+      .flow { fill: none; stroke: #64748b; stroke-width: 4; marker-end: url(#arrow); }
+      .card { fill: #111f34; stroke: #334155; stroke-width: 2; rx: 22; filter: url(#shadow); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="760" rx="32" fill="url(#bg)"/>
+  <circle cx="1460" cy="-30" r="310" fill="#0e7490" opacity="0.12"/>
+  <circle cx="120" cy="790" r="310" fill="#be123c" opacity="0.08"/>
+
+  <text x="72" y="74" class="title">Fail-closed ROS 1 Noetic architecture</text>
+  <text x="72" y="108" class="subtitle">One command owner, independent safety authorities, explicit simulation / hardware boundary</text>
+
+  <rect x="72" y="168" width="230" height="180" class="card"/>
+  <rect x="72" y="168" width="230" height="8" rx="4" fill="url(#cyan)"/>
+  <text x="98" y="216" class="label">Sensor intake</text>
+  <text x="98" y="253" class="body">Livox 3D LiDAR</text>
+  <text x="98" y="281" class="body">IMU orientation</text>
+  <text x="98" y="309" class="body">Monotonic timestamps</text>
+  <text x="98" y="332" class="mono">queue depth = 1</text>
+
+  <path d="M302 258 H362" class="flow"/>
+
+  <rect x="382" y="168" width="260" height="180" class="card"/>
+  <rect x="382" y="168" width="260" height="8" rx="4" fill="#38bdf8"/>
+  <text x="408" y="216" class="label">Canonical perception</text>
+  <text x="408" y="253" class="body">PointCloud2 + IMU</text>
+  <text x="408" y="281" class="body">Slope / timing receipts</text>
+  <text x="408" y="309" class="body">No motion authority</text>
+  <text x="408" y="332" class="mono">finite + fresh only</text>
+
+  <path d="M642 258 H702" class="flow"/>
+
+  <rect x="722" y="168" width="260" height="180" class="card"/>
+  <rect x="722" y="168" width="260" height="8" rx="4" fill="#a78bfa"/>
+  <text x="748" y="216" class="label">Navigation</text>
+  <text x="748" y="253" class="body">Localization guard</text>
+  <text x="748" y="281" class="body">Immutable route manager</text>
+  <text x="748" y="309" class="body">move_base sole publisher</text>
+  <text x="748" y="332" class="mono">/cmd_vel_nav</text>
+
+  <path d="M982 258 H1042" class="flow"/>
+
+  <rect x="1062" y="150" width="466" height="216" class="card"/>
+  <rect x="1062" y="150" width="466" height="8" rx="4" fill="#f59e0b"/>
+  <text x="1088" y="200" class="label">Independent safety authorities</text>
+  <text x="1088" y="240" class="body">Collision / TTC</text>
+  <text x="1260" y="240" class="body">Slope / roll</text>
+  <text x="1398" y="240" class="body">Topology</text>
+  <text x="1088" y="278" class="body">Localization confidence</text>
+  <text x="1260" y="278" class="body">Route / geofence</text>
+  <text x="1398" y="278" class="body">Clock</text>
+  <rect x="1088" y="310" width="414" height="36" rx="18" fill="#422006" stroke="#f59e0b" stroke-opacity="0.55"/>
+  <text x="1114" y="334" class="mono" fill="#fbbf24">missing · stale · conflicting → STOP</text>
+
+  <path d="M1295 366 V421" class="flow"/>
+
+  <rect x="1048" y="440" width="494" height="130" rx="24" fill="#172033" stroke="#fb7185" stroke-width="3" filter="url(#shadow)"/>
+  <text x="1076" y="483" class="label">Safety gate</text>
+  <text x="1076" y="516" class="body">DISARMED by default · finite zero on every fault</text>
+  <text x="1076" y="548" class="mono">/cmd_vel_nav → /cmd_vel_safe</text>
+  <rect x="1370" y="463" width="144" height="70" rx="18" fill="#4c0519" stroke="#fb7185" stroke-width="2"/>
+  <text x="1395" y="493" class="mono" fill="#fecdd3">HARDWARE</text>
+  <text x="1405" y="519" class="label" fill="#fb7185">LOCKED</text>
+
+  <path d="M1048 505 H906" class="flow"/>
+
+  <rect x="650" y="422" width="236" height="172" class="card"/>
+  <rect x="650" y="422" width="236" height="8" rx="4" fill="#22c55e"/>
+  <text x="676" y="470" class="label">Output profiles</text>
+  <text x="676" y="507" class="body">Simulation adapter</text>
+  <text x="676" y="535" class="body">Replay</text>
+  <text x="676" y="563" class="body">Hardware shadow</text>
+  <text x="676" y="585" class="mono">real motor: none</text>
+
+  <rect x="72" y="640" width="1456" height="72" rx="20" fill="#0b1628" stroke="#26364c" stroke-width="2"/>
+  <text x="102" y="674" class="label">Runtime closure</text>
+  <text x="300" y="674" class="body">Ubuntu 20.04 · ROS 1 Noetic · Gazebo Classic 11</text>
+  <text x="102" y="700" class="mono">ROS 2 + GLIM are offline artifact tools only; simulation evidence never grants physical authority.</text>
+</svg>

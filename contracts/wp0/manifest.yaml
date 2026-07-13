@@ -34,7 +34,7 @@ artifacts:
   - path: A14-hazard-log.yaml
     sha256: e52a198c74bc4331f8f1ad8a51ed7c72be9f6117469bd98e8a681eb825428a74
   - path: A15-evidence-inventory.yaml
-    sha256: 19e0eb3b9946ea6e44bb2dd28754a978122e7bfdcbb66e23f344c1f2479089c3
+    sha256: 298fc2f5dc4c102a8535106feff48eb87c59b2f21c6e74822bc48861c71aac99
   - path: A16-release-authority.yaml
     sha256: 519622195bcbeee1472615014b81978198286105aa3425561167ac53347024fb
   - path: A17-verification-matrix.yaml
