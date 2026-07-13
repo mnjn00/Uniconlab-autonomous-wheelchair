@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="#overview">Overview</a> ·
-  <a href="#gazebo-driving-demo">Gazebo drive</a> ·
+  <a href="#gazebo-obstacle-avoidance-demo">Obstacle avoidance</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#verification">Verification</a> ·
@@ -57,25 +57,29 @@ fails closed to finite zero and `DISARMED`.
 | Actual target NUC | Not fingerprinted or qualified | Blocked |
 | Real driver, e-stop, braking envelope | Not measured and not approved | Hardware locked |
 
-## Gazebo driving demo
+## Gazebo obstacle-avoidance demo
 
 <p align="center">
-  <a href="docs/assets/gazebo-drive.mp4">
-    <img src="docs/assets/gazebo-drive.gif" alt="Thirty-second Gazebo Classic simulation drive" width="100%" />
+  <a href="docs/assets/gazebo-obstacle-avoidance.mp4">
+    <img src="docs/assets/gazebo-obstacle-avoidance.gif" alt="Thirty-second Gazebo DWA obstacle-avoidance drive" width="100%" />
   </a>
 </p>
 
 <p align="center">
   <sub>
-    30 seconds of the repository wheelchair model moving in Gazebo Classic 11.
+    30 seconds of live laser scans, costmaps, and the DWA local planner steering around a collision obstacle.
     Select the animation to open the 1280×720 MP4.
   </sub>
 </p>
 
-This is a real Gazebo runtime capture of the URDF, differential-drive controller, and simulation-only controller
-adapter—not a map animation. A bounded demo publisher drove only `/cmd_vel_safe` inside the isolated simulator;
-the real motor endpoint remained disconnected. The footage is presentation evidence, not target-hardware,
-route-clearance, safety-qualification, campus-operation, or passenger-operation evidence.
+This is a real Gazebo Classic 11 runtime capture—not a map animation or keyframed render. `move_base` used
+`dwa_local_planner/DWAPlannerROS` and a temporary README-only 2D laser scene to command the repository URDF
+through the simulation controller adapter. Across 600 moving frames, the model advanced 5.38 m, deviated
+1.09 m laterally to pass the obstacle, and recorded zero barrier contacts. See the
+[capture receipt](docs/assets/gazebo-obstacle-avoidance-receipt.json).
+
+The scene proves only visible software-in-the-loop avoidance behavior. It is not the committed campus world,
+does not qualify physical clearance or braking distance, and grants no hardware, campus, or passenger authority.
 
 ### Candidate route geometry
 

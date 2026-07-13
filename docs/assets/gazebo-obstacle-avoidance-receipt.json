@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "gazebo-dwa-obstacle-avoidance-video-receipt",
+  "claimTag": "SIMULATION_ONLY",
+  "planner": "dwa_local_planner/DWAPlannerROS",
+  "sensorTopic": "/readme_scan",
+  "frames": 600,
+  "fps": 20.0,
+  "durationSeconds": 30.0,
+  "nonzeroCommandFrames": 600,
+  "firstSimulationStamp": 23.128,
+  "lastSimulationStamp": 80.38,
+  "startWorldPosition": {
+    "x": -6.988730468192285,
+    "y": 0.002740166255107346
+  },
+  "endWorldPosition": {
+    "x": -1.6050965066342482,
+    "y": -1.0725293811413128
+  },
+  "forwardDisplacementM": 5.383633961558037,
+  "maxAbsLateralDeviationM": 1.0927368682587757,
+  "minimumLaserRangeM": 0.6847572922706604,
+  "minimumObstacleCenterDistancesM": {
+    "avoidance_barrier_1": 1.0787897671360092,
+    "avoidance_barrier_2": 3.1105242911268185,
+    "avoidance_barrier_3": 5.611718017886208
+  },
+  "obstacleContactCount": 0,
+  "maxAbsLinearMps": 0.10999999940395355,
+  "maxAbsAngularRadps": 0.0833333358168602,
+  "hardwareMotionAuthorized": false,
+  "passengerOperationAuthorized": false,
+  "sourceRevision": "565d694a45f90a4954b6533dd302d03e72e5ff61",
+  "captureScene": "README-only Gazebo road scene with three collision obstacles; not a release qualification world",
+  "commandPath": "move_base DWA -> /cmd_vel_safe -> simulation_controller_adapter -> Gazebo differential-drive controller",
+  "authorityCeiling": "presentation-only simulation evidence"
+}
