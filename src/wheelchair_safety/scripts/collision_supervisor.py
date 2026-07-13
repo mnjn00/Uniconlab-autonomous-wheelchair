@@ -1472,29 +1472,66 @@ def _buffer_slope_evidence(
         evidence.popleft()
 
 
+def _slope_current_stream_timing_valid(
+    source_s: float, evaluation_s: float, receipt_s: float, now_s: float
+) -> bool:
+    """Validate a slope receipt independently of a cloud-time association."""
+    return (
+        all(_finite(value) for value in (source_s, evaluation_s, receipt_s, now_s))
+        and source_s <= receipt_s + CLOCK_FUTURE_TOLERANCE_S
+        and evaluation_s <= receipt_s + CLOCK_FUTURE_TOLERANCE_S
+        and receipt_s <= now_s + CLOCK_FUTURE_TOLERANCE_S
+        and now_s - receipt_s <= 0.10
+    )
+
+
 def _select_slope_evidence(
     evidence: Iterable[SlopeEvidence], cloud_stamp_s: float, now_s: float
 ) -> Optional[SlopeEvidence]:
-    candidates = tuple(
-        entry for entry in evidence
+    entries = tuple(evidence)
+    associated = tuple(
+        entry for entry in entries
         if _finite(entry.source_s)
         and _slope_cloud_time_valid(
             entry.source_s, entry.evaluation_s, cloud_stamp_s, now_s
         )
+        and entry.source_s <= cloud_stamp_s + CLOCK_FUTURE_TOLERANCE_S
+        and cloud_stamp_s - entry.source_s <= 0.10
     )
-    fresh = tuple(
-        entry for entry in candidates
-        if _slope_timing_valid(entry.source_s, entry.receipt_s, cloud_stamp_s, now_s)
-    )
-    selected = fresh if fresh else candidates
-    if fresh:
-        restrictive = tuple(entry for entry in fresh if not entry.valid)
-        if restrictive:
-            selected = restrictive
-    return max(
-        selected,
+    associated_restrictive = tuple(entry for entry in associated if not entry.valid)
+    associated_entry = max(
+        associated_restrictive or associated,
         key=lambda entry: (entry.source_s, entry.evaluation_s, entry.receipt_s),
         default=None,
+    )
+    if associated_entry is None:
+        return None
+
+    current = tuple(
+        entry for entry in entries
+        if _slope_current_stream_timing_valid(
+            entry.source_s, entry.evaluation_s, entry.receipt_s, now_s
+        )
+    )
+    current_restrictive = tuple(entry for entry in current if not entry.valid)
+    current_entry = max(
+        current_restrictive or current,
+        key=lambda entry: (entry.receipt_s, entry.source_s, entry.evaluation_s),
+        default=None,
+    )
+    if current_entry is None:
+        return associated_entry
+    return SlopeEvidence(
+        associated_entry.source_s,
+        associated_entry.evaluation_s,
+        current_entry.receipt_s,
+        associated_entry.pitch_rad,
+        associated_entry.policy_sha256,
+        bool(
+            associated_entry.valid
+            and current_entry.valid
+            and associated_entry.policy_sha256 == current_entry.policy_sha256
+        ),
     )
 
 
@@ -1530,7 +1567,8 @@ def _slope_cloud_time_valid(
     now_s: float,
 ) -> bool:
     return (
-        source_s <= cloud_stamp_s + CLOCK_FUTURE_TOLERANCE_S
+        all(_finite(value) for value in (source_s, evaluation_s, cloud_stamp_s, now_s))
+        and source_s <= cloud_stamp_s + CLOCK_FUTURE_TOLERANCE_S
         and evaluation_s <= now_s + CLOCK_FUTURE_TOLERANCE_S
     )
 
@@ -1728,15 +1766,14 @@ class CollisionSupervisorRosNode:
                 slope_evidence = tuple(self.slope_evidence)
                 if (not _finite(now_s) or not self._slope_stream_valid):
                     return now_s, slope_evidence
-                if any(
-                    _slope_cloud_time_valid(
-                        entry.source_s, entry.evaluation_s, cloud_stamp_s, now_s
-                    )
-                    and _slope_timing_valid(
-                        entry.source_s, entry.receipt_s, cloud_stamp_s, now_s
-                    )
-                    for entry in slope_evidence
-                ):
+                slope_entry = _select_slope_evidence(
+                    slope_evidence, cloud_stamp_s, now_s
+                )
+                if (slope_entry is not None
+                        and _slope_timing_valid(
+                            slope_entry.source_s, slope_entry.receipt_s,
+                            cloud_stamp_s, now_s
+                        )):
                     return now_s, slope_evidence
                 remaining = deadline - time.monotonic()
                 if remaining <= 0.0:

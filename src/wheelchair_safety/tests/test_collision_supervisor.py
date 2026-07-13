@@ -259,13 +259,15 @@ def test_slope_callback_rejects_wrong_policy_and_unsafe_states(monkeypatch, poli
     assert node.slope_high_water == 1.0
 
 
-def _evidence(source, evaluation=None, receipt=None, valid=True):
+def _evidence(
+    source, evaluation=None, receipt=None, valid=True, pitch=0.0, policy_sha256=None
+):
     return cs.SlopeEvidence(
         source,
         source if evaluation is None else evaluation,
         source if receipt is None else receipt,
-        0.0,
-        "a" * 64,
+        pitch,
+        "a" * 64 if policy_sha256 is None else policy_sha256,
         valid,
     )
 
@@ -296,7 +298,7 @@ def test_slope_buffer_fresh_restrictive_evidence_dominates_newer_permissive():
     assert selected.valid is False
 
 
-def test_slope_buffer_stale_restrictive_evidence_does_not_mask_exactly_fresh_permissive():
+def test_slope_buffer_associated_restrictive_evidence_dominates_current_clear():
     evidence = cs.deque((
         _evidence(0.89, receipt=0.89, valid=False),
         _evidence(0.90, receipt=0.90, valid=True),
@@ -305,14 +307,178 @@ def test_slope_buffer_stale_restrictive_evidence_does_not_mask_exactly_fresh_per
     selected = cs._select_slope_evidence(evidence, 0.90, 1.00)
 
     assert selected is not None
-    assert selected.source_s == pytest.approx(0.90)
-    assert selected.valid is True
+    assert (selected.source_s, selected.receipt_s, selected.valid) == (0.89, 0.90, False)
 
 
 def test_slope_buffer_has_no_candidate_when_all_samples_are_too_new():
     evidence = cs.deque((_evidence(0.96), _evidence(0.98)))
 
     assert cs._select_slope_evidence(evidence, 0.90, 1.0) is None
+
+
+def test_slope_buffer_composes_cloud_pitch_with_current_health_after_175ms():
+    associated = _evidence(
+        0.90, evaluation=0.91, receipt=0.90, pitch=0.17
+    )
+    current = _evidence(
+        1.025, evaluation=1.03, receipt=1.075, pitch=0.44
+    )
+
+    selected = cs._select_slope_evidence((associated, current), 0.90, 1.075)
+
+    assert selected is not None
+    assert selected is not associated
+    assert selected is not current
+    assert current.source_s > 0.90 + cs.CLOCK_FUTURE_TOLERANCE_S
+    assert (
+        selected.source_s, selected.evaluation_s, selected.receipt_s,
+        selected.pitch_rad, selected.policy_sha256, selected.valid,
+    ) == (0.90, 0.91, 1.075, 0.17, "a" * 64, True)
+    assert cs._slope_timing_valid(
+        selected.source_s, selected.receipt_s, 0.90, 1.075
+    )
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        now=1.075,
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_stamp_s=selected.source_s,
+        slope_receipt_s=selected.receipt_s,
+        slope_valid=selected.valid,
+    ))
+    assert decision.reason != "stale_or_mismatched_slope_odom"
+
+
+@pytest.mark.parametrize(
+    "associated_valid,current_valid,current_policy",
+    (
+        (False, True, "a" * 64),
+        (True, False, "a" * 64),
+        (True, True, "b" * 64),
+    ),
+    ids=("associated_restrictive", "current_restrictive", "current_policy_mismatch"),
+)
+def test_slope_buffer_composite_restrictive_or_policy_mismatch_stops(
+    associated_valid, current_valid, current_policy
+):
+    associated = _evidence(
+        0.90, evaluation=0.91, receipt=0.89, valid=associated_valid, pitch=0.17
+    )
+    current = _evidence(
+        1.025, evaluation=1.03, receipt=1.075, valid=current_valid,
+        policy_sha256=current_policy,
+    )
+
+    selected = cs._select_slope_evidence((associated, current), 0.90, 1.075)
+
+    assert selected is not None
+    assert (
+        selected.source_s, selected.evaluation_s, selected.receipt_s,
+        selected.pitch_rad, selected.policy_sha256, selected.valid,
+    ) == (0.90, 0.91, 1.075, 0.17, "a" * 64, False)
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        now=1.075,
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_stamp_s=selected.source_s,
+        slope_receipt_s=selected.receipt_s,
+        slope_valid=selected.valid,
+    ))
+    assert (decision.state, decision.reason) == (cs.STOP, "invalid_slope_evidence")
+
+
+def test_slope_buffer_current_restrictive_evidence_dominates_newer_clear():
+    associated = _evidence(0.90, receipt=0.89, pitch=0.17)
+    restrictive_current = _evidence(
+        1.00, receipt=1.025, valid=False, pitch=0.31
+    )
+    newer_clear_current = _evidence(
+        1.025, receipt=1.075, pitch=0.44
+    )
+
+    selected = cs._select_slope_evidence(
+        (associated, restrictive_current, newer_clear_current), 0.90, 1.075
+    )
+
+    assert selected is not None
+    assert (
+        selected.source_s, selected.receipt_s, selected.pitch_rad, selected.valid
+    ) == (0.90, 1.025, 0.17, False)
+
+
+@pytest.mark.parametrize(
+    "source,associated",
+    (
+        (0.90 - 0.10 - 0.0001, False),
+        (0.90 - 0.10, True),
+        (0.90 - 0.10 + 0.0001, True),
+        (0.90 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, True),
+        (0.90 + cs.CLOCK_FUTURE_TOLERANCE_S, True),
+        (0.90 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, False),
+    ),
+)
+def test_slope_buffer_association_keeps_exact_cloud_source_bounds(source, associated):
+    entry = _evidence(source, receipt=1.0)
+    selected = cs._select_slope_evidence((entry,), 0.90, 1.0)
+
+    assert (selected is not None) is associated
+    if not associated:
+        decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+            points=(static_point(10.0),),
+            cloud_stamp_s=0.90,
+            slope_stamp_s=source,
+            slope_receipt_s=1.0,
+            slope_valid=False,
+        ))
+        assert (decision.state, decision.reason) == (
+            cs.STOP, "invalid_slope_evidence"
+        )
+
+
+@pytest.mark.parametrize(
+    "receipt,current_healthy",
+    (
+        (1.0 - 0.10 - 0.0001, False),
+        (1.0 - 0.10, True),
+        (1.0 - 0.10 + 0.0001, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S - 0.0001, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S, True),
+        (1.0 + cs.CLOCK_FUTURE_TOLERANCE_S + 0.0001, False),
+    ),
+)
+def test_slope_buffer_returns_associated_receipt_when_current_health_is_invalid(
+    receipt, current_healthy
+):
+    entry = _evidence(0.90, receipt=receipt)
+    selected = cs._select_slope_evidence((entry,), 0.90, 1.0)
+
+    assert selected is not None
+    assert (
+        cs._slope_current_stream_timing_valid(
+            entry.source_s, entry.evaluation_s, entry.receipt_s, 1.0
+        )
+        is current_healthy
+    )
+    assert (selected is entry) is not current_healthy
+    assert selected.receipt_s == pytest.approx(receipt)
+    assert (
+        cs._slope_timing_valid(
+            selected.source_s, selected.receipt_s, 0.90, 1.0
+        )
+        is current_healthy
+    )
+    decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
+        points=(static_point(10.0),),
+        cloud_stamp_s=0.90,
+        slope_stamp_s=selected.source_s,
+        slope_receipt_s=selected.receipt_s,
+        slope_valid=selected.valid,
+    ))
+    if current_healthy:
+        assert decision.reason != "stale_or_mismatched_slope_odom"
+    else:
+        assert (decision.state, decision.reason) == (
+            cs.STOP, "stale_or_mismatched_slope_odom"
+        )
 
 
 def test_slope_buffer_is_source_ordered_and_bounded():
@@ -531,14 +697,15 @@ def test_postprocess_slope_snapshot_observes_callback_after_input_snapshot(
         assert decision.reason == "invalid_slope_evidence"
 
 
-def test_postprocess_slope_join_wakes_for_fresh_clear_callback(monkeypatch):
+def test_postprocess_slope_join_waits_for_current_health_after_association(monkeypatch):
     policy_sha256 = "a" * 64
     node = _slope_callback_node(policy_sha256)
     _install_steady_ros_clock(monkeypatch)
-    node._slope_cb(_slope_message(0.79, 0.79, policy_sha256, cs.CLEAR))
+    node.slope_evidence.append(_evidence(0.90, receipt=0.89))
+    node._slope_stream_valid = True
 
     worker, result, wait_timeouts = _start_waiting_slope_snapshot(node, monkeypatch)
-    node._slope_cb(_slope_message(0.90, 1.00, policy_sha256, cs.CLEAR))
+    node._slope_cb(_slope_message(0.96, 1.00, policy_sha256, cs.CLEAR))
     worker.join(timeout=0.1)
 
     assert not worker.is_alive()
@@ -556,23 +723,24 @@ def test_postprocess_slope_join_wakes_for_fresh_clear_callback(monkeypatch):
         ("b" * 64, cs.CLEAR),
     ),
 )
-def test_postprocess_slope_join_wakes_for_restrictive_callback(
+def test_postprocess_slope_join_wakes_for_restrictive_current_callback(
     monkeypatch, callback_policy, state
 ):
     expected_policy_sha256 = "a" * 64
     node = _slope_callback_node(expected_policy_sha256)
     _install_steady_ros_clock(monkeypatch)
-    node._slope_cb(_slope_message(0.79, 0.79, expected_policy_sha256, cs.CLEAR))
+    node.slope_evidence.append(_evidence(0.90, receipt=0.89))
+    node._slope_stream_valid = True
 
     worker, result, _ = _start_waiting_slope_snapshot(node, monkeypatch)
-    node._slope_cb(_slope_message(0.90, 1.00, callback_policy, state))
+    node._slope_cb(_slope_message(0.96, 1.00, callback_policy, state))
     worker.join(timeout=0.1)
 
     assert not worker.is_alive()
     now_s, slope_evidence = result["snapshot"]
     selected = cs._select_slope_evidence(slope_evidence, 0.90, now_s)
     assert selected is not None
-    assert selected.valid is False
+    assert (selected.source_s, selected.receipt_s, selected.valid) == (0.90, 1.0, False)
     decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
         now=now_s,
         points=(static_point(10.0),),
@@ -617,7 +785,7 @@ def test_postprocess_slope_join_wakes_fail_closed_on_malformed_or_regressing_cal
     assert (decision.state, decision.reason) == (cs.STOP, "invalid_slope_evidence")
 
 
-def test_postprocess_slope_join_timeout_returns_stale_evidence(monkeypatch):
+def test_postprocess_slope_join_timeout_fails_closed_without_associated_evidence(monkeypatch):
     policy_sha256 = "a" * 64
     node = _slope_callback_node(policy_sha256)
     _install_steady_ros_clock(monkeypatch)
@@ -635,20 +803,14 @@ def test_postprocess_slope_join_timeout_returns_stale_evidence(monkeypatch):
 
     assert len(wait_timeouts) == 1
     assert 0.0 < wait_timeouts[0] <= cs.SLOPE_EVIDENCE_JOIN_TIMEOUT_S
-    selected = cs._select_slope_evidence(slope_evidence, 0.90, now_s)
-    assert selected is not None
+    assert cs._select_slope_evidence(slope_evidence, 0.90, now_s) is None
     decision = cs.CollisionSupervisorCore(policy()).evaluate(inputs(
         now=now_s,
         points=(static_point(10.0),),
         cloud_stamp_s=0.90,
-        slope_stamp_s=selected.source_s,
-        slope_receipt_s=selected.receipt_s,
-        slope_valid=selected.valid,
+        slope_valid=False,
     ))
-    assert (decision.state, decision.reason) == (
-        cs.STOP,
-        "stale_or_mismatched_slope_odom",
-    )
+    assert (decision.state, decision.reason) == (cs.STOP, "invalid_slope_evidence")
 
 
 def test_slope_condition_wait_releases_input_lock_for_callback(monkeypatch):
