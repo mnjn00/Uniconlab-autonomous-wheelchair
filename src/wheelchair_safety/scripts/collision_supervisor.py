@@ -1053,7 +1053,7 @@ class CollisionSupervisorCore:
                      <= self.policy.first_command_grace_s + 1e-12)
             if not i.nav_available and not grace:
                 return SENSOR_STALE | COLLISION, "missing_nav_command"
-            if i.nav_available and not fresh_after_hold:
+            if i.nav_available and not fresh_after_hold and not grace:
                 return SENSOR_STALE | COLLISION, "pre_hold_nav_command"
         cloud_age, odom_age, command_age = self._ages(i)
         if cloud_age > self.policy.cloud_ttl_s:

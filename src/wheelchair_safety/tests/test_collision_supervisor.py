@@ -1693,40 +1693,62 @@ def test_hold_allows_stationary_evidence_without_nav_and_rejects_nonzero_caps():
     assert malformed.reason == "malformed_hold_intent"
 
 
-def test_first_command_grace_is_inclusive_and_old_pre_hold_command_is_rejected():
+@pytest.mark.parametrize(
+    "elapsed_s,expected_pre_hold_rejection",
+    (
+        (policy().first_command_grace_s - 0.000001, False),
+        (policy().first_command_grace_s, False),
+        (policy().first_command_grace_s + 0.000001, True),
+    ),
+)
+def test_pre_hold_nav_is_accepted_only_during_inclusive_first_command_grace(
+    elapsed_s, expected_pre_hold_rejection
+):
     core = cs.CollisionSupervisorCore(policy())
     core.evaluate(inputs(
         1, 1.0, (static_point(10.0),), speed=0.0, nav_available=False,
         intent_stamp_s=1.0, intent_behavior=cs.INTENT_HOLD,
         intent_max_linear_mps=0.0, intent_max_angular_rps=0.0,
     ))
-    transition = core.evaluate(inputs(
+    core.evaluate(inputs(
         2, 2.0, (static_point(10.0),), speed=0.0, nav_available=False,
         intent_stamp_s=2.0, intent_behavior=cs.INTENT_PROCEED,
     ))
-    boundary = core.evaluate(inputs(
-        3, 2.1, (static_point(10.0),), speed=0.0, nav_available=False,
-        intent_stamp_s=2.1, intent_behavior=cs.INTENT_PROCEED,
+    decision = core.evaluate(inputs(
+        3, 2.0 + elapsed_s, (static_point(10.0),), speed=0.0,
+        nav_available=True, nav_stamp_s=1.99, intent_stamp_s=2.0 + elapsed_s,
+        intent_behavior=cs.INTENT_PROCEED,
     ))
-    expired = core.evaluate(inputs(
-        4, 2.100001, (static_point(10.0),), speed=0.0, nav_available=False,
-        intent_stamp_s=2.100001, intent_behavior=cs.INTENT_PROCEED,
-    ))
-    assert transition.reason != "missing_nav_command"
-    assert boundary.reason != "missing_nav_command"
-    assert expired.reason == "missing_nav_command"
 
-    stale = cs.CollisionSupervisorCore(policy())
-    stale.evaluate(inputs(
+    assert (decision.reason == "pre_hold_nav_command") is expected_pre_hold_rejection
+
+
+def test_missing_nav_command_is_rejected_immediately_after_first_command_grace():
+    core = cs.CollisionSupervisorCore(policy())
+    core.evaluate(inputs(
         1, 1.0, (static_point(10.0),), speed=0.0, nav_available=False,
         intent_stamp_s=1.0, intent_behavior=cs.INTENT_HOLD,
         intent_max_linear_mps=0.0, intent_max_angular_rps=0.0,
     ))
-    rejected = stale.evaluate(inputs(
-        2, 1.01, (static_point(10.0),), speed=0.0, nav_available=True,
-        nav_stamp_s=0.99, intent_stamp_s=1.01, intent_behavior=cs.INTENT_PROCEED,
+    core.evaluate(inputs(
+        2, 2.0, (static_point(10.0),), speed=0.0, nav_available=False,
+        intent_stamp_s=2.0, intent_behavior=cs.INTENT_PROCEED,
     ))
-    assert rejected.reason == "pre_hold_nav_command"
+    within_grace = core.evaluate(inputs(
+        3, 2.0 + policy().first_command_grace_s, (static_point(10.0),),
+        speed=0.0, nav_available=False,
+        intent_stamp_s=2.0 + policy().first_command_grace_s,
+        intent_behavior=cs.INTENT_PROCEED,
+    ))
+    expired = core.evaluate(inputs(
+        4, 2.0 + policy().first_command_grace_s + 0.000001,
+        (static_point(10.0),), speed=0.0, nav_available=False,
+        intent_stamp_s=2.0 + policy().first_command_grace_s + 0.000001,
+        intent_behavior=cs.INTENT_PROCEED,
+    ))
+
+    assert within_grace.reason != "missing_nav_command"
+    assert expired.reason == "missing_nav_command"
 
 
 def test_watchdog_initial_no_cloud_and_stale_cloud_are_canonical_stop_heartbeats():
