@@ -627,7 +627,7 @@ def test_ros_publish_snapshots_evidence_before_sampling_evaluation_clock():
     )
 
     assert (
-        assignments["route_msg"] < snapshot_index < assignments["now"]
+        assignments["route_evidence"] < snapshot_index < assignments["now"]
         < assignments["now_s"]
     )
 
@@ -765,6 +765,12 @@ def test_ros_revocation_generation_clears_status_only_held_pair(monkeypatch):
     timers[0](None)
     status_messages = publishers["/route_safety/geofence_status"].messages
     assert status_messages[-1].header.stamp.to_sec() == 10.0
+    assert status_messages[-1].route_id == route.route_id
+
+    FakeTime.current_s = 10.05
+    timers[0](None)
+    assert status_messages[-1].header.stamp.to_sec() == 10.0
+    assert status_messages[-1].route_id == route.route_id
 
     FakeTime.current_s = 10.1
     invalid_candidate, _ = localization_pair(10.1, 2, candidate_source="foreign")
@@ -780,6 +786,37 @@ def test_ros_revocation_generation_clears_status_only_held_pair(monkeypatch):
     callbacks["/localization/status"](recovered_status)
     timers[0](None)
     assert status_messages[-1].header.stamp.to_sec() == 10.2
+    assert status_messages[-1].route_id == route.route_id
+
+    FakeTime.current_s = 10.25
+    callbacks["/route/active"](active)
+    timers[0](None)
+    assert status_messages[-1].state == route_safety.STATUS_UNKNOWN
+    assert status_messages[-1].route_id == ""
+
+    active_heartbeat = _active_route(
+        10.3, direction=1 if route.direction == "outbound" else 2,
+        route_id=route.route_id, map_id=policy.map_id,
+        map_sha256=policy.map_sha256,
+        route_manifest_sha256=route.route_manifest_sha256,
+        safety_manifest_sha256=policy.manifest_sha256,
+    )
+    FakeTime.current_s = 10.3
+    callbacks["/route/active"](active_heartbeat)
+    timers[0](None)
+    assert status_messages[-1].route_id == route.route_id
+
+    FakeTime.current_s = 10.99
+    fresh_candidate, fresh_status = localization_pair(10.99, 4)
+    callbacks["/localization/candidate"](fresh_candidate)
+    callbacks["/localization/status"](fresh_status)
+    timers[0](None)
+    assert status_messages[-1].route_id == route.route_id
+
+    FakeTime.current_s = 11.051
+    timers[0](None)
+    assert status_messages[-1].state == route_safety.STATUS_UNKNOWN
+    assert status_messages[-1].route_id == ""
 
 
 def test_snapshot_evidence_is_not_evaluated_with_a_pre_snapshot_clock():

@@ -325,6 +325,14 @@ def _valid_sha256_identity(value: Any) -> bool:
     )
 
 
+def active_route_is_fresh(now_s: float, route_stamp: float) -> bool:
+    return (
+        _is_finite_number(now_s)
+        and _is_finite_number(route_stamp)
+        and -FUTURE_TOLERANCE_S <= now_s - route_stamp <= ACTIVE_ROUTE_TTL_S
+    )
+
+
 def select_active_route(
         route_msg: Any, now_s: float,
         previous: Optional[Tuple[int, Tuple[Any, ...], float]],
@@ -339,8 +347,7 @@ def select_active_route(
             route_msg.route_manifest_sha256, route_msg.safety_manifest_sha256,
         )
         if (
-                not _is_finite_number(now_s)
-                or not math.isfinite(route_stamp)
+                not active_route_is_fresh(now_s, route_stamp)
                 or not _valid_nonnegative_int(activation_sequence)
                 or activation_sequence <= 0
                 or not isinstance(identity[0], int)
@@ -348,7 +355,6 @@ def select_active_route(
                 or identity[0] not in (1, 2)
                 or not all(isinstance(value, str) and value for value in identity[1:4])
                 or not all(_valid_sha256_identity(value) for value in identity[4:])
-                or not -FUTURE_TOLERANCE_S <= now_s - route_stamp <= ACTIVE_ROUTE_TTL_S
         ):
             return None, previous
         if previous is not None:
@@ -1058,20 +1064,27 @@ def run_ros_node() -> None:
     status_message = [0]
     held_pair = [None]
     observed_revocation_generation = [0]
+    route_message_id = [0]
+    observed_route_message_id = [0]
+    accepted_route = [None]
 
 
     def receive_status(msg: Any) -> None:
         status_message[0] += 1
         evidence.add_status((msg, rospy.Time.now().to_sec(), status_message[0]))
+    def receive_route(msg: Any) -> None:
+        route_message_id[0] += 1
+        latest["route"] = (route_message_id[0], msg)
+
 
     rospy.Subscriber(
         "/localization/candidate", LocalizationCandidate, evidence.add_candidate, queue_size=1,
     )
     rospy.Subscriber("/localization/status", LocalizationStatus, receive_status, queue_size=1)
-    rospy.Subscriber("/route/active", ActiveRoute, lambda msg: latest.__setitem__("route", msg), queue_size=1)
+    rospy.Subscriber("/route/active", ActiveRoute, receive_route, queue_size=1)
 
     def publish(_event: Any) -> None:
-        route_msg = latest["route"]
+        route_evidence = latest["route"]
         evidence_snapshot = evidence.snapshot()
         status_evidence = evidence_snapshot.status_evidence
         pose_msg = evidence_snapshot.candidate
@@ -1081,21 +1094,34 @@ def run_ros_node() -> None:
             held_pair[0] = None
             observed_revocation_generation[0] = evidence_snapshot.revocation_generation
         selection = None
-        if route_msg is not None:
-            selection, route_high_water = select_active_route(
-                route_msg, now_s, high_water["route"],
-            )
-            if selection is not None:
-                active_route = policy.route(selection.route_id)
-                expected_direction = (
-                    1 if active_route is not None and active_route.direction == "outbound"
-                    else 2 if active_route is not None and active_route.direction == "return"
-                    else 0
+        if route_evidence is not None:
+            current_route_message_id, route_msg = route_evidence
+            if current_route_message_id != observed_route_message_id[0]:
+                observed_route_message_id[0] = current_route_message_id
+                accepted_route[0] = None
+                candidate_selection, route_high_water = select_active_route(
+                    route_msg, now_s, high_water["route"],
                 )
-                if route_msg.direction == expected_direction:
-                    high_water["route"] = route_high_water
+                if candidate_selection is not None:
+                    active_route = policy.route(candidate_selection.route_id)
+                    expected_direction = (
+                        1 if active_route is not None and active_route.direction == "outbound"
+                        else 2 if active_route is not None and active_route.direction == "return"
+                        else 0
+                    )
+                    if route_msg.direction == expected_direction:
+                        high_water["route"] = route_high_water
+                        accepted_route[0] = (
+                            current_route_message_id, candidate_selection,
+                            route_high_water[2],
+                        )
+            if accepted_route[0] is not None:
+                accepted_message_id, accepted_selection, accepted_stamp = accepted_route[0]
+                if (accepted_message_id == current_route_message_id
+                        and active_route_is_fresh(now_s, accepted_stamp)):
+                    selection = accepted_selection
                 else:
-                    selection = None
+                    accepted_route[0] = None
         sample = None
         status_is_acceptable = False
         if status_evidence is not None:
