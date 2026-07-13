@@ -900,10 +900,10 @@ def run_ros_node() -> None:
     rospy.Subscriber("/route/active", ActiveRoute, lambda msg: latest.__setitem__("route", msg), queue_size=1)
 
     def publish(_event: Any) -> None:
-        now = rospy.Time.now()
-        now_s = now.to_sec()
         route_msg = latest["route"]
         status_evidence, pose_msg = evidence.snapshot()
+        now = rospy.Time.now()
+        now_s = now.to_sec()
         selection = None
         if route_msg is not None:
             try:

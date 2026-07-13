@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pure deterministic evidence for immutable route-safety behavior."""
 
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -345,6 +346,72 @@ def test_ros_pairing_retains_existing_stamp_reset_map_and_policy_checks():
             "localization_msg.independent_check_passed",
     ):
         assert condition in source
+
+
+def test_ros_publish_snapshots_evidence_before_sampling_evaluation_clock():
+    module = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    run_ros_node = next(
+        node for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_ros_node"
+    )
+    publish = next(
+        node for node in run_ros_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "publish"
+    )
+    assignments = {
+        statement.targets[0].id: index
+        for index, statement in enumerate(publish.body)
+        if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name))
+    }
+    snapshot_index = next(
+        index for index, statement in enumerate(publish.body)
+        if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Tuple)
+            and [element.id for element in statement.targets[0].elts] == [
+                "status_evidence", "pose_msg"
+            ] and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and statement.value.func.attr == "snapshot"
+            and isinstance(statement.value.func.value, ast.Name)
+            and statement.value.func.value.id == "evidence")
+    )
+
+    assert (
+        assignments["route_msg"] < snapshot_index < assignments["now"]
+        < assignments["now_s"]
+    )
+
+
+def test_snapshot_evidence_is_not_evaluated_with_a_pre_snapshot_clock():
+    policy = _load(_manifest())
+    candidate, status = _localization_evidence(10.10)
+    evidence = route_safety.LocalizationEvidenceBuffer()
+    evidence.add_candidate(candidate)
+    evidence.add_status((status, 10.10, 1))
+
+    status_evidence, snapshot_candidate = evidence.snapshot()
+    snapshot_status, receipt_stamp, _ = status_evidence
+    evaluation_stamp = snapshot_status.evaluation_stamp.to_sec()
+    snapshot_sample = _pose(
+        pose_stamp=evaluation_stamp,
+        status_stamp=evaluation_stamp,
+        transform_stamp=evaluation_stamp,
+    )
+
+    assert snapshot_candidate is candidate
+    assert evaluation_stamp == receipt_stamp == 10.10
+    pre_snapshot = route_safety.evaluate(
+        policy, snapshot_sample, _selection(policy), 10.00,
+    )
+    assert pre_snapshot.signal_state == route_safety.STOP
+    assert pre_snapshot.reason_mask == (
+        route_safety.REASON_SENSOR_STALE | route_safety.REASON_GEOFENCE
+    )
+    assert route_safety.evaluate(
+        policy, snapshot_sample, _selection(policy), receipt_stamp,
+    ).clear
+
 
 
 
