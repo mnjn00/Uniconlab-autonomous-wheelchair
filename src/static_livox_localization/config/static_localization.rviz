@@ -1,0 +1,83 @@
+Panels:
+  - Class: rviz/Displays
+    Help Height: 0
+    Name: Displays
+    Property Tree Widget:
+      Expanded: []
+      Splitter Ratio: 0.5
+    Tree Height: 520
+  - Class: rviz/Tool Properties
+    Expanded: []
+    Name: Tool Properties
+    Splitter Ratio: 0.588679
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.8
+      Class: rviz/Map
+      Color Scheme: map
+      Draw Behind: true
+      Enabled: true
+      Name: Livox Seed Map
+      Topic: /livox_seed_map
+      Unreliable: false
+      Use Timestamp: false
+      Value: true
+    - Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.1
+      Class: rviz/PoseWithCovariance
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.3
+      Head Radius: 0.1
+      Name: GICP Estimated Pose
+      Queue Size: 10
+      Shaft Length: 1
+      Shaft Radius: 0.05
+      Shape: Arrow
+      Topic: /fast_lio_icp/pose
+      Unreliable: false
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Default Light: true
+    Fixed Frame: map
+    Frame Rate: 15
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+      Hide Inactive Objects: true
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+    - Class: rviz/SetInitialPose
+      Theta std deviation: 0.17453292519943295
+      Topic: /fast_lio_icp/initialpose
+      X std deviation: 0.25
+      Y std deviation: 0.25
+  Value: true
+  Views:
+    Current:
+      Angle: 0
+      Class: rviz/TopDownOrtho
+      Name: Current View
+      Scale: 80
+      Target Frame: map
+      X: 90
+      Y: -35
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 820
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd000000010000000000000170000002fefc0200000002fb000000100044006900730070006c006100790073010000003d0000022b000000c900fffffffb0000001e0054006f006f006c002000500072006f0070006500720074006900650073010000026e000000cd0000006700ffffff000003b0000002fe00000004000000040000000800000008fc00000000
+  Tool Properties:
+    collapsed: false
+  Width: 1280
+  X: 80
+  Y: 60
