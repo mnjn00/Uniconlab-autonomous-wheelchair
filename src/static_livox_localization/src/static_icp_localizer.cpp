@@ -84,6 +84,8 @@ class StaticIcpLocalizer {
     double max_seed_rotation_deg = 30.0;
     private_nh_.param("max_seed_rotation_deg", max_seed_rotation_deg, 30.0);
     config_.max_seed_rotation_rad = max_seed_rotation_deg * M_PI / 180.0;
+    private_nh_.param("max_stationary_step_m", max_stationary_step_m_, 0.20);
+    private_nh_.param("max_stationary_yaw_deg", max_stationary_yaw_deg_, 5.0);
     if (map_path_.empty() || map_sha256_.size() != 64) throw std::runtime_error("map_path and 64-char map_sha256 are required");
     const std::string observed = sha256_file(map_path_);
     if (observed != map_sha256_) throw std::runtime_error("map SHA-256 mismatch: " + observed);
@@ -105,6 +107,7 @@ class StaticIcpLocalizer {
       accumulator_->clear();
       window_start_ = ros::Time();
       has_seed_ = true;
+      has_last_pose_ = false;
       ++reset_count_;
       publish_diagnostic(false, "ACCUMULATING", static_livox_localization::RegistrationResult());
       ROS_INFO("Accepted initial pose seed #%d: %.3f %.3f %.3f", reset_count_, seed_.translation().x(), seed_.translation().y(), seed_.translation().z());
@@ -126,9 +129,19 @@ class StaticIcpLocalizer {
     scan.swap(accumulator_);
     accumulator_.reset(new pcl::PointCloud<pcl::PointXYZI>);
     window_start_ = stamp;
-    const auto result = static_livox_localization::register_cloud(scan, map_, seed_, config_);
+    auto result = static_livox_localization::register_cloud(scan, map_, seed_, config_);
+    if (result.converged && has_last_pose_) {
+      const Eigen::Isometry3d delta = last_pose_.inverse() * result.map_T_base;
+      const double step = delta.translation().norm();
+      const double yaw_step_deg = std::abs(std::atan2(delta.rotation()(1, 0), delta.rotation()(0, 0))) * 180.0 / M_PI;
+      if (step > max_stationary_step_m_ || yaw_step_deg > max_stationary_yaw_deg_) {
+        ROS_WARN("Rejected stationary pose jump: %.3f m, %.3f deg", step, yaw_step_deg);
+        result.converged = false;
+      }
+    }
     if (result.converged) {
-      seed_ = result.map_T_base;
+      last_pose_ = result.map_T_base;
+      has_last_pose_ = true;
       publish_pose(stamp, result);
       publish_diagnostic(true, "RAW_OK", result);
     } else {
@@ -172,11 +185,15 @@ class StaticIcpLocalizer {
   pcl::PointCloud<pcl::PointXYZI>::Ptr map_, accumulator_;
   static_livox_localization::RegistrationConfig config_;
   Eigen::Isometry3d seed_ = Eigen::Isometry3d::Identity();
+  Eigen::Isometry3d last_pose_ = Eigen::Isometry3d::Identity();
   std::mutex mutex_;
   ros::Time window_start_;
   bool has_seed_ = false;
+  bool has_last_pose_ = false;
   int reset_count_ = 0;
   double window_s_ = 5.0;
+  double max_stationary_step_m_ = 0.20;
+  double max_stationary_yaw_deg_ = 5.0;
   std::string map_path_, map_sha256_, map_id_, map_frame_, base_frame_, cloud_topic_, seed_topic_;
 };
 
@@ -191,5 +208,6 @@ int main(int argc, char** argv) {
   }
   return 0;
 }
+
 
 

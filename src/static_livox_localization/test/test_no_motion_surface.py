@@ -8,3 +8,5 @@ def test_launch_and_localizer_have_no_motion_or_tf_publication():
     assert "/cmd_vel" not in text
     assert "TransformBroadcaster" not in text
     assert "move_base" not in text
+    assert "seed_ = result.map_T_base" not in text
+    assert "max_stationary_step_m" in text
