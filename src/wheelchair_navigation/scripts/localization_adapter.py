@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Sequence
 
-VALID_SOURCES = ("base_model", "amcl", "cartographer_noetic")
+VALID_SOURCES = ("base_model", "amcl", "cartographer_noetic", "fast_lio_icp")
 STATUS_MAX_AGE_S = 0.25
 TF_FUTURE_TOLERANCE_S = 0.05
 TF_VALIDITY_HORIZON_S = 0.04
