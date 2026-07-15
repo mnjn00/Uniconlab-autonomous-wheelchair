@@ -1,0 +1,6 @@
+<launch>
+  <arg name="config" default="$(find static_livox_localization)/config/static_localization.yaml"/>
+  <node pkg="static_livox_localization" type="static_icp_localizer" name="static_icp_localizer" output="screen" required="true">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+</launch>
