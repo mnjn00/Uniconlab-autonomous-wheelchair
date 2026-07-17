@@ -1,0 +1,37 @@
+map_path: /home/mprp3/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd
+map_sha256: b985cd2b49c796809c3dfe8ae79e39717454e27e725cd4495d695ea95c6628dc
+map_id: livox_raw_20260707
+map_preview_topic: /fast_lio_icp/map_preview
+map_preview_voxel_resolution: 0.75
+
+map_frame: map
+odom_frame: camera_init
+base_frame: body
+cloud_topic: /cloud_registered_body
+odom_topic: /Odometry
+seed_topic: /fast_lio_icp/initialpose
+
+initialization_window_s: 3.0
+rolling_window_s: 2.0
+correction_period_s: 1.0
+max_cloud_odom_skew_s: 0.10
+max_cloud_samples: 20
+max_submap_points: 120000
+
+voxel_resolution: 0.20
+roi_radius: 20.0
+roi_z_half_extent: 5.0
+max_correspondence: 1.0
+max_iterations: 64
+min_points: 500
+max_fitness: 0.20
+min_inlier_ratio: 0.35
+
+max_prediction_translation_m: 1.0
+max_prediction_yaw_deg: 20.0
+max_correction_translation_m: 0.30
+max_correction_yaw_deg: 5.0
+degraded_after_failures: 1
+lost_after_s: 8.0
+recovery_confirmations: 2
+

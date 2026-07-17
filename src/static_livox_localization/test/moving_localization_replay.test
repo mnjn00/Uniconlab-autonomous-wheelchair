@@ -1,0 +1,18 @@
+<launch>
+  <arg name="bag" default="" doc="Absolute path to an explicitly selected trial bag"/>
+  <arg name="config" default="$(find static_livox_localization)/config/moving_localization.yaml"/>
+
+  <param name="use_sim_time" value="true"/>
+
+  <include file="$(find static_livox_localization)/launch/moving_localization.launch">
+    <arg name="config" value="$(arg config)"/>
+    <arg name="visualization" value="false"/>
+    <arg name="rviz" value="false"/>
+  </include>
+
+  <node pkg="rosbag"
+        type="play"
+        name="moving_localization_replay"
+        required="true"
+        args="--clock $(arg bag) --topics /livox/lidar /livox/imu /cloud_registered_body /Odometry /fast_lio_icp/initialpose /tf_static"/>
+</launch>

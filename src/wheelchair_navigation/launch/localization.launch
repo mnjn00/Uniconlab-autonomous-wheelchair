@@ -1,7 +1,7 @@
 <launch>
   <!-- Disabled by default. Callers must explicitly bind the deployed map and policy. -->
   <arg name="enabled" default="false"/>
-  <arg name="source" default="" doc="One of: base_model, amcl, cartographer_noetic"/>
+  <arg name="source" default="" doc="One of: base_model, amcl, cartographer_noetic, fast_lio_icp"/>
   <arg name="map_id"/>
   <arg name="map_sha256"/>
   <arg name="policy_sha256"/>
@@ -10,12 +10,15 @@
   <arg name="base_model_pose_topic" default="/base_model/localization_pose"/>
   <arg name="amcl_pose_topic" default="/amcl_pose"/>
   <arg name="cartographer_pose_topic" default="/cartographer/tracked_pose"/>
+  <arg name="fast_lio_icp_pose_topic" default="/fast_lio_icp/pose"/>
   <arg name="base_model_diagnostic_topic" default="/base_model/localization_diagnostics"/>
   <arg name="amcl_diagnostic_topic" default="/amcl/localization_diagnostics"/>
   <arg name="cartographer_diagnostic_topic" default="/cartographer/localization_diagnostics"/>
+  <arg name="fast_lio_icp_diagnostic_topic" default="/fast_lio_icp/localization_diagnostics"/>
   <arg name="base_model_enabled" default="false"/>
   <arg name="amcl_enabled" default="false"/>
   <arg name="cartographer_noetic_enabled" default="false"/>
+  <arg name="fast_lio_icp_enabled" default="false"/>
 
   <node pkg="wheelchair_navigation" type="localization_adapter.py"
         name="localization_adapter" output="screen" required="true">
@@ -36,5 +39,8 @@
     <param name="sources/cartographer_noetic/enabled" value="$(arg cartographer_noetic_enabled)"/>
     <param name="sources/cartographer_noetic/pose_topic" value="$(arg cartographer_pose_topic)"/>
     <param name="sources/cartographer_noetic/diagnostic_topic" value="$(arg cartographer_diagnostic_topic)"/>
+    <param name="sources/fast_lio_icp/enabled" value="$(arg fast_lio_icp_enabled)"/>
+    <param name="sources/fast_lio_icp/pose_topic" value="$(arg fast_lio_icp_pose_topic)"/>
+    <param name="sources/fast_lio_icp/diagnostic_topic" value="$(arg fast_lio_icp_diagnostic_topic)"/>
   </node>
 </launch>
