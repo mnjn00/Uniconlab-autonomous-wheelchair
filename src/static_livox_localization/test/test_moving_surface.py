@@ -47,6 +47,9 @@ def test_moving_config_accepts_observed_stationary_calibration_band():
 
     assert config["max_fitness"] >= 0.263
     assert config["min_inlier_ratio"] <= 0.225
+    assert config["max_correspondence"] == 0.5
+    assert config["max_prediction_translation_m"] == 1.5
+    assert config["candidate_translation_tolerance_m"] == 0.30
 
 
 

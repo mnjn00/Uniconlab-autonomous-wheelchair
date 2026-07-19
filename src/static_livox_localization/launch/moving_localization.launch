@@ -13,6 +13,13 @@
 
   <group if="$(arg visualization)">
     <node pkg="static_livox_localization"
+          type="bounded_cloud_preview_node"
+          name="bounded_cloud_preview"
+          output="screen">
+      <rosparam command="load" file="$(arg config)"/>
+    </node>
+
+    <node pkg="static_livox_localization"
           type="map_preview_publisher"
           name="map_preview_publisher"
           output="screen">

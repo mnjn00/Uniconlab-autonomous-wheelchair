@@ -14,6 +14,12 @@ def evaluate_summary(
     max_return_yaw_deg=10.0,
 ):
     reasons = []
+    state_durations = summary.get("state_duration_s", {})
+    for required_state in ("MANUAL_ALIGN", "VERIFYING", "TRACKING"):
+        if required_state not in state_durations:
+            reasons.append(
+                "MISSING_ALIGNMENT_STATE:" + required_state
+            )
     if not summary.get("pose_samples"):
         reasons.append("NO_POSE")
         return False, reasons

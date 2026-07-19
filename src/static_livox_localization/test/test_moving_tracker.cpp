@@ -73,6 +73,26 @@ TEST(MovingTracker, RejectsRegistrationFarFromOdometryPrediction) {
   EXPECT_EQ(decision.reason, "PREDICTION_TRANSLATION_JUMP");
 }
 
+TEST(MovingTracker, IgnoresVerticalDriftForPlanarPredictionGate) {
+  RegistrationResult registration;
+  registration.converged = true;
+  registration.fitness = 0.05;
+  registration.inlier_ratio = 0.80;
+  registration.source_points = 5000;
+  registration.target_points = 10000;
+  registration.map_T_base = Eigen::Isometry3d::Identity();
+  registration.map_T_base.translation().z() = 2.0;
+  TrackingConfig config;
+  config.max_prediction_translation_m = 0.50;
+
+  const CorrectionDecision decision = evaluate_correction(
+      registration, Eigen::Isometry3d::Identity(), config);
+
+  EXPECT_TRUE(decision.accepted);
+  EXPECT_NEAR(decision.prediction_translation_m, 0.0, 1e-9);
+  EXPECT_NEAR(decision.prediction_rotation_rad, 0.0, 1e-9);
+}
+
 TEST(MovingTracker, LimitsAcceptedMapToOdomCorrectionStep) {
   TrackingConfig config;
   config.max_correction_translation_m = 0.30;

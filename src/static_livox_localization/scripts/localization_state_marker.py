@@ -8,6 +8,8 @@ from visualization_msgs.msg import Marker
 
 
 COLORS = {
+    "MANUAL_ALIGN": (0.0, 1.0, 1.0),
+    "VERIFYING": (1.0, 0.0, 1.0),
     "TRACKING": (0.0, 1.0, 0.0),
     "DEGRADED": (1.0, 1.0, 0.0),
     "LOST": (1.0, 0.0, 0.0),
@@ -21,6 +23,9 @@ class LocalizationStateMarker:
         self.state = "WAITING_INITIALIZATION"
         self.publisher = rospy.Publisher(
             "/fast_lio_icp/state_marker", Marker, queue_size=1, latch=True
+        )
+        self.footprint_publisher = rospy.Publisher(
+            "/fast_lio_icp/wheelchair_footprint_marker", Marker, queue_size=1, latch=True
         )
         rospy.Subscriber(
             "/fast_lio_icp/pose", PoseWithCovarianceStamped,
@@ -58,6 +63,19 @@ class LocalizationStateMarker:
         marker.color.a = 1.0
         marker.text = self.state
         self.publisher.publish(marker)
+
+        footprint = Marker()
+        footprint.header = self.pose.header
+        footprint.ns = "wheelchair_footprint"
+        footprint.id = 0
+        footprint.type = Marker.CYLINDER
+        footprint.action = Marker.ADD
+        footprint.pose = self.pose.pose.pose
+        footprint.scale.x = footprint.scale.y = 1.0
+        footprint.scale.z = 0.08
+        footprint.color.r, footprint.color.g, footprint.color.b = color
+        footprint.color.a = 0.45
+        self.footprint_publisher.publish(footprint)
 
 
 if __name__ == "__main__":

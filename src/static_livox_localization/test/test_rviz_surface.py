@@ -14,11 +14,11 @@ def test_rviz_uses_fixed_map_and_only_bounded_visualization_topics():
     assert "/fast_lio_icp/map_preview" in text
     assert "/fast_lio_icp/pose" in text
     assert "/fast_lio_icp/path" in text
-    assert "/cloud_registered_body" in text
+    assert "/fast_lio_icp/live_preview" in text
     assert "/fast_lio_icp/reference_marker" in text
     assert "/fast_lio_icp/state_marker" in text
-    assert "Frame Rate: 12" in text
-    assert "Decay Time: 1" in text
+    assert "Frame Rate: 10" in text
+    assert "Decay Time: 0" in text
 
 
 def test_map_preview_is_voxelized_latched_and_never_rewrites_map():

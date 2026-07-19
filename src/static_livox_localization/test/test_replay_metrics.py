@@ -17,7 +17,7 @@ def valid_summary():
         "max_yaw_step_deg": 2.0,
         "return_translation_m": 0.30,
         "return_yaw_deg": 7.0,
-        "state_duration_s": {"TRACKING": 50.0, "DEGRADED": 2.0},
+        "state_duration_s": {"MANUAL_ALIGN": 0.1, "VERIFYING": 3.0, "TRACKING": 50.0, "DEGRADED": 2.0},
     }
 
 
@@ -40,6 +40,16 @@ def test_rejects_pose_jump_and_large_return_error():
     assert "POSE_JUMP" in reasons
     assert "RETURN_TRANSLATION" in reasons
     assert "RETURN_YAW" in reasons
+
+
+def test_rejects_trial_missing_assisted_alignment_states():
+    summary = valid_summary()
+    del summary["state_duration_s"]["VERIFYING"]
+
+    accepted, reasons = MODULE.evaluate_summary(summary)
+
+    assert not accepted
+    assert "MISSING_ALIGNMENT_STATE:VERIFYING" in reasons
 
 
 def test_replay_launch_is_localization_only_and_requires_explicit_bag():

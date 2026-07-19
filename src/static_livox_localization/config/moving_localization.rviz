@@ -8,11 +8,13 @@ Visualization Manager:
   Global Options:
     Background Color: 35; 35; 35
     Fixed Frame: map
-    Frame Rate: 12
+    Frame Rate: 10
   Displays:
     - Class: rviz/PointCloud2
       Name: Fixed 3D Map Preview
       Topic: /fast_lio_icp/map_preview
+      Color Transformer: FlatColor
+      Color: 255; 0; 0
       Queue Size: 1
       Size (Pixels): 2
       Style: Points
@@ -20,11 +22,13 @@ Visualization Manager:
       Enabled: true
     - Class: rviz/PointCloud2
       Name: Current Livox Cloud
-      Topic: /cloud_registered_body
+      Topic: /fast_lio_icp/live_preview
+      Color Transformer: FlatColor
+      Color: 0; 255; 0
       Queue Size: 1
       Size (Pixels): 2
       Style: Points
-      Decay Time: 1
+      Decay Time: 0
       Enabled: true
     - Class: rviz/PoseWithCovariance
       Name: Estimated Wheelchair Pose
@@ -46,6 +50,11 @@ Visualization Manager:
     - Class: rviz/Marker
       Name: Localization State
       Marker Topic: /fast_lio_icp/state_marker
+      Queue Size: 1
+      Enabled: true
+    - Class: rviz/Marker
+      Name: Wheelchair 1m Footprint
+      Marker Topic: /fast_lio_icp/wheelchair_footprint_marker
       Queue Size: 1
       Enabled: true
   Tools:

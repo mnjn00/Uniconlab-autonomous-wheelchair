@@ -11,6 +11,11 @@ cloud_topic: /cloud_registered_body
 odom_topic: /Odometry
 seed_topic: /fast_lio_icp/initialpose
 
+preview_input_topic: /cloud_registered_body
+preview_output_topic: /fast_lio_icp/live_preview
+preview_voxel_resolution: 0.30
+preview_max_rate_hz: 5.0
+
 initialization_window_s: 3.0
 rolling_window_s: 2.0
 correction_period_s: 1.0
@@ -19,19 +24,24 @@ max_cloud_samples: 20
 max_submap_points: 120000
 
 voxel_resolution: 0.20
-roi_radius: 20.0
+roi_radius: 8.0
 roi_z_half_extent: 5.0
-max_correspondence: 1.0
+max_correspondence: 0.5
 max_iterations: 64
 min_points: 500
 max_fitness: 0.28
 min_inlier_ratio: 0.20
 
-max_prediction_translation_m: 1.0
+max_prediction_translation_m: 1.5
 max_prediction_yaw_deg: 20.0
-max_correction_translation_m: 0.30
-max_correction_yaw_deg: 5.0
+max_correction_translation_m: 0.05
+max_correction_yaw_deg: 1.0
 degraded_after_failures: 1
 lost_after_s: 8.0
 recovery_confirmations: 2
+
+auto_correction_on_start: false
+required_consistent_candidates: 3
+candidate_translation_tolerance_m: 0.30
+candidate_yaw_tolerance_deg: 3.0
 

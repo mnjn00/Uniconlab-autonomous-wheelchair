@@ -24,8 +24,10 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <std_srvs/SetBool.h>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include "static_livox_localization/assisted_alignment.hpp"
 #include "static_livox_localization/moving_tracker.hpp"
 #include "static_livox_localization/registration.hpp"
 #include "static_livox_localization/rolling_submap.hpp"
@@ -112,15 +114,19 @@ class MovingIcpLocalizer {
   using CorrectionDecision = static_livox_localization::CorrectionDecision;
   using TrackingState = static_livox_localization::TrackingState;
 
+  using ConsensusDecision = static_livox_localization::ConsensusDecision;
   MovingIcpLocalizer()
       : private_nh_("~"),
         map_(new Cloud),
         rolling_submap_(rolling_config_),
-        state_machine_(tracking_config_) {
+        state_machine_(tracking_config_),
+        alignment_controller_(alignment_config_) {
     load_parameters();
     rolling_submap_ = static_livox_localization::RollingSubmap(rolling_config_);
     state_machine_ =
         static_livox_localization::TrackingStateMachine(tracking_config_);
+    alignment_controller_ =
+        static_livox_localization::AssistedAlignmentController(alignment_config_);
     load_fixed_map();
 
     pose_pub_ = nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>(
@@ -135,6 +141,9 @@ class MovingIcpLocalizer {
     cloud_sub_ = nh_.subscribe(cloud_topic_, 10,
                                &MovingIcpLocalizer::cloud_callback, this);
 
+    auto_correction_service_ = nh_.advertiseService("/fast_lio_icp/enable_auto_correction",
+                                                    &MovingIcpLocalizer::set_auto_correction,
+                                                    this);
     path_.header.frame_id = map_frame_;
     std::lock_guard<std::mutex> lock(mutex_);
     publish_diagnostic_locked("WAITING_FOR_INITIALPOSE", RegistrationResult(),
@@ -207,6 +216,18 @@ class MovingIcpLocalizer {
     private_nh_.param("lost_after_s", tracking_config_.lost_after_s, 8.0);
     private_nh_.param("recovery_confirmations",
                       tracking_config_.recovery_confirmations, 2);
+    private_nh_.param("auto_correction_on_start", auto_correction_on_start_,
+                      false);
+    private_nh_.param("required_consistent_candidates",
+                      alignment_config_.required_consistent_candidates, 3);
+    private_nh_.param("candidate_translation_tolerance_m",
+                      alignment_config_.candidate_translation_tolerance_m, 0.20);
+    double candidate_yaw_tolerance_deg = 3.0;
+    private_nh_.param("candidate_yaw_tolerance_deg",
+                      candidate_yaw_tolerance_deg, 3.0);
+    alignment_config_.candidate_rotation_tolerance_rad =
+        candidate_yaw_tolerance_deg * M_PI / 180.0;
+
 
     private_nh_.param("rolling_window_s", rolling_config_.window_s, 2.0);
     private_nh_.param("voxel_resolution", rolling_config_.voxel_resolution,
@@ -237,6 +258,27 @@ class MovingIcpLocalizer {
     }
   }
 
+  bool set_auto_correction(std_srvs::SetBool::Request& request,
+                           std_srvs::SetBool::Response& response) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    response.success =
+        alignment_controller_.set_auto_correction(request.data);
+    if (response.success && request.data) {
+      rolling_submap_.clear();
+      correction_in_progress_ = false;
+      initialization_start_stamp_s_ = ros::Time::now().toSec();
+      last_correction_stamp_s_ = -1.0;
+    }
+    response.message =
+        response.success
+            ? static_livox_localization::alignment_state_name(
+                  alignment_controller_.state())
+            : "INITIAL_POSE_REQUIRED";
+    publish_diagnostic_locked(response.message, RegistrationResult(),
+                              CorrectionDecision());
+    return true;
+  }
+
   void seed_callback(
       const geometry_msgs::PoseWithCovarianceStampedConstPtr& message) {
     try {
@@ -248,6 +290,7 @@ class MovingIcpLocalizer {
       std::lock_guard<std::mutex> lock(mutex_);
       seed_map_T_base_ = seed;
       has_seed_ = true;
+      alignment_controller_.on_seed();
       has_map_T_odom_ = false;
       has_seed_map_T_odom_guess_ = false;
       correction_in_progress_ = false;
@@ -262,8 +305,11 @@ class MovingIcpLocalizer {
         seed_map_T_odom_guess_ =
             seed_map_T_base_ * latest_odom_.odom_T_base.inverse();
         has_seed_map_T_odom_guess_ = true;
+        map_T_odom_ = seed_map_T_odom_guess_;
+        has_map_T_odom_ = true;
+        publish_pose_tf_path_locked(latest_odom_);
       }
-      publish_diagnostic_locked("ACCUMULATING_INITIALIZATION",
+      publish_diagnostic_locked("MANUAL_ALIGN",
                                 RegistrationResult(), CorrectionDecision());
     } catch (const std::exception& error) {
       ROS_ERROR("Rejected initial pose: %s", error.what());
@@ -302,6 +348,8 @@ class MovingIcpLocalizer {
       seed_map_T_odom_guess_ =
           seed_map_T_base_ * sample.odom_T_base.inverse();
       has_seed_map_T_odom_guess_ = true;
+      map_T_odom_ = seed_map_T_odom_guess_;
+      has_map_T_odom_ = true;
     }
     if (has_map_T_odom_) publish_pose_tf_path_locked(sample);
   }
@@ -346,19 +394,21 @@ class MovingIcpLocalizer {
                                   RegistrationResult(), CorrectionDecision());
         return;
       }
-      if (!has_seed_ || !has_seed_map_T_odom_guess_) return;
-      if (initialization_start_stamp_s_ < 0.0) {
-        initialization_start_stamp_s_ = stamp.toSec();
-      }
-      initializing = !has_map_T_odom_;
-      const double required_period =
-          initializing ? initialization_window_s_ : correction_period_s_;
-      const double reference_stamp =
-          initializing ? initialization_start_stamp_s_ : last_correction_stamp_s_;
-      if (correction_in_progress_ ||
-          stamp.toSec() - reference_stamp < required_period) {
+      if (!has_seed_ || !has_seed_map_T_odom_guess_ ||
+          !alignment_controller_.auto_correction_enabled()) {
         return;
       }
+      initializing =
+          alignment_controller_.state() ==
+          static_livox_localization::AlignmentState::VERIFYING;
+      const bool first_verification = last_correction_stamp_s_ < 0.0;
+      const double required_period =
+          first_verification ? initialization_window_s_ : correction_period_s_;
+      const double reference_stamp =
+          first_verification ? initialization_start_stamp_s_
+                             : last_correction_stamp_s_;
+      if (correction_in_progress_ ||
+          stamp.toSec() - reference_stamp < required_period) return;
       submap = rolling_submap_.build_in_base_frame(odom.odom_T_base);
       if (!submap ||
           static_cast<int>(submap->size()) < registration_config_.min_points) {
@@ -366,9 +416,7 @@ class MovingIcpLocalizer {
                                   RegistrationResult(), CorrectionDecision());
         return;
       }
-      predicted_map_T_base =
-          (initializing ? seed_map_T_odom_guess_ : map_T_odom_) *
-          odom.odom_T_base;
+      predicted_map_T_base = map_T_odom_ * odom.odom_T_base;
       correction_in_progress_ = true;
       last_correction_stamp_s_ = stamp.toSec();
     }
@@ -388,23 +436,30 @@ class MovingIcpLocalizer {
 
     std::lock_guard<std::mutex> lock(mutex_);
     correction_in_progress_ = false;
+    if (!alignment_controller_.auto_correction_enabled()) return;
     if (decision.accepted) {
       const Eigen::Isometry3d candidate_map_T_odom =
           static_livox_localization::compute_map_T_odom(
               registration.map_T_base, odom.odom_T_base);
-      if (!has_map_T_odom_) {
-        map_T_odom_ = candidate_map_T_odom;
-        has_map_T_odom_ = true;
-        state_machine_.initialize(stamp.toSec());
-      } else {
+      const ConsensusDecision consensus =
+          alignment_controller_.observe_candidate(candidate_map_T_odom);
+      if (consensus.ready) {
         map_T_odom_ = static_livox_localization::limit_map_T_odom_step(
             map_T_odom_, candidate_map_T_odom, tracking_config_);
-        state_machine_.observe(true, stamp.toSec());
+        if (state_machine_.state() == TrackingState::WAITING_INITIALIZATION) {
+          state_machine_.initialize(stamp.toSec());
+        } else {
+          state_machine_.observe(true, stamp.toSec());
+        }
+        publish_pose_tf_path_locked(odom);
       }
-      publish_diagnostic_locked(decision.reason, registration, decision);
-      publish_pose_tf_path_locked(odom);
+      publish_diagnostic_locked(consensus.reason, registration, decision);
     } else {
-      if (has_map_T_odom_) state_machine_.observe(false, stamp.toSec());
+      alignment_controller_.observe_rejection();
+      if (alignment_controller_.state() ==
+          static_livox_localization::AlignmentState::TRACKING) {
+        state_machine_.observe(false, stamp.toSec());
+      }
       publish_diagnostic_locked(decision.reason, registration, decision);
     }
   }
@@ -448,16 +503,34 @@ class MovingIcpLocalizer {
     diagnostic_msgs::DiagnosticStatus status;
     status.name = "fast_lio_icp";
     status.hardware_id = map_id_;
-    const TrackingState state = state_machine_.state();
-    if (state == TrackingState::TRACKING) {
+    const TrackingState tracking_state = state_machine_.state();
+    const static_livox_localization::AlignmentState alignment_state =
+        alignment_controller_.state();
+    if (alignment_state !=
+        static_livox_localization::AlignmentState::TRACKING) {
+      status.level = diagnostic_msgs::DiagnosticStatus::WARN;
+      status.message =
+          static_livox_localization::alignment_state_name(alignment_state);
+    } else if (tracking_state == TrackingState::TRACKING) {
       status.level = diagnostic_msgs::DiagnosticStatus::OK;
-    } else if (state == TrackingState::LOST) {
+      status.message =
+          static_livox_localization::tracking_state_name(tracking_state);
+    } else if (tracking_state == TrackingState::LOST) {
       status.level = diagnostic_msgs::DiagnosticStatus::ERROR;
+      status.message =
+          static_livox_localization::tracking_state_name(tracking_state);
     } else {
       status.level = diagnostic_msgs::DiagnosticStatus::WARN;
+      status.message =
+          static_livox_localization::tracking_state_name(tracking_state);
     }
-    status.message = static_livox_localization::tracking_state_name(state);
     status.values.push_back(key_value("raw_state", status.message));
+    status.values.push_back(key_value("auto_correction_enabled",
+                                      alignment_controller_.auto_correction_enabled()
+                                          ? "true" : "false"));
+    status.values.push_back(key_value("consistent_candidate_count",
+                                      std::to_string(
+                                          alignment_controller_.consistent_count())));
     status.values.push_back(key_value("reason", reason));
     status.values.push_back(
         key_value("fitness", std::to_string(registration.fitness)));
@@ -492,14 +565,17 @@ class MovingIcpLocalizer {
   ros::Subscriber seed_sub_;
   ros::Subscriber odom_sub_;
   ros::Subscriber cloud_sub_;
+  ros::ServiceServer auto_correction_service_;
   tf2_ros::TransformBroadcaster tf_broadcaster_;
 
   Cloud::Ptr map_;
   static_livox_localization::RegistrationConfig registration_config_;
   static_livox_localization::TrackingConfig tracking_config_;
   static_livox_localization::RollingSubmapConfig rolling_config_;
+  static_livox_localization::AlignmentConfig alignment_config_;
   static_livox_localization::RollingSubmap rolling_submap_;
   static_livox_localization::TrackingStateMachine state_machine_;
+  static_livox_localization::AssistedAlignmentController alignment_controller_;
 
   std::mutex mutex_;
   std::deque<OdomSample> odom_history_;
@@ -513,6 +589,7 @@ class MovingIcpLocalizer {
   bool has_seed_map_T_odom_guess_ = false;
   bool has_map_T_odom_ = false;
   bool correction_in_progress_ = false;
+  bool auto_correction_on_start_ = false;
   int reset_count_ = 0;
   int path_max_poses_ = 2000;
   double initialization_window_s_ = 3.0;

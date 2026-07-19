@@ -10,6 +10,14 @@ double rotation_angle(const Eigen::Matrix3d& rotation) {
   return std::abs(Eigen::AngleAxisd(rotation).angle());
 }
 
+double planar_translation(const Eigen::Vector3d& translation) {
+  return std::hypot(translation.x(), translation.y());
+}
+
+double yaw_angle(const Eigen::Matrix3d& rotation) {
+  return std::abs(std::atan2(rotation(1, 0), rotation(0, 0)));
+}
+
 }  // namespace
 
 Eigen::Isometry3d compute_map_T_odom(
@@ -48,8 +56,8 @@ CorrectionDecision evaluate_correction(
 
   const Eigen::Isometry3d prediction_delta =
       predicted_map_T_base.inverse() * registration.map_T_base;
-  decision.prediction_translation_m = prediction_delta.translation().norm();
-  decision.prediction_rotation_rad = rotation_angle(prediction_delta.rotation());
+  decision.prediction_translation_m = planar_translation(prediction_delta.translation());
+  decision.prediction_rotation_rad = yaw_angle(prediction_delta.rotation());
   if (decision.prediction_translation_m >
       config.max_prediction_translation_m) {
     decision.reason = "PREDICTION_TRANSLATION_JUMP";

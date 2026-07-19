@@ -10,9 +10,14 @@
     <arg name="rviz" value="false"/>
   </include>
 
+  <node pkg="static_livox_localization"
+        type="enable_auto_correction_after_seed.py"
+        name="enable_auto_correction_after_seed"
+        output="screen"/>
+
   <node pkg="rosbag"
         type="play"
         name="moving_localization_replay"
         required="true"
-        args="--clock $(arg bag) --topics /livox/lidar /livox/imu /cloud_registered_body /Odometry /fast_lio_icp/initialpose /tf_static"/>
+        args="--clock --delay=2 $(arg bag) --topics /livox/lidar /livox/imu /cloud_registered_body /Odometry /fast_lio_icp/initialpose /tf_static"/>
 </launch>

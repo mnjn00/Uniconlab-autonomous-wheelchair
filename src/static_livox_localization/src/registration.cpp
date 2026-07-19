@@ -51,8 +51,9 @@ RegistrationResult register_cloud(
   gicp.setMaximumIterations(config.max_iterations);
   gicp.setTransformationEpsilon(1e-6);
   gicp.setEuclideanFitnessEpsilon(1e-6);
-  pcl::PointCloud<pcl::PointXYZI> aligned;
-  gicp.align(aligned, seed.matrix().cast<float>());
+  pcl::PointCloud<pcl::PointXYZI>::Ptr aligned(
+      new pcl::PointCloud<pcl::PointXYZI>);
+  gicp.align(*aligned, seed.matrix().cast<float>());
   if (!gicp.hasConverged()) return result;
 
   result.map_T_base.matrix() = gicp.getFinalTransformation().cast<double>();
@@ -62,15 +63,21 @@ RegistrationResult register_cloud(
   const double rotation = Eigen::AngleAxisd(delta.rotation()).angle();
 
   pcl::KdTreeFLANN<pcl::PointXYZI> tree;
-  tree.setInputCloud(target);
+  const pcl::PointCloud<pcl::PointXYZI>::ConstPtr sparser =
+      aligned->size() <= target->size() ? aligned : target;
+  const pcl::PointCloud<pcl::PointXYZI>::ConstPtr denser =
+      aligned->size() <= target->size() ? target : aligned;
+  tree.setInputCloud(denser);
   int inliers = 0;
   std::vector<int> index(1);
   std::vector<float> distance(1);
   const double threshold2 = config.max_correspondence * config.max_correspondence;
-  for (const auto& point : aligned.points) {
+  for (const auto& point : sparser->points) {
     if (tree.nearestKSearch(point, 1, index, distance) == 1 && distance[0] <= threshold2) ++inliers;
   }
-  result.inlier_ratio = aligned.empty() ? 0.0 : static_cast<double>(inliers) / aligned.size();
+  result.inlier_ratio = sparser->empty()
+                            ? 0.0
+                            : static_cast<double>(inliers) / sparser->size();
   result.converged = std::isfinite(result.fitness) && result.fitness <= config.max_fitness &&
                      translation <= config.max_seed_translation &&
                      rotation <= config.max_seed_rotation_rad;
