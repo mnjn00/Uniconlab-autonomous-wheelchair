@@ -80,6 +80,12 @@ ConsensusDecision AssistedAlignmentController::observe_candidate(
   return decision;
 }
 
+void AssistedAlignmentController::begin_reacquisition() {
+  if (!auto_correction_enabled_ || state_ != AlignmentState::TRACKING) return;
+  clear_consensus();
+  state_ = AlignmentState::VERIFYING;
+}
+
 void AssistedAlignmentController::observe_rejection() {
   clear_consensus();
   if (auto_correction_enabled_ && state_ != AlignmentState::TRACKING) {

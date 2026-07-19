@@ -34,8 +34,8 @@ min_inlier_ratio: 0.20
 
 max_prediction_translation_m: 1.5
 max_prediction_yaw_deg: 20.0
-max_correction_translation_m: 0.05
-max_correction_yaw_deg: 1.0
+max_correction_translation_m: 0.20
+max_correction_yaw_deg: 2.0
 degraded_after_failures: 1
 lost_after_s: 8.0
 recovery_confirmations: 2

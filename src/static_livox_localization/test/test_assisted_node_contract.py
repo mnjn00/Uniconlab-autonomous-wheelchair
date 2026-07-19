@@ -34,17 +34,34 @@ def test_assisted_tracking_uses_tight_roi_consensus_and_small_corrections():
     assert config["required_consistent_candidates"] == 3
     assert config["candidate_translation_tolerance_m"] == 0.30
     assert config["candidate_yaw_tolerance_deg"] == 3.0
-    assert config["max_correction_translation_m"] == 0.05
-    assert config["max_correction_yaw_deg"] == 1.0
+    assert config["max_correction_translation_m"] == 0.20
+    assert config["max_correction_yaw_deg"] == 2.0
     assert config["auto_correction_on_start"] is False
 
 
-def test_correction_is_applied_only_after_consensus():
+def test_verification_snaps_full_candidate_only_after_consensus():
     text = node_text()
     observe = text.index("observe_candidate(candidate_map_T_odom)")
     ready = text.index("consensus.ready", observe)
-    apply = text.index("limit_map_T_odom_step", ready)
-    assert observe < ready < apply
+    snap = text.index("map_T_odom_ = candidate_map_T_odom;", ready)
+    assert observe < ready < snap
+
+
+def test_tracking_applies_limited_step_on_every_accepted_candidate():
+    text = node_text()
+    accepted = text.index("if (decision.accepted)")
+    tracking_branch = text.index("} else {", accepted)
+    apply = text.index("limit_map_T_odom_step", tracking_branch)
+    observe_true = text.index("state_machine_.observe(true", apply)
+    assert accepted < tracking_branch < apply < observe_true
+
+
+def test_lost_tracking_triggers_reacquisition():
+    text = node_text()
+    assert "begin_reacquisition" in text
+    lost = text.index("TrackingState::LOST)", text.index("observe(false"))
+    reacquire = text.index("begin_reacquisition", lost)
+    assert lost < reacquire
 
 
 def test_std_srvs_is_declared_as_build_and_runtime_dependency():

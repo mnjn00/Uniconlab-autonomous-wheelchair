@@ -93,6 +93,33 @@ TEST(AssistedAlignment, RejectionClearsPendingConsensus) {
   EXPECT_EQ(controller.state(), AlignmentState::VERIFYING);
 }
 
+TEST(AssistedAlignment, LostTrackingReentersVerifyingForReacquisition) {
+  AlignmentConfig config;
+  config.required_consistent_candidates = 1;
+  AssistedAlignmentController controller(config);
+  controller.on_seed();
+  ASSERT_TRUE(controller.set_auto_correction(true));
+  ASSERT_TRUE(controller.observe_candidate(Eigen::Isometry3d::Identity()).ready);
+  ASSERT_EQ(controller.state(), AlignmentState::TRACKING);
+
+  controller.begin_reacquisition();
+
+  EXPECT_EQ(controller.state(), AlignmentState::VERIFYING);
+  EXPECT_TRUE(controller.auto_correction_enabled());
+  EXPECT_EQ(controller.consistent_count(), 0);
+  EXPECT_TRUE(controller.observe_candidate(Eigen::Isometry3d::Identity()).ready);
+  EXPECT_EQ(controller.state(), AlignmentState::TRACKING);
+}
+
+TEST(AssistedAlignment, ReacquisitionRequiresActiveTracking) {
+  AssistedAlignmentController controller(AlignmentConfig{});
+  controller.on_seed();
+
+  controller.begin_reacquisition();
+
+  EXPECT_EQ(controller.state(), AlignmentState::MANUAL_ALIGN);
+}
+
 TEST(AssistedAlignment, NewSeedReturnsTrackingControllerToManual) {
   AlignmentConfig config;
   config.required_consistent_candidates = 1;

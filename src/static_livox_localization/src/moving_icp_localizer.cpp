@@ -441,24 +441,34 @@ class MovingIcpLocalizer {
       const Eigen::Isometry3d candidate_map_T_odom =
           static_livox_localization::compute_map_T_odom(
               registration.map_T_base, odom.odom_T_base);
-      const ConsensusDecision consensus =
-          alignment_controller_.observe_candidate(candidate_map_T_odom);
-      if (consensus.ready) {
+      if (initializing) {
+        const ConsensusDecision consensus =
+            alignment_controller_.observe_candidate(candidate_map_T_odom);
+        if (consensus.ready) {
+          map_T_odom_ = candidate_map_T_odom;
+          if (state_machine_.state() ==
+              TrackingState::WAITING_INITIALIZATION) {
+            state_machine_.initialize(stamp.toSec());
+          } else {
+            state_machine_.observe(true, stamp.toSec());
+          }
+          publish_pose_tf_path_locked(odom);
+        }
+        publish_diagnostic_locked(consensus.reason, registration, decision);
+      } else {
         map_T_odom_ = static_livox_localization::limit_map_T_odom_step(
             map_T_odom_, candidate_map_T_odom, tracking_config_);
-        if (state_machine_.state() == TrackingState::WAITING_INITIALIZATION) {
-          state_machine_.initialize(stamp.toSec());
-        } else {
-          state_machine_.observe(true, stamp.toSec());
-        }
+        state_machine_.observe(true, stamp.toSec());
         publish_pose_tf_path_locked(odom);
+        publish_diagnostic_locked(decision.reason, registration, decision);
       }
-      publish_diagnostic_locked(consensus.reason, registration, decision);
     } else {
       alignment_controller_.observe_rejection();
       if (alignment_controller_.state() ==
-          static_livox_localization::AlignmentState::TRACKING) {
-        state_machine_.observe(false, stamp.toSec());
+          static_livox_localization::AlignmentState::TRACKING &&
+          state_machine_.observe(false, stamp.toSec()) ==
+              TrackingState::LOST) {
+        alignment_controller_.begin_reacquisition();
       }
       publish_diagnostic_locked(decision.reason, registration, decision);
     }

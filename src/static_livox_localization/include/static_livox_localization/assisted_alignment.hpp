@@ -34,6 +34,7 @@ class AssistedAlignmentController {
   bool set_auto_correction(bool enabled);
   ConsensusDecision observe_candidate(const Eigen::Isometry3d& candidate);
   void observe_rejection();
+  void begin_reacquisition();
 
   AlignmentState state() const { return state_; }
   bool auto_correction_enabled() const { return auto_correction_enabled_; }
