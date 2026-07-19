@@ -24,8 +24,8 @@ roi_z_half_extent: 5.0
 max_correspondence: 1.0
 max_iterations: 64
 min_points: 500
-max_fitness: 0.20
-min_inlier_ratio: 0.35
+max_fitness: 0.28
+min_inlier_ratio: 0.20
 
 max_prediction_translation_m: 1.0
 max_prediction_yaw_deg: 20.0

@@ -1,5 +1,6 @@
 from pathlib import Path
 import xml.etree.ElementTree as ET
+import yaml
 
 
 ROOT = Path(__file__).parents[1]
@@ -38,6 +39,15 @@ def test_moving_config_declares_fixed_map_and_tracking_contract():
 
     assert "livox_raw_20260707_0p20m_xyzi.pcd" in config_text
     assert "b985cd2b49c796809c3dfe8ae79e39717454e27e725cd4495d695ea95c6628dc" in config_text
+
+def test_moving_config_accepts_observed_stationary_calibration_band():
+    config = yaml.safe_load(
+        (ROOT / "config" / "moving_localization.yaml").read_text(encoding="utf-8")
+    )
+
+    assert config["max_fitness"] >= 0.263
+    assert config["min_inlier_ratio"] <= 0.225
+
 
 
 def test_static_localizer_remains_tf_and_motion_command_free():
