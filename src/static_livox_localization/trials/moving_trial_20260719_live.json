@@ -1,0 +1,41 @@
+{
+  "trial_id": "moving_live_20260719",
+  "date": "2026-07-19",
+  "verdict": "SUCCESS",
+  "operators": ["minjun", "gyeongyeon"],
+  "code_under_test": {
+    "commit": "1bb01c7",
+    "description": "closed-loop correction: consensus snap on init, per-candidate limited corrections (0.20 m / 2 deg), reacquisition on LOST"
+  },
+  "map_id": "livox_raw_20260707",
+  "replay_validation": {
+    "bag": "aejimum_to_gongsen.bag (334 s)",
+    "seed_offset_0m": {"mean_prediction_error_m": 0.011, "max_prediction_error_m": 0.185, "lost_samples": 1},
+    "seed_offset_2m": {"converged_within_s": 10, "mean_prediction_error_m": 0.012, "lost_samples": 1},
+    "cross_seed_trajectory_agreement": {"mean_m": 0.009, "p95_m": 0.037},
+    "old_code_baseline": {"persistent_error_m": 0.7, "lost_samples": 24}
+  },
+  "live_trial": {
+    "recording": "moving_fixed_20260719_194907.bag (~52 min, unindexed .active reindexed)",
+    "tracking_quality_good_coverage": {
+      "inlier_ratio": [0.46, 0.53],
+      "prediction_error_m": [0.001, 0.015],
+      "acceptance": "5/5 consecutive OK"
+    },
+    "seed_snap_and_reacquisition": "verified live: consensus snap after operator seed, automatic VERIFYING reacquisition after LOST",
+    "known_issue": {
+      "symptom": "sawtooth pose jumps up to 1.1 m near end of route",
+      "segment_map_xy": [[2, 0], [-33, 23]],
+      "cause": "sparse map coverage causes NOT_CONVERGED streaks; odometry drift accumulates and reacquisition snaps it back; magnitude scales with speed (same ~1 m/s speed was clean in well-mapped segments)",
+      "recommended_actions": [
+        "remap and merge the sparse segment",
+        "optional: rate-limit reacquisition corrections (slew) to smooth snaps",
+        "operational: reduce speed in that segment until remapped"
+      ]
+    }
+  },
+  "operational_notes": {
+    "fast_lio_divergence": "one FAST-LIO divergence observed under heavy CPU load (4K VNC polling); restart recovered; keep VNC at 1080p",
+    "seed_workflow": "operator seed disables auto correction; auto re-enable helper used during trial"
+  }
+}
