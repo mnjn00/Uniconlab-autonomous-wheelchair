@@ -1,0 +1,7 @@
+﻿<launch>
+  <arg name="map_yaml" default="/home/mprp3/wheelchair_localization_maps/livox_raw_20260707/seed_map_2d/livox_seed_map.yaml"/>
+  <node pkg="map_server" type="map_server" name="livox_seed_map_server" args="$(arg map_yaml)" output="screen">
+    <remap from="map" to="/livox_seed_map"/>
+    <remap from="map_metadata" to="/livox_seed_map_metadata"/>
+  </node>
+</launch>

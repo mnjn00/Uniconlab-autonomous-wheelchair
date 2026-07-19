@@ -1,0 +1,38 @@
+<launch>
+  <arg name="config" default="$(find static_livox_localization)/config/moving_localization.yaml"/>
+  <arg name="visualization" default="true"/>
+  <arg name="rviz" default="false"/>
+
+  <node pkg="static_livox_localization"
+        type="moving_icp_localizer"
+        name="moving_icp_localizer"
+        output="screen"
+        required="true">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+
+  <group if="$(arg visualization)">
+    <node pkg="static_livox_localization"
+          type="map_preview_publisher"
+          name="map_preview_publisher"
+          output="screen">
+      <rosparam command="load" file="$(arg config)"/>
+    </node>
+    <node pkg="static_livox_localization"
+          type="reference_marker.py"
+          name="reference_marker"
+          output="screen"/>
+    <node pkg="static_livox_localization"
+          type="localization_state_marker.py"
+          name="localization_state_marker"
+          output="screen"/>
+  </group>
+
+  <node if="$(arg rviz)"
+        pkg="rviz"
+        type="rviz"
+        name="moving_localization_rviz"
+        args="-d $(find static_livox_localization)/config/moving_localization.rviz"
+        output="screen"/>
+</launch>
+

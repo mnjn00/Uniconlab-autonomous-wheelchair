@@ -1,0 +1,20 @@
+﻿map_path: /home/mprp3/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd
+map_sha256: b985cd2b49c796809c3dfe8ae79e39717454e27e725cd4495d695ea95c6628dc
+map_id: livox_raw_20260707
+map_frame: map
+base_frame: base_link
+cloud_topic: /cloud_registered_body
+seed_topic: /fast_lio_icp/initialpose
+window_s: 5.0
+voxel_resolution: 0.20
+roi_radius: 20.0
+roi_z_half_extent: 5.0
+max_correspondence: 1.0
+max_iterations: 64
+min_points: 500
+max_fitness: 0.20
+max_seed_translation: 3.0
+max_seed_rotation_deg: 30.0
+
+max_stationary_step_m: 0.20
+max_stationary_yaw_deg: 5.0
