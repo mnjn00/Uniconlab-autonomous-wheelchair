@@ -62,12 +62,51 @@ setsid nohup roslaunch static_livox_localization moving_localization.launch \
   rviz:="$RVIZ" auto_init:=true auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
   > "$LOG/live_localization.log" 2>&1 < /dev/null &
 
-echo "[5/5] waiting for TRACKING (auto seed + consensus)"
+echo "[5/7] waiting for TRACKING (auto seed + consensus)"
+LOCALIZED=0
 for i in $(seq 1 45); do
   STATE=$(timeout 3 rostopic echo -n1 /fast_lio_icp/localization_diagnostics/status[0]/message 2>/dev/null | head -1)
   echo "  state: $STATE"
-  echo "$STATE" | grep -q TRACKING && { echo "LOCALIZED - ready to drive"; exit 0; }
+  echo "$STATE" | grep -q TRACKING && { LOCALIZED=1; break; }
   sleep 2
 done
-echo "WARNING: not TRACKING yet. Check RViz overlay; you can still seed manually (2D Pose Estimate)."
-exit 4
+if [ "$LOCALIZED" != "1" ]; then
+  echo "WARNING: not TRACKING yet. Seed manually in RViz, then re-run or continue by hand."
+  exit 4
+fi
+echo "LOCALIZED"
+
+echo "[6/7] wheel base + safety gate + follower (paused)"
+source "$HOME/catkin_ws/devel/setup.bash"
+setsid nohup roslaunch base_model wheel.launch \
+  > "$LOG/live_base.log" 2>&1 < /dev/null &
+for i in $(seq 1 15); do
+  timeout 3 rostopic echo -n1 /wheel_status >/dev/null 2>&1 && break
+  sleep 2
+done
+if ! timeout 3 rostopic echo -n1 /wheel_status >/dev/null 2>&1; then
+  echo "ERROR: wheel base not responding (/wheel_status silent)"; exit 5
+fi
+source "$HOME/livox_static_localization_ws/devel/setup.bash"
+setsid nohup rosrun static_livox_localization safety_gate.py \
+  > "$LOG/live_gate.log" 2>&1 < /dev/null &
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_waypoints.json}"
+setsid nohup rosrun static_livox_localization waypoint_follower.py \
+  _route:="$ROUTE" > "$LOG/live_follower.log" 2>&1 < /dev/null &
+
+echo "[7/7] black-box recorder"
+mkdir -p "$HOME/localization_trials"
+setsid nohup rosbag record --lz4 \
+  -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
+  /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics \
+  /cmd_vel_raw /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
+  /waypoint_follower/status /Odometry \
+  > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
+
+echo ""
+echo "READY. To drive the route:"
+echo "  1) rostopic pub -1 /mode_cmd std_msgs/Int16 65     # auto mode"
+echo "  2) rosservice call /waypoint_follower/start \"data: true\""
+echo "Pause:  rosservice call /waypoint_follower/start \"data: false\""
+echo "E-stop: joystick to manual mode (or: rostopic pub -1 /mode_cmd std_msgs/Int16 77)"
+exit 0

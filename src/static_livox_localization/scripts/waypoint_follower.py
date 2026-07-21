@@ -23,7 +23,7 @@ import rospy
 from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from sensor_msgs.msg import PointCloud2
-from std_msgs.msg import Int16MultiArray
+from std_msgs.msg import Int16MultiArray, String
 from std_srvs.srv import SetBool, SetBoolResponse
 
 import sensor_msgs.point_cloud2 as pc2
@@ -49,6 +49,10 @@ BYPASS_AFTER_S = 10.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
+BASE_STALE_S = 1.5
+MAX_TILT_ROLL = math.radians(6.0)
+MAX_TILT_PITCH = math.radians(8.0)
+GEOFENCE_M = 3.5
 AUTO_MODE = 65
 
 
@@ -70,18 +74,25 @@ class WaypointFollower:
         self.pose_xy = None
         self.pose_yaw = 0.0
         self.pose_pitch = 0.0
+        self.pose_roll = 0.0
         self.pose_stamp = rospy.Time(0)
         self.tracking_state = ""
         self.drive_mode = None
+        self.wheel_status_stamp = rospy.Time(0)
+        self.route_locked = False
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.nearest_index = 0
         self.current_speed = 0.0
         self.blocked_since = None
         self.lateral_offset = 0.0
+        self.last_yaw_rate = 0.0
         self.status = "PAUSED"
 
-        self.cmd_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
+        cmd_topic = rospy.get_param("~cmd_topic", "/cmd_vel_raw")
+        self.cmd_pub = rospy.Publisher(cmd_topic, Twist, queue_size=1)
+        self.status_pub = rospy.Publisher(
+            "/waypoint_follower/status", String, queue_size=2)
         rospy.Subscriber("/fast_lio_icp/pose", PoseWithCovarianceStamped,
                          self.on_pose, queue_size=5)
         rospy.Subscriber("/cloud_registered_body", PointCloud2,
@@ -101,6 +112,7 @@ class WaypointFollower:
         self.pose_xy = np.array([p.x, p.y])
         self.pose_yaw = yaw
         self.pose_pitch = pitch
+        self.pose_roll = roll
         self.pose_stamp = message.header.stamp
 
     def on_cloud(self, message):
@@ -116,6 +128,7 @@ class WaypointFollower:
                 self.tracking_state = status.message
 
     def on_wheel_status(self, message):
+        self.wheel_status_stamp = rospy.Time.now()
         if len(message.data) > 1:
             self.drive_mode = message.data[1]
 
@@ -173,6 +186,9 @@ class WaypointFollower:
     # ------------------------------------------------------------ control
     def pure_pursuit_target(self):
         d = np.linalg.norm(self.waypoints - self.pose_xy, axis=1)
+        if not self.route_locked:
+            self.nearest_index = int(np.argmin(d))
+            self.route_locked = True
         window_end = min(self.nearest_index + 15, len(self.waypoints))
         self.nearest_index = int(
             self.nearest_index + np.argmin(d[self.nearest_index:window_end]))
@@ -203,12 +219,21 @@ class WaypointFollower:
             reason = "NO_CLOUD"
         elif self.tracking_state == "LOST":
             reason = "LOCALIZATION_LOST"
+        elif (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
+            reason = "BASE_STALE"
         elif self.drive_mode is not None and self.drive_mode != AUTO_MODE:
             reason = "MANUAL_MODE"
+        elif abs(self.pose_roll) > MAX_TILT_ROLL or \
+                abs(self.pose_pitch) > MAX_TILT_PITCH:
+            reason = "TILT_LIMIT"
+        elif self.route_locked and np.min(np.linalg.norm(
+                self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
+            reason = "OFF_ROUTE"
         if reason:
             if reason != self.status:
                 rospy.loginfo("hold: %s", reason)
                 self.status = reason
+            self.status_pub.publish(String(data="HOLD:" + reason))
             self.send_stop()
             return
 
@@ -267,6 +292,10 @@ class WaypointFollower:
         heading_error = math.atan2(math.sin(heading - self.pose_yaw),
                                    math.cos(heading - self.pose_yaw))
         yaw_rate = max(-MAX_YAW_RATE, min(MAX_YAW_RATE, 1.2 * heading_error))
+        slew = 1.5 / CONTROL_HZ
+        yaw_rate = max(self.last_yaw_rate - slew,
+                       min(self.last_yaw_rate + slew, yaw_rate))
+        self.last_yaw_rate = yaw_rate
         allowed = min(allowed, max(0.12, MAX_SPEED * (1.0 - abs(heading_error) / 1.2)))
         if blocking:
             allowed = 0.0
@@ -283,6 +312,8 @@ class WaypointFollower:
         self.cmd_pub.publish(command)
 
         state = blocking or ("BYPASS" if abs(self.lateral_offset) > 0.01 else "DRIVING")
+        self.status_pub.publish(String(data="%s wp=%d/%d v=%.2f" % (
+            state, self.nearest_index, len(self.waypoints), self.current_speed)))
         if state != self.status:
             rospy.loginfo("state: %s (wp %d/%d, v=%.2f)",
                           state, self.nearest_index, len(self.waypoints),
