@@ -2,6 +2,9 @@
   <arg name="config" default="$(find static_livox_localization)/config/moving_localization.yaml"/>
   <arg name="visualization" default="true"/>
   <arg name="rviz" default="false"/>
+  <arg name="auto_init" default="false"/>
+  <arg name="auto_init_map" default="/home/mprp3/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd"/>
+  <arg name="auto_init_traj" default="/home/mprp3/wheelchair_localization_maps/livox_raw_20260707/traj_lidar.txt"/>
 
   <node pkg="static_livox_localization"
         type="moving_icp_localizer"
@@ -41,5 +44,12 @@
         name="moving_localization_rviz"
         args="-d $(find static_livox_localization)/config/moving_localization.rviz"
         output="screen"/>
+
+  <node if="$(arg auto_init)"
+        pkg="static_livox_localization"
+        type="auto_initial_pose.py"
+        name="auto_initial_pose"
+        output="screen"
+        args="--map $(arg auto_init_map) --traj $(arg auto_init_traj)"/>
 </launch>
 

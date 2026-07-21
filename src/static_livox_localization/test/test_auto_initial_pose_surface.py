@@ -33,3 +33,12 @@ def test_auto_init_supports_dry_run_without_publishing():
     dry_run = text.index("args.dry_run")
     publish = text.index("seed_pub.publish")
     assert dry_run < publish
+
+
+def test_launch_exposes_optional_auto_init_node():
+    launch = (ROOT / "launch" / "moving_localization.launch").read_text(
+        encoding="utf-8"
+    )
+    assert '<arg name="auto_init" default="false"/>' in launch
+    assert 'type="auto_initial_pose.py"' in launch
+    assert 'if="$(arg auto_init)"' in launch
