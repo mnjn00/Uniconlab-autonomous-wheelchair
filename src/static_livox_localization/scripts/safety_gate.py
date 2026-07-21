@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Independent last-line safety gate between the planner and the wheel base.
+"""Independent obstacle safety gate between the planner and tip_guard.
 
 Deliberately knows nothing about routes or planning: it forwards
-/cmd_vel_raw to /cmd_vel only when its OWN forward-corridor check passes,
-clamps speeds, replaces stale or missing input with a stop, and publishes
-continuously so the base always has a live command stream. If the planner
-misbehaves or dies, this gate stops the chair; if this gate dies, the
-uart-level watchdog stops the chair.
+/cmd_vel_raw to /cmd_vel_gated only when its OWN forward-corridor check
+passes, clamps speeds, replaces stale or missing input with a stop, and
+publishes continuously so the chain always has a live command stream.
+tip_guard.py is the final stage after this (guards against tip-over
+independently of obstacles); wheel_cmd_tmp.py/uart.py consume its output
+on /cmd_vel. If the planner misbehaves or dies, this gate stops the chair;
+if this gate dies, tip_guard's own staleness check stops the chair; if
+that dies too, the uart-level watchdog stops the chair.
 """
 
 import numpy as np
@@ -101,7 +104,7 @@ class SafetyGate:
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""
-        self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
+        self.pub = rospy.Publisher("/cmd_vel_gated", Twist, queue_size=1)
         rospy.Subscriber("/cmd_vel_raw", Twist, self.on_raw, queue_size=1)
         rospy.Subscriber("/cloud_registered_body", PointCloud2,
                          self.on_cloud, queue_size=2)

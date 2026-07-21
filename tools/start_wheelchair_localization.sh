@@ -20,7 +20,7 @@ fi
 echo "  vnc on port 5900 (pw 0000), NUC IP: $(hostname -I | tr ' ' '\n' | grep -v '^192\.168\.1\.' | head -1)"
 
 echo "[1/5] cleaning old processes"
-for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose'; do
+for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower'; do
   pkill -f "$pattern" 2>/dev/null || true
 done
 sleep 2
@@ -90,6 +90,17 @@ fi
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
 setsid nohup rosrun static_livox_localization safety_gate.py \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
+IMU_TOPIC="${IMU_TOPIC:-/livox/imu}"
+setsid nohup rosrun static_livox_localization tip_guard.py \
+  _imu_topic:="$IMU_TOPIC" \
+  > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
+for i in $(seq 1 10); do
+  timeout 2 rostopic echo -n1 /tip_guard/status >/dev/null 2>&1 && break
+  sleep 1
+done
+echo "  tip_guard armed - watch /tip_guard/status; if it stays"
+echo "  CONFIG_UNVERIFIED for more than ~30s of driving, the IMU axis"
+echo "  needs checking (see IMU_TOPIC / rosparam ~gyro_pitch_axis/sign)"
 ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_waypoints.json}"
 BAND="${BAND:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_safety_band.json}"
 setsid nohup rosrun static_livox_localization waypoint_follower.py \
@@ -101,8 +112,8 @@ mkdir -p "$HOME/localization_trials"
 setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics \
-  /cmd_vel_raw /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
-  /waypoint_follower/status /Odometry \
+  /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
+  /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

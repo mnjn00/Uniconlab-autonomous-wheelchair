@@ -38,7 +38,7 @@ MAX_SPEED = 0.5
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
-MAX_ACCEL = 0.25
+MAX_ACCEL = 0.18
 MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
@@ -61,6 +61,7 @@ POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
 MAX_TILT_ROLL = math.radians(6.0)
 MAX_TILT_PITCH = math.radians(8.0)
+BAND_RECOVER_MAX = 0.5
 GEOFENCE_M = 3.5
 AUTO_MODE = 65
 
@@ -145,9 +146,12 @@ class SafetyBand:
 
     def lateral_limits(self, point):
         d = np.linalg.norm(self.xy - point, axis=1)
-        k = int(np.argmin(d))
+        order = np.argsort(d)[:2]
+        k = int(order[0])
         lateral = float(np.dot(point - self.xy[k], self.normals[k]))
-        return lateral, -self.right[k], self.left[k]
+        lo = -max(self.right[j] for j in order)
+        hi = max(self.left[j] for j in order)
+        return lateral, lo, hi
 
     def contains(self, point, grace=0.0):
         lateral, lo, hi = self.lateral_limits(point)
@@ -335,7 +339,7 @@ class WaypointFollower:
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             reason = "OFF_ROUTE"
         elif self.route_locked and not self.band.contains(
-                self.pose_xy, grace=OFF_BAND_GRACE):
+                self.pose_xy, grace=BAND_RECOVER_MAX):
             reason = "OFF_BAND"
         if reason:
             if reason != self.status:
@@ -351,9 +355,14 @@ class WaypointFollower:
             rospy.loginfo("GOAL REACHED")
             return
 
+        recovering = self.route_locked and not self.band.contains(
+            self.pose_xy, grace=OFF_BAND_GRACE)
+
         obstacle_dist = self.obstacle_distance(self.lateral_offset)
 
         allowed = MAX_SPEED
+        if recovering:
+            allowed = min(allowed, CREEP_SPEED)
         if self.band.is_narrow(self.pose_xy):
             allowed = min(allowed, NARROW_SPEED)
         if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
@@ -426,7 +435,8 @@ class WaypointFollower:
         self.cmd_pub.publish(command)
 
         state = blocking or (
-            "BYPASS" if abs(self.lateral_offset) > 0.01 else "DRIVING")
+            "RECOVER" if recovering else
+            ("BYPASS" if abs(self.lateral_offset) > 0.01 else "DRIVING"))
         self.status_pub.publish(String(data="%s wp=%d/%d v=%.2f" % (
             state, self.nearest_index, len(self.waypoints),
             self.current_speed)))

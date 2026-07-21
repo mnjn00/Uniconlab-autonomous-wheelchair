@@ -9,16 +9,29 @@ def gate_text():
             / "safety_gate.py").read_text(encoding="utf-8")
 
 
+def tip_guard_text():
+    return (ROOT / "src" / "static_livox_localization" / "scripts"
+            / "tip_guard.py").read_text(encoding="utf-8")
+
+
 def uart_text():
     return (ROOT / "tools" / "base_model_uart_watchdog.py").read_text(
         encoding="utf-8")
 
 
-def test_gate_is_route_agnostic_last_line_between_planner_and_base():
+def test_gate_is_route_agnostic_and_feeds_tip_guard_not_the_base_directly():
     text = gate_text()
     assert '"/cmd_vel_raw"' in text
-    assert '"/cmd_vel"' in text
+    assert '"/cmd_vel_gated"' in text
     assert "route" not in text.lower().replace("routes or planning", "")
+
+
+def test_tip_guard_is_the_final_stage_publishing_cmd_vel():
+    gate = gate_text()
+    guard = tip_guard_text()
+    assert '"/cmd_vel_gated"' in guard
+    assert '"/cmd_vel"' in guard
+    assert '"/cmd_vel"' not in gate
 
 
 def test_gate_replaces_stale_input_with_stop_and_always_publishes():
