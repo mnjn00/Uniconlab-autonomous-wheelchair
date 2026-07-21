@@ -13,8 +13,71 @@ import numpy as np
 import rospy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import PointCloud2
+from nav_msgs.msg import Odometry
 
 import sensor_msgs.point_cloud2 as pc2
+import tf.transformations as tft
+
+
+class CloudAccumulator:
+    """Merge ~1 s of sparse MID360 scans into the current body frame.
+
+    A single 0.1 s sweep leaves the forward corridor nearly empty (the
+    non-repetitive pattern needs accumulation), so per-scan ground checks
+    false-trigger. Scans are motion-compensated via /Odometry.
+    """
+
+    def __init__(self, window_s=1.0):
+        self.window_s = window_s
+        self.scans = []
+        self.odoms = []
+
+    def add_odom(self, message):
+        q = message.pose.pose.orientation
+        p = message.pose.pose.position
+        T = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
+        T[:3, 3] = (p.x, p.y, p.z)
+        self.odoms.append((message.header.stamp.to_sec(), T))
+        self.odoms = self.odoms[-60:]
+
+    def nearest_odom(self, stamp):
+        if not self.odoms:
+            return None
+        times = np.array([t for t, _ in self.odoms])
+        k = int(np.argmin(np.abs(times - stamp)))
+        if abs(times[k] - stamp) > 0.15:
+            return None
+        return self.odoms[k][1]
+
+    def add_cloud(self, message):
+        pts = np.array(list(pc2.read_points(
+            message, field_names=("x", "y", "z"), skip_nans=True)),
+            dtype=np.float32)
+        stamp = message.header.stamp.to_sec()
+        self.scans.append((stamp, pts))
+        self.scans = [s for s in self.scans if stamp - s[0] <= self.window_s + 0.3]
+
+    def merged(self):
+        if not self.scans:
+            return None, rospy.Time(0)
+        newest_stamp = self.scans[-1][0]
+        T_ref = self.nearest_odom(newest_stamp)
+        if T_ref is None:
+            return None, rospy.Time(0)
+        inv_ref = np.linalg.inv(T_ref)
+        parts = []
+        for stamp, pts in self.scans:
+            if newest_stamp - stamp > self.window_s or not len(pts):
+                continue
+            T = self.nearest_odom(stamp)
+            if T is None:
+                continue
+            M = (inv_ref @ T).astype(np.float32)
+            parts.append(pts @ M[:3, :3].T + M[:3, 3])
+        if not parts:
+            return None, rospy.Time(0)
+        return np.vstack(parts), rospy.Time.from_sec(newest_stamp)
+
 
 GATE_HZ = 15.0
 INPUT_STALE_S = 0.6
@@ -24,8 +87,7 @@ HARD_W_LIMIT = 0.6
 STOP_DISTANCE_M = 0.8
 CHECK_RANGE_M = 1.4
 HALF_WIDTH_M = 0.5
-DROP_M = 0.09
-STEP_M = 0.13
+SENSOR_HEIGHT_M = 0.30
 OBSTACLE_MIN_Z = 0.15
 OBSTACLE_MAX_Z = 1.9
 
@@ -35,6 +97,7 @@ class SafetyGate:
         rospy.init_node("safety_gate")
         self.raw = Twist()
         self.raw_stamp = rospy.Time(0)
+        self.accumulator = CloudAccumulator()
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""
@@ -42,6 +105,8 @@ class SafetyGate:
         rospy.Subscriber("/cmd_vel_raw", Twist, self.on_raw, queue_size=1)
         rospy.Subscriber("/cloud_registered_body", PointCloud2,
                          self.on_cloud, queue_size=2)
+        rospy.Subscriber("/Odometry", Odometry,
+                         self.on_odom, queue_size=50)
         rospy.on_shutdown(lambda: self.pub.publish(Twist()))
 
     def on_raw(self, message):
@@ -49,42 +114,30 @@ class SafetyGate:
         self.raw_stamp = rospy.Time.now()
 
     def on_cloud(self, message):
-        self.cloud = np.array(list(pc2.read_points(
-            message, field_names=("x", "y", "z"), skip_nans=True)),
-            dtype=np.float32)
-        self.cloud_stamp = message.header.stamp
+        self.accumulator.add_cloud(message)
+        self.cloud, self.cloud_stamp = self.accumulator.merged()
+
+    def on_odom(self, message):
+        self.accumulator.add_odom(message)
 
     def forward_blocked(self):
+        """Obstacle-only check: the MID360 cannot see near ground (vertical
+        FOV -7 deg, low mount), so drop protection is the follower's
+        map-band containment; this gate independently blocks visible
+        obstacles and stale sensing."""
         if self.cloud is None or len(self.cloud) < 100:
             return "NO_CLOUD"
         pts = self.cloud
-        near = pts[(pts[:, 0] > -0.6) & (pts[:, 0] < 1.0) &
-                   (np.abs(pts[:, 1]) < 0.7)]
-        if len(near) < 20:
-            return "NO_GROUND_REF"
-        ego_ground = np.percentile(near[:, 2], 10)
-
+        ground_plane = -SENSOR_HEIGHT_M
         zone = pts[(pts[:, 0] > 0.25) & (pts[:, 0] < CHECK_RANGE_M) &
                    (np.abs(pts[:, 1]) < HALF_WIDTH_M)]
-        rel = zone[:, 2] - ego_ground if len(zone) else np.empty(0)
-        obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)] \
-            if len(zone) else zone
-        if len(obstacles) >= 5 and np.percentile(obstacles[:, 0], 5) < STOP_DISTANCE_M:
+        if not len(zone):
+            return ""
+        rel = zone[:, 2] - ground_plane
+        obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)]
+        if len(obstacles) >= 5 and \
+                np.percentile(obstacles[:, 0], 5) < STOP_DISTANCE_M:
             return "OBSTACLE"
-        for lo in np.arange(0.3, CHECK_RANGE_M, 0.25):
-            band = zone[(zone[:, 0] >= lo) & (zone[:, 0] < lo + 0.25)] \
-                if len(zone) else zone
-            ground_band = band[band[:, 2] - ego_ground < OBSTACLE_MIN_Z] \
-                if len(band) else band
-            if len(ground_band) < 3:
-                if lo < 1.1:
-                    return "GROUND_GAP"
-                continue
-            step = np.percentile(ground_band[:, 2], 15) - ego_ground
-            if step < -DROP_M:
-                return "DROP"
-            if step > STEP_M:
-                return "STEP"
         return ""
 
     def spin(self):

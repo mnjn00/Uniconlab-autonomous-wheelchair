@@ -29,11 +29,11 @@ def test_gate_replaces_stale_input_with_stop_and_always_publishes():
     assert "rospy.on_shutdown" in text
 
 
-def test_gate_blocks_drops_steps_gaps_and_close_obstacles():
+def test_gate_blocks_close_obstacles_and_missing_sensing():
     text = gate_text()
-    for reason in ('"DROP"', '"STEP"', '"GROUND_GAP"', '"OBSTACLE"',
-                   '"NO_CLOUD"'):
+    for reason in ('"OBSTACLE"', '"NO_CLOUD"'):
         assert reason in text
+    assert "map-band containment" in text
 
 
 def test_gate_forbids_reverse_and_clamps_speeds():

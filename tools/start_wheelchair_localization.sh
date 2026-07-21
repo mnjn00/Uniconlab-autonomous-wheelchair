@@ -91,8 +91,10 @@ source "$HOME/livox_static_localization_ws/devel/setup.bash"
 setsid nohup rosrun static_livox_localization safety_gate.py \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
 ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_waypoints.json}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_safety_band.json}"
 setsid nohup rosrun static_livox_localization waypoint_follower.py \
-  _route:="$ROUTE" > "$LOG/live_follower.log" 2>&1 < /dev/null &
+  _route:="$ROUTE" _safety_band:="$BAND" \
+  > "$LOG/live_follower.log" 2>&1 < /dev/null &
 
 echo "[7/7] black-box recorder"
 mkdir -p "$HOME/localization_trials"
