@@ -49,6 +49,10 @@ OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
 CHAIR_HALF_WIDTH = 0.35
 BAND_MARGIN = 0.10
+BAND_FLOOR = 0.15
+NARROW_BAND_WIDTH = 1.2
+NARROW_SPEED = 0.2
+OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
 BYPASS_AFTER_S = 10.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
@@ -125,14 +129,19 @@ class SafetyBand:
         self.xy = np.array([[s["x"], s["y"]] for s in data["stations"]])
         heading = np.radians([s["heading_deg"] for s in data["stations"]])
         self.normals = np.stack([-np.sin(heading), np.cos(heading)], axis=1)
-        usable_left, usable_right = [], []
+        usable_left, usable_right, narrow = [], [], []
         for s in data["stations"]:
+            # the driven line itself is proven safe, so never shrink the
+            # usable band below +-BAND_FLOOR; narrow stations creep instead
             usable_left.append(
-                max(s["left_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, 0.0))
+                max(s["left_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
             usable_right.append(
-                max(s["right_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, 0.0))
+                max(s["right_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
+            narrow.append(
+                s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
         self.left = np.array(usable_left)
         self.right = np.array(usable_right)
+        self.narrow = np.array(narrow)
 
     def lateral_limits(self, point):
         d = np.linalg.norm(self.xy - point, axis=1)
@@ -140,9 +149,13 @@ class SafetyBand:
         lateral = float(np.dot(point - self.xy[k], self.normals[k]))
         return lateral, -self.right[k], self.left[k]
 
-    def contains(self, point):
+    def contains(self, point, grace=0.0):
         lateral, lo, hi = self.lateral_limits(point)
-        return lo - 1e-6 <= lateral <= hi + 1e-6
+        return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
+
+    def is_narrow(self, point):
+        d = np.linalg.norm(self.xy - point, axis=1)
+        return bool(self.narrow[int(np.argmin(d))])
 
     def clamp(self, point):
         d = np.linalg.norm(self.xy - point, axis=1)
@@ -321,7 +334,8 @@ class WaypointFollower:
         elif self.route_locked and np.min(np.linalg.norm(
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             reason = "OFF_ROUTE"
-        elif self.route_locked and not self.band.contains(self.pose_xy):
+        elif self.route_locked and not self.band.contains(
+                self.pose_xy, grace=OFF_BAND_GRACE):
             reason = "OFF_BAND"
         if reason:
             if reason != self.status:
@@ -340,6 +354,8 @@ class WaypointFollower:
         obstacle_dist = self.obstacle_distance(self.lateral_offset)
 
         allowed = MAX_SPEED
+        if self.band.is_narrow(self.pose_xy):
+            allowed = min(allowed, NARROW_SPEED)
         if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
             allowed = min(allowed, SLOPE_SPEED)
         if self.tracking_state == "DEGRADED":
