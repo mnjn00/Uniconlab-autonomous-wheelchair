@@ -1,0 +1,26 @@
+{
+  "trial_id": "auto_init_field_20260721",
+  "date": "2026-07-21",
+  "verdict": "SUCCESS",
+  "feature_under_test": {
+    "commits": ["b13c81f", "35d5456"],
+    "description": "global initial-pose search (auto_initial_pose.py) + one-command field startup"
+  },
+  "map_id": "livox_raw_20260707",
+  "replay_validation": {
+    "search_time_s": 3,
+    "top_candidate_error": "1.0 m / 3 deg vs ground truth",
+    "fallback_exercised": "rank-1 rejected by consensus, rank-2 verified to TRACKING in 7 s"
+  },
+  "field_trial": {
+    "location": "aejimun route start, outdoor",
+    "operator_input": "none - no manual 2D Pose Estimate",
+    "sequence": "start_wheelchair_localization.sh -> lidar/odom waits -> auto seed -> VERIFYING -> TRACKING",
+    "tracking_quality": {
+      "prediction_error_m": 0.010,
+      "fitness": 0.033,
+      "inlier_ratio": 0.213,
+      "note": "inlier at threshold margin at the route start as previously characterized; improves along route"
+    }
+  }
+}
