@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero-route.png" alt="UniconLab autonomous wheelchair route map" width="100%" />
+  <img src="docs/assets/hero-route.png" alt="Hanyang University Unicon Lab, Robotics - Autonomous Wheelchair" width="100%" />
 </p>
 
 <h1 align="center">UniconLab Autonomous Wheelchair</h1>
