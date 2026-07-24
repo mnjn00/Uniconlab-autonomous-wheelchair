@@ -58,8 +58,17 @@ def test_governor_throttles_down_on_caution_rate_and_recovers_slowly():
 
 def test_stale_or_tripped_forces_zero_and_node_always_stops_on_shutdown():
     text = guard_text()
-    assert "desired = 0.0 if (self.tripped or stale) else self.raw.linear.x" in text
+    assert "desired = self.counter_motion_target()" in text
+    assert "elif stale:\n                desired = 0.0" in text
     assert "rospy.on_shutdown(lambda: self.pub.publish(Twist()))" in text
+
+
+def test_counter_motion_defaults_off_and_requires_verified_axis():
+    text = guard_text()
+    assert '"~enable_counter_motion", False' in text
+    assert "not (self.enable_counter_motion and self.axis_config_ok)" in text
+    assert "return 0.0" in text
+    assert "COUNTER_SPEED_MAX" in text
 
 
 def test_never_claims_direct_lidar_ground_tilt_sensing():

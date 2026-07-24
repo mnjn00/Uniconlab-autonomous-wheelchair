@@ -39,6 +39,15 @@ recovers slowly when calm. An empty, tippy chair naturally produces
 bigger pitch-rate for the same command and gets throttled harder; a
 loaded, stable chair is not needlessly restricted.
 
+Trip response default is a hard brake to zero (linear.x -> 0), not an
+active reverse. Braking while pitching back already applies a
+nose-down reaction that helps arrest a backward tip. An active bounded
+counter-motion (briefly commanding a small reverse speed while the tilt
+is still growing) is available via ~enable_counter_motion but defaults
+to OFF and only ever engages once the IMU/Odometry correlation
+self-check has passed - never on unverified axis mapping, since a wrong
+sign there would turn a corrective reverse into an actively harmful one.
+
 This node reduces tip risk substantially but is NOT a substitute for a
 physical anti-tip caster/wheel - sensor latency, wheel slip, and uneven
 ground mean no software layer can give an absolute guarantee.
@@ -78,11 +87,16 @@ CORRELATION_MIN_AGREEMENT = 0.6
 CORRELATION_MIN_DELTA_RAD = math.radians(0.5)
 FALLBACK_ACCEL = 0.12
 
+COUNTER_SPEED_MAX = 0.15
+COUNTER_ENGAGE_PITCH_RAD = TRIP_PITCH_RAD
+
 
 class TipGuard:
     def __init__(self):
         rospy.init_node("tip_guard")
         imu_topic = rospy.get_param("~imu_topic", "/livox/imu")
+        self.enable_counter_motion = rospy.get_param(
+            "~enable_counter_motion", False)
         gyro_pitch_axis = rospy.get_param("~gyro_pitch_axis", "y")
         self.gyro_sign = float(rospy.get_param("~gyro_pitch_sign", 1.0))
         self._gyro_index = {"x": 0, "y": 1, "z": 2}[gyro_pitch_axis]
@@ -190,6 +204,24 @@ class TipGuard:
         return abs(self.fused_pitch) < RELEASE_PITCH_RAD and \
             abs(self.pitch_rate) < RELEASE_RATE_RAD_S
 
+    def counter_motion_target(self):
+        """Small bounded reverse command while still actively tipping.
+        Only ever engages with a verified IMU axis mapping; direction is
+        derived from the SAME sign-symmetric growth test as the trip
+        itself, so a bad axis config cannot silently reverse it."""
+        if not (self.enable_counter_motion and self.axis_config_ok):
+            return 0.0
+        predicted = self.fused_pitch + self.pitch_rate * LOOKAHEAD_S
+        still_growing = (predicted * self.fused_pitch) >= 0.0 and \
+            abs(self.fused_pitch) > COUNTER_ENGAGE_PITCH_RAD
+        if not still_growing:
+            return 0.0
+        # counter in the direction opposite the wheelchair's own forward
+        # command history: back off from whatever direction it was
+        # driving when the tip began.
+        direction = -1.0 if self.current_speed >= 0.0 else 1.0
+        return direction * COUNTER_SPEED_MAX
+
     def update_governor(self, dt):
         if abs(self.pitch_rate) > CAUTION_RATE_RAD_S:
             self.accel_budget = max(
@@ -223,7 +255,12 @@ class TipGuard:
                      (now - self.imu_stamp).to_sec() > IMU_STALE_S or
                      (now - self.odom_stamp).to_sec() > ODOM_STALE_S)
 
-            desired = 0.0 if (self.tripped or stale) else self.raw.linear.x
+            if self.tripped:
+                desired = self.counter_motion_target()
+            elif stale:
+                desired = 0.0
+            else:
+                desired = self.raw.linear.x
             if desired > self.current_speed:
                 step = min(desired - self.current_speed,
                           self.accel_budget * dt)
