@@ -30,7 +30,7 @@ class CloudAccumulator:
     false-trigger. Scans are motion-compensated via /Odometry.
     """
 
-    def __init__(self, window_s=1.0):
+    def __init__(self, window_s=0.6):
         self.window_s = window_s
         self.scans = []
         self.odoms = []
@@ -85,10 +85,11 @@ class CloudAccumulator:
 GATE_HZ = 15.0
 INPUT_STALE_S = 0.6
 CLOUD_STALE_S = 1.0
-HARD_V_LIMIT = 0.6
+HARD_V_LIMIT = 1.1
 HARD_W_LIMIT = 0.6
-STOP_DISTANCE_M = 0.8
-CHECK_RANGE_M = 1.4
+STOP_DISTANCE_MIN_M = 0.8
+STOP_DISTANCE_PER_MPS = 1.5
+CHECK_RANGE_M = 3.0
 HALF_WIDTH_M = 0.5
 SENSOR_HEIGHT_M = 0.30
 OBSTACLE_MIN_Z = 0.15
@@ -138,8 +139,10 @@ class SafetyGate:
             return ""
         rel = zone[:, 2] - ground_plane
         obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)]
+        stop_distance = max(STOP_DISTANCE_MIN_M,
+                            STOP_DISTANCE_PER_MPS * abs(self.raw.linear.x))
         if len(obstacles) >= 5 and \
-                np.percentile(obstacles[:, 0], 5) < STOP_DISTANCE_M:
+                np.percentile(obstacles[:, 0], 5) < stop_distance:
             return "OBSTACLE"
         return ""
 

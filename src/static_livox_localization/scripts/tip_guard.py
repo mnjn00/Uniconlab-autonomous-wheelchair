@@ -70,9 +70,17 @@ IMU_STALE_S = 0.3
 ODOM_STALE_S = 0.5
 
 LOOKAHEAD_S = 0.35
-TRIP_PITCH_RAD = math.radians(4.0)
+# Tip-over is a FAST pitch change; hills are SLOW ones. Trip on deviation
+# from a slow terrain baseline (EMA of fused pitch), never on absolute
+# pitch alone - the aejimun route legitimately climbs ~5 deg slopes.
+BASELINE_TAU_S = 4.0
+TRIP_DEV_RAD = math.radians(3.0)
 TRIP_RATE_RAD_S = math.radians(20.0)
-RELEASE_PITCH_RAD = math.radians(2.0)
+# angular-acceleration early trip: a tip event ramps the pitch rate hard;
+# rate AND accel in the same direction beyond these both -> trip earliest
+TRIP_ACCEL_RAD_S2 = math.radians(80.0)
+TRIP_ACCEL_MIN_RATE_RAD_S = math.radians(8.0)
+RELEASE_DEV_RAD = math.radians(1.0)
 RELEASE_RATE_RAD_S = math.radians(3.0)
 
 CAUTION_RATE_RAD_S = math.radians(6.0)
@@ -88,7 +96,7 @@ CORRELATION_MIN_DELTA_RAD = math.radians(0.5)
 FALLBACK_ACCEL = 0.12
 
 COUNTER_SPEED_MAX = 0.15
-COUNTER_ENGAGE_PITCH_RAD = TRIP_PITCH_RAD
+COUNTER_ENGAGE_PITCH_RAD = TRIP_DEV_RAD
 
 
 class TipGuard:
@@ -107,9 +115,13 @@ class TipGuard:
 
         self.imu_stamp = rospy.Time(0)
         self.pitch_rate = 0.0
+        self.pitch_accel = 0.0
+        self._last_rate = None
+        self._last_rate_stamp = None
 
         self.odom_stamp = rospy.Time(0)
         self.fused_pitch = 0.0
+        self.baseline_pitch = None
         self._last_fused_pitch = None
         self._last_fused_stamp = None
         self._gyro_since_last_fused = deque()
@@ -141,6 +153,14 @@ class TipGuard:
             message.angular_velocity.y if self._gyro_index == 1
             else message.angular_velocity.z)
         self.pitch_rate = self.gyro_sign * rate
+        stamp_s = now.to_sec()
+        if self._last_rate is not None and self._last_rate_stamp is not None:
+            dt = stamp_s - self._last_rate_stamp
+            if 1e-4 < dt < 0.1:
+                raw_accel = (self.pitch_rate - self._last_rate) / dt
+                self.pitch_accel += 0.3 * (raw_accel - self.pitch_accel)
+        self._last_rate = self.pitch_rate
+        self._last_rate_stamp = stamp_s
         self._gyro_since_last_fused.append((now.to_sec(), self.pitch_rate))
         cutoff = now.to_sec() - 2.0
         while self._gyro_since_last_fused and \
@@ -153,6 +173,11 @@ class TipGuard:
         q = message.pose.pose.orientation
         _, pitch, _ = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
         self.fused_pitch = pitch
+        if self.baseline_pitch is None:
+            self.baseline_pitch = pitch
+        else:
+            alpha = min(1.0, 0.1 / BASELINE_TAU_S)
+            self.baseline_pitch += alpha * (pitch - self.baseline_pitch)
 
         stamp = now.to_sec()
         if self._last_fused_pitch is not None and self._last_fused_stamp is not None:
@@ -187,21 +212,36 @@ class TipGuard:
             self.axis_config_ok = ok
 
     # ------------------------------------------------------------ logic
+    def deviation(self):
+        """Pitch relative to the slow terrain baseline - large only when
+        the chair rotates FAST relative to the ground it stands on."""
+        if self.baseline_pitch is None:
+            return 0.0
+        return self.fused_pitch - self.baseline_pitch
+
     def should_trip(self):
-        """Sign-symmetric: trips only when tilt is GROWING in either
-        direction, never while recovering toward level (predicted_pitch
-        and current pitch same sign, or a raw rotation rate alone is
-        already extreme)."""
+        """Sign-symmetric on the deviation: trips only when the deviation
+        is GROWING in either direction (or the raw rotation rate alone is
+        already extreme). Steady slopes converge into the baseline and
+        never trip; a fast tip event outruns the baseline and does."""
         if abs(self.pitch_rate) > TRIP_RATE_RAD_S:
+            return True
+        if abs(self.pitch_rate) > TRIP_ACCEL_MIN_RATE_RAD_S and \
+                abs(self.pitch_accel) > TRIP_ACCEL_RAD_S2 and \
+                self.pitch_accel * self.pitch_rate > 0.0:
             return True
         if not self.axis_config_ok:
             return False
-        predicted = self.fused_pitch + self.pitch_rate * LOOKAHEAD_S
-        growing = (predicted * self.fused_pitch) >= 0.0
-        return growing and abs(predicted) > TRIP_PITCH_RAD
+        dev = self.deviation()
+        predicted = dev + self.pitch_rate * LOOKAHEAD_S
+        growing = (predicted * dev) >= 0.0
+        return growing and abs(predicted) > TRIP_DEV_RAD
 
     def should_release(self):
-        return abs(self.fused_pitch) < RELEASE_PITCH_RAD and \
+        """Self-recovering on slopes: the baseline converges to the
+        terrain pitch within a few seconds, so deviation decays to zero
+        even while parked mid-hill."""
+        return abs(self.deviation()) < RELEASE_DEV_RAD and \
             abs(self.pitch_rate) < RELEASE_RATE_RAD_S
 
     def counter_motion_target(self):
@@ -211,9 +251,10 @@ class TipGuard:
         itself, so a bad axis config cannot silently reverse it."""
         if not (self.enable_counter_motion and self.axis_config_ok):
             return 0.0
-        predicted = self.fused_pitch + self.pitch_rate * LOOKAHEAD_S
-        still_growing = (predicted * self.fused_pitch) >= 0.0 and \
-            abs(self.fused_pitch) > COUNTER_ENGAGE_PITCH_RAD
+        dev = self.deviation()
+        predicted = dev + self.pitch_rate * LOOKAHEAD_S
+        still_growing = (predicted * dev) >= 0.0 and \
+            abs(dev) > COUNTER_ENGAGE_PITCH_RAD
         if not still_growing:
             return 0.0
         # counter in the direction opposite the wheelchair's own forward
@@ -278,8 +319,9 @@ class TipGuard:
                 "STALE" if stale else (
                     "CONFIG_UNVERIFIED" if not self.axis_config_ok else "OK"))
             self.status_pub.publish(String(
-                data="%s pitch=%.1f rate=%.1f budget=%.2f" % (
+                data="%s pitch=%.1f dev=%.1f rate=%.1f budget=%.2f" % (
                     state, math.degrees(self.fused_pitch),
+                    math.degrees(self.deviation()),
                     math.degrees(self.pitch_rate), self.accel_budget)))
             if state != self.status:
                 rospy.loginfo("tip_guard: %s", state)

@@ -14,16 +14,18 @@ def test_guard_sits_between_gated_command_and_final_cmd_vel():
     assert '"/cmd_vel"' in text
 
 
-def test_guard_predicts_pitch_ahead_instead_of_only_reacting_to_angle():
+def test_guard_predicts_deviation_ahead_instead_of_reacting_to_angle():
     text = guard_text()
     assert "LOOKAHEAD_S" in text
-    assert "predicted = self.fused_pitch + self.pitch_rate * LOOKAHEAD_S" in text
+    assert "predicted = dev + self.pitch_rate * LOOKAHEAD_S" in text
 
 
-def test_trip_logic_is_sign_symmetric_and_ignores_recovery():
+def test_trip_logic_uses_terrain_baseline_so_hills_do_not_trip():
     text = guard_text()
-    assert "growing = (predicted * self.fused_pitch) >= 0.0" in text
-    assert "return growing and abs(predicted) > TRIP_PITCH_RAD" in text
+    assert "BASELINE_TAU_S" in text
+    assert "self.fused_pitch - self.baseline_pitch" in text
+    assert "growing = (predicted * dev) >= 0.0" in text
+    assert "return growing and abs(predicted) > TRIP_DEV_RAD" in text
 
 
 def test_extreme_raw_rotation_rate_alone_trips_without_needing_axis_confirmation():
@@ -34,9 +36,9 @@ def test_extreme_raw_rotation_rate_alone_trips_without_needing_axis_confirmation
     assert should_trip < rate_check < axis_check
 
 
-def test_release_requires_both_low_angle_and_low_rate():
+def test_release_is_self_recovering_on_slopes():
     text = guard_text()
-    assert "abs(self.fused_pitch) < RELEASE_PITCH_RAD" in text
+    assert "abs(self.deviation()) < RELEASE_DEV_RAD" in text
     assert "abs(self.pitch_rate) < RELEASE_RATE_RAD_S" in text
 
 
