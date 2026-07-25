@@ -77,3 +77,32 @@ def test_never_claims_direct_lidar_ground_tilt_sensing():
     text = guard_text()
     assert "is NOT usable here" in text
     assert "fused pitch from /Odometry" in text
+
+
+def test_climb_assist_is_speed_feedback_bounded_by_tip_governor():
+    text = guard_text()
+    assert "CLIMB_GAIN" in text
+    assert "self.measured_speed" in text
+    assert "min(\n                            CLIMB_GAIN * error, self.accel_budget)" in text or \
+        "self.accel_budget) * dt" in text
+    assert "CLIMB_BOOST_MAX" in text and "CLIMB_BRAKE_MAX" in text
+
+
+def test_nothing_is_added_to_the_output_past_the_accel_limiter():
+    """A second climb-assist integrator once added its boost straight to
+    out.linear.x, bypassing the accel budget and the soft-launch cap and
+    stacking with the governed one. Assist must reach the output only by
+    way of `desired`, which the rate limiter then ramps."""
+    text = guard_text()
+    assert "out.linear.x = self.current_speed\n" in text
+    fold = text.index("desired = max(0.0, desired + self.climb_boost)")
+    limiter = text.index("step = min(desired - self.current_speed, budget * dt)")
+    publish = text.index("out.linear.x = self.current_speed")
+    assert fold < limiter < publish
+
+
+def test_climb_boost_resets_on_trip_or_stale():
+    text = guard_text()
+    trip_block = text.index("if self.tripped:")
+    reset = text.index("self.climb_boost = 0.0", trip_block)
+    assert reset > trip_block

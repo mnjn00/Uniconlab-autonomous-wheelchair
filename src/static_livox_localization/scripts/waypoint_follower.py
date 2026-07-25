@@ -13,8 +13,10 @@ Per control cycle:
   - obstacle guard: slow near obstacles/pedestrians, stop when close
   - stuck-obstacle bypass: after 10 s, side-step within the band only
   - slope guard and DEGRADED-localization slowdown, tilt aborts
-  - speed policy: 1.0 m/s cap with speed-scaled obstacle guard
-    distances, curvature slowdown, accel/yaw-rate limiting
+  - speed policy: 1.5 m/s cap (typical powered-wheelchair pace)
+    with speed-scaled obstacle guard distances, curvature
+    slowdown, accel/yaw-rate limiting; tip_guard adds closed-loop
+    climb assist so slopes get torque without tipping
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST localization, manual joystick mode, or
     geofence violation, and always sends stop on shutdown.
@@ -35,8 +37,8 @@ from std_srvs.srv import SetBool, SetBoolResponse
 import sensor_msgs.point_cloud2 as pc2
 import tf.transformations as tft
 
-MAX_SPEED = 1.0
-SLOPE_SPEED = 0.3
+MAX_SPEED = 1.5
+SLOPE_SPEED = 0.6
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
 MAX_ACCEL = 0.18
@@ -59,13 +61,27 @@ NARROW_BAND_WIDTH = 1.2
 NARROW_SPEED = 0.2
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
+# on steep terrain, hug the proven driven line: creep, shorter
+# lookahead (no corner cutting), and no lateral bypass - the line
+# driven on 7/7 is the one place the camber is known passable
+STEEP_PITCH_RAD = math.radians(4.0)
+STEEP_SPEED = 0.3
+STEEP_LOOKAHEAD_FACTOR = 0.6
 BYPASS_AFTER_S = 10.0
-BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
+# micro offsets first: street furniture (barrier bars, sign posts)
+# usually needs only a small shift; large offsets after
+BYPASS_OFFSETS = (0.35, -0.35, 0.6, -0.6, 1.0, -1.0)
+MICRO_BYPASS_M = 0.4
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
-MAX_TILT_ROLL = math.radians(6.0)
-MAX_TILT_PITCH = math.radians(8.0)
+# static attitude backstop only - dynamic tip detection lives in
+# tip_guard (50 Hz deviation/rate/accel). Hanyang's steepest route ramp
+# measures ~10 deg fused pitch and its cambered ramps ~6.3 deg roll, so
+# both aborts sit above the measured terrain with margin while staying
+# far below static rollover attitudes.
+MAX_TILT_ROLL = math.radians(11.0)
+MAX_TILT_PITCH = math.radians(12.0)
 BAND_RECOVER_MAX = 0.5
 GEOFENCE_M = 3.5
 AUTO_MODE = 65
@@ -183,6 +199,17 @@ class WaypointFollower:
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
         self.band = SafetyBand(rospy.get_param("~safety_band"))
         self.sensor_height = rospy.get_param("~sensor_height", 0.30)
+        # operator-authorized band grace for SMALL bypass offsets only:
+        # lets the chair dodge mapped-as-step street furniture when a
+        # human on site confirms the adjacent surface is flat. Default
+        # off; never applies to large offsets.
+        self.micro_bypass_grace = rospy.get_param(
+            "~micro_bypass_grace", 0.0)
+        # how far outside the usable band the chair may sit and still
+        # creep back on its own; raise only with an operator on site
+        # (e.g. after a manual reposition past street furniture)
+        self.band_recover_max = rospy.get_param(
+            "~band_recover_max", BAND_RECOVER_MAX)
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))
 
@@ -290,10 +317,14 @@ class WaypointFollower:
             return False
         heading = np.array([math.cos(self.pose_yaw), math.sin(self.pose_yaw)])
         normal = np.array([-heading[1], heading[0]])
+        grace = self.micro_bypass_grace if abs(offset) <= MICRO_BYPASS_M else 0.0
         for ahead in (0.5, 1.5, 2.5, 3.5):
             p = self.pose_xy + heading * ahead + normal * offset
-            if not self.band.contains(p):
+            if not self.band.contains(p, grace=grace):
                 return False
+        if grace > 0.0:
+            rospy.logwarn("micro-bypass using operator-authorized band "
+                          "grace %.2f m (offset %+.2f)", grace, offset)
         return True
 
     def send_stop(self):
@@ -310,6 +341,8 @@ class WaypointFollower:
         self.nearest_index = int(
             self.nearest_index + np.argmin(d[self.nearest_index:window_end]))
         lookahead = 1.0 + 1.6 * self.current_speed
+        if abs(self.pose_pitch) > STEEP_PITCH_RAD:
+            lookahead = max(0.8, lookahead * STEEP_LOOKAHEAD_FACTOR)
         target = self.waypoints[-1].copy()
         acc = 0.0
         for i in range(self.nearest_index, len(self.waypoints) - 1):
@@ -349,7 +382,7 @@ class WaypointFollower:
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             reason = "OFF_ROUTE"
         elif self.route_locked and not self.band.contains(
-                self.pose_xy, grace=BAND_RECOVER_MAX):
+                self.pose_xy, grace=self.band_recover_max):
             reason = "OFF_BAND"
         if reason:
             if reason != self.status:
