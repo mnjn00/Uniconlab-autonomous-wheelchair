@@ -114,7 +114,7 @@ class GlimStaticContracts(unittest.TestCase):
 
     def test_deterministic_config_bundle_rejects_tamper(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             for source in DETERMINISTIC_CONFIG.iterdir():
                 (root / source.name).write_bytes(source.read_bytes())
             (root / "config_preprocess.json").write_text("tampered")
@@ -155,7 +155,7 @@ class GlimStaticContracts(unittest.TestCase):
 
 class Rosbag2ValidationTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
+        self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name).resolve()
         self.db = self.root / "normalized.db3"
         connection = sqlite3.connect(self.db)
         connection.executescript("CREATE TABLE topics(id INTEGER PRIMARY KEY,name TEXT,type TEXT,serialization_format TEXT,offered_qos_profiles TEXT); CREATE TABLE messages(id INTEGER PRIMARY KEY,topic_id INTEGER,timestamp INTEGER,data BLOB);")
@@ -294,13 +294,13 @@ class Rosbag2ValidationTests(unittest.TestCase):
 class ActualOutputTests(unittest.TestCase):
     def test_missing_real_dump_cannot_be_reported_as_success(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); (root / "dump").mkdir(); (root / "out").mkdir()
+            root = Path(temporary).resolve(); (root / "dump").mkdir(); (root / "out").mkdir()
             with self.assertRaisesRegex(ValueError, "actual GLIM dump"):
                 runner.derive_outputs(root / "dump", root / "out")
 
     def test_dump_trajectory_and_submap_are_required_before_map_derivation(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); dump = root / "dump"; output = root / "output"; dump.mkdir(); output.mkdir()
+            root = Path(temporary).resolve(); dump = root / "dump"; output = root / "output"; dump.mkdir(); output.mkdir()
             submap = dump / "000000"; submap.mkdir(); (submap / "points_compact.bin").write_bytes(b"points"); (submap / "data.txt").write_text("pose")
             (dump / "traj_lidar.txt").write_text("0 0 0 0 0 0 0 1\n1 1 0 0 0 0 0 1\n2 2 0 0 0 0 0 1\n")
             def exported(command, check):
@@ -349,7 +349,7 @@ class GlimPointTimeCompatibilityTests(unittest.TestCase):
 class ConverterTransactionTests(unittest.TestCase):
     def test_corrupt_source_hash_leaves_no_partial_output(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary); bag = root / "normalized.bag"; bag.write_bytes(b"corrupt")
+            root = Path(temporary).resolve(); bag = root / "normalized.bag"; bag.write_bytes(b"corrupt")
             manifest = root / "normalization_manifest.yaml"
             manifest.write_text(json.dumps({"schema_version": 1, "artifact_id": "wheelchair.normalized_livox/v1",
                 "output": {"bag_path": "normalized.bag", "sha256": "0" * 64, "format": "rosbag1-v2",
