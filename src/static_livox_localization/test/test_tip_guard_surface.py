@@ -94,11 +94,27 @@ def test_nothing_is_added_to_the_output_past_the_accel_limiter():
     stacking with the governed one. Assist must reach the output only by
     way of `desired`, which the rate limiter then ramps."""
     text = guard_text()
-    assert "out.linear.x = self.current_speed\n" in text
     fold = text.index("desired = max(0.0, desired + self.climb_boost)")
     limiter = text.index("step = min(desired - self.current_speed, budget * dt)")
-    publish = text.index("out.linear.x = self.current_speed")
+    publish = text.index("out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT")
     assert fold < limiter < publish
+
+
+def test_assist_cannot_create_motion_from_a_stop_command():
+    """Every upstream hold - OBSTACLE, TILT_LIMIT, OFF_BAND, LOCALIZATION_*,
+    MANUAL_MODE - arrives here as linear.x == 0. A boost integrated on a
+    slope must not survive it, or this stage drives on through the stop."""
+    text = guard_text()
+    assert "if abs(desired) <= 0.05:\n                    self.climb_boost = 0.0" \
+        in text
+
+
+def test_output_has_an_absolute_ceiling_of_its_own():
+    """The gate clamps to HARD_V_LIMIT, then the assist can add up to
+    CLIMB_BOOST_MAX on top, so this stage needs its own last word."""
+    text = guard_text()
+    assert "ABSOLUTE_V_LIMIT = " in text
+    assert "out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT" in text
 
 
 def test_climb_boost_resets_on_trip_or_stale():
@@ -112,4 +128,5 @@ def test_no_duplicate_unbounded_boost_bypassing_the_accel_governor():
     assert "def update_boost" not in text
     assert "self.boost" not in text
     assert "\nBOOST_MAX = " not in text
-    assert "out.linear.x = self.current_speed\n" in text
+    # the output is the rate-limited speed, clamped - never a raw sum
+    assert "out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT" in text

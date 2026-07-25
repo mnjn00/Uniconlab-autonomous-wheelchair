@@ -122,6 +122,12 @@ CLIMB_BRAKE_MAX = 0.5
 
 SPEED_MEASURE_WINDOW_S = 0.4
 
+# Hard ceiling on what this stage may ever publish, independent of what
+# arrives on /cmd_vel_gated. Set at the follower's MAX_SPEED rather than the
+# gate's HARD_V_LIMIT so the assist cannot push the chair past the fastest
+# speed the route planner is allowed to ask for.
+ABSOLUTE_V_LIMIT = 1.5
+
 
 class TipGuard:
     def __init__(self):
@@ -354,6 +360,17 @@ class TipGuard:
                 self.climb_boost = 0.0
             else:
                 desired = self.raw.linear.x
+                # The assist may only SCALE a request to move, never create
+                # one. Adding a positive boost to a zero command let this
+                # node keep driving through every upstream stop: OBSTACLE,
+                # TILT_LIMIT, OFF_BAND, LOCALIZATION_* and MANUAL_MODE all
+                # arrive here as linear.x == 0, and a boost integrated on a
+                # slope then carried the chair on at up to CLIMB_BOOST_MAX,
+                # bleeding off only at CLIMB_DECAY_PER_S - roughly 0.5 m of
+                # travel after a commanded full stop, with no layer able to
+                # override it.
+                if abs(desired) <= 0.05:
+                    self.climb_boost = 0.0
                 # climb-assist feedback: track measured ground speed
                 on_slope = abs(self.fused_pitch) > CLIMB_MIN_PITCH_RAD
                 if desired > 0.05 and on_slope:
@@ -391,7 +408,9 @@ class TipGuard:
             # climb assist is already folded into `desired` above, so it
             # passes through the accel budget with everything else -
             # nothing may be added to the output past the rate limiter.
-            out.linear.x = self.current_speed
+            out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT,
+                                        self.current_speed))
+            self.current_speed = out.linear.x
             out.angular.z = 0.0 if (self.tripped or stale) else self.raw.angular.z
             self.pub.publish(out)
 

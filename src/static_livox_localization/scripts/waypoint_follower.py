@@ -35,6 +35,10 @@ from std_msgs.msg import Int16MultiArray, String
 from std_srvs.srv import SetBool, SetBoolResponse
 
 import sensor_msgs.point_cloud2 as pc2
+
+from body_frame import (LIDAR_IN_BODY_XYZ,
+                        LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
+from safety_band import SafetyBand
 import tf.transformations as tft
 
 MAX_SPEED = 1.5
@@ -54,10 +58,6 @@ GUARD_STOP_PER_MPS = 1.2
 GUARD_SLOW_EXTRA_M = 1.2
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
-CHAIR_HALF_WIDTH = 0.35
-BAND_MARGIN = 0.10
-BAND_FLOOR = 0.15
-NARROW_BAND_WIDTH = 1.2
 NARROW_SPEED = 0.2
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
@@ -92,8 +92,11 @@ NEAREST_RESYNC_M = 2.0
 class CloudAccumulator:
     """Merge ~1 s of sparse MID360 scans into the current body frame."""
 
-    def __init__(self, window_s=0.6):
+    def __init__(self, window_s=0.6, lidar_in_body=LIDAR_IN_BODY_XYZ,
+                 lidar_in_body_yaw=LIDAR_IN_BODY_YAW_RAD):
         self.window_s = window_s
+        self.lidar_in_body = lidar_in_body
+        self.lidar_in_body_yaw = lidar_in_body_yaw
         self.scans = []
         self.odoms = []
 
@@ -142,54 +145,9 @@ class CloudAccumulator:
             parts.append(pts @ M[:3, :3].T + M[:3, 3])
         if not parts:
             return None, rospy.Time(0)
-        return np.vstack(parts), rospy.Time.from_sec(newest)
-
-
-class SafetyBand:
-    """Per-station drop-free lateral limits along the route (map frame)."""
-
-    def __init__(self, path):
-        data = json.load(open(path))
-        self.xy = np.array([[s["x"], s["y"]] for s in data["stations"]])
-        heading = np.radians([s["heading_deg"] for s in data["stations"]])
-        self.normals = np.stack([-np.sin(heading), np.cos(heading)], axis=1)
-        usable_left, usable_right, narrow = [], [], []
-        for s in data["stations"]:
-            # the driven line itself is proven safe, so never shrink the
-            # usable band below +-BAND_FLOOR; narrow stations creep instead
-            usable_left.append(
-                max(s["left_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
-            usable_right.append(
-                max(s["right_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
-            narrow.append(
-                s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
-        self.left = np.array(usable_left)
-        self.right = np.array(usable_right)
-        self.narrow = np.array(narrow)
-
-    def lateral_limits(self, point):
-        d = np.linalg.norm(self.xy - point, axis=1)
-        order = np.argsort(d)[:2]
-        k = int(order[0])
-        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
-        lo = -max(self.right[j] for j in order)
-        hi = max(self.left[j] for j in order)
-        return lateral, lo, hi
-
-    def contains(self, point, grace=0.0):
-        lateral, lo, hi = self.lateral_limits(point)
-        return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
-
-    def is_narrow(self, point):
-        d = np.linalg.norm(self.xy - point, axis=1)
-        return bool(self.narrow[int(np.argmin(d))])
-
-    def clamp(self, point):
-        d = np.linalg.norm(self.xy - point, axis=1)
-        k = int(np.argmin(d))
-        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
-        clamped = min(max(lateral, -self.right[k]), self.left[k])
-        return self.xy[k] + self.normals[k] * clamped
+        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
+                               self.lidar_in_body_yaw)
+        return merged, rospy.Time.from_sec(newest)
 
 
 class WaypointFollower:

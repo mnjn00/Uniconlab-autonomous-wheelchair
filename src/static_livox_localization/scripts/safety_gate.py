@@ -19,6 +19,9 @@ from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Odometry
 
 import sensor_msgs.point_cloud2 as pc2
+
+from body_frame import (LIDAR_IN_BODY_XYZ,
+                        LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
 import tf.transformations as tft
 
 
@@ -30,8 +33,11 @@ class CloudAccumulator:
     false-trigger. Scans are motion-compensated via /Odometry.
     """
 
-    def __init__(self, window_s=0.6):
+    def __init__(self, window_s=0.6, lidar_in_body=LIDAR_IN_BODY_XYZ,
+                 lidar_in_body_yaw=LIDAR_IN_BODY_YAW_RAD):
         self.window_s = window_s
+        self.lidar_in_body = lidar_in_body
+        self.lidar_in_body_yaw = lidar_in_body_yaw
         self.scans = []
         self.odoms = []
 
@@ -79,7 +85,9 @@ class CloudAccumulator:
             parts.append(pts @ M[:3, :3].T + M[:3, 3])
         if not parts:
             return None, rospy.Time(0)
-        return np.vstack(parts), rospy.Time.from_sec(newest_stamp)
+        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
+                               self.lidar_in_body_yaw)
+        return merged, rospy.Time.from_sec(newest_stamp)
 
 
 GATE_HZ = 15.0
