@@ -42,3 +42,13 @@ def test_launch_exposes_optional_auto_init_node():
     assert '<arg name="auto_init" default="false"/>' in launch
     assert 'type="auto_initial_pose.py"' in launch
     assert 'if="$(arg auto_init)"' in launch
+
+
+def test_auto_init_retries_with_a_fresh_submap_on_full_failure():
+    text = script_text()
+    assert "--retries" in text
+    assert "def attempt(" in text
+    assert "recollecting and retrying" in text
+    # each retry must build its own collector, not reuse one across attempts
+    attempt_def = text.index("def attempt(")
+    assert "SubmapCollector(args.window_s)" in text[attempt_def:]
