@@ -117,7 +117,14 @@ rosservice call /fast_lio_icp/enable_auto_correction "data: false"
 `source_points`, `target_points`, `reset_count`, `map_id`, `map_sha256`,
 `map_frame`, `odom_frame`, `base_frame`.
 
-진단 레벨은 정합 상태가 `TRACKING`이 아니면 WARN, `TRACKING`이면 OK, `LOST`면 ERROR다.
+진단 레벨은 다음 순서로 결정된다.
+
+| 조건 | 레벨 | `status.message` |
+|---|---|---|
+| 정합 상태가 `TRACKING`이 아님 | WARN | 정합 상태 이름 |
+| 정합과 추적이 모두 `TRACKING` | OK | `TRACKING` |
+| 추적이 `LOST` | ERROR | `LOST` |
+| 그 외, 즉 `DEGRADED` | WARN | `DEGRADED` |
 
 ## 좌표 프레임
 
