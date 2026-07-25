@@ -82,6 +82,8 @@ MAX_TILT_PITCH = math.radians(12.0)
 BAND_RECOVER_MAX = 0.5
 GEOFENCE_M = 3.5
 AUTO_MODE = 65
+DEGRADED_STOP_S = 3.0
+NEAREST_RESYNC_M = 2.0
 
 
 class CloudAccumulator:
@@ -207,6 +209,7 @@ class WaypointFollower:
         self.pose_roll = 0.0
         self.pose_stamp = rospy.Time(0)
         self.tracking_state = ""
+        self.degraded_since = None
         self.drive_mode = None
         self.wheel_status_stamp = rospy.Time(0)
         self.route_locked = False
@@ -320,8 +323,17 @@ class WaypointFollower:
             self.nearest_index = int(np.argmin(d))
             self.route_locked = True
         window_end = min(self.nearest_index + 15, len(self.waypoints))
-        self.nearest_index = int(
+        windowed_index = int(
             self.nearest_index + np.argmin(d[self.nearest_index:window_end]))
+        global_index = int(np.argmin(d))
+        if d[global_index] + NEAREST_RESYNC_M < d[windowed_index]:
+            rospy.logwarn(
+                "waypoint_follower: position diverged from windowed search "
+                "(wp %d, %.1fm) vs global nearest (wp %d, %.1fm) - resyncing",
+                windowed_index, d[windowed_index], global_index, d[global_index])
+            self.nearest_index = global_index
+        else:
+            self.nearest_index = windowed_index
         lookahead = 1.0 + 1.6 * self.current_speed
         if abs(self.pose_pitch) > STEEP_PITCH_RAD:
             lookahead = max(0.8, lookahead * STEEP_LOOKAHEAD_FACTOR)
@@ -343,6 +355,11 @@ class WaypointFollower:
 
     def step(self):
         now = rospy.Time.now()
+        if self.tracking_state == "DEGRADED":
+            if self.degraded_since is None:
+                self.degraded_since = now
+        else:
+            self.degraded_since = None
         reason = None
         if not self.enabled or self.done:
             reason = "DONE" if self.done else "PAUSED"
@@ -353,6 +370,9 @@ class WaypointFollower:
             reason = "NO_CLOUD"
         elif self.tracking_state == "LOST":
             reason = "LOCALIZATION_LOST"
+        elif self.tracking_state == "DEGRADED" and self.degraded_since is not None and \
+                (now - self.degraded_since).to_sec() > DEGRADED_STOP_S:
+            reason = "LOCALIZATION_DEGRADED_TIMEOUT"
         elif (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
             reason = "BASE_STALE"
         elif self.drive_mode is not None and self.drive_mode != AUTO_MODE:

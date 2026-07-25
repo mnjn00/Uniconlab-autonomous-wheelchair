@@ -53,3 +53,17 @@ def test_follower_bypasses_static_obstacles_only_inside_band():
 def test_missing_cloud_data_is_treated_as_blocked():
     text = follower_text()
     assert "return 0.0  # no data = treat as blocked" in text
+
+
+def test_degraded_localization_times_out_to_a_hold():
+    text = follower_text()
+    assert "DEGRADED_STOP_S" in text
+    assert '"LOCALIZATION_DEGRADED_TIMEOUT"' in text
+    assert "self.degraded_since" in text
+
+
+def test_pure_pursuit_resyncs_globally_when_position_jumps_backward():
+    text = follower_text()
+    assert "NEAREST_RESYNC_M" in text
+    assert "global_index = int(np.argmin(d))" in text
+    assert "resyncing" in text
