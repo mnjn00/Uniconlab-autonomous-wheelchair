@@ -5,17 +5,78 @@
 
 - `src/static_livox_localization/src/assisted_alignment.cpp`
 - `src/static_livox_localization/src/moving_icp_localizer.cpp`
+- `src/static_livox_localization/scripts/waypoint_follower.py`
 - `src/static_livox_localization/config/moving_localization.yaml`
+
+---
+
+## 경고: 정합에 개입하기 전에 반드시 주행을 먼저 세운다
+
+**정합 상태를 바꾸는 어떤 조작도 휠체어를 세우지 않는다.** 이 문서의 모든 절차는
+휠체어가 정지한 상태를 전제로 한다.
+
+```bash
+rosservice call /waypoint_follower/start "data: false"   # 주행 일시정지
+# E-stop: 조이스틱을 수동 모드로. 또는:
+rostopic pub -1 /mode_cmd std_msgs/Int16 77
+```
+
+이유를 정확히 알아야 한다. `waypoint_follower.py:415-439`가 주행을 멈추는 로컬라이제이션
+사유는 **두 가지뿐**이다.
+
+- `tracking_state == "LOST"`
+- `tracking_state == "DEGRADED"`가 `DEGRADED_STOP_S`를 초과해 지속
+
+즉 `MANUAL_ALIGN`, `VERIFYING`, `WAITING_INITIALIZATION`은 **정지 사유가 아니다.**
+그리고 자동 보정을 끄면 `moving_icp_localizer.cpp:397-400`에서 조기 return이 걸려
+추적 FSM 자체가 갱신되지 않으므로 **`LOST`에 도달하는 것이 불가능해진다.**
+
+따라서 주행 중에 자동 보정을 끄거나 시드를 다시 투입하면, 휠체어는 최대
+`MAX_SPEED = 1.5` m/s로 **보정이 멈춘 추측항법 포즈 위에서, 로컬라이제이션 상실 감지가
+꺼진 채** 계속 주행한다. `safety_gate.py`는 장애물과 기하만 보고 로컬라이제이션 상태를
+전혀 모르므로 이 상황을 잡아주지 못한다.
+
+---
+
+## 현장 기본 경로는 자동이다
+
+`tools/start_wheelchair_localization.sh:144`는 다음으로 기동한다.
+
+```
+roslaunch static_livox_localization moving_localization.launch auto_init:=true ...
+```
+
+`auto_init:=true`는 `auto_initial_pose.py`를 띄우고, 이 노드가 **운영자 조작 없이**
+시드를 발행하고 자동 보정을 켠다. 즉 아래 1~3절의 수동 절차는 **평상시에 일어나지 않는다.**
+
+자동 경로는 사람의 육안 확인을 자동화한 것이 아니라 **점수 임계값으로 대체**한 것이다.
+
+| 인자 | 기본값 | 의미 |
+|---|---|---|
+| `--min-score` | 0.25 | KD-tree inlier 점수 하한. 미만이면 가설 기각 |
+| `--top` | 4 | 상위 몇 개 가설까지 시도할지 |
+| `--retries` | 2 | 재시도 횟수 |
+| `--verify-timeout` | 20.0 | `TRACKING` 확인 대기 시간(초) |
+| `--inlier-radius` | 0.45 | inlier 판정 반경(m) |
+
+1~3절의 수동 절차는 자동 초기화가 실패해 스크립트가
+`WARNING: not TRACKING yet`을 출력했을 때 쓰는 **대체 경로**다.
+
+---
 
 ## 지도는 움직이지 않는다
 
-가장 먼저 이해해야 할 원칙이다. 지도는 고정된 PCD이고 적재 시점에 SHA-256으로 고정된다
+지도는 고정된 PCD이고 적재 시점에 SHA-256으로 검증된다
 (`moving_localization.yaml`의 `map_sha256`). 어떤 보정도 지도 점군을 변환하지 않는다.
 보정은 오직 `map_T_odom_` 변환 하나만 갱신한다.
 
 따라서 RViz에서 빨간색 고정 지도가 움직이는 것처럼 보인다면 그것은 지도가 아니라
 추정 포즈가 이동한 것이다. 정합이 맞는지는 빨간색 고정 지도와 초록색 실시간 클라우드가
 겹치는지로 판단한다.
+
+참고로 `map_sha256`이 맞지 않으면 노드는 종료 코드 2로 죽고
+(`moving_icp_localizer.cpp:253-254`), `moving_localization.launch:13`이 `required="true"`라
+launch 전체가 내려간다. 기동 직후 아무것도 뜨지 않으면 이 경우를 먼저 의심한다.
 
 ## 두 개의 상태 기계
 
@@ -28,9 +89,10 @@
 
 `/fast_lio_icp/localization_diagnostics`의 `status.message`는 정합 상태가 `TRACKING`이
 아닌 동안에는 정합 상태를 그대로 싣는다. 정합이 `TRACKING`이 된 뒤에야 추적 품질
-상태(`DEGRADED`, `LOST`)가 나타날 수 있다.
+상태(`DEGRADED`, `LOST`)가 나타날 수 있다. `waypoint_follower`는 이 하나의 문자열만 보므로,
+위 경고 절의 이야기가 여기서 나온다.
 
-## 운영 절차
+## 운영 절차 (주행 정지 상태에서만)
 
 ### 1. 시드 투입
 
@@ -44,20 +106,24 @@ RViz의 `2D Pose Estimate`로 `/fast_lio_icp/initialpose`에 포즈를 발행한
 - 추적 FSM, 경로, 롤링 서브맵을 초기화한다
 - ICP를 돌리지 않고 즉시 `map_T_odom_`을 시드 값으로 설정하고 포즈/TF를 발행한다
 
-즉 시드 직후 화면에 보이는 정렬은 순수하게 운영자가 지정한 값이다. 아직 어떤 정합도
+마지막 항목은 `has_latest_odom_`이 참일 때만 일어난다
+(`moving_icp_localizer.cpp:304-311`). FAST-LIO 오도메트리가 아직 올라오지 않았다면 시드를
+넣어도 아무것도 보이지 않는다. 첫 `/Odometry` 메시지를 기다린다.
+
+시드 직후 화면에 보이는 정렬은 순수하게 운영자가 지정한 값이다. 아직 어떤 정합도
 수행되지 않았다.
 
 ### 2. 육안 정렬 확인
 
 `MANUAL_ALIGN` 상태에서는 클라우드가 롤링 서브맵에 누적될 뿐 **ICP가 전혀 실행되지
-않는다**. 이 단계에서 운영자가 해야 할 일은 하나다. 빨간색 고정 지도와 초록색 실시간
-클라우드가 충분히 겹치는지 확인하는 것.
+않는다.** 이 단계에서 확인할 것은 하나다. 빨간색 고정 지도와 초록색 실시간 클라우드가
+충분히 겹치는지.
 
 `/fast_lio_icp/wheelchair_footprint_marker`가 지름 1.0 m 원통으로 휠체어 발자국을
-표시하며, 정합 상태에 따라 색이 바뀐다. 이 원을 지도상의 실제 위치에 맞추는 것이
-수동 정합의 목표다.
+표시하며, 정합 상태에 따라 색이 바뀐다.
 
-겹침이 부족하면 3단계로 넘어가지 말고 시드를 다시 투입한다.
+겹침이 부족하면 3절로 넘어가지 말고 시드를 다시 투입한다. **주행이 정지해 있는지 다시
+확인한다** — 재시드는 포즈를 클릭한 위치로 불연속 점프시키고 추적 FSM을 초기화한다.
 
 ### 3. 자동 보정 활성화
 
@@ -69,17 +135,26 @@ rosservice call /fast_lio_icp/enable_auto_correction "data: true"
   `INITIAL_POSE_REQUIRED`이다. 시드를 먼저 투입해야 한다.
 - 그 외에는 합의 버퍼를 비우고 정합 상태를 `VERIFYING`으로 올린다. 롤링 서브맵도
   비워지고 초기화 창 시계가 다시 시작된다.
-- 응답 메시지는 결과 정합 상태 이름이다.
+- **이미 `TRACKING`인 상태에서 호출해도 마찬가지다.** 경고 없이 `VERIFYING`으로
+  내려가고 서브맵이 비워진다. 주행 중에는 호출하지 않는다.
 
-`auto_correction_on_start: false`이므로 노드는 절대 스스로 자동 보정을 켜지 않는다.
-이 서비스 호출은 항상 운영자 또는 명시적 헬퍼의 행위다.
+노드가 스스로 자동 보정을 켜는 경로는 없다. `auto_correction_enabled_`의 기본값이
+`false`이고 이 서비스 외에는 값을 바꾸는 코드가 없기 때문이다.
+
+> `moving_localization.yaml`의 `auto_correction_on_start`는 현재 **동작하지 않는
+> 파라미터**다. `moving_icp_localizer.cpp:219`에서 읽어 `:602`에 저장하지만 그 값을
+> 사용하는 코드가 없다. `true`로 바꿔도 아무 일도 일어나지 않는다.
 
 ### 4. VERIFYING에서 TRACKING으로
 
 `VERIFYING`에서 노드는 `initialization_window_s: 3.0`초를 기다린 뒤 첫 정합을 시도하고,
-이후 `correction_period_s: 1.0`초마다 반복한다.
+이후 `correction_period_s: 1.0`초마다 반복한다. 단 이 3초 대기는 **서비스로 켠 경로에만**
+적용된다. `LOST` 이후 자동 재획득은 `last_correction_stamp_s_`를 초기화하지 않으므로
+첫 후보가 1.0초 뒤에 나온다.
 
-각 후보는 직전 후보와 비교된다. 아래 두 조건을 모두 만족하면 일관된 것으로 센다.
+각 후보는 직전 후보와 비교된다. 비교는 **평면 기준**이다
+(`assisted_alignment.cpp:53-57`은 `hypot(x, y)`와 yaw만 본다). z축만 어긋난 경우는
+일관된 것으로 계산된다.
 
 | 파라미터 | 값 |
 |---|---|
@@ -87,26 +162,53 @@ rosservice call /fast_lio_icp/enable_auto_correction "data: true"
 | `candidate_yaw_tolerance_deg` | 3.0 |
 | `required_consistent_candidates` | 3 |
 
-진단의 `reason` 필드로 진행을 읽을 수 있다.
+진단의 `reason` 필드로 진행을 읽는다.
 
 - `CANDIDATE_ACCUMULATING` — 일관된 후보가 쌓이는 중
-- `CANDIDATE_INCONSISTENT` — 불일치, 카운터가 1로 초기화됨
-- `CONSENSUS_READY` — 합의 완료, 정합 상태가 `TRACKING`으로 올라가고 후보가 그대로 적용됨
+- `CANDIDATE_INCONSISTENT` — 불일치. 카운터가 **1로** 초기화
+- `CONSENSUS_READY` — 합의 완료. 정합 상태가 `TRACKING`으로 올라감
 
-`TRACKING` 진입 이후의 보정은 매 스텝 `max_correction_translation_m: 0.20`,
-`max_correction_yaw_deg: 2.0`으로 제한된다.
+정합 자체가 **기각**된 경우는 다르다. `observe_rejection()`이 합의를 **0으로** 지우고,
+아직 `TRACKING` 전이면 `VERIFYING`으로 되돌린다.
 
-정합이 계속 실패해 추적 FSM이 `lost_after_s: 8.0`초 동안 `LOST`가 되면 노드는
-재획득을 시작해 정합 상태를 `VERIFYING`으로 되돌리고 합의 게이트를 다시 통과시킨다.
+`VERIFYING`이 멈춘 것처럼 보일 때 실제로 자주 만나는 `reason`은 위 세 개가 아니라
+다음이다. 진단을 직접 확인한다.
+
+- `CLOUD_ODOMETRY_TIME_MISMATCH`, `INSUFFICIENT_ROLLING_SUBMAP`, `CLOUD_REJECTED`
+- `WAITING_FOR_INITIALPOSE`, `ODOMETRY_FRAME_MISMATCH`
+- 정합 평가 기각: `NOT_CONVERGED`, `HIGH_FITNESS`, `INSUFFICIENT_SOURCE_POINTS`,
+  `INSUFFICIENT_TARGET_POINTS`, `LOW_INLIER_RATIO`, `PREDICTION_TRANSLATION_JUMP`,
+  `PREDICTION_ROTATION_JUMP`
+
+### 포즈가 한 번에 얼마나 튈 수 있는가
+
+이 절이 안전 판단의 핵심이다. 보정 한계는 **경로에 따라 다르다.**
+
+| 경로 | 한계 | 근거 |
+|---|---|---|
+| `TRACKING` 정상 보정 | 스텝당 0.20 m / 2.0° | `max_correction_translation_m`, `max_correction_yaw_deg` |
+| `CONSENSUS_READY` 스냅 | **클램프 없음** | `moving_icp_localizer.cpp:447-448`이 후보를 그대로 대입 |
+| `VERIFYING` 중 후보 수용 폭 | **3.0 m / 30°** | `registration_max_seed_translation_m`, `registration_max_seed_rotation_deg` |
+
+세 번째 줄의 두 값은 **`moving_localization.yaml`에 없다.** `moving_icp_localizer.cpp:189-195`의
+C++ 기본값 3.0 m / 30°가 현장에서 그대로 동작한다.
+
+그리고 `moving_icp_localizer.cpp:465-472`에 따라 `LOST` 이후 재획득은 `VERIFYING`으로
+돌아가므로, 이것은 기동 시에만 해당하는 이야기가 아니다. **주행 중 8초 상실 후 재획득에서
+포즈가 한 번에 최대 3 m 이동할 수 있다.** `TRACKING` 진입 후 0.20 m 제한만 보고 판단하면
+안 된다.
 
 ### 5. 자동 보정 해제
 
 ```bash
+rosservice call /waypoint_follower/start "data: false"        # 반드시 먼저
 rosservice call /fast_lio_icp/enable_auto_correction "data: false"
 ```
 
-항상 성공하며 정합 상태를 `MANUAL_ALIGN`으로 되돌리고 자동 보정을 끈다. 정합이
-의심스러울 때 즉시 ICP를 멈추는 수단이다.
+두 번째 명령은 항상 성공하며 정합 상태를 `MANUAL_ALIGN`으로 되돌리고 자동 보정을 끈다.
+
+**이 명령은 휠체어를 세우지 않는다.** 최상단 경고를 다시 읽는다. ICP를 멈추는 것과
+차량을 멈추는 것은 별개이고, 이 명령은 전자만 한다.
 
 ## 진단 읽기
 
@@ -126,6 +228,8 @@ rosservice call /fast_lio_icp/enable_auto_correction "data: false"
 | 추적이 `LOST` | ERROR | `LOST` |
 | 그 외, 즉 `DEGRADED` | WARN | `DEGRADED` |
 
+WARN만 보고는 정합 문제인지 추적 문제인지 알 수 없다. `status.message`를 봐야 한다.
+
 ## 좌표 프레임
 
 | 파라미터 | 값 |
@@ -133,13 +237,6 @@ rosservice call /fast_lio_icp/enable_auto_correction "data: false"
 | `map_frame` | `map` |
 | `odom_frame` | `camera_init` |
 | `base_frame` | `body` |
-
-## 자동 시드 경로
-
-`auto_initial_pose.py`는 위 절차를 자동화한다. 후보 시드를 발행하고 1.0초 뒤 자동 보정을
-켠 다음, 진단에서 `TRACKING`이 나올 때까지 `--verify-timeout`(기본 20초) 동안 폴링한다.
-실패하면 다음 순위 가설을 발행한다. 시드 자체가 자동 보정을 다시 끄기 때문에 각 가설은
-`MANUAL_ALIGN` -> `VERIFYING`으로 깨끗하게 재진입한다.
 
 ## 기록
 
