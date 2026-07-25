@@ -116,17 +116,6 @@ CLIMB_DECAY_PER_S = 0.6
 CLIMB_BOOST_MAX = 1.0
 CLIMB_BRAKE_MAX = 0.5
 
-# Hill assist: closed-loop speed makeup. The command chain is open-loop,
-# so on a steep ramp the actual speed sags below the commanded one and
-# the chair stalls; commanding harder in one step is what pitches the
-# nose up. Instead an integrator slowly raises the output while the
-# MEASURED speed lags the desired one - torque arrives gradually, and
-# the boost freezes and decays the moment the gyro shows any nose-lift
-# tendency, so climbing power and tipping tendency can never coexist.
-BOOST_MAX = 0.45
-BOOST_GAIN_PER_S = 0.10
-BOOST_DECAY_PER_S = 0.60
-BOOST_FREEZE_RATE_RAD_S = math.radians(4.0)
 SPEED_MEASURE_WINDOW_S = 0.4
 
 
@@ -157,8 +146,6 @@ class TipGuard:
         self._last_odom_t = None
         self.climb_boost = 0.0
         self.baseline_pitch = None
-        self.measured_speed = 0.0
-        self.boost = 0.0
         self._odom_track = deque()
         self._last_fused_pitch = None
         self._last_fused_stamp = None
@@ -322,23 +309,6 @@ class TipGuard:
         direction = -1.0 if self.current_speed >= 0.0 else 1.0
         return direction * COUNTER_SPEED_MAX
 
-    def update_boost(self, dt, desired):
-        """Hill-assist integrator - only with a verified IMU axis, only
-        while genuinely lagging, frozen/decayed on any nose-lift sign."""
-        nose_lift = self.pitch_rate * (1.0 if desired >= 0 else -1.0)
-        unsafe = (self.tripped or not self.axis_config_ok or
-                  nose_lift > BOOST_FREEZE_RATE_RAD_S or
-                  abs(self.pitch_rate) > CAUTION_RATE_RAD_S)
-        if unsafe or desired <= 0.05:
-            self.boost = max(0.0, self.boost - BOOST_DECAY_PER_S * dt)
-            return
-        lag = desired - self.measured_speed
-        if lag > 0.05:
-            self.boost = min(BOOST_MAX,
-                             self.boost + BOOST_GAIN_PER_S * lag * dt / 0.3)
-        elif lag < -0.02:
-            self.boost = max(0.0, self.boost - BOOST_DECAY_PER_S * dt)
-
     def update_governor(self, dt):
         if abs(self.pitch_rate) > CAUTION_RATE_RAD_S:
             self.accel_budget = max(
@@ -403,7 +373,6 @@ class TipGuard:
                     if abs(self.climb_boost) < 0.02:
                         self.climb_boost = 0.0
                 desired = max(0.0, desired + self.climb_boost)
-            self.update_boost(dt, 0.0 if (self.tripped or stale) else desired)
             if desired > self.current_speed:
                 budget = self.accel_budget
                 if self.measured_speed < LAUNCH_SPEED_MPS:
@@ -415,8 +384,7 @@ class TipGuard:
             self.current_speed += step
 
             out = Twist()
-            out.linear.x = self.current_speed + (
-                self.boost if self.current_speed > 0.02 else 0.0)
+            out.linear.x = self.current_speed
             out.angular.z = 0.0 if (self.tripped or stale) else self.raw.angular.z
             self.pub.publish(out)
 
@@ -425,11 +393,11 @@ class TipGuard:
                     "CONFIG_UNVERIFIED" if not self.axis_config_ok else "OK"))
             self.status_pub.publish(String(
                 data="%s pitch=%.1f dev=%.1f rate=%.1f budget=%.2f "
-                     "v=%.2f boost=%.2f" % (
+                     "v=%.2f" % (
                     state, math.degrees(self.fused_pitch),
                     math.degrees(self.deviation()),
                     math.degrees(self.pitch_rate), self.accel_budget,
-                    self.measured_speed, self.boost)))
+                    self.measured_speed)))
             if state != self.status:
                 rospy.loginfo("tip_guard: %s", state)
                 self.status = state

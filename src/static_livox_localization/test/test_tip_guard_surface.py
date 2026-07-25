@@ -75,3 +75,11 @@ def test_never_claims_direct_lidar_ground_tilt_sensing():
     text = guard_text()
     assert "is NOT usable here" in text
     assert "fused pitch from /Odometry" in text
+
+
+def test_no_duplicate_unbounded_boost_bypassing_the_accel_governor():
+    text = guard_text()
+    assert "def update_boost" not in text
+    assert "self.boost" not in text
+    assert "\nBOOST_MAX = " not in text
+    assert "out.linear.x = self.current_speed\n" in text
