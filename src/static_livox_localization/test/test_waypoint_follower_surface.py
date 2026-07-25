@@ -28,16 +28,20 @@ def test_follower_holds_on_lost_pose_cloud_or_manual_mode():
 
 def test_follower_keeps_wheelchair_inside_map_safety_band():
     text = follower_text()
-    assert "class SafetyBand" in text
+    # SafetyBand now lives in its own ROS-free module so the geometry can
+    # be unit-tested against the shipped band; see test_safety_band.py
+    assert "from safety_band import SafetyBand" in text
     assert "self.band.clamp(target)" in text
     assert '"OFF_BAND"' in text
-    assert "CHAIR_HALF_WIDTH" in text and "BAND_MARGIN" in text
+    band = (ROOT / "scripts" / "safety_band.py").read_text(encoding="utf-8")
+    assert "CHAIR_HALF_WIDTH" in band and "BAND_MARGIN" in band
 
 
 def test_follower_speed_policy_is_bounded():
     text = follower_text()
-    assert "MAX_SPEED = 0.5" in text
-    assert "SLOPE_SPEED = 0.3" in text
+    assert "MAX_SPEED = 1.5" in text
+    assert "GUARD_STOP_PER_MPS" in text
+    assert "SLOPE_SPEED = 0.6" in text
     assert "MAX_ACCEL" in text and "MAX_DECEL" in text
 
 

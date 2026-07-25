@@ -35,6 +35,10 @@ from std_msgs.msg import Int16MultiArray, String
 from std_srvs.srv import SetBool, SetBoolResponse
 
 import sensor_msgs.point_cloud2 as pc2
+
+from body_frame import (LIDAR_IN_BODY_XYZ,
+                        LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
+from safety_band import SafetyBand
 import tf.transformations as tft
 
 MAX_SPEED = 1.5
@@ -54,10 +58,6 @@ GUARD_STOP_PER_MPS = 1.2
 GUARD_SLOW_EXTRA_M = 1.2
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
-CHAIR_HALF_WIDTH = 0.35
-BAND_MARGIN = 0.10
-BAND_FLOOR = 0.15
-NARROW_BAND_WIDTH = 1.2
 NARROW_SPEED = 0.2
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
@@ -68,7 +68,10 @@ STEEP_PITCH_RAD = math.radians(4.0)
 STEEP_SPEED = 0.3
 STEEP_LOOKAHEAD_FACTOR = 0.6
 BYPASS_AFTER_S = 10.0
-BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
+# micro offsets first: street furniture (barrier bars, sign posts)
+# usually needs only a small shift; large offsets after
+BYPASS_OFFSETS = (0.35, -0.35, 0.6, -0.6, 1.0, -1.0)
+MICRO_BYPASS_M = 0.4
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
@@ -89,8 +92,11 @@ NEAREST_RESYNC_M = 2.0
 class CloudAccumulator:
     """Merge ~1 s of sparse MID360 scans into the current body frame."""
 
-    def __init__(self, window_s=0.6):
+    def __init__(self, window_s=0.6, lidar_in_body=LIDAR_IN_BODY_XYZ,
+                 lidar_in_body_yaw=LIDAR_IN_BODY_YAW_RAD):
         self.window_s = window_s
+        self.lidar_in_body = lidar_in_body
+        self.lidar_in_body_yaw = lidar_in_body_yaw
         self.scans = []
         self.odoms = []
 
@@ -139,54 +145,9 @@ class CloudAccumulator:
             parts.append(pts @ M[:3, :3].T + M[:3, 3])
         if not parts:
             return None, rospy.Time(0)
-        return np.vstack(parts), rospy.Time.from_sec(newest)
-
-
-class SafetyBand:
-    """Per-station drop-free lateral limits along the route (map frame)."""
-
-    def __init__(self, path):
-        data = json.load(open(path))
-        self.xy = np.array([[s["x"], s["y"]] for s in data["stations"]])
-        heading = np.radians([s["heading_deg"] for s in data["stations"]])
-        self.normals = np.stack([-np.sin(heading), np.cos(heading)], axis=1)
-        usable_left, usable_right, narrow = [], [], []
-        for s in data["stations"]:
-            # the driven line itself is proven safe, so never shrink the
-            # usable band below +-BAND_FLOOR; narrow stations creep instead
-            usable_left.append(
-                max(s["left_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
-            usable_right.append(
-                max(s["right_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
-            narrow.append(
-                s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
-        self.left = np.array(usable_left)
-        self.right = np.array(usable_right)
-        self.narrow = np.array(narrow)
-
-    def lateral_limits(self, point):
-        d = np.linalg.norm(self.xy - point, axis=1)
-        order = np.argsort(d)[:2]
-        k = int(order[0])
-        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
-        lo = -max(self.right[j] for j in order)
-        hi = max(self.left[j] for j in order)
-        return lateral, lo, hi
-
-    def contains(self, point, grace=0.0):
-        lateral, lo, hi = self.lateral_limits(point)
-        return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
-
-    def is_narrow(self, point):
-        d = np.linalg.norm(self.xy - point, axis=1)
-        return bool(self.narrow[int(np.argmin(d))])
-
-    def clamp(self, point):
-        d = np.linalg.norm(self.xy - point, axis=1)
-        k = int(np.argmin(d))
-        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
-        clamped = min(max(lateral, -self.right[k]), self.left[k])
-        return self.xy[k] + self.normals[k] * clamped
+        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
+                               self.lidar_in_body_yaw)
+        return merged, rospy.Time.from_sec(newest)
 
 
 class WaypointFollower:
@@ -198,6 +159,17 @@ class WaypointFollower:
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
         self.band = SafetyBand(rospy.get_param("~safety_band"))
         self.sensor_height = rospy.get_param("~sensor_height", 0.30)
+        # operator-authorized band grace for SMALL bypass offsets only:
+        # lets the chair dodge mapped-as-step street furniture when a
+        # human on site confirms the adjacent surface is flat. Default
+        # off; never applies to large offsets.
+        self.micro_bypass_grace = rospy.get_param(
+            "~micro_bypass_grace", 0.0)
+        # how far outside the usable band the chair may sit and still
+        # creep back on its own; raise only with an operator on site
+        # (e.g. after a manual reposition past street furniture)
+        self.band_recover_max = rospy.get_param(
+            "~band_recover_max", BAND_RECOVER_MAX)
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))
 
@@ -306,10 +278,14 @@ class WaypointFollower:
             return False
         heading = np.array([math.cos(self.pose_yaw), math.sin(self.pose_yaw)])
         normal = np.array([-heading[1], heading[0]])
+        grace = self.micro_bypass_grace if abs(offset) <= MICRO_BYPASS_M else 0.0
         for ahead in (0.5, 1.5, 2.5, 3.5):
             p = self.pose_xy + heading * ahead + normal * offset
-            if not self.band.contains(p):
+            if not self.band.contains(p, grace=grace):
                 return False
+        if grace > 0.0:
+            rospy.logwarn("micro-bypass using operator-authorized band "
+                          "grace %.2f m (offset %+.2f)", grace, offset)
         return True
 
     def send_stop(self):
@@ -384,7 +360,7 @@ class WaypointFollower:
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             reason = "OFF_ROUTE"
         elif self.route_locked and not self.band.contains(
-                self.pose_xy, grace=BAND_RECOVER_MAX):
+                self.pose_xy, grace=self.band_recover_max):
             reason = "OFF_BAND"
         if reason:
             if reason != self.status:

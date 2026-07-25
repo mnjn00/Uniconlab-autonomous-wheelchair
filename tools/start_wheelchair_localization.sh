@@ -43,9 +43,38 @@ if ! timeout 3 rostopic echo -n1 /livox/lidar/header >/dev/null 2>&1; then
 fi
 echo "  lidar OK"
 
+# VN-100: the inertial source for both FAST-LIO and tip_guard. It must be
+# up BEFORE FAST-LIO, which waits on IMU messages to initialise. To fall
+# back to the lidar's built-in IMU, set VN_IMU=0 and the FAST-LIO launch
+# below reverts to the previously validated mapping_mid360.launch.
+VN_IMU="${VN_IMU:-1}"
+if [ "$VN_IMU" = "1" ]; then
+  echo "[2b/5] VectorNav VN-100"
+  # A SIGTERM'd vnpub leaves the sensor streaming binary at 921600; the next
+  # driver start parses that backlog as register replies and segfaults
+  # (observed: exit code -11). Silence async output before opening it.
+  python3 "$HOME/vn_reset.py" 2>&1 | sed 's/^/  vn_reset: /' || \
+    echo "  vn_reset failed - continuing, driver may still negotiate"
+  source "$HOME/catkin_ws/devel/setup.bash"
+  setsid nohup roslaunch base_model vectornav.launch \
+    > "$LOG/live_vectornav.log" 2>&1 < /dev/null &
+  for i in $(seq 1 20); do
+    timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1; then
+    echo "ERROR: /vectornav/IMU silent (check /dev/vn cable)"; exit 6
+  fi
+  echo "  VN-100 OK"
+  FASTLIO_LAUNCH="mapping_mid360_vn100.launch"
+else
+  echo "  VN_IMU=0 - falling back to the lidar's built-in IMU"
+  FASTLIO_LAUNCH="mapping_mid360.launch"
+fi
+
 echo "[3/5] FAST-LIO (keep the wheelchair STILL for a few seconds)"
 source "$HOME/fast_lio_ws/devel/setup.bash"
-setsid nohup roslaunch fast_lio mapping_mid360.launch rviz:=false \
+setsid nohup roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
   > "$LOG/live_fastlio.log" 2>&1 < /dev/null &
 for i in $(seq 1 20); do
   timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1 && break
@@ -90,7 +119,11 @@ fi
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
 setsid nohup rosrun static_livox_localization safety_gate.py \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
-IMU_TOPIC="${IMU_TOPIC:-/livox/imu}"
+if [ "$VN_IMU" = "1" ]; then
+  IMU_TOPIC="${IMU_TOPIC:-/vectornav/IMU}"
+else
+  IMU_TOPIC="${IMU_TOPIC:-/livox/imu}"
+fi
 setsid nohup rosrun static_livox_localization tip_guard.py \
   _imu_topic:="$IMU_TOPIC" \
   > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
@@ -113,7 +146,8 @@ setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
-  /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
+  /waypoint_follower/status /tip_guard/status /Odometry \
+  /livox/imu /vectornav/IMU \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

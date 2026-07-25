@@ -14,8 +14,12 @@ time ahead from the CURRENT angular rate and trips before the static
 threshold is ever reached.
 
 Sensor fusion, honestly stated:
-  - fast path: raw gyro rate from /livox/imu (~200 Hz) - lowest latency
-    signal for "is it rotating right now, and how fast"
+  - fast path: raw gyro rate from the VectorNav VN-100 (/vectornav/IMU,
+    200 Hz) - lowest latency signal for "is it rotating right now, and
+    how fast". Only angular_velocity is read, so the VN's m/s^2
+    acceleration units (the Livox driver reports g) never enter here.
+    The VN frame was measured to sit within 0.4 deg of the lidar in roll
+    and pitch, so the pitch axis index and sign carry over unchanged.
   - reference path: fused pitch from /Odometry (FAST-LIO, ~10 Hz) - this
     IS the "LiDAR information" contribution: FAST-LIO's orientation is
     LiDAR-inertial fused, not IMU alone. Direct point-cloud ground-plane
@@ -118,11 +122,17 @@ CLIMB_BRAKE_MAX = 0.5
 
 SPEED_MEASURE_WINDOW_S = 0.4
 
+# Hard ceiling on what this stage may ever publish, independent of what
+# arrives on /cmd_vel_gated. Set at the follower's MAX_SPEED rather than the
+# gate's HARD_V_LIMIT so the assist cannot push the chair past the fastest
+# speed the route planner is allowed to ask for.
+ABSOLUTE_V_LIMIT = 1.5
+
 
 class TipGuard:
     def __init__(self):
         rospy.init_node("tip_guard")
-        imu_topic = rospy.get_param("~imu_topic", "/livox/imu")
+        imu_topic = rospy.get_param("~imu_topic", "/vectornav/IMU")
         self.enable_counter_motion = rospy.get_param(
             "~enable_counter_motion", False)
         gyro_pitch_axis = rospy.get_param("~gyro_pitch_axis", "y")
@@ -350,6 +360,17 @@ class TipGuard:
                 self.climb_boost = 0.0
             else:
                 desired = self.raw.linear.x
+                # The assist may only SCALE a request to move, never create
+                # one. Adding a positive boost to a zero command let this
+                # node keep driving through every upstream stop: OBSTACLE,
+                # TILT_LIMIT, OFF_BAND, LOCALIZATION_* and MANUAL_MODE all
+                # arrive here as linear.x == 0, and a boost integrated on a
+                # slope then carried the chair on at up to CLIMB_BOOST_MAX,
+                # bleeding off only at CLIMB_DECAY_PER_S - roughly 0.5 m of
+                # travel after a commanded full stop, with no layer able to
+                # override it.
+                if abs(desired) <= 0.05:
+                    self.climb_boost = 0.0
                 # climb-assist feedback: track measured ground speed
                 on_slope = abs(self.fused_pitch) > CLIMB_MIN_PITCH_RAD
                 if desired > 0.05 and on_slope:
@@ -384,7 +405,12 @@ class TipGuard:
             self.current_speed += step
 
             out = Twist()
-            out.linear.x = self.current_speed
+            # climb assist is already folded into `desired` above, so it
+            # passes through the accel budget with everything else -
+            # nothing may be added to the output past the rate limiter.
+            out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT,
+                                        self.current_speed))
+            self.current_speed = out.linear.x
             out.angular.z = 0.0 if (self.tripped or stale) else self.raw.angular.z
             self.pub.publish(out)
 
@@ -393,11 +419,11 @@ class TipGuard:
                     "CONFIG_UNVERIFIED" if not self.axis_config_ok else "OK"))
             self.status_pub.publish(String(
                 data="%s pitch=%.1f dev=%.1f rate=%.1f budget=%.2f "
-                     "v=%.2f" % (
+                     "v=%.2f boost=%.2f" % (
                     state, math.degrees(self.fused_pitch),
                     math.degrees(self.deviation()),
                     math.degrees(self.pitch_rate), self.accel_budget,
-                    self.measured_speed)))
+                    self.measured_speed, self.climb_boost)))
             if state != self.status:
                 rospy.loginfo("tip_guard: %s", state)
                 self.status = state
