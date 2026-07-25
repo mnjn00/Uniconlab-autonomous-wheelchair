@@ -313,7 +313,7 @@ def find_initial_pose(first_xyz, tmap, traj_path, args):
         raise SystemExit(
             "initial pose fitness %.3f below %.2f - the drive probably "
             "starts outside the 07/07 map coverage" % (best[0], MIN_FITNESS))
-    return np.array(best[2])
+    return np.array(best[2]), float(best[0]), float(best[1])
 
 
 def main():
@@ -345,11 +345,31 @@ def main():
 
     done = {}
     if os.path.exists(args.out):
+        # The whole point of this file is surviving a power cut, and a power
+        # cut is exactly what leaves a half-written final record. Parsing it
+        # strictly made the failure this recovery exists for the thing that
+        # prevented recovery. A damaged line can only ever be the last one,
+        # since every earlier line was followed by a completed write.
+        damaged = 0
         with open(args.out) as f:
-            for line in f:
+            lines = f.readlines()
+        for number, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
                 rec = json.loads(line)
                 done[rec["seq"]] = rec
-        print("resuming: %d scans already localized" % len(done))
+            except (ValueError, KeyError):
+                damaged += 1
+                if number != len(lines):
+                    raise SystemExit(
+                        "%s line %d is corrupt but is not the last line - "
+                        "refusing to guess which poses are trustworthy"
+                        % (args.out, number))
+                print("discarding truncated final record (line %d)" % number)
+        print("resuming: %d scans already localized%s"
+              % (len(done), " (1 partial record dropped)" if damaged else ""))
 
     pose = None
     prev_delta = np.eye(4)
@@ -389,7 +409,8 @@ def main():
             if pose is None:
                 if len(xyz) < INIT_MIN_POINTS:
                     continue          # wait for a scan dense enough to trust
-                pose = find_initial_pose(xyz, tmap, args.traj, args)
+                pose, fitness, rmse = find_initial_pose(
+                    xyz, tmap, args.traj, args)
                 prev_delta = np.eye(4)
                 lost = 0
 
@@ -404,6 +425,8 @@ def main():
 
             good = (res.fitness >= MIN_FITNESS and
                     res.inlier_rmse <= MAX_RMSE_M and jump <= MAX_JUMP_M)
+            # metrics belong to whatever actually produced `pose` below
+            fitness, rmse, relocalized = res.fitness, res.inlier_rmse, False
             if good:
                 prev_delta = np.linalg.inv(pose) @ new_pose
                 pose = new_pose
@@ -418,20 +441,27 @@ def main():
                 if lost >= RELOCALIZE_AFTER and len(xyz) >= INIT_MIN_POINTS:
                     print("scan %d: lost for %d scans - relocalizing"
                           % (seq, lost))
-                    pose = find_initial_pose(xyz, tmap, args.traj, args)
+                    pose, fitness, rmse = find_initial_pose(
+                        xyz, tmap, args.traj, args)
                     prev_delta = np.eye(4)
                     lost = 0
+                    relocalized = True
 
             out.write(json.dumps({
                 "seq": seq, "stamp": stamp,
                 "t": list(np.round(pose[:3, 3], 4)),
                 "q": list(np.round(R_to_quat(pose[:3, :3]), 6)),
-                "fitness": round(res.fitness, 4),
-                "rmse": round(res.inlier_rmse, 4),
+                "fitness": round(fitness, 4),
+                "rmse": round(rmse, 4),
+                "relocalized": relocalized,
                 "ok": bool(good)}) + "\n")
 
+            # flush per record: a buffered write means a power cut loses
+            # every pose since the last checkpoint, not just the last one.
+            # fsync stays on the checkpoint interval - it is the expensive
+            # half and losing the page cache needs the whole box to die.
+            out.flush()
             if (seq + 1) % args.checkpoint_every == 0:
-                out.flush()
                 os.fsync(out.fileno())
                 rate = (seq + 1 - len(done)) / max(time.time() - t_start, 1e-3)
                 print("scan %5d  t=%7.1fs  ok=%d bad=%d  fitness=%.3f  "
