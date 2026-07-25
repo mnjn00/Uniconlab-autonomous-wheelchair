@@ -198,6 +198,7 @@ mkdir -p "$HOME/localization_trials"
 setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics \
+  /fast_lio_icp/initialpose \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry \
   /livox/imu /vectornav/IMU \
