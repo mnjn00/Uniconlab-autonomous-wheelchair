@@ -13,7 +13,10 @@ Per control cycle:
   - obstacle guard: slow near obstacles/pedestrians, stop when close
   - stuck-obstacle bypass: after 10 s, side-step within the band only
   - slope guard and DEGRADED-localization slowdown, tilt aborts
-  - speed policy: 0.5 m/s cap, curvature slowdown, accel/yaw-rate limiting
+  - speed policy: 1.5 m/s cap (typical powered-wheelchair pace)
+    with speed-scaled obstacle guard distances, curvature
+    slowdown, accel/yaw-rate limiting; tip_guard adds closed-loop
+    climb assist so slopes get torque without tipping
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST localization, manual joystick mode, or
     geofence violation, and always sends stop on shutdown.
@@ -34,8 +37,8 @@ from std_srvs.srv import SetBool, SetBoolResponse
 import sensor_msgs.point_cloud2 as pc2
 import tf.transformations as tft
 
-MAX_SPEED = 0.5
-SLOPE_SPEED = 0.3
+MAX_SPEED = 1.5
+SLOPE_SPEED = 0.6
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
 MAX_ACCEL = 0.18
@@ -43,8 +46,12 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
-GUARD_STOP_M = 1.1
-GUARD_SLOW_M = 2.2
+# obstacle guard distances scale with speed: braking distance + sensing
+# latency must always fit inside the stop radius (near-stationary floor
+# 0.9 m, 1.8 m+ at full speed)
+GUARD_STOP_MIN_M = 0.9
+GUARD_STOP_PER_MPS = 1.2
+GUARD_SLOW_EXTRA_M = 1.2
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
 CHAIR_HALF_WIDTH = 0.35
@@ -54,13 +61,24 @@ NARROW_BAND_WIDTH = 1.2
 NARROW_SPEED = 0.2
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
+# on steep terrain, hug the proven driven line: creep, shorter
+# lookahead (no corner cutting), and no lateral bypass - the line
+# driven on 7/7 is the one place the camber is known passable
+STEEP_PITCH_RAD = math.radians(4.0)
+STEEP_SPEED = 0.3
+STEEP_LOOKAHEAD_FACTOR = 0.6
 BYPASS_AFTER_S = 10.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
-MAX_TILT_ROLL = math.radians(6.0)
-MAX_TILT_PITCH = math.radians(8.0)
+# static attitude backstop only - dynamic tip detection lives in
+# tip_guard (50 Hz deviation/rate/accel). Hanyang's steepest route ramp
+# measures ~10 deg fused pitch and its cambered ramps ~6.3 deg roll, so
+# both aborts sit above the measured terrain with margin while staying
+# far below static rollover attitudes.
+MAX_TILT_ROLL = math.radians(11.0)
+MAX_TILT_PITCH = math.radians(12.0)
 BAND_RECOVER_MAX = 0.5
 GEOFENCE_M = 3.5
 AUTO_MODE = 65
@@ -69,7 +87,7 @@ AUTO_MODE = 65
 class CloudAccumulator:
     """Merge ~1 s of sparse MID360 scans into the current body frame."""
 
-    def __init__(self, window_s=1.0):
+    def __init__(self, window_s=0.6):
         self.window_s = window_s
         self.scans = []
         self.odoms = []
@@ -262,7 +280,8 @@ class WaypointFollower:
             return 0.0  # no data = treat as blocked
         pts = self.cloud
         ground_plane = -self.sensor_height
-        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < GUARD_SLOW_M + 0.6) &
+        guard_slow = self.guard_stop() + GUARD_SLOW_EXTRA_M
+        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < guard_slow + 0.6) &
              (np.abs(pts[:, 1] - lateral_shift) < CORRIDOR_HALF_WIDTH))
         zone = pts[m]
         if not len(zone):
@@ -272,6 +291,10 @@ class WaypointFollower:
         if len(obstacles) < 5:
             return None
         return float(np.percentile(obstacles[:, 0], 5))
+
+    def guard_stop(self):
+        return max(GUARD_STOP_MIN_M,
+                   0.6 + GUARD_STOP_PER_MPS * self.current_speed)
 
     def bypass_target_ok(self, offset):
         """A lateral bypass is allowed only if the offset corridor stays
@@ -300,6 +323,8 @@ class WaypointFollower:
         self.nearest_index = int(
             self.nearest_index + np.argmin(d[self.nearest_index:window_end]))
         lookahead = 1.0 + 1.6 * self.current_speed
+        if abs(self.pose_pitch) > STEEP_PITCH_RAD:
+            lookahead = max(0.8, lookahead * STEEP_LOOKAHEAD_FACTOR)
         target = self.waypoints[-1].copy()
         acc = 0.0
         for i in range(self.nearest_index, len(self.waypoints) - 1):
@@ -371,13 +396,14 @@ class WaypointFollower:
             allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
+        guard_stop = self.guard_stop()
+        guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
         if obstacle_dist is not None:
-            if obstacle_dist < GUARD_STOP_M:
+            if obstacle_dist < guard_stop:
                 blocking = "OBSTACLE"
                 allowed = 0.0
-            elif obstacle_dist < GUARD_SLOW_M:
-                ratio = (obstacle_dist - GUARD_STOP_M) / \
-                    (GUARD_SLOW_M - GUARD_STOP_M)
+            elif obstacle_dist < guard_slow:
+                ratio = (obstacle_dist - guard_stop) / GUARD_SLOW_EXTRA_M
                 allowed = min(allowed,
                               CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
 
@@ -388,7 +414,7 @@ class WaypointFollower:
                     abs(self.lateral_offset) < 0.01:
                 for offset in BYPASS_OFFSETS:
                     clear = self.obstacle_distance(offset)
-                    if (clear is None or clear > GUARD_SLOW_M) and \
+                    if (clear is None or clear > guard_slow) and \
                             self.bypass_target_ok(offset):
                         self.lateral_offset = offset
                         rospy.logwarn(
@@ -402,7 +428,7 @@ class WaypointFollower:
             self.blocked_since = None
             if abs(self.lateral_offset) > 0.01:
                 back = self.obstacle_distance(0.0)
-                if back is None or back > GUARD_SLOW_M:
+                if back is None or back > guard_slow:
                     self.lateral_offset = 0.0
                     rospy.loginfo("bypass complete, rejoining route")
 
