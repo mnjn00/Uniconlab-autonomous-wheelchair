@@ -36,11 +36,11 @@ jobs:
       # such as wheelchair_navigation are simply not importable.
       - name: Resolve dependencies and build catkin workspace
         run: |
-          mkdir -p reports catkin-build catkin-devel
+          mkdir -p reports build devel
           docker run --rm \
             -v "$PWD/reports:/ws/reports" \
-            -v "$PWD/catkin-build:/ws/build" \
-            -v "$PWD/catkin-devel:/ws/devel" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
             wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
             set -eo pipefail
             source /opt/ros/noetic/setup.bash
@@ -51,8 +51,8 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD/reports:/ws/reports" \
-            -v "$PWD/catkin-build:/ws/build" \
-            -v "$PWD/catkin-devel:/ws/devel" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
             wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
             set -eo pipefail
             source /opt/ros/noetic/setup.bash
@@ -62,8 +62,8 @@ jobs:
       - name: Xacro and URDF validation
         run: |
           docker run --rm \
-            -v "$PWD/catkin-build:/ws/build" \
-            -v "$PWD/catkin-devel:/ws/devel" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
             wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
             set -eo pipefail
             source /opt/ros/noetic/setup.bash
@@ -74,8 +74,8 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD/reports:/ws/reports" \
-            -v "$PWD/catkin-build:/ws/build" \
-            -v "$PWD/catkin-devel:/ws/devel" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
             wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
             set -eo pipefail
             source /opt/ros/noetic/setup.bash
@@ -86,8 +86,8 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD/reports:/ws/reports" \
-            -v "$PWD/catkin-build:/ws/build" \
-            -v "$PWD/catkin-devel:/ws/devel" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
             wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
             set -eo pipefail
             source /opt/ros/noetic/setup.bash
