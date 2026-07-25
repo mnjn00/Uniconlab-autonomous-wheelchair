@@ -14,8 +14,12 @@ time ahead from the CURRENT angular rate and trips before the static
 threshold is ever reached.
 
 Sensor fusion, honestly stated:
-  - fast path: raw gyro rate from /livox/imu (~200 Hz) - lowest latency
-    signal for "is it rotating right now, and how fast"
+  - fast path: raw gyro rate from the VectorNav VN-100 (/vectornav/IMU,
+    200 Hz) - lowest latency signal for "is it rotating right now, and
+    how fast". Only angular_velocity is read, so the VN's m/s^2
+    acceleration units (the Livox driver reports g) never enter here.
+    The VN frame was measured to sit within 0.4 deg of the lidar in roll
+    and pitch, so the pitch axis index and sign carry over unchanged.
   - reference path: fused pitch from /Odometry (FAST-LIO, ~10 Hz) - this
     IS the "LiDAR information" contribution: FAST-LIO's orientation is
     LiDAR-inertial fused, not IMU alone. Direct point-cloud ground-plane
@@ -122,7 +126,7 @@ SPEED_MEASURE_WINDOW_S = 0.4
 class TipGuard:
     def __init__(self):
         rospy.init_node("tip_guard")
-        imu_topic = rospy.get_param("~imu_topic", "/livox/imu")
+        imu_topic = rospy.get_param("~imu_topic", "/vectornav/IMU")
         self.enable_counter_motion = rospy.get_param(
             "~enable_counter_motion", False)
         gyro_pitch_axis = rospy.get_param("~gyro_pitch_axis", "y")
