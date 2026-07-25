@@ -50,6 +50,11 @@ echo "  lidar OK"
 VN_IMU="${VN_IMU:-1}"
 if [ "$VN_IMU" = "1" ]; then
   echo "[2b/5] VectorNav VN-100"
+  # A SIGTERM'd vnpub leaves the sensor streaming binary at 921600; the next
+  # driver start parses that backlog as register replies and segfaults
+  # (observed: exit code -11). Silence async output before opening it.
+  python3 "$HOME/vn_reset.py" 2>&1 | sed 's/^/  vn_reset: /' || \
+    echo "  vn_reset failed - continuing, driver may still negotiate"
   source "$HOME/catkin_ws/devel/setup.bash"
   setsid nohup roslaunch base_model vectornav.launch \
     > "$LOG/live_vectornav.log" 2>&1 < /dev/null &
@@ -141,7 +146,8 @@ setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
-  /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
+  /waypoint_follower/status /tip_guard/status /Odometry \
+  /livox/imu /vectornav/IMU \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""
