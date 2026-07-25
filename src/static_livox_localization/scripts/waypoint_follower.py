@@ -87,6 +87,11 @@ GEOFENCE_M = 3.5
 AUTO_MODE = 65
 DEGRADED_STOP_S = 3.0
 NEAREST_RESYNC_M = 2.0
+# the chord from the chair to the target is sampled at this spacing and every
+# sample must be in band; clamping only the endpoint checked nothing between
+CHORD_SAMPLE_M = 0.25
+MIN_LOOKAHEAD_M = 0.9
+LOOKAHEAD_BACKOFF_M = 0.4
 
 
 class CloudAccumulator:
@@ -192,6 +197,7 @@ class WaypointFollower:
         self.current_speed = 0.0
         self.blocked_since = None
         self.lateral_offset = 0.0
+        self.chord_speed_cap = MAX_SPEED
         self.last_yaw_rate = 0.0
         self.status = "PAUSED"
 
@@ -313,13 +319,13 @@ class WaypointFollower:
         lookahead = 1.0 + 1.6 * self.current_speed
         if abs(self.pose_pitch) > STEEP_PITCH_RAD:
             lookahead = max(0.8, lookahead * STEEP_LOOKAHEAD_FACTOR)
-        target = self.waypoints[-1].copy()
-        acc = 0.0
-        for i in range(self.nearest_index, len(self.waypoints) - 1):
-            acc += np.linalg.norm(self.waypoints[i + 1] - self.waypoints[i])
-            if acc >= lookahead:
-                target = self.waypoints[i + 1].copy()
-                break
+        # A straight chord can only stay inside a +-0.15 m band on curves
+        # gentler than about a 10 m radius, so on tighter corners the answer
+        # is a SHORTER lookahead - i.e. less speed - not a collapsed target.
+        # Measured on the shipped route: 3.4 m chords are in band at 91.5% of
+        # driven-line positions, 1.8 m at 98.9%, and ~1 m essentially always.
+        lookahead, self.chord_speed_cap = self.safe_lookahead(lookahead)
+        target = self.lookahead_point(lookahead)
         if abs(self.lateral_offset) > 0.01:
             direction = target - self.pose_xy
             n = np.linalg.norm(direction)
@@ -328,6 +334,74 @@ class WaypointFollower:
                 target = target + normal * self.lateral_offset
         # never steer to a point outside the drop-free band
         return self.band.clamp(target)
+
+    def safe_lookahead(self, wanted):
+        """Longest lookahead whose chord stays in band, and the speed it implies.
+
+        Returns (lookahead, speed_cap). The chord is what the chair actually
+        traverses; band.clamp only ever constrained the ENDPOINT, and since
+        that endpoint was a route waypoint its lateral offset was ~0, so the
+        clamp was a no-op and nothing checked the path in between.
+
+        The shipped route makes this necessary rather than theoretical: 4 of
+        its 85 waypoints lie OUTSIDE the band and 8 of 84 chords leave it,
+        because the 353-station driven line was sparsified to 85 points
+        without regard for the band - cutting corners by up to 0.63 m where
+        the usable band is often 0.15 m. Filed separately; until the route is
+        regenerated this is what keeps a wheel on the pavement.
+        """
+        candidate = wanted
+        while candidate >= MIN_LOOKAHEAD_M:
+            target = self.band.clamp(self.lookahead_point(candidate))
+            if self.chord_in_band(target):
+                implied = max(0.0, (candidate - 1.0) / 1.6)
+                return candidate, (MAX_SPEED if candidate >= wanted - 1e-9
+                                   else max(CREEP_SPEED, implied))
+            candidate -= LOOKAHEAD_BACKOFF_M
+        # even the shortest chord is not provably safe: creep, and say so
+        rospy.logwarn_throttle(
+            5.0, "waypoint_follower: no band-safe chord at this pose, creeping")
+        return MIN_LOOKAHEAD_M, CREEP_SPEED
+
+    def lookahead_point(self, lookahead):
+        """Point `lookahead` metres along the route polyline from the chair.
+
+        Interpolated WITHIN a segment rather than snapped to a waypoint. The
+        deployed route has 85 waypoints over 353 m - median spacing 4.60 m,
+        and 63 of 84 segments longer than the 3.4 m maximum lookahead - so
+        snapping made the target "the next waypoint" almost every cycle. The
+        effective lookahead was then 4.6-6.9 m, 2-7x what was asked for, and
+        STEEP_LOOKAHEAD_FACTOR (which exists to stop corner-cutting on steep
+        ground) could never take effect at all.
+        """
+        start = self.waypoints[self.nearest_index]
+        remaining = lookahead
+        for i in range(self.nearest_index, len(self.waypoints) - 1):
+            a = self.waypoints[i] if i > self.nearest_index else start
+            b = self.waypoints[i + 1]
+            seg = np.linalg.norm(b - a)
+            if seg < 1e-6:
+                continue
+            if remaining <= seg:
+                return a + (b - a) * (remaining / seg)
+            remaining -= seg
+        return self.waypoints[-1].copy()
+
+    def chord_in_band(self, target):
+        """Is every sample along pose->target inside the band?
+
+        Uses the same OFF_BAND_GRACE the containment hold already tolerates,
+        so this cannot refuse a line the hold logic would accept.
+        """
+        span = float(np.linalg.norm(target - self.pose_xy))
+        if span < 1e-6:
+            return True
+        steps = max(2, int(math.ceil(span / CHORD_SAMPLE_M)))
+        for k in range(1, steps + 1):
+            point = self.pose_xy + (target - self.pose_xy) * (float(k) / steps)
+            if not self.band.contains(point, grace=OFF_BAND_GRACE):
+                return False
+        return True
 
     def step(self):
         now = rospy.Time.now()
@@ -386,6 +460,9 @@ class WaypointFollower:
             allowed = min(allowed, CREEP_SPEED)
         if self.band.is_narrow(self.pose_xy):
             allowed = min(allowed, NARROW_SPEED)
+        # a chord longer than the band allows is answered with less speed,
+        # which shortens the lookahead, which shortens the chord
+        allowed = min(allowed, self.chord_speed_cap)
         if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
             allowed = min(allowed, SLOPE_SPEED)
         if self.tracking_state == "DEGRADED":

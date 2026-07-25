@@ -142,3 +142,68 @@ def test_how_much_of_the_route_sits_on_the_floor_is_visible():
     band = _band()
     on_floor = int(np.sum(np.isclose(band.left, BAND_FLOOR)))
     assert 0 < on_floor < len(band.left), on_floor
+
+
+# --- route vs band: the facts the follower's chord check has to cope with ---
+
+ROUTE_JSON = ROOT / "routes" / "aejimun_to_gongsen_waypoints.json"
+
+
+def _route():
+    return np.array([[w["x"], w["y"]] for w in
+                     json.load(open(ROUTE_JSON))["waypoints"]])
+
+
+def _chord_in_band(band, a, b, grace=0.0, spacing=0.25):
+    span = float(np.linalg.norm(b - a))
+    if span < 1e-6:
+        return True
+    steps = max(2, int(np.ceil(span / spacing)))
+    return all(band.contains(a + (b - a) * (k / float(steps)), grace=grace)
+               for k in range(1, steps + 1))
+
+
+def test_the_shipped_route_is_not_band_safe():
+    """Documents the root cause behind the follower's chord check, and fails
+    loudly if the route is ever regenerated: 4 of 85 waypoints lie outside
+    the band and 8 of 84 chords leave it, because the 353-station driven line
+    was sparsified to 85 points without regard for the band."""
+    band, route = _band(), _route()
+    outside = [i for i in range(len(route)) if not band.contains(route[i])]
+    leaving = sum(1 for i in range(len(route) - 1)
+                  if not _chord_in_band(band, route[i], route[i + 1]))
+    assert outside, "route unexpectedly band-safe - was it regenerated?"
+    assert len(outside) <= 4, outside
+    assert leaving <= 8, leaving
+
+
+def test_a_short_chord_from_the_driven_line_is_always_in_band():
+    """Why backing the lookahead off works: a ~1 m chord is safe everywhere,
+    so a creep speed is always available."""
+    band = _band()
+    bad = 0
+    for i in range(0, len(band.xy) - 2):
+        direction = band.xy[i + 1] - band.xy[i]
+        n = np.linalg.norm(direction)
+        if n < 1e-6:
+            continue
+        target = band.xy[i] + direction / n * 0.9
+        if not _chord_in_band(band, band.xy[i], target, grace=0.10):
+            bad += 1
+    assert bad <= 2, "%d of %d short chords left the band" % (bad, len(band.xy))
+
+
+def test_a_long_chord_is_not_always_in_band():
+    """The reason speed has to back off at all: a 3.4 m chord cannot follow
+    curves tighter than roughly a 10 m radius inside a 0.15 m band."""
+    band = _band()
+    bad = 0
+    for i in range(0, len(band.xy) - 5):
+        direction = band.xy[i + 3] - band.xy[i]
+        n = np.linalg.norm(direction)
+        if n < 1e-6:
+            continue
+        target = band.xy[i] + direction / n * 3.4
+        if not _chord_in_band(band, band.xy[i], target, grace=0.10):
+            bad += 1
+    assert bad > 0, "long chords unexpectedly all safe - check the band data"
