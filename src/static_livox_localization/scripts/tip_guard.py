@@ -408,8 +408,12 @@ class TipGuard:
             # climb assist is already folded into `desired` above, so it
             # passes through the accel budget with everything else -
             # nothing may be added to the output past the rate limiter.
-            out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT,
-                                        self.current_speed))
+            # Lower bound is the counter-motion allowance, not zero: a
+            # max(0.0, ...) here silently deleted counter_motion_target(),
+            # whose whole job is commanding a small REVERSE while a backward
+            # tilt is still growing. The ceiling is what this clamp is for.
+            out.linear.x = max(-COUNTER_SPEED_MAX,
+                               min(ABSOLUTE_V_LIMIT, self.current_speed))
             self.current_speed = out.linear.x
             out.angular.z = 0.0 if (self.tripped or stale) else self.raw.angular.z
             self.pub.publish(out)

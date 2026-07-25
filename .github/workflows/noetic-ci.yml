@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   software-rc:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -80,7 +80,7 @@ jobs:
   gazebo-live-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Run real ROS/Gazebo surface; unavailable is a failure
@@ -100,7 +100,7 @@ jobs:
   external-full-bag-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Require externally acquired full-bag qualification
         run: |
@@ -110,7 +110,7 @@ jobs:
   target-nuc-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Require target NUC qualification
         run: |
@@ -120,7 +120,7 @@ jobs:
   hardware-passenger-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Refuse hardware or passenger authority from CI
         run: |
@@ -130,7 +130,7 @@ jobs:
   release-manifest:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: [software-rc, gazebo-live-gate, external-full-bag-gate, target-nuc-gate, hardware-passenger-gate]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Generate only a complete strict software-only manifest

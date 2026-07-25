@@ -95,8 +95,19 @@ if [ "$VN_IMU" = "1" ]; then
   # A SIGTERM'd vnpub leaves the sensor streaming binary at 921600; the next
   # driver start parses that backlog as register replies and segfaults
   # (observed: exit code -11). Silence async output before opening it.
-  python3 "$HOME/vn_reset.py" 2>&1 | sed 's/^/  vn_reset: /' || \
-    echo "  vn_reset failed - continuing, driver may still negotiate"
+  # Resolve next to this script first so a repo checkout works, then fall
+  # back to the deployed layout where only the script itself is copied to
+  # $HOME. Hardcoding $HOME meant the repo copy could never run it.
+  VN_RESET=""
+  for candidate in "$(dirname "$0")/vn_reset.py" "$HOME/vn_reset.py"; do
+    [ -f "$candidate" ] && { VN_RESET="$candidate"; break; }
+  done
+  if [ -n "$VN_RESET" ]; then
+    python3 "$VN_RESET" 2>&1 | sed 's/^/  vn_reset: /' || \
+      echo "  vn_reset failed - continuing, driver may still negotiate"
+  else
+    echo "  vn_reset.py not found - the driver may segfault on a stale stream"
+  fi
   source "$HOME/catkin_ws/devel/setup.bash"
   setsid nohup roslaunch base_model vectornav.launch \
     > "$LOG/live_vectornav.log" 2>&1 < /dev/null &

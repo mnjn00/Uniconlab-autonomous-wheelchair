@@ -1,0 +1,13 @@
+# Contract validation hashes the bytes of these files, so any newline
+# translation on checkout changes the hash and makes validate_wp0_contracts.py
+# fail on a Windows clone for reasons that have nothing to do with content.
+# Normalise to LF in the repository and never translate on checkout.
+* text=auto eol=lf
+
+# Belt and braces for the byte-bound artifacts: no translation at all.
+contracts/** -text
+*.json -text
+*.yaml -text
+*.yml -text
+*.pcd -text binary
+*.bag -text binary
