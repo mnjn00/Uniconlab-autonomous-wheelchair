@@ -17,9 +17,12 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 
-# Only chains rooted at one of these module-level names are checked; anything
-# built from a fixture or a temporary directory is not a repository reference.
-ROOT_NAMES = {"ROOT", "PROJECT", "REPOSITORY", "REPO", "PACKAGE", "HERE"}
+# Every module-level name that resolves to a literal path is treated as a root,
+# not a fixed allowlist: constants like DESC, SCRIPTS and NAV are as common as
+# ROOT here, and an allowlist silently skipped whole files. Function-local names
+# (root, tmp_path, ...) are never module-level, so temporary directories stay
+# out on their own.
+
 
 
 def discover_test_files():
@@ -56,12 +59,18 @@ def strip_resolve(node):
     return node
 
 
+def is_path_call(func):
+    """Match both `Path(...)` and `pathlib.Path(...)`."""
+    return (isinstance(func, ast.Name) and func.id == "Path") or (
+        isinstance(func, ast.Attribute) and func.attr == "Path"
+    )
+
+
 def is_path_of_dunder_file(node):
     node = strip_resolve(node)
     return (
         isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "Path"
+        and is_path_call(node.func)
         and len(node.args) == 1
         and isinstance(node.args[0], ast.Name)
         and node.args[0].id == "__file__"
@@ -106,7 +115,7 @@ def module_level_roots(tree, source_file):
         if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
             continue
         target = statement.targets[0]
-        if not isinstance(target, ast.Name) or target.id not in ROOT_NAMES:
+        if not isinstance(target, ast.Name):
             continue
         resolved = resolve_expression(statement.value, known, source_file)
         if resolved is not None:
@@ -125,8 +134,8 @@ def referenced_paths(path):
     for node in ast.walk(tree):
         if not (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)):
             continue
-        # Only consider the outermost chain, i.e. skip a node that is itself the
-        # left operand of another division.
+        # ast.walk also yields the intermediate chains, so parent directories get
+        # existence-checked too. That is wanted, not an accident.
         resolved = resolve_expression(node, known, source_file)
         if resolved is None:
             continue
@@ -177,6 +186,34 @@ class ReferencedFilesExistTests(unittest.TestCase):
         self.assertIn(REPOSITORY / "docs" / "livox_moving_localization_ko.md", found)
         self.assertIn(
             REPOSITORY / "tools" / "start_wheelchair_localization.sh", found
+        )
+
+    def test_the_checker_keeps_broad_coverage(self):
+        """A green result must mean "checked", not "resolved almost nothing".
+
+        Passing two spot checks says nothing about the other 76 files, so the
+        floor is on the totals. Raise it when coverage genuinely improves; a
+        drop means an idiom stopped being recognised.
+        """
+        resolved_total = 0
+        files_resolving_nothing = []
+        for path in discover_test_files():
+            count = len(list(referenced_paths(path)))
+            resolved_total += count
+            if count == 0:
+                files_resolving_nothing.append(str(path.relative_to(REPOSITORY)))
+
+        self.assertGreaterEqual(
+            resolved_total,
+            450,
+            f"reference resolution dropped to {resolved_total}; an idiom in the "
+            "test files is no longer recognised",
+        )
+        self.assertLessEqual(
+            len(files_resolving_nothing),
+            10,
+            "too many test files resolve no references at all:\n"
+            + "\n".join(files_resolving_nothing),
         )
 
 

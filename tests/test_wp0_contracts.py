@@ -137,7 +137,15 @@ class WP0ContractValidatorTests(unittest.TestCase):
         self.assertFalse(normalization["repository_committed"])
         self.assertTrue(normalization["evidence_path"].startswith("artifacts/"))
         ignored = (REPOSITORY / ".gitignore").read_text(encoding="utf-8").splitlines()
-        self.assertIn("artifacts/", ignored)
+        self.assertTrue(
+            any(line.strip() in {"artifacts/", "/artifacts/"} for line in ignored),
+            ".gitignore no longer excludes artifacts/, so A15's "
+            "repository_committed: false is no longer the real state",
+        )
+        # The hash is verified against the file only when an operator supplies it,
+        # so at least assert its shape here; otherwise a blanked or placeholder
+        # value could sit in A15 indefinitely without anything noticing.
+        self.assertRegex(normalization["evidence_sha256"], r"^[0-9a-f]{64}$")
 
     def test_full_bag_normalization_evidence_is_hash_bound(self):
         """When an operator supplies the external report it must match A15."""
@@ -153,12 +161,12 @@ class WP0ContractValidatorTests(unittest.TestCase):
             normalization["evidence_sha256"],
         )
 
-    def test_full_bag_claims_remain_narrow_and_fail_closed(self):
-        """A15's recorded claims must stay narrow whether or not the report is here.
+    def test_full_bag_claims_in_inventory_remain_narrow_and_fail_closed(self):
+        """A15's recorded claims must stay narrow, report present or not.
 
-        These assertions run against the committed inventory, so a clean
-        checkout still guards the claim boundary. When the external report is
-        present it must additionally agree with what A15 recorded.
+        This runs against the committed inventory only, so it is always enforced
+        and never skips. The external report is checked separately, by
+        test_full_bag_external_report_agrees_with_inventory.
         """
         normalization = full_bag_normalization_inventory()
         self.assertEqual(
@@ -185,9 +193,20 @@ class WP0ContractValidatorTests(unittest.TestCase):
         self.assertFalse(fail_closed["hardware_motion_authorized"])
         self.assertFalse(fail_closed["passenger_operation_authorized"])
 
+    def test_full_bag_external_report_agrees_with_inventory(self):
+        """When an operator supplies the external report, it must match A15.
+
+        This skips rather than returning quietly, so a clean checkout and CI
+        report BLOCKED instead of a green result under a name that claims the
+        report was checked.
+        """
+        normalization = full_bag_normalization_inventory()
         evidence_path = REPOSITORY / normalization["evidence_path"]
         if not evidence_path.is_file():
-            return
+            self.skipTest(
+                "BLOCKED: external full-bag evidence absent at "
+                f"{normalization['evidence_path']}; A15 declares it uncommitted"
+            )
 
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
         self.assertEqual(evidence["verifier"]["status"], "ok")
