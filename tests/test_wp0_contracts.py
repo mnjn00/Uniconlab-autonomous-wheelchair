@@ -16,6 +16,18 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 VALIDATOR = REPOSITORY / "scripts" / "validate_wp0_contracts.py"
 
 
+def evidence_inventory():
+    return yaml.safe_load(
+        (REPOSITORY / "contracts" / "wp0" / "A15-evidence-inventory.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def full_bag_normalization_inventory():
+    return evidence_inventory()["source_dataset"]["full_bag_normalization"]
+
+
 class WP0ContractValidatorTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -114,28 +126,70 @@ class WP0ContractValidatorTests(unittest.TestCase):
         (self.contract_dir / "A10-conversion-abi-v1.md").unlink()
         self.assert_rejected(self.run_validator(), "E_MISSING_ARTIFACT: A10-conversion-abi-v1.md")
 
+    def test_full_bag_evidence_is_declared_external_and_stays_git_ignored(self):
+        """The report is generated from a 2.8 GB local bag and is never committed.
+
+        A clean checkout therefore cannot contain it. That absence has to be a
+        declared, fail-closed state rather than a silent hole, so the inventory
+        and .gitignore must agree that the path is external.
+        """
+        normalization = full_bag_normalization_inventory()
+        self.assertFalse(normalization["repository_committed"])
+        self.assertTrue(normalization["evidence_path"].startswith("artifacts/"))
+        ignored = (REPOSITORY / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("artifacts/", ignored)
+
     def test_full_bag_normalization_evidence_is_hash_bound(self):
-        inventory = yaml.safe_load(
-            (REPOSITORY / "contracts" / "wp0" / "A15-evidence-inventory.yaml").read_text(
-                encoding="utf-8"
-            )
-        )
-        normalization = inventory["source_dataset"]["full_bag_normalization"]
+        """When an operator supplies the external report it must match A15."""
+        normalization = full_bag_normalization_inventory()
         evidence_path = REPOSITORY / normalization["evidence_path"]
+        if not evidence_path.is_file():
+            self.skipTest(
+                "BLOCKED: external full-bag evidence absent at "
+                f"{normalization['evidence_path']}; A15 declares it uncommitted"
+            )
         self.assertEqual(
             hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
             normalization["evidence_sha256"],
         )
 
     def test_full_bag_claims_remain_narrow_and_fail_closed(self):
-        evidence = json.loads(
-            (
-                REPOSITORY
-                / "artifacts"
-                / "software_rc"
-                / "full-bag-normalization.json"
-            ).read_text(encoding="utf-8")
+        """A15's recorded claims must stay narrow whether or not the report is here.
+
+        These assertions run against the committed inventory, so a clean
+        checkout still guards the claim boundary. When the external report is
+        present it must additionally agree with what A15 recorded.
+        """
+        normalization = full_bag_normalization_inventory()
+        self.assertEqual(
+            normalization["qualification"],
+            "PASSED_INGESTION_REPLAY_CONSISTENCY_ONLY",
         )
+        self.assertEqual(normalization["independent_verifier"]["status"], "ok")
+        self.assertEqual(normalization["repeatability"]["independent_conversions"], 3)
+        self.assertTrue(normalization["repeatability"]["byte_identical_outputs"])
+        self.assertFalse(normalization["alignment"]["verified"])
+        self.assertFalse(
+            normalization["converter"]["typestore_is_recording_distribution_evidence"]
+        )
+        self.assertFalse(normalization["source_idl"]["recording_revision_proven"])
+        self.assertFalse(normalization["normalized_bag"]["repository_committed"])
+
+        fail_closed = evidence_inventory()["claim_limits"]["fail_closed_state"]
+        self.assertEqual(
+            fail_closed["wp2_full_conversion"],
+            "PASSED_INGESTION_REPLAY_CONSISTENCY_ONLY",
+        )
+        self.assertEqual(fail_closed["fusion_localization_qualification"], "BLOCKED")
+        self.assertEqual(fail_closed["target_nuc_qualification"], "BLOCKED")
+        self.assertFalse(fail_closed["hardware_motion_authorized"])
+        self.assertFalse(fail_closed["passenger_operation_authorized"])
+
+        evidence_path = REPOSITORY / normalization["evidence_path"]
+        if not evidence_path.is_file():
+            return
+
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
         self.assertEqual(evidence["verifier"]["status"], "ok")
         self.assertEqual(evidence["repeatability"]["independent_conversion_count"], 3)
         self.assertTrue(evidence["repeatability"]["byte_identical_outputs"])
@@ -153,6 +207,12 @@ class WP0ContractValidatorTests(unittest.TestCase):
                 "points_repaired": 0,
             },
         )
+        for key in ("clouds", "imus", "total_records", "points"):
+            self.assertEqual(
+                evidence["outputs"]["counts"][key],
+                normalization["counts"][key],
+                f"external report and A15 disagree on {key}",
+            )
         self.assertFalse(evidence["inputs"]["alignment"]["verified"])
         self.assertFalse(
             evidence["inputs"]["converter"][
