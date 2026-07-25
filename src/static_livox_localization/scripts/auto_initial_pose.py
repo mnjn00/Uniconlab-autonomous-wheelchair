@@ -152,91 +152,101 @@ def main():
 
 
 def attempt(args, map_points, tree, candidates):
+    """One full collect-score-verify pass. Always unregisters every
+    subscriber it created before returning (success, failure, or
+    exception) so a retry never leaves the previous attempt's callbacks
+    running against a now-abandoned collector/state dict."""
     collector = SubmapCollector(args.window_s)
-    deadline = rospy.Time.now() + rospy.Duration(30.0)
-    submap = None
-    while not rospy.is_shutdown() and rospy.Time.now() < deadline:
-        rospy.sleep(0.5)
-        submap = collector.build()
-        if submap is not None and len(submap) > 2000 and len(collector.clouds) >= 10:
-            break
-    if submap is None or len(submap) < 500:
-        rospy.logerr("no usable submap from /cloud_registered_body")
-        return 2
-    ranges = np.linalg.norm(submap[:, :2], axis=1)
-    submap = submap[ranges < args.max_range]
-    sample = voxel_downsample(submap, 0.4, 1800)
-    rospy.loginfo("submap sample: %d points", len(sample))
-
-    yaw_offsets = (0.0, np.pi, np.pi / 4, -np.pi / 4, 3 * np.pi / 4, -3 * np.pi / 4)
-    scored = []
-    ones = np.ones((len(sample), 1), np.float32)
-    for x, y, z, heading in candidates:
-        for offset in yaw_offsets:
-            yaw = heading + offset
-            c, s = np.cos(yaw), np.sin(yaw)
-            R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], np.float32)
-            world = sample @ R.T + np.array([x, y, z], np.float32)
-            dists, _ = tree.query(world, k=1, distance_upper_bound=args.inlier_radius)
-            score = float(np.isfinite(dists).mean())
-            scored.append((score, x, y, z, yaw))
-    scored.sort(key=lambda item: -item[0])
-
-    rospy.loginfo("top candidates:")
-    for score, x, y, z, yaw in scored[:6]:
-        rospy.loginfo("  score=%.3f  (%.1f, %.1f, %.1f) yaw=%.0fdeg",
-                      score, x, y, z, np.degrees(yaw))
-
-    if args.dry_run:
-        return 0
-    if scored[0][0] < args.min_score:
-        rospy.logerr("best score %.3f below threshold %.2f - not seeding",
-                     scored[0][0], args.min_score)
-        return 3
-
-    state = {"message": ""}
-
-    def on_diag(message):
-        for status in message.status:
-            if status.name == "fast_lio_icp":
-                state["message"] = status.message
-
-    rospy.Subscriber("/fast_lio_icp/localization_diagnostics",
-                     DiagnosticArray, on_diag, queue_size=5)
-    seed_pub = rospy.Publisher("/fast_lio_icp/initialpose",
-                               PoseWithCovarianceStamped, queue_size=1)
-    rospy.sleep(0.5)
-    enable = rospy.ServiceProxy("/fast_lio_icp/enable_auto_correction", SetBool)
-
-    for rank, (score, x, y, z, yaw) in enumerate(scored[:args.top]):
-        if score < args.min_score:
-            break
-        rospy.loginfo("trying candidate %d: score=%.3f (%.1f, %.1f) yaw=%.0f",
-                      rank + 1, score, x, y, np.degrees(yaw))
-        seed = PoseWithCovarianceStamped()
-        seed.header.frame_id = "map"
-        seed.header.stamp = rospy.Time.now()
-        seed.pose.pose.position.x = x
-        seed.pose.pose.position.y = y
-        seed.pose.pose.position.z = z
-        q = tft.quaternion_from_euler(0, 0, yaw)
-        seed.pose.pose.orientation.x = q[0]
-        seed.pose.pose.orientation.y = q[1]
-        seed.pose.pose.orientation.z = q[2]
-        seed.pose.pose.orientation.w = q[3]
-        seed_pub.publish(seed)
-        rospy.sleep(1.0)
-        rospy.wait_for_service("/fast_lio_icp/enable_auto_correction", timeout=10.0)
-        enable(True)
-        verify_deadline = rospy.Time.now() + rospy.Duration(args.verify_timeout)
-        while not rospy.is_shutdown() and rospy.Time.now() < verify_deadline:
-            if state["message"] == "TRACKING":
-                rospy.loginfo("initialized: candidate %d verified (TRACKING)", rank + 1)
-                return 0
+    diag_sub = None
+    try:
+        deadline = rospy.Time.now() + rospy.Duration(30.0)
+        submap = None
+        while not rospy.is_shutdown() and rospy.Time.now() < deadline:
             rospy.sleep(0.5)
-        rospy.logwarn("candidate %d failed verification, trying next", rank + 1)
-    rospy.logerr("no candidate passed verification")
-    return 4
+            submap = collector.build()
+            if submap is not None and len(submap) > 2000 and len(collector.clouds) >= 10:
+                break
+        if submap is None or len(submap) < 500:
+            rospy.logerr("no usable submap from /cloud_registered_body")
+            return 2
+        ranges = np.linalg.norm(submap[:, :2], axis=1)
+        submap = submap[ranges < args.max_range]
+        sample = voxel_downsample(submap, 0.4, 1800)
+        rospy.loginfo("submap sample: %d points", len(sample))
+
+        yaw_offsets = (0.0, np.pi, np.pi / 4, -np.pi / 4, 3 * np.pi / 4, -3 * np.pi / 4)
+        scored = []
+        for x, y, z, heading in candidates:
+            for offset in yaw_offsets:
+                yaw = heading + offset
+                c, s = np.cos(yaw), np.sin(yaw)
+                R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], np.float32)
+                world = sample @ R.T + np.array([x, y, z], np.float32)
+                dists, _ = tree.query(world, k=1, distance_upper_bound=args.inlier_radius)
+                score = float(np.isfinite(dists).mean())
+                scored.append((score, x, y, z, yaw))
+        scored.sort(key=lambda item: -item[0])
+
+        rospy.loginfo("top candidates:")
+        for score, x, y, z, yaw in scored[:6]:
+            rospy.loginfo("  score=%.3f  (%.1f, %.1f, %.1f) yaw=%.0fdeg",
+                          score, x, y, z, np.degrees(yaw))
+
+        if args.dry_run:
+            return 0
+        if scored[0][0] < args.min_score:
+            rospy.logerr("best score %.3f below threshold %.2f - not seeding",
+                         scored[0][0], args.min_score)
+            return 3
+
+        state = {"message": ""}
+
+        def on_diag(message):
+            for status in message.status:
+                if status.name == "fast_lio_icp":
+                    state["message"] = status.message
+
+        diag_sub = rospy.Subscriber("/fast_lio_icp/localization_diagnostics",
+                                    DiagnosticArray, on_diag, queue_size=5)
+        seed_pub = rospy.Publisher("/fast_lio_icp/initialpose",
+                                   PoseWithCovarianceStamped, queue_size=1)
+        rospy.sleep(0.5)
+        enable = rospy.ServiceProxy("/fast_lio_icp/enable_auto_correction", SetBool)
+
+        for rank, (score, x, y, z, yaw) in enumerate(scored[:args.top]):
+            if score < args.min_score:
+                break
+            rospy.loginfo("trying candidate %d: score=%.3f (%.1f, %.1f) yaw=%.0f",
+                          rank + 1, score, x, y, np.degrees(yaw))
+            seed = PoseWithCovarianceStamped()
+            seed.header.frame_id = "map"
+            seed.header.stamp = rospy.Time.now()
+            seed.pose.pose.position.x = x
+            seed.pose.pose.position.y = y
+            seed.pose.pose.position.z = z
+            q = tft.quaternion_from_euler(0, 0, yaw)
+            seed.pose.pose.orientation.x = q[0]
+            seed.pose.pose.orientation.y = q[1]
+            seed.pose.pose.orientation.z = q[2]
+            seed.pose.pose.orientation.w = q[3]
+            seed_pub.publish(seed)
+            rospy.sleep(1.0)
+            rospy.wait_for_service("/fast_lio_icp/enable_auto_correction", timeout=10.0)
+            enable(True)
+            verify_deadline = rospy.Time.now() + rospy.Duration(args.verify_timeout)
+            while not rospy.is_shutdown() and rospy.Time.now() < verify_deadline:
+                if state["message"] == "TRACKING":
+                    rospy.loginfo("initialized: candidate %d verified (TRACKING)", rank + 1)
+                    return 0
+                rospy.sleep(0.5)
+            rospy.logwarn("candidate %d failed verification, trying next", rank + 1)
+        rospy.logerr("no candidate passed verification")
+        return 4
+    finally:
+        collector.odom_sub.unregister()
+        collector.cloud_sub.unregister()
+        if diag_sub is not None:
+            diag_sub.unregister()
 
 
 if __name__ == "__main__":
