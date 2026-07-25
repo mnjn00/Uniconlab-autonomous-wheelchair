@@ -126,6 +126,9 @@ def main():
     parser.add_argument("--max-range", type=float, default=25.0)
     parser.add_argument("--verify-timeout", type=float, default=20.0)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--retries", type=int, default=2,
+                        help="extra full re-collection attempts after the "
+                             "first, if no candidate passes verification")
     args = parser.parse_args(rospy.myargv(sys.argv)[1:])
 
     rospy.init_node("auto_initial_pose")
@@ -135,6 +138,20 @@ def main():
     candidates = load_candidates(args.traj, args.spacing)
     rospy.loginfo("%d trajectory candidates", len(candidates))
 
+    for attempt_num in range(1, args.retries + 2):
+        rospy.loginfo("auto-init attempt %d/%d", attempt_num, args.retries + 1)
+        result = attempt(args, map_points, tree, candidates)
+        if result == 0:
+            return 0
+        if attempt_num <= args.retries:
+            rospy.logwarn(
+                "attempt %d failed (code %d) - recollecting and retrying",
+                attempt_num, result)
+    rospy.logerr("auto-init failed after %d attempt(s)", args.retries + 1)
+    return result
+
+
+def attempt(args, map_points, tree, candidates):
     collector = SubmapCollector(args.window_s)
     deadline = rospy.Time.now() + rospy.Duration(30.0)
     submap = None

@@ -106,3 +106,10 @@ def test_climb_boost_resets_on_trip_or_stale():
     trip_block = text.index("if self.tripped:")
     reset = text.index("self.climb_boost = 0.0", trip_block)
     assert reset > trip_block
+
+def test_no_duplicate_unbounded_boost_bypassing_the_accel_governor():
+    text = guard_text()
+    assert "def update_boost" not in text
+    assert "self.boost" not in text
+    assert "\nBOOST_MAX = " not in text
+    assert "out.linear.x = self.current_speed\n" in text
