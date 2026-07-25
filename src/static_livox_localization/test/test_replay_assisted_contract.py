@@ -21,9 +21,16 @@ def test_replay_enables_auto_correction_only_after_replayed_seed():
 
 
 def test_trial_recording_keeps_seed_and_alignment_state_evidence():
+    """The black-box bag has to hold both the seed and what the seed led to.
+
+    Without /fast_lio_icp/initialpose the trial cannot be replayed or explained
+    after the fact, because the seed is what every later correction is relative
+    to.
+    """
     recorder = (
-        PROJECT / "runtime" / "record_moving_localization_trial.sh"
+        PROJECT / "tools" / "start_wheelchair_localization.sh"
     ).read_text(encoding="utf-8")
+    assert "rosbag record" in recorder
     assert "/fast_lio_icp/initialpose" in recorder
     assert "/fast_lio_icp/localization_diagnostics" in recorder
 
