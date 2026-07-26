@@ -31,6 +31,14 @@ CorrectionDecision evaluate_correction(
     const Eigen::Isometry3d& predicted_map_T_base,
     const TrackingConfig& config) {
   CorrectionDecision decision;
+  if (registration.source_points < config.min_source_points) {
+    decision.reason = "INSUFFICIENT_SOURCE_POINTS";
+    return decision;
+  }
+  if (registration.target_points < config.min_target_points) {
+    decision.reason = "INSUFFICIENT_TARGET_POINTS";
+    return decision;
+  }
   if (!registration.converged) {
     decision.reason = "NOT_CONVERGED";
     return decision;
@@ -38,14 +46,6 @@ CorrectionDecision evaluate_correction(
   if (!std::isfinite(registration.fitness) ||
       registration.fitness > config.max_fitness) {
     decision.reason = "HIGH_FITNESS";
-    return decision;
-  }
-  if (registration.source_points < config.min_source_points) {
-    decision.reason = "INSUFFICIENT_SOURCE_POINTS";
-    return decision;
-  }
-  if (registration.target_points < config.min_target_points) {
-    decision.reason = "INSUFFICIENT_TARGET_POINTS";
     return decision;
   }
   if (!std::isfinite(registration.inlier_ratio) ||

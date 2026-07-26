@@ -25,6 +25,30 @@ import sensor_msgs.point_cloud2 as pc2
 import tf.transformations as tft
 
 
+TERMINAL_CANDIDATE_REASONS = frozenset({
+    "INSUFFICIENT_TARGET_POINTS",
+})
+
+
+def candidate_diagnostic_state(status):
+    """Extract the localizer fields used by candidate verification."""
+    values = {item.key: item.value for item in status.values}
+    try:
+        target_points = int(values.get("target_points", ""))
+    except (TypeError, ValueError):
+        target_points = None
+    return {
+        "message": status.message,
+        "reason": values.get("reason", ""),
+        "target_points": target_points,
+    }
+
+
+def should_abandon_candidate(state):
+    """Return true when waiting cannot repair the current map crop."""
+    return state.get("reason") in TERMINAL_CANDIDATE_REASONS
+
+
 def load_pcd_xyz(path):
     with open(path, "rb") as f:
         header = b""
@@ -199,12 +223,16 @@ def attempt(args, map_points, tree, candidates):
                          scored[0][0], args.min_score)
             return 3
 
-        state = {"message": ""}
+        state = {
+            "message": "",
+            "reason": "",
+            "target_points": None,
+        }
 
         def on_diag(message):
             for status in message.status:
                 if status.name == "fast_lio_icp":
-                    state["message"] = status.message
+                    state.update(candidate_diagnostic_state(status))
 
         diag_sub = rospy.Subscriber("/fast_lio_icp/localization_diagnostics",
                                     DiagnosticArray, on_diag, queue_size=5)
@@ -216,6 +244,7 @@ def attempt(args, map_points, tree, candidates):
         for rank, (score, x, y, z, yaw) in enumerate(scored[:args.top]):
             if score < args.min_score:
                 break
+            state.update(message="", reason="", target_points=None)
             rospy.loginfo("trying candidate %d: score=%.3f (%.1f, %.1f) yaw=%.0f",
                           rank + 1, score, x, y, np.degrees(yaw))
             seed = PoseWithCovarianceStamped()
@@ -238,6 +267,11 @@ def attempt(args, map_points, tree, candidates):
                 if state["message"] == "TRACKING":
                     rospy.loginfo("initialized: candidate %d verified (TRACKING)", rank + 1)
                     return 0
+                if should_abandon_candidate(state):
+                    rospy.logwarn(
+                        "candidate %d rejected immediately: %s (target_points=%s)",
+                        rank + 1, state["reason"], state["target_points"])
+                    break
                 rospy.sleep(0.5)
             rospy.logwarn("candidate %d failed verification, trying next", rank + 1)
         rospy.logerr("no candidate passed verification")

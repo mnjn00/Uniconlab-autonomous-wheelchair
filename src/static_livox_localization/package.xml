@@ -7,6 +7,9 @@
   <license>MIT</license>
   <buildtool_depend>catkin</buildtool_depend>
   <depend>roscpp</depend>
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>tf</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>diagnostic_msgs</depend>
@@ -19,5 +22,8 @@
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
   <depend>std_srvs</depend>
+  <!-- Field localization nodes: auto_initial_pose.py needs SciPy, the rest NumPy. -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
   <test_depend>rostest</test_depend>
 </package>

@@ -55,6 +55,24 @@ TEST(MovingTracker, RejectsConvergedRegistrationWithTooFewInliers) {
   EXPECT_EQ(decision.reason, "LOW_INLIER_RATIO");
 }
 
+TEST(MovingTracker, ReportsSparseTargetBeforeGenericNonConvergence) {
+  RegistrationResult registration;
+  registration.converged = false;
+  registration.fitness = 1000000000.0;
+  registration.inlier_ratio = 0.0;
+  registration.source_points = 9412;
+  registration.target_points = 31;
+  TrackingConfig config;
+  config.min_source_points = 500;
+  config.min_target_points = 500;
+
+  const CorrectionDecision decision =
+      evaluate_correction(registration, pose(0.0, 0.0, 0.0), config);
+
+  EXPECT_FALSE(decision.accepted);
+  EXPECT_EQ(decision.reason, "INSUFFICIENT_TARGET_POINTS");
+}
+
 TEST(MovingTracker, RejectsRegistrationFarFromOdometryPrediction) {
   RegistrationResult registration;
   registration.converged = true;

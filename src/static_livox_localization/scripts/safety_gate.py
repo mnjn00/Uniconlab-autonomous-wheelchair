@@ -12,6 +12,14 @@ if this gate dies, tip_guard's own staleness check stops the chair; if
 that dies too, the uart-level watchdog stops the chair.
 """
 
+import os
+
+for _thread_var in (
+        "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_thread_var, "1")
+del _thread_var
+
 import numpy as np
 import rospy
 from geometry_msgs.msg import Twist

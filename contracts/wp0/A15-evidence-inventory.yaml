@@ -12,7 +12,7 @@ provenance:
     intent_reconciliation_sha256: a31092d64375ae1958fa77ea8adb682ffd1232d11f01865109fcb0112fb3607f
   repository_readme:
     path: README.md
-    sha256: cb80a30475fe7ceedf352d9fe30c17e7e52151c236030b6a75ad01d84d194aaf
+    sha256: e68a381d50b475c538780e298534391e732cdac3ac426d49d135fe861ffb9e1f
     claim_scope: public project overview, actual Gazebo simulation media, build and launch guidance, committed artifact inventory, and explicit safety/authority boundary
   local_manual:
     reported_path: /home/mnjn/다운로드/20230725_wheel_manual (2).pdf
@@ -84,6 +84,8 @@ source_dataset:
       fail_closed_behavior: no full-bag, zero-loss, deterministic-conversion, IDL, timing, or localization qualification claim until explicit staging is hashed and validated
   full_bag_normalization:
     evidence_path: artifacts/software_rc/full-bag-normalization.json
+    repository_committed: false
+    provenance_type: external qualification evidence produced from a 2.8 GB local source bag; artifacts/ is git-ignored, so this report is absent from a clean checkout and from CI, and its claims stay BLOCKED until an operator supplies the file at evidence_path
     evidence_sha256: c646ac26bf9f125da12637bd970994809900b197d956b5faaec0f01e80cf7591
     qualification: PASSED_INGESTION_REPLAY_CONSISTENCY_ONLY
     source:

@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   software-rc:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -30,40 +30,74 @@ jobs:
           fetch-depth: 2
       - name: Build pinned Noetic image
         run: docker build --pull=false --tag wheelchair-noetic-ci:${GITHUB_SHA} --file tools/noetic/Dockerfile .
+      # build/ and devel/ are bind-mounted so the catkin environment survives the
+      # `docker run --rm` that produced it. Without this, every later step starts
+      # a fresh container with only /opt/ros sourced, and catkin Python packages
+      # such as wheelchair_navigation are simply not importable.
       - name: Resolve dependencies and build catkin workspace
         run: |
-          mkdir -p reports
-          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+          mkdir -p reports build devel
+          docker run --rm \
+            -v "$PWD/reports:/ws/reports" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
+            wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
             source /opt/ros/noetic/setup.bash
             rosdep check --from-paths src --ignore-src --rosdistro=noetic
-            catkin_make -DCMAKE_BUILD_TYPE=Release'
+            catkin_make -DCMAKE_BUILD_TYPE=Release
+            test -f /ws/devel/setup.bash'
       - name: Full pytest and WP0 contract validation
         run: |
-          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+          docker run --rm \
+            -v "$PWD/reports:/ws/reports" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
+            wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
             source /opt/ros/noetic/setup.bash
+            source /ws/devel/setup.bash
             python3 -m pytest --junitxml=reports/pytest.xml
             python3 scripts/validate_wp0_contracts.py'
       - name: Xacro and URDF validation
         run: |
-          docker run --rm wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+          docker run --rm \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
+            wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
             source /opt/ros/noetic/setup.bash
+            source /ws/devel/setup.bash
             xacro src/wheelchair_description/urdf/wheelchair.urdf.xacro > /tmp/wheelchair.urdf
             check_urdf /tmp/wheelchair.urdf'
       - name: Static sole-command-path no-bypass gate
         run: |
-          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+          docker run --rm \
+            -v "$PWD/reports:/ws/reports" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
+            wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
             source /opt/ros/noetic/setup.bash
+            source /ws/devel/setup.bash
             python3 -m pytest src/wheelchair_safety/tests/test_no_bypass_invariant.py tests/test_decision_no_twist.py \
               --junitxml=reports/no-bypass.xml'
       - name: Fake/replay algorithm fixtures (not live evidence)
         run: |
-          docker run --rm -v "$PWD/reports:/ws/reports" wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+          docker run --rm \
+            -v "$PWD/reports:/ws/reports" \
+            -v "$PWD/build:/ws/build" \
+            -v "$PWD/devel:/ws/devel" \
+            wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
             source /opt/ros/noetic/setup.bash
+            source /ws/devel/setup.bash
             python3 -m pytest tests/test_rc_scenario_runner.py src/wheelchair_gazebo/tests/test_rc_world_static.py \
               --junitxml=reports/scenario-fixtures.xml'
       - name: Validate strict release tooling without claiming release authority
         run: |
           docker run --rm wheelchair-noetic-ci:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
             python3 -m pytest tests/test_release_manifest.py
             python3 scripts/generate_release_manifest.py --help
             python3 scripts/verify_release_manifest.py --help'
@@ -80,7 +114,7 @@ jobs:
   gazebo-live-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Run real ROS/Gazebo surface; unavailable is a failure
@@ -100,7 +134,7 @@ jobs:
   external-full-bag-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Require externally acquired full-bag qualification
         run: |
@@ -110,7 +144,7 @@ jobs:
   target-nuc-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Require target NUC qualification
         run: |
@@ -120,7 +154,7 @@ jobs:
   hardware-passenger-gate:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: software-rc
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Refuse hardware or passenger authority from CI
         run: |
@@ -130,7 +164,7 @@ jobs:
   release-manifest:
     if: github.event_name == 'workflow_dispatch' && inputs.release
     needs: [software-rc, gazebo-live-gate, external-full-bag-gate, target-nuc-gate, hardware-passenger-gate]
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Generate only a complete strict software-only manifest

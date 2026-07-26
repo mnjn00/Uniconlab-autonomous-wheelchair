@@ -96,7 +96,7 @@ def test_nothing_is_added_to_the_output_past_the_accel_limiter():
     text = guard_text()
     fold = text.index("desired = max(0.0, desired + self.climb_boost)")
     limiter = text.index("step = min(desired - self.current_speed, budget * dt)")
-    publish = text.index("out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT")
+    publish = text.index("out.linear.x = max(-COUNTER_SPEED_MAX,")
     assert fold < limiter < publish
 
 
@@ -114,7 +114,8 @@ def test_output_has_an_absolute_ceiling_of_its_own():
     CLIMB_BOOST_MAX on top, so this stage needs its own last word."""
     text = guard_text()
     assert "ABSOLUTE_V_LIMIT = " in text
-    assert "out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT" in text
+    assert "out.linear.x = max(-COUNTER_SPEED_MAX," in text
+    assert "min(ABSOLUTE_V_LIMIT" in text
 
 
 def test_climb_boost_resets_on_trip_or_stale():
@@ -129,4 +130,14 @@ def test_no_duplicate_unbounded_boost_bypassing_the_accel_governor():
     assert "self.boost" not in text
     assert "\nBOOST_MAX = " not in text
     # the output is the rate-limited speed, clamped - never a raw sum
-    assert "out.linear.x = max(0.0, min(ABSOLUTE_V_LIMIT" in text
+    assert "out.linear.x = max(-COUNTER_SPEED_MAX," in text
+    assert "min(ABSOLUTE_V_LIMIT" in text
+
+
+def test_the_output_clamp_does_not_delete_counter_motion():
+    """The ceiling clamp must not have a zero floor: counter_motion_target()
+    exists to command a small REVERSE while a backward tilt is still
+    growing, and max(0.0, ...) silently deleted it."""
+    text = guard_text()
+    assert "out.linear.x = max(-COUNTER_SPEED_MAX," in text
+    assert "out.linear.x = max(0.0," not in text
