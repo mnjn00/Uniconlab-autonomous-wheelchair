@@ -31,6 +31,7 @@
 #include "static_livox_localization/moving_tracker.hpp"
 #include "static_livox_localization/registration.hpp"
 #include "static_livox_localization/rolling_submap.hpp"
+#include "static_livox_localization/route_bounds.hpp"
 
 namespace {
 
@@ -128,6 +129,18 @@ class MovingIcpLocalizer {
     alignment_controller_ =
         static_livox_localization::AssistedAlignmentController(alignment_config_);
     load_fixed_map();
+    route_bounds_ = static_livox_localization::load_route_bounds(
+        route_bounds_path_, route_bounds_margin_m_);
+    if (route_bounds_.empty()) {
+      ROS_WARN(
+          "route_bounds_path is empty - relocalization candidates are not "
+          "checked against known route coverage. A geometrically similar "
+          "but wrong region of the map can still be accepted as ground "
+          "truth if it happens to pass ICP fitness/inlier/consensus checks.");
+    } else {
+      ROS_INFO("Loaded %zu route bounds station(s), margin %.1f m",
+               route_bounds_.points.size(), route_bounds_.margin_m);
+    }
 
     pose_pub_ = nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>(
         "/fast_lio_icp/pose", 20);
@@ -243,6 +256,9 @@ class MovingIcpLocalizer {
     rolling_config_.max_stored_points =
         static_cast<std::size_t>(std::max(1, max_points));
     private_nh_.param("path_max_poses", path_max_poses_, 2000);
+
+    private_nh_.param<std::string>("route_bounds_path", route_bounds_path_, "");
+    private_nh_.param("route_bounds_margin_m", route_bounds_margin_m_, 20.0);
   }
 
   void load_fixed_map() {
@@ -287,6 +303,10 @@ class MovingIcpLocalizer {
         throw std::runtime_error("initial pose must be expressed in map frame");
       }
       const Eigen::Isometry3d seed = pose_to_eigen(message->pose.pose);
+      if (!route_bounds_.contains(seed.translation().head<2>())) {
+        throw std::runtime_error(
+            "seed pose is outside configured route bounds");
+      }
       std::lock_guard<std::mutex> lock(mutex_);
       seed_map_T_base_ = seed;
       has_seed_ = true;
@@ -437,7 +457,25 @@ class MovingIcpLocalizer {
     std::lock_guard<std::mutex> lock(mutex_);
     correction_in_progress_ = false;
     if (!alignment_controller_.auto_correction_enabled()) return;
-    if (decision.accepted) {
+    // A candidate can pass fitness/inlier/consensus checks and still be the
+    // wrong place: those metrics only measure how well the scan matches ITS
+    // OWN neighborhood, not whether that neighborhood is where the chair
+    // actually is. Gate on known route coverage independently of ICP score,
+    // both for the very first lock (initializing) and for every correction
+    // afterward, so a plausible-looking wrong region can never become - or
+    // silently replace - the operating pose.
+    const bool in_route_bounds = route_bounds_.contains(
+        registration.map_T_base.translation().head<2>());
+    if (decision.accepted && !in_route_bounds) {
+      alignment_controller_.observe_rejection();
+      if (alignment_controller_.state() ==
+          static_livox_localization::AlignmentState::TRACKING &&
+          state_machine_.observe(false, stamp.toSec()) ==
+              TrackingState::LOST) {
+        alignment_controller_.begin_reacquisition();
+      }
+      publish_diagnostic_locked("OUT_OF_ROUTE_BOUNDS", registration, decision);
+    } else if (decision.accepted) {
       const Eigen::Isometry3d candidate_map_T_odom =
           static_livox_localization::compute_map_T_odom(
               registration.map_T_base, odom.odom_T_base);
@@ -586,6 +624,7 @@ class MovingIcpLocalizer {
   static_livox_localization::RollingSubmap rolling_submap_;
   static_livox_localization::TrackingStateMachine state_machine_;
   static_livox_localization::AssistedAlignmentController alignment_controller_;
+  static_livox_localization::RouteBounds route_bounds_;
 
   std::mutex mutex_;
   std::deque<OdomSample> odom_history_;
@@ -616,6 +655,8 @@ class MovingIcpLocalizer {
   std::string cloud_topic_;
   std::string odom_topic_;
   std::string seed_topic_;
+  std::string route_bounds_path_;
+  double route_bounds_margin_m_ = 20.0;
 };
 
 int main(int argc, char** argv) {

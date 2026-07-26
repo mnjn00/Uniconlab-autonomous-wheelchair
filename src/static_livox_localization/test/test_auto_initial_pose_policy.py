@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 
+from pathlib import Path
 from types import SimpleNamespace
+import sys
 
 import pytest
 
 
 pytest.importorskip("rospy")
+
+SCRIPTS = Path(__file__).parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 
 from auto_initial_pose import (
     candidate_diagnostic_state,
@@ -37,6 +42,18 @@ def test_sparse_target_crop_rejects_candidate_immediately():
         "reason": "INSUFFICIENT_TARGET_POINTS",
         "target_points": 31,
     }
+    assert should_abandon_candidate(state)
+
+
+def test_out_of_route_bounds_rejects_candidate_immediately():
+    state = candidate_diagnostic_state(
+        _status(
+            "VERIFYING",
+            reason="OUT_OF_ROUTE_BOUNDS",
+            target_points=20441,
+        )
+    )
+
     assert should_abandon_candidate(state)
 
 

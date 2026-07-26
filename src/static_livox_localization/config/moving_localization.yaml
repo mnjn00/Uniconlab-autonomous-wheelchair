@@ -11,6 +11,16 @@ cloud_topic: /cloud_registered_body
 odom_topic: /Odometry
 seed_topic: /fast_lio_icp/initialpose
 
+# Reject any relocalization candidate (initial seed or later correction)
+# whose position is farther than route_bounds_margin_m from every station in
+# this file, regardless of how good its ICP fitness/inlier score looks. A
+# distant region of the map that happens to resemble the true route can
+# still pass those checks - this is what caught the recurring wrong lock at
+# (171, -34) on 2026-07-25 and 2026-07-26 field runs. Leave the path empty
+# to disable (matches pre-existing behavior).
+route_bounds_path: /home/mprp3/wheelchair_localization_src/routes/aejimun_to_gongsen_safety_band.json
+route_bounds_margin_m: 20.0
+
 preview_input_topic: /cloud_registered_body
 preview_output_topic: /fast_lio_icp/live_preview
 preview_voxel_resolution: 0.30

@@ -8,7 +8,7 @@ find_package(OpenSSL REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
-  LIBRARIES static_registration moving_tracker rolling_submap assisted_alignment bounded_cloud_preview
+  LIBRARIES static_registration moving_tracker rolling_submap assisted_alignment bounded_cloud_preview route_bounds
   CATKIN_DEPENDS roscpp sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions
 )
 include_directories(include ${catkin_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIR})
@@ -24,11 +24,13 @@ add_library(assisted_alignment src/assisted_alignment.cpp)
 target_link_libraries(assisted_alignment ${catkin_LIBRARIES})
 add_library(bounded_cloud_preview src/bounded_cloud_preview.cpp)
 target_link_libraries(bounded_cloud_preview ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+add_library(route_bounds src/route_bounds.cpp)
+target_link_libraries(route_bounds ${catkin_LIBRARIES})
 
 add_executable(static_icp_localizer src/static_icp_localizer.cpp)
 target_link_libraries(static_icp_localizer static_registration ${catkin_LIBRARIES} ${PCL_LIBRARIES} OpenSSL::Crypto)
 add_executable(moving_icp_localizer src/moving_icp_localizer.cpp)
-target_link_libraries(moving_icp_localizer assisted_alignment rolling_submap moving_tracker static_registration ${catkin_LIBRARIES} ${PCL_LIBRARIES} OpenSSL::Crypto)
+target_link_libraries(moving_icp_localizer assisted_alignment rolling_submap moving_tracker static_registration route_bounds ${catkin_LIBRARIES} ${PCL_LIBRARIES} OpenSSL::Crypto)
 add_executable(map_preview_publisher src/map_preview_publisher.cpp)
 target_link_libraries(map_preview_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES} OpenSSL::Crypto)
 add_executable(bounded_cloud_preview_node src/bounded_cloud_preview_node.cpp)
@@ -67,6 +69,7 @@ install(
     rolling_submap
     assisted_alignment
     bounded_cloud_preview
+    route_bounds
     static_icp_localizer
     moving_icp_localizer
     map_preview_publisher
@@ -100,5 +103,10 @@ if(CATKIN_ENABLE_TESTING)
   catkin_add_gtest(test_bounded_cloud_preview test/test_bounded_cloud_preview.cpp)
   if(TARGET test_bounded_cloud_preview)
     target_link_libraries(test_bounded_cloud_preview bounded_cloud_preview ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+  endif()
+
+  catkin_add_gtest(test_route_bounds test/test_route_bounds.cpp)
+  if(TARGET test_route_bounds)
+    target_link_libraries(test_route_bounds route_bounds ${catkin_LIBRARIES})
   endif()
 endif()

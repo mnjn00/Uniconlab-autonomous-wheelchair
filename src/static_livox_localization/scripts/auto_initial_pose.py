@@ -27,6 +27,12 @@ import tf.transformations as tft
 
 TERMINAL_CANDIDATE_REASONS = frozenset({
     "INSUFFICIENT_TARGET_POINTS",
+    # The localizer's own route-bounds gate (moving_icp_localizer route_bounds_
+    # param): a candidate can converge with plenty of target points and still
+    # be geometrically outside the known route, e.g. a distant region of the
+    # map that happens to look similar to the true start. No amount of
+    # waiting fixes that - try the next candidate immediately.
+    "OUT_OF_ROUTE_BOUNDS",
 })
 
 
