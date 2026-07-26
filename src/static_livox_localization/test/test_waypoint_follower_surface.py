@@ -8,6 +8,11 @@ def follower_text():
     return (ROOT / "scripts" / "waypoint_follower.py").read_text(encoding="utf-8")
 
 
+def policy_text():
+    return (ROOT / "scripts" / "localization_policy.py").read_text(
+        encoding="utf-8")
+
+
 def test_follower_starts_paused_and_requires_explicit_start():
     text = follower_text()
     assert "self.enabled = False" in text
@@ -20,7 +25,7 @@ def test_follower_always_stops_on_shutdown():
 
 
 def test_follower_holds_on_lost_pose_cloud_or_manual_mode():
-    text = follower_text()
+    text = follower_text() + policy_text()
     for guard in ("NO_POSE", "NO_CLOUD", "LOCALIZATION_LOST", "MANUAL_MODE"):
         assert guard in text
     assert "AUTO_MODE = 65" in text
@@ -60,10 +65,16 @@ def test_missing_cloud_data_is_treated_as_blocked():
 
 
 def test_degraded_localization_times_out_to_a_hold():
-    text = follower_text()
+    text = follower_text() + policy_text()
     assert "DEGRADED_STOP_S" in text
     assert '"LOCALIZATION_DEGRADED_TIMEOUT"' in text
     assert "self.degraded_since" in text
+
+
+def test_follower_delegates_all_localization_states_to_fail_closed_policy():
+    text = follower_text()
+    assert "from localization_policy import localization_hold_reason" in text
+    assert "reason = localization_hold_reason(" in text
 
 
 def test_pure_pursuit_resyncs_globally_when_position_jumps_backward():

@@ -18,7 +18,8 @@ Per control cycle:
     slowdown, accel/yaw-rate limiting; tip_guard adds closed-loop
     climb assist so slopes get torque without tipping
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
-    stale pose/cloud/base, LOST localization, manual joystick mode, or
+    stale pose/cloud/base, any non-TRACKING localization state (with a bounded
+    DEGRADED grace period), manual joystick mode, or
     geofence violation, and always sends stop on shutdown.
 """
 
@@ -38,6 +39,7 @@ import sensor_msgs.point_cloud2 as pc2
 
 from body_frame import (LIDAR_IN_BODY_XYZ,
                         LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
+from localization_policy import localization_hold_reason
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -418,22 +420,25 @@ class WaypointFollower:
             reason = "NO_POSE"
         elif (now - self.cloud_stamp).to_sec() > 1.0:
             reason = "NO_CLOUD"
-        elif self.tracking_state == "LOST":
-            reason = "LOCALIZATION_LOST"
-        elif self.tracking_state == "DEGRADED" and self.degraded_since is not None and \
-                (now - self.degraded_since).to_sec() > DEGRADED_STOP_S:
-            reason = "LOCALIZATION_DEGRADED_TIMEOUT"
-        elif (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
+        else:
+            degraded_age_s = None if self.degraded_since is None else \
+                (now - self.degraded_since).to_sec()
+            reason = localization_hold_reason(
+                self.tracking_state, degraded_age_s, DEGRADED_STOP_S)
+        if reason is None and \
+                (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
             reason = "BASE_STALE"
-        elif self.drive_mode is not None and self.drive_mode != AUTO_MODE:
+        elif reason is None and self.drive_mode is not None and \
+                self.drive_mode != AUTO_MODE:
             reason = "MANUAL_MODE"
-        elif abs(self.pose_roll) > MAX_TILT_ROLL or \
-                abs(self.pose_pitch) > MAX_TILT_PITCH:
+        elif reason is None and (
+                abs(self.pose_roll) > MAX_TILT_ROLL or
+                abs(self.pose_pitch) > MAX_TILT_PITCH):
             reason = "TILT_LIMIT"
-        elif self.route_locked and np.min(np.linalg.norm(
+        elif reason is None and self.route_locked and np.min(np.linalg.norm(
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             reason = "OFF_ROUTE"
-        elif self.route_locked and not self.band.contains(
+        elif reason is None and self.route_locked and not self.band.contains(
                 self.pose_xy, grace=self.band_recover_max):
             reason = "OFF_BAND"
         if reason:
