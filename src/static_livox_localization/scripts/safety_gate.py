@@ -22,6 +22,7 @@ import sensor_msgs.point_cloud2 as pc2
 
 from body_frame import (LIDAR_IN_BODY_XYZ,
                         LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
+from forward_coverage import corridor_has_coverage
 import tf.transformations as tft
 
 
@@ -143,8 +144,10 @@ class SafetyGate:
         ground_plane = -SENSOR_HEIGHT_M
         zone = pts[(pts[:, 0] > 0.25) & (pts[:, 0] < CHECK_RANGE_M) &
                    (np.abs(pts[:, 1]) < HALF_WIDTH_M)]
-        if not len(zone):
-            return ""
+        if not corridor_has_coverage(
+                pts, 0.25, CHECK_RANGE_M, 0.0, HALF_WIDTH_M,
+                ground_plane - 0.15, ground_plane + OBSTACLE_MAX_Z):
+            return "FORWARD_BLIND"
         rel = zone[:, 2] - ground_plane
         obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)]
         stop_distance = max(STOP_DISTANCE_MIN_M,

@@ -38,6 +38,7 @@ import sensor_msgs.point_cloud2 as pc2
 
 from body_frame import (LIDAR_IN_BODY_XYZ,
                         LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
+from forward_coverage import corridor_has_coverage
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -256,22 +257,26 @@ class WaypointFollower:
     # ------------------------------------------------------------ safety
     def obstacle_distance(self, lateral_shift=0.0):
         """Nearest obstacle in the forward corridor from the live scan,
-        or None. The scan sees people and objects, not near ground."""
+        plus whether that corridor has enough observations to claim clear.
+        The scan sees people and objects, not near ground."""
         if self.cloud is None or len(self.cloud) < 100:
-            return 0.0  # no data = treat as blocked
+            return 0.0, False  # no data = treat as blocked
         pts = self.cloud
         ground_plane = -self.sensor_height
         guard_slow = self.guard_stop() + GUARD_SLOW_EXTRA_M
         m = ((pts[:, 0] > 0.25) & (pts[:, 0] < guard_slow + 0.6) &
              (np.abs(pts[:, 1] - lateral_shift) < CORRIDOR_HALF_WIDTH))
         zone = pts[m]
-        if not len(zone):
-            return None
+        if not corridor_has_coverage(
+                pts, 0.25, guard_slow + 0.6, lateral_shift,
+                CORRIDOR_HALF_WIDTH, ground_plane - 0.15,
+                ground_plane + OBSTACLE_MAX_Z):
+            return 0.0, False
         rel = zone[:, 2] - ground_plane
         obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)]
         if len(obstacles) < 5:
-            return None
-        return float(np.percentile(obstacles[:, 0], 5))
+            return None, True
+        return float(np.percentile(obstacles[:, 0], 5)), True
 
     def guard_stop(self):
         return max(GUARD_STOP_MIN_M,
@@ -453,7 +458,8 @@ class WaypointFollower:
         recovering = self.route_locked and not self.band.contains(
             self.pose_xy, grace=OFF_BAND_GRACE)
 
-        obstacle_dist = self.obstacle_distance(self.lateral_offset)
+        obstacle_dist, forward_covered = self.obstacle_distance(
+            self.lateral_offset)
 
         allowed = MAX_SPEED
         if recovering:
@@ -471,7 +477,10 @@ class WaypointFollower:
         blocking = None
         guard_stop = self.guard_stop()
         guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
-        if obstacle_dist is not None:
+        if not forward_covered:
+            blocking = "FORWARD_BLIND"
+            allowed = 0.0
+        elif obstacle_dist is not None:
             if obstacle_dist < guard_stop:
                 blocking = "OBSTACLE"
                 allowed = 0.0
@@ -486,8 +495,8 @@ class WaypointFollower:
             elif (now - self.blocked_since).to_sec() > BYPASS_AFTER_S and \
                     abs(self.lateral_offset) < 0.01:
                 for offset in BYPASS_OFFSETS:
-                    clear = self.obstacle_distance(offset)
-                    if (clear is None or clear > guard_slow) and \
+                    clear, covered = self.obstacle_distance(offset)
+                    if covered and (clear is None or clear > guard_slow) and \
                             self.bypass_target_ok(offset):
                         self.lateral_offset = offset
                         rospy.logwarn(
@@ -500,8 +509,8 @@ class WaypointFollower:
         elif blocking is None:
             self.blocked_since = None
             if abs(self.lateral_offset) > 0.01:
-                back = self.obstacle_distance(0.0)
-                if back is None or back > guard_slow:
+                back, covered = self.obstacle_distance(0.0)
+                if covered and (back is None or back > guard_slow):
                     self.lateral_offset = 0.0
                     rospy.loginfo("bypass complete, rejoining route")
 

@@ -50,13 +50,15 @@ catkin_install_python(
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-# body_frame.py and safety_band.py are imported as plain sibling modules
+# body_frame.py, forward_coverage.py and safety_band.py are imported as plain
+# sibling modules
 # (`from body_frame import ...`), so they must land beside the nodes that import
 # them rather than on the Python path. They carry no shebang and are not nodes,
 # hence install(FILES ...) instead of catkin_install_python.
 install(
   FILES
     scripts/body_frame.py
+    scripts/forward_coverage.py
     scripts/safety_band.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

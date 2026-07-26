@@ -56,7 +56,16 @@ def test_follower_bypasses_static_obstacles_only_inside_band():
 
 def test_missing_cloud_data_is_treated_as_blocked():
     text = follower_text()
-    assert "return 0.0  # no data = treat as blocked" in text
+    assert "return 0.0, False  # no data = treat as blocked" in text
+
+
+def test_unobserved_forward_corridor_is_distinct_from_clear():
+    follower = follower_text()
+    gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
+    assert "corridor_has_coverage" in follower
+    assert 'blocking = "FORWARD_BLIND"' in follower
+    assert "corridor_has_coverage" in gate
+    assert 'return "FORWARD_BLIND"' in gate
 
 
 def test_degraded_localization_times_out_to_a_hold():
