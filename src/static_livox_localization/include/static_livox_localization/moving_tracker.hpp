@@ -50,6 +50,12 @@ Eigen::Isometry3d limit_map_T_odom_step(
     const Eigen::Isometry3d& candidate_map_T_odom,
     const TrackingConfig& config);
 
+Eigen::Isometry3d apply_verified_map_T_odom(
+    const Eigen::Isometry3d& current_map_T_odom,
+    const Eigen::Isometry3d& candidate_map_T_odom,
+    bool first_initialization,
+    const TrackingConfig& config);
+
 const char* tracking_state_name(TrackingState state);
 
 class TrackingStateMachine {

@@ -445,9 +445,13 @@ class MovingIcpLocalizer {
         const ConsensusDecision consensus =
             alignment_controller_.observe_candidate(candidate_map_T_odom);
         if (consensus.ready) {
-          map_T_odom_ = candidate_map_T_odom;
-          if (state_machine_.state() ==
-              TrackingState::WAITING_INITIALIZATION) {
+          const bool first_initialization =
+              state_machine_.state() == TrackingState::WAITING_INITIALIZATION;
+          map_T_odom_ =
+              static_livox_localization::apply_verified_map_T_odom(
+                  map_T_odom_, candidate_map_T_odom, first_initialization,
+                  tracking_config_);
+          if (first_initialization) {
             state_machine_.initialize(stamp.toSec());
           } else {
             state_machine_.observe(true, stamp.toSec());

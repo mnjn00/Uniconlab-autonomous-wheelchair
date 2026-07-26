@@ -102,6 +102,16 @@ Eigen::Isometry3d limit_map_T_odom_step(
   return current_map_T_odom * limited_delta;
 }
 
+Eigen::Isometry3d apply_verified_map_T_odom(
+    const Eigen::Isometry3d& current_map_T_odom,
+    const Eigen::Isometry3d& candidate_map_T_odom,
+    bool first_initialization,
+    const TrackingConfig& config) {
+  if (first_initialization) return candidate_map_T_odom;
+  return limit_map_T_odom_step(
+      current_map_T_odom, candidate_map_T_odom, config);
+}
+
 const char* tracking_state_name(TrackingState state) {
   switch (state) {
     case TrackingState::WAITING_INITIALIZATION:

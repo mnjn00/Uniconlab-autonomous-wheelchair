@@ -39,12 +39,25 @@ def test_assisted_tracking_uses_tight_roi_consensus_and_small_corrections():
     assert config["auto_correction_on_start"] is False
 
 
-def test_verification_snaps_full_candidate_only_after_consensus():
+def test_verification_snaps_only_on_first_initialization():
     text = node_text()
     observe = text.index("observe_candidate(candidate_map_T_odom)")
     ready = text.index("consensus.ready", observe)
-    snap = text.index("map_T_odom_ = candidate_map_T_odom;", ready)
-    assert observe < ready < snap
+    first = text.index("const bool first_initialization", ready)
+    apply = text.index("apply_verified_map_T_odom", first)
+    assert observe < ready < first < apply
+    assert "map_T_odom_ = candidate_map_T_odom;" not in text[ready:apply]
+
+
+def test_reacquisition_uses_the_same_step_limiter_as_tracking():
+    node = node_text()
+    ready = node.index("consensus.ready")
+    apply = node.index("apply_verified_map_T_odom", ready)
+    tracker = (ROOT / "src" / "moving_tracker.cpp").read_text(encoding="utf-8")
+    helper = tracker.index("apply_verified_map_T_odom")
+    limited = tracker.index("limit_map_T_odom_step", helper)
+    assert apply > ready
+    assert limited > helper
 
 
 def test_tracking_applies_limited_step_on_every_accepted_candidate():

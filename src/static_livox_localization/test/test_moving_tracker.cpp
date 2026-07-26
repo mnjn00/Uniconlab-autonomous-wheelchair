@@ -21,6 +21,7 @@ using static_livox_localization::RegistrationResult;
 using static_livox_localization::TrackingConfig;
 using static_livox_localization::TrackingState;
 using static_livox_localization::TrackingStateMachine;
+using static_livox_localization::apply_verified_map_T_odom;
 using static_livox_localization::compute_map_T_odom;
 using static_livox_localization::evaluate_correction;
 using static_livox_localization::limit_map_T_odom_step;
@@ -103,6 +104,24 @@ TEST(MovingTracker, LimitsAcceptedMapToOdomCorrectionStep) {
 
   EXPECT_NEAR(limited.translation().norm(), 0.30, 1e-9);
   EXPECT_NEAR(Eigen::AngleAxisd(limited.rotation()).angle(),
+              config.max_correction_rotation_rad, 1e-9);
+}
+
+TEST(MovingTracker, SnapsOnlyDuringFirstInitialization) {
+  TrackingConfig config;
+  config.max_correction_translation_m = 0.20;
+  config.max_correction_rotation_rad = 2.0 * M_PI / 180.0;
+  const Eigen::Isometry3d candidate = pose(3.0, 0.0, 0.5);
+
+  const Eigen::Isometry3d initialized = apply_verified_map_T_odom(
+      Eigen::Isometry3d::Identity(), candidate, true, config);
+  const Eigen::Isometry3d reacquired = apply_verified_map_T_odom(
+      Eigen::Isometry3d::Identity(), candidate, false, config);
+
+  EXPECT_NEAR(initialized.translation().x(), 3.0, 1e-9);
+  EXPECT_NEAR(Eigen::AngleAxisd(initialized.rotation()).angle(), 0.5, 1e-9);
+  EXPECT_NEAR(reacquired.translation().norm(), 0.20, 1e-9);
+  EXPECT_NEAR(Eigen::AngleAxisd(reacquired.rotation()).angle(),
               config.max_correction_rotation_rad, 1e-9);
 }
 
