@@ -14,12 +14,17 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # liburdfdom-tools supplies check_urdf, which the URDF validation step invokes.
 # noetic-desktop-full brings the urdf libraries but not that CLI.
 #
-# Both are unpinned, unlike the two below, because the exact Focal patch
-# versions could not be confirmed offline; pin them once a build log reports the
-# installed versions.
+# git is deliberately NOT pinned, unlike everything else here. It comes from
+# focal-updates, where each security patch supersedes and removes the previous
+# version, so pinning the observed 1:2.25.1-1ubuntu3.14 would build today and
+# fail the moment the next patch lands. The other three are frozen Focal
+# release packages, so pinning them is stable. This image is a CI/SIL validation
+# environment and never a NUC runtime artifact, so tracking git security patches
+# is the right trade; the ROS/Gazebo closure stays reproducible via the base
+# digest.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
-      liburdfdom-tools \
+      liburdfdom-tools=1.0.4+ds-2 \
       python3-jsonschema=3.2.0-0ubuntu2 \
       python3-pytest=4.6.9-1 \
     && rm -rf /var/lib/apt/lists/*
