@@ -12,7 +12,14 @@ def localization_hold_reason(state, degraded_age_s, degraded_stop_s):
     if state == "TRACKING":
         return None
     if state == "DEGRADED":
-        if degraded_age_s is not None and degraded_age_s > degraded_stop_s:
+        if degraded_age_s is None:
+            # How long it has been degraded is unknown, so the grace period
+            # cannot be evaluated. The caller sets degraded_since before asking,
+            # but tracking_state is written from the diagnostic callback thread,
+            # so a state change landing between those two points reaches here
+            # with no age. Holding for that one cycle is the fail-closed answer.
+            return "LOCALIZATION_DEGRADED_AGE_UNKNOWN"
+        if degraded_age_s > degraded_stop_s:
             return "LOCALIZATION_DEGRADED_TIMEOUT"
         return None
     if state == "LOST":
