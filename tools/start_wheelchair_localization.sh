@@ -11,13 +11,37 @@ source /opt/ros/noetic/setup.bash
 export ROS_MASTER_URI=http://127.0.0.1:11311
 export DISPLAY="${DISPLAY:-:0}"
 
-echo "[0/5] display + vnc"
+echo "[0/5] display"
 XAUTHORITY="$HOME/.Xauthority" xrandr --output HDMI-1 --mode 1920x1080 2>/dev/null || true
-if ! pgrep -x x11vnc >/dev/null; then
-  setsid nohup x11vnc -display :0 -auth guess -passwd 0000 -forever -shared \
-    -repeat -wait 15 -defer 15 -o "$HOME/x11vnc.log" -bg >/dev/null 2>&1 < /dev/null || true
+
+# VNC is opt-in, password-file authenticated, and loopback-only by default.
+# Create the credential once with: x11vnc -storepasswd ~/.vnc/passwd
+# Connect through a tunnel: ssh -L 5900:127.0.0.1:5900 mprp3@<nuc>
+VNC="${VNC:-0}"
+VNC_AUTH="${VNC_AUTH:-$HOME/.vnc/passwd}"
+if [ "$VNC" = "1" ]; then
+  if [ ! -f "$VNC_AUTH" ]; then
+    echo "ERROR: VNC requested but auth file is missing: $VNC_AUTH" >&2
+    exit 7
+  fi
+  VNC_BIND="-localhost"
+  VNC_WHERE="127.0.0.1 only"
+  if [ "${VNC_ALLOW_REMOTE:-0}" = "1" ]; then
+    VNC_BIND=""
+    VNC_WHERE="all interfaces"
+    echo "WARNING: VNC is exposed to the network" >&2
+  fi
+  if ! pgrep -x x11vnc >/dev/null; then
+    # VNC_BIND is intentionally either one trusted option or empty.
+    # shellcheck disable=SC2086
+    setsid nohup x11vnc -display :0 -auth guess -rfbauth "$VNC_AUTH" \
+      $VNC_BIND -forever -shared -repeat -wait 15 -defer 15 \
+      -o "$HOME/x11vnc.log" -bg >/dev/null 2>&1 < /dev/null || true
+  fi
+  echo "  vnc on port 5900 ($VNC_WHERE)"
+else
+  echo "  vnc disabled (set VNC=1 after creating $VNC_AUTH)"
 fi
-echo "  vnc on port 5900 (pw 0000), NUC IP: $(hostname -I | tr ' ' '\n' | grep -v '^192\.168\.1\.' | head -1)"
 
 echo "[1/5] cleaning old processes"
 for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower'; do
