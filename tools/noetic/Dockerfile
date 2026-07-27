@@ -9,11 +9,17 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # exact Focal package versions.
 # git is not test-only: scripts/generate_release_manifest.py shells out to it in
 # source_identity() to tell a clean commit from a dirty worktree, so the release
-# tooling cannot run in this image without it. Left unpinned because the exact
-# Focal patch version could not be confirmed offline; pin it once a build log
-# reports the installed version.
+# tooling cannot run in this image without it.
+#
+# liburdfdom-tools supplies check_urdf, which the URDF validation step invokes.
+# noetic-desktop-full brings the urdf libraries but not that CLI.
+#
+# Both are unpinned, unlike the two below, because the exact Focal patch
+# versions could not be confirmed offline; pin them once a build log reports the
+# installed versions.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
+      liburdfdom-tools \
       python3-jsonschema=3.2.0-0ubuntu2 \
       python3-pytest=4.6.9-1 \
     && rm -rf /var/lib/apt/lists/*
