@@ -7,7 +7,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # This image is a CI/SIL validation environment, never a NUC runtime artifact.
 # The ROS/Gazebo closure is pinned by the base digest; test-only additions use
 # exact Focal package versions.
+# git is not test-only: scripts/generate_release_manifest.py shells out to it in
+# source_identity() to tell a clean commit from a dirty worktree, so the release
+# tooling cannot run in this image without it. Left unpinned because the exact
+# Focal patch version could not be confirmed offline; pin it once a build log
+# reports the installed version.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+      git \
       python3-jsonschema=3.2.0-0ubuntu2 \
       python3-pytest=4.6.9-1 \
     && rm -rf /var/lib/apt/lists/*
