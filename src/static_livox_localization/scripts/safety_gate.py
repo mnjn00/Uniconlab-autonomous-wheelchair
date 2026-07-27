@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Independent obstacle safety gate between the planner and tip_guard.
+"""Independent obstacle safety gate between the planner and the wheel base.
 
 Deliberately knows nothing about routes or planning: it forwards
-/cmd_vel_raw to /cmd_vel_gated only when its OWN forward-corridor check
+/cmd_vel_raw to /cmd_vel only when its OWN forward-corridor check
 passes, clamps speeds, replaces stale or missing input with a stop, and
 publishes continuously so the chain always has a live command stream.
-tip_guard.py is the final stage after this (guards against tip-over
-independently of obstacles); wheel_cmd_tmp.py/uart.py consume its output
-on /cmd_vel. If the planner misbehaves or dies, this gate stops the chair;
-if this gate dies, tip_guard's own staleness check stops the chair; if
-that dies too, the uart-level watchdog stops the chair.
+This is now the final stage before the wheel base; wheel_cmd_tmp.py/uart.py
+consume its output on /cmd_vel directly. Dynamic tip-over prediction
+(tip_guard.py) was removed - it was tripping on transient pitch-rate/accel
+spikes from shallow bumps more often than it caught genuine tips, and the
+terrain here does not need it (see waypoint_follower.py's static
+MAX_TILT_ROLL/MAX_TILT_PITCH abort for the remaining tilt backstop). If
+the planner misbehaves or dies, this gate stops the chair; if this gate
+dies too, the uart-level watchdog stops the chair.
 """
 
 import numpy as np
@@ -104,7 +107,7 @@ class SafetyGate:
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""
-        self.pub = rospy.Publisher("/cmd_vel_gated", Twist, queue_size=1)
+        self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         rospy.Subscriber("/cmd_vel_raw", Twist, self.on_raw, queue_size=1)
         rospy.Subscriber("/cloud_registered_body", PointCloud2,
                          self.on_cloud, queue_size=2)

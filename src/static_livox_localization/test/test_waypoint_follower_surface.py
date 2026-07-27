@@ -100,8 +100,6 @@ def test_field_nodes_and_sibling_policy_modules_are_installed_together():
     cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
     for path in (
             "scripts/waypoint_follower.py",
-            "scripts/tip_guard.py",
             "scripts/localization_policy.py",
-            "scripts/safety_band.py",
-            "scripts/tip_guard_policy.py"):
+            "scripts/safety_band.py"):
         assert path in cmake
