@@ -56,9 +56,10 @@ def test_governor_throttles_down_on_caution_rate_and_recovers_slowly():
     assert "GOVERNOR_RECOVER_PER_S" in text
 
 
-def test_stale_or_tripped_forces_zero_and_node_always_stops_on_shutdown():
+def test_stale_or_tripped_uses_stop_policy_and_node_stops_on_shutdown():
     text = guard_text()
-    assert "desired = 0.0 if (self.tripped or stale) else self.raw.linear.x" in text
+    assert "next_linear_speed(" in text
+    assert "self.tripped or stale)" in text
     assert "rospy.on_shutdown(lambda: self.pub.publish(Twist()))" in text
 
 

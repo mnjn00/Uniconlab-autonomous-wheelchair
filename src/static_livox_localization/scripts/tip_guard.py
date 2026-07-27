@@ -52,6 +52,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
 from std_msgs.msg import String
+from tip_guard_policy import next_linear_speed
 
 import tf.transformations as tft
 
@@ -71,7 +72,6 @@ GOVERNOR_MIN_ACCEL = 0.05
 GOVERNOR_MAX_ACCEL = 0.30
 GOVERNOR_RECOVER_PER_S = 0.05
 GOVERNOR_CUT_FACTOR = 0.5
-HARD_DECEL = 1.0
 
 CORRELATION_WINDOW = 20
 CORRELATION_MIN_AGREEMENT = 0.6
@@ -223,14 +223,12 @@ class TipGuard:
                      (now - self.imu_stamp).to_sec() > IMU_STALE_S or
                      (now - self.odom_stamp).to_sec() > ODOM_STALE_S)
 
-            desired = 0.0 if (self.tripped or stale) else self.raw.linear.x
-            if desired > self.current_speed:
-                step = min(desired - self.current_speed,
-                          self.accel_budget * dt)
-            else:
-                decel = HARD_DECEL if self.tripped else (2.0 * HARD_DECEL)
-                step = max(desired - self.current_speed, -decel * dt)
-            self.current_speed += step
+            self.current_speed = next_linear_speed(
+                self.current_speed,
+                self.raw.linear.x,
+                self.accel_budget,
+                dt,
+                self.tripped or stale)
 
             out = Twist()
             out.linear.x = self.current_speed

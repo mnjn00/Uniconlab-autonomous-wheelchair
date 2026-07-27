@@ -43,6 +43,12 @@ catkin_install_python(
     scripts/reference_marker.py
     scripts/localization_state_marker.py
     scripts/enable_auto_correction_after_seed.py
+    scripts/tip_guard.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+install(
+  FILES
+    scripts/tip_guard_policy.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(
