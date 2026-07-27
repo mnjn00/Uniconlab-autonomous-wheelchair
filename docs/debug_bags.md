@@ -80,7 +80,34 @@ across, 6.7 cm down). How to read the report:
   (omega^2 r reaches ~0.30 m/s^2 at the chair's max yaw rate) and must not
   be read as sensor error until that is compensated.
 
-## 3. Findings from the 2026-07-27 bag
+## 3. Dataset audit: 2026-07-07 and 2026-07-25
+
+The older bags were checked before interpreting the rollback drive:
+
+- The 07-07 ROS 2 source and `normalized.bag` both span 688.225 s and contain
+  144,484 messages: 6,882 lidar frames and 137,602 IMU samples. All IMU values
+  are finite; every lidar frame is non-empty (6,432 to 24,096 points). Lidar
+  cadence has no doubled-period gap. The IMU has 114 doubled-period gaps, with
+  a worst gap of 85.6 ms, so downstream replay must preserve timestamps rather
+  than assuming an uninterrupted 200 Hz clock.
+- `glim_mapping_20260725_164749.bag` is 1,151.054 s
+  (11,511 lidar / 230,231 IMU), `170718` is the readable reindexed power-cut
+  bag at 125.961 s (1,260 / 25,201), and `171319` is 925.729 s
+  (9,258 / 185,138). None has an empty lidar frame; the only doubled-period
+  IMU gap across the two complete runs is 11.1 ms in `171319`. These are
+  healthy mapping inputs; the short power-cut bag is not a complete run.
+- `blackbox_20260725_180626.bag` is not evidence of an autonomous hill run.
+  All 201,410 wheel-status messages report MANUAL mode, all recorded
+  `/cmd_vel*` streams are zero, and the follower reports `HOLD:PAUSED`
+  throughout. The wheel frames show only brief manual motion late in the
+  2,014 s recording. `/vectornav/IMU` is absent, so this bag cannot compare the
+  sensor that drove FAST-LIO with Livox or identify the earlier hill failure.
+
+These checks establish dataset health and limitations. They do not turn a
+mapping bag into localization ground truth or fill in a topic that was not
+recorded.
+
+## 4. Findings from the 2026-07-27 bag
 
 Bag `debug_20260727_193008.bag`: 357 s, 466,616 messages, zero dropped.
 Stack in the rolled-back configuration (`VN_IMU=0`, FAST-LIO on
@@ -111,7 +138,7 @@ Stack in the rolled-back configuration (`VN_IMU=0`, FAST-LIO on
   nothing in `src/static_livox_localization` consumes twist, so this is
   harmless today and a trap for anything that later does.
 
-## 4. What this changes, and what still needs a drive
+## 5. What this changes, and what still needs a drive
 
 Committed now, on the strength of this bag: the recorder already covered
 everything (no change needed), the comparison is repeatable
