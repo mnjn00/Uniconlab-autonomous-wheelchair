@@ -10,10 +10,25 @@
 
 ---
 
-## 경고: 정합에 개입하기 전에 반드시 주행을 먼저 세운다
+## 정합에 개입하면 휠체어가 선다
 
-**정합 상태를 바꾸는 어떤 조작도 휠체어를 세우지 않는다.** 이 문서의 모든 절차는
-휠체어가 정지한 상태를 전제로 한다.
+`waypoint_follower.py`는 정합 상태가 **`TRACKING`일 때만** 주행한다. 판정은
+`localization_policy.py`의 `localization_hold_reason`이 전담한다.
+
+| `status.message` | 판정 |
+|---|---|
+| `TRACKING` | 주행 |
+| `DEGRADED`, 지속 시간이 `DEGRADED_STOP_S` 이내 | 주행 (유예) |
+| `DEGRADED`, 유예 초과 | 정지 `LOCALIZATION_DEGRADED_TIMEOUT` |
+| `LOST` | 정지 `LOCALIZATION_LOST` |
+| `MANUAL_ALIGN`, `VERIFYING`, `WAITING_INITIALIZATION`, 초기 빈 값, 그 외 전부 | 정지 `LOCALIZATION_NOT_TRACKING` |
+
+따라서 주행 중에 시드를 다시 투입하거나 자동 보정을 끄면 **휠체어가 스스로 선다.**
+정합을 되찾아 `TRACKING`으로 복귀하면 자동으로 다시 출발한다. 래치되지 않으므로
+운영자가 따로 풀어줄 것은 없다.
+
+그래도 개입 전에 명시적으로 세우는 습관은 유지한다. 정지 이유가 하나로 좁혀져 로그가
+읽기 쉬워지고, 의도한 정지와 시스템이 건 정지를 구분할 수 있다.
 
 ```bash
 rosservice call /waypoint_follower/start "data: false"   # 주행 일시정지
@@ -21,20 +36,24 @@ rosservice call /waypoint_follower/start "data: false"   # 주행 일시정지
 rostopic pub -1 /mode_cmd std_msgs/Int16 77
 ```
 
-이유를 정확히 알아야 한다. `waypoint_follower.py:415-439`가 주행을 멈추는 로컬라이제이션
-사유는 **두 가지뿐**이다.
+### 이 규칙이 막지 못하는 것
 
-- `tracking_state == "LOST"`
-- `tracking_state == "DEGRADED"`가 `DEGRADED_STOP_S`를 초과해 지속
+판정은 마지막으로 수신한 진단 문자열 하나에만 의존한다. **진단의 신선도는 검사하지
+않는다.** 로컬라이저가 `TRACKING`을 마지막으로 발행한 뒤 죽거나 조용해지면, follower는
+그 허가를 계속 들고 주행한다. `odom_callback`이 얼어붙은 `map_T_odom_`으로 포즈를 계속
+발행하므로 `NO_POSE`도 트립되지 않는다.
 
-즉 `MANUAL_ALIGN`, `VERIFYING`, `WAITING_INITIALIZATION`은 **정지 사유가 아니다.**
-그리고 자동 보정을 끄면 `moving_icp_localizer.cpp:397-400`에서 조기 return이 걸려
-추적 FSM 자체가 갱신되지 않으므로 **`LOST`에 도달하는 것이 불가능해진다.**
+또한 `CLOUD_ODOMETRY_TIME_MISMATCH`, `CLOUD_REJECTED`, `INSUFFICIENT_ROLLING_SUBMAP`
+같은 조기 return 경로는 **보정을 평가하지 않고도 `TRACKING`을 그대로 발행한다.**
 
-따라서 주행 중에 자동 보정을 끄거나 시드를 다시 투입하면, 휠체어는 최대
-`MAX_SPEED = 1.5` m/s로 **보정이 멈춘 추측항법 포즈 위에서, 로컬라이제이션 상실 감지가
-꺼진 채** 계속 주행한다. `safety_gate.py`는 장애물과 기하만 보고 로컬라이제이션 상태를
-전혀 모르므로 이 상황을 잡아주지 못한다.
+그러므로 주행 중에는 진단이 **계속 갱신되고 있는지** 눈으로 확인한다. 값이 멈춰 있으면
+`TRACKING`이라도 신뢰하지 않는다.
+
+```bash
+rostopic hz /fast_lio_icp/localization_diagnostics
+```
+
+미해결 이슈 #41이다.
 
 ---
 
@@ -122,8 +141,9 @@ RViz의 `2D Pose Estimate`로 `/fast_lio_icp/initialpose`에 포즈를 발행한
 `/fast_lio_icp/wheelchair_footprint_marker`가 지름 1.0 m 원통으로 휠체어 발자국을
 표시하며, 정합 상태에 따라 색이 바뀐다.
 
-겹침이 부족하면 3절로 넘어가지 말고 시드를 다시 투입한다. **주행이 정지해 있는지 다시
-확인한다** — 재시드는 포즈를 클릭한 위치로 불연속 점프시키고 추적 FSM을 초기화한다.
+겹침이 부족하면 3절로 넘어가지 말고 시드를 다시 투입한다. 재시드는 포즈를 클릭한 위치로
+불연속 점프시키고 추적 FSM을 초기화하며, 정합 상태를 `MANUAL_ALIGN`으로 되돌리므로
+follower는 그 시점에 정지한다.
 
 ### 3. 자동 보정 활성화
 
@@ -207,8 +227,9 @@ rosservice call /fast_lio_icp/enable_auto_correction "data: false"
 
 두 번째 명령은 항상 성공하며 정합 상태를 `MANUAL_ALIGN`으로 되돌리고 자동 보정을 끈다.
 
-**이 명령은 휠체어를 세우지 않는다.** 최상단 경고를 다시 읽는다. ICP를 멈추는 것과
-차량을 멈추는 것은 별개이고, 이 명령은 전자만 한다.
+정합 상태가 `TRACKING`을 벗어나므로 **follower는 이 시점에 `LOCALIZATION_NOT_TRACKING`으로
+스스로 선다.** 첫 명령으로 먼저 세우는 것은 의도한 정지와 시스템이 건 정지를 로그에서
+구분하기 위해서다.
 
 ## 진단 읽기
 
