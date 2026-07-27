@@ -5,9 +5,9 @@ Deliberately knows nothing about routes or planning: it forwards
 /cmd_vel_raw to /cmd_vel_gated only when its OWN forward-corridor check
 passes, clamps speeds, replaces stale or missing input with a stop, and
 publishes continuously so the chain always has a live command stream.
-tip_guard.py is the final stage after this (guards against tip-over
-independently of obstacles); wheel_cmd_tmp.py/uart.py consume its output
-on /cmd_vel. If the planner misbehaves or dies, this gate stops the chair;
+tip_guard.py is the final stage after this (rate-limited relay with its
+own staleness fail-safe); wheel_cmd_tmp.py/uart.py consume its output on
+/cmd_vel. If the planner misbehaves or dies, this gate stops the chair;
 if this gate dies, tip_guard's own staleness check stops the chair; if
 that dies too, the uart-level watchdog stops the chair.
 """

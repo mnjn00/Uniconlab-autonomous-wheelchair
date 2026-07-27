@@ -12,7 +12,7 @@ Per control cycle:
     steering targets and bypass offsets are clamped into the band
   - obstacle guard: slow near obstacles/pedestrians, stop when close
   - stuck-obstacle bypass: after 10 s, side-step within the band only
-  - slope guard and bounded DEGRADED-localization grace, tilt aborts
+  - slope guard and bounded DEGRADED-localization grace
   - speed policy: 0.5 m/s cap, curvature slowdown, accel/yaw-rate limiting
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST or sustained DEGRADED localization, manual
@@ -57,8 +57,6 @@ BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
-MAX_TILT_ROLL = math.radians(6.0)
-MAX_TILT_PITCH = math.radians(8.0)
 BAND_RECOVER_MAX = OFF_BAND_GRACE
 GEOFENCE_M = 3.5
 AUTO_MODE = 65
@@ -143,7 +141,6 @@ class WaypointFollower:
         self.pose_xy = None
         self.pose_yaw = 0.0
         self.pose_pitch = 0.0
-        self.pose_roll = 0.0
         self.pose_stamp = rospy.Time(0)
         self.tracking_state = ""
         self.degraded_since = None
@@ -182,11 +179,10 @@ class WaypointFollower:
     def on_pose(self, message):
         p = message.pose.pose.position
         q = message.pose.pose.orientation
-        roll, pitch, yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
+        _, pitch, yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
         self.pose_xy = np.array([p.x, p.y])
         self.pose_yaw = yaw
         self.pose_pitch = pitch
-        self.pose_roll = roll
         self.pose_stamp = message.header.stamp
 
     def on_cloud(self, message):
@@ -370,10 +366,6 @@ class WaypointFollower:
         elif reason is None and self.drive_mode is not None and \
                 self.drive_mode != AUTO_MODE:
             reason = "MANUAL_MODE"
-        elif reason is None and (
-                abs(self.pose_roll) > MAX_TILT_ROLL or
-                abs(self.pose_pitch) > MAX_TILT_PITCH):
-            reason = "TILT_LIMIT"
         elif reason is None and self.route_locked and np.min(np.linalg.norm(
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             reason = "OFF_ROUTE"
