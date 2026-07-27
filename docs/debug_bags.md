@@ -117,13 +117,30 @@ Committed now, on the strength of this bag: the recorder already covered
 everything (no change needed), the comparison is repeatable
 (`tools/compare_imu_bag.py`), and the measurements above are on record.
 
-Still open, each needing its own validation drive rather than a batch:
+The rollback defects were re-checked and fixed in separate commits rather than
+restoring the reverted batch:
 
-- a clean stationary bias-drift comparison (calm final bookend) before the
-  VN-100 fusion is attempted again;
-- moving validation of any re-fusion, since the earlier one was verified
-  stationary-only and then rolled back with everything else;
-- the four defects the rollback re-introduced (permissive safety-band
-  brackets, `tip_guard` climb-boost bleed-through, unvalidated uart drive
-  mode, hardcoded VNC password) plus fail-closed behaviour outside
-  `TRACKING` - re-check individually, never re-apply as a set.
+- the route band now takes the restrictive bracketing limit, checks the whole
+  drive chord, interpolates sparse route segments, and holds when no safe chord
+  exists;
+- sustained `DEGRADED` localization holds after 3 s and a recovered pose
+  resynchronizes route progress;
+- an upstream zero reaches the final `tip_guard` output immediately instead of
+  being delayed by its speed governor;
+- wheel status must match the exact checksum-valid 11-byte controller frame
+  observed in all 237,203 status messages across the 07-25 and 07-27 bags;
+- VNC is disabled by default and requires a password file when enabled.
+
+Before another autonomous route run, validate those changes independently:
+first on raised wheels, prove a nonzero command becomes zero in one guard cycle,
+the UART watchdog stops on command starvation, malformed status frames never
+latch AUTO, and manual/auto mode changes still work. Then run an unoccupied,
+spotter-controlled low-speed route test on the Livox configuration
+(`VN_IMU=0`), confirming no unexpected `UNSAFE_CHORD`,
+`LOCALIZATION_DEGRADED_TIMEOUT`, or route-progress resync events. Do not add the
+VN-100 to that run.
+
+VN-100 fusion remains a separate experiment. It still needs a clean
+stationary-one-minute -> route and hill -> undisturbed stationary-one-minute
+bag, followed by moving validation of any re-fusion. The current bag does not
+justify replacing the Livox IMU.
