@@ -43,23 +43,6 @@ catkin_install_python(
     scripts/reference_marker.py
     scripts/localization_state_marker.py
     scripts/enable_auto_correction_after_seed.py
-    scripts/auto_initial_pose.py
-    scripts/safety_gate.py
-    scripts/tip_guard.py
-    scripts/waypoint_follower.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-# body_frame.py, localization_policy.py and safety_band.py are imported as
-# plain sibling modules
-# (`from body_frame import ...`), so they must land beside the nodes that import
-# them rather than on the Python path. They carry no shebang and are not nodes,
-# hence install(FILES ...) instead of catkin_install_python.
-install(
-  FILES
-    scripts/body_frame.py
-    scripts/localization_policy.py
-    scripts/safety_band.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(

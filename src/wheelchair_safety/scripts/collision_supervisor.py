@@ -868,14 +868,6 @@ class CollisionSupervisorCore:
         ages = self._ages(inputs)
         coverage = self._coverage(inputs)
         speed = self._selected_speed(inputs)
-        # The braking distance must assume the FASTEST the chair might be
-        # going, but the swept arc must use what is actually COMMANDED:
-        # radius = speed / angular, so substituting the hard maximum there
-        # sweeps a wide arc while the gate emits a tight one, and an obstacle
-        # in the rear quarter falls outside the wide box and inside the
-        # narrow one. One value cannot serve both - over-estimating is
-        # conservative for braking and anti-conservative for the sweep.
-        sweep_speed = self._commanded_speed(inputs)
         # Simulation-only stationary gate, aligned with localization: drift below
         # 1 cm/s travels < the existing 0.20 m uncertainty over the 4 s horizon.
         # This normalization does not authorize hardware operation.
@@ -927,8 +919,7 @@ class CollisionSupervisorCore:
                 ambiguous_ttc,
                 ambiguous_intersects,
             ) = self._assess_obstacles(
-                inputs.points, speed, angular, required, a_eff, hold,
-                sweep_speed,
+                inputs.points, speed, angular, required, a_eff, hold
             )
             occluded = inputs.occluded or (coverage < 1.0 and nearest < required)
             if occluded:
@@ -1132,16 +1123,6 @@ class CollisionSupervisorCore:
             return -1.0
         return min(i.coverage_fraction, max(0.0, i.observed_coverage_bins / float(i.expected_coverage_bins)))
 
-    @staticmethod
-    def _commanded_speed(i: CollisionInputs) -> float:
-        """The speed the arc geometry must be built from: what the gate is
-        actually emitting, not the envelope used for braking distance."""
-        if _finite(i.safe_linear_mps):
-            return i.safe_linear_mps
-        if _finite(i.nav_linear_mps):
-            return i.nav_linear_mps
-        return math.nan
-
     def _selected_speed(self, i: CollisionInputs) -> float:
         values = (i.odom_linear_mps, i.safe_linear_mps)
         if not all(_finite(value) for value in values):
@@ -1181,7 +1162,6 @@ class CollisionSupervisorCore:
         required: float,
         a_eff: float,
         hold: bool = False,
-        sweep_speed: Optional[float] = None,
     ) -> Tuple[
         int,
         float,
@@ -1220,11 +1200,6 @@ class CollisionSupervisorCore:
         ambiguous_ttc = math.inf
         ambiguous_intersects = False
         intersects = False
-        # arc geometry uses the COMMANDED speed; `speed` remains the braking
-        # envelope. Falling back to `speed` keeps existing callers (and the
-        # tests that drive this method directly) behaving as before.
-        arc_speed = speed if sweep_speed is None or not _finite(sweep_speed) \
-            else sweep_speed
         travel_time = min(
             self.policy.max_horizon_s,
             required / max(abs(speed), 1e-9),
@@ -1247,7 +1222,7 @@ class CollisionSupervisorCore:
                     point,
                     0.0,
                     0.0,
-                    arc_speed,
+                    speed,
                     angular,
                     hx,
                     hy,
@@ -1271,7 +1246,7 @@ class CollisionSupervisorCore:
                         point,
                         observed_vx,
                         observed_vy,
-                        arc_speed,
+                        speed,
                         angular,
                         hx,
                         hy,
@@ -1292,7 +1267,7 @@ class CollisionSupervisorCore:
                         point,
                         classified_vx,
                         classified_vy,
-                        arc_speed,
+                        speed,
                         angular,
                         hx,
                         hy,
@@ -1328,7 +1303,7 @@ class CollisionSupervisorCore:
                     point,
                     point_vx,
                     point_vy,
-                    arc_speed,
+                    speed,
                     angular,
                     hx,
                     hy,

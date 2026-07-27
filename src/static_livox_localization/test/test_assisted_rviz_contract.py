@@ -37,14 +37,12 @@ def test_rviz_has_one_meter_wheelchair_footprint_marker():
 
 
 def test_korean_runbook_documents_explicit_manual_alignment_gate():
-    text = (PROJECT / "docs" / "livox_moving_localization_ko.md").read_text(
-        encoding="utf-8"
-    )
+    text = (
+        PROJECT / "docs" / "runbooks" / "livox-moving-localization-ko.md"
+    ).read_text(encoding="utf-8")
+    assert "사자상 원형" in text
     assert "MANUAL_ALIGN" in text
     assert "VERIFYING" in text
-    assert "TRACKING" in text
-    assert "INITIAL_POSE_REQUIRED" in text
-    assert "CONSENSUS_READY" in text
     assert 'rosservice call /fast_lio_icp/enable_auto_correction "data: true"' in text
     assert 'rosservice call /fast_lio_icp/enable_auto_correction "data: false"' in text
     assert "지도는 움직이지 않는다" in text

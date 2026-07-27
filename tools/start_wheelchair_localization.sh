@@ -11,55 +11,13 @@ source /opt/ros/noetic/setup.bash
 export ROS_MASTER_URI=http://127.0.0.1:11311
 export DISPLAY="${DISPLAY:-:0}"
 
-echo "[0/5] display"
+echo "[0/5] display + vnc"
 XAUTHORITY="$HOME/.Xauthority" xrandr --output HDMI-1 --mode 1920x1080 2>/dev/null || true
-
-# VNC is OFF by default and bound to loopback when enabled.
-#
-# This used to start x11vnc unconditionally with `-passwd 0000` on the
-# command line, no -localhost, and then print the reachable NUC IP. The
-# password is in this repository's public history, so it is not a secret and
-# cannot be made one by editing it here - anyone on the network could take
-# the desktop session, and from that session drive the chair via rosservice.
-# Treat 0000 as burned: generate a new password into the -rfbauth file below.
-#
-#   VNC=1                       enable, listening on 127.0.0.1 only
-#   VNC_ALLOW_REMOTE=1          also bind the network interface (avoid)
-#   VNC_AUTH=<path>             password file, default ~/.vnc/passwd
-#
-# Create the password file once, readable only by the operator account:
-#   x11vnc -storepasswd ~/.vnc/passwd
-# Then reach the desktop over an SSH tunnel rather than exposing the port:
-#   ssh -L 5900:127.0.0.1:5900 mprp3@<nuc>
-VNC="${VNC:-0}"
-VNC_AUTH="${VNC_AUTH:-$HOME/.vnc/passwd}"
-if [ "$VNC" = "1" ]; then
-  if [ ! -f "$VNC_AUTH" ]; then
-    echo "  VNC requested but $VNC_AUTH is missing."
-    echo "  Create it with: x11vnc -storepasswd $VNC_AUTH"
-    echo "  (refusing to start an unauthenticated or hardcoded-password VNC)"
-    exit 7
-  fi
-  if [ "$(stat -c %a "$VNC_AUTH" 2>/dev/null)" != "600" ]; then
-    echo "  WARNING: $VNC_AUTH is not mode 600 - tighten it (chmod 600)"
-  fi
-  VNC_BIND="-localhost"
-  VNC_WHERE="127.0.0.1 only (tunnel with: ssh -L 5900:127.0.0.1:5900 ...)"
-  if [ "$VNC_ALLOW_REMOTE" = "1" ]; then
-    VNC_BIND=""
-    VNC_WHERE="ALL INTERFACES - exposed to the network"
-    echo "  WARNING: VNC_ALLOW_REMOTE=1, the desktop is reachable from the network"
-  fi
-  if ! pgrep -x x11vnc >/dev/null; then
-    # shellcheck disable=SC2086
-    setsid nohup x11vnc -display :0 -auth guess -rfbauth "$VNC_AUTH" \
-      $VNC_BIND -forever -shared -repeat -wait 15 -defer 15 \
-      -o "$HOME/x11vnc.log" -bg >/dev/null 2>&1 < /dev/null || true
-  fi
-  echo "  vnc on 5900, $VNC_WHERE"
-else
-  echo "  vnc disabled (VNC=1 to enable; see the notes in this script)"
+if ! pgrep -x x11vnc >/dev/null; then
+  setsid nohup x11vnc -display :0 -auth guess -passwd 0000 -forever -shared \
+    -repeat -wait 15 -defer 15 -o "$HOME/x11vnc.log" -bg >/dev/null 2>&1 < /dev/null || true
 fi
+echo "  vnc on port 5900 (pw 0000), NUC IP: $(hostname -I | tr ' ' '\n' | grep -v '^192\.168\.1\.' | head -1)"
 
 echo "[1/5] cleaning old processes"
 for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower'; do
@@ -85,49 +43,9 @@ if ! timeout 3 rostopic echo -n1 /livox/lidar/header >/dev/null 2>&1; then
 fi
 echo "  lidar OK"
 
-# VN-100: the inertial source for both FAST-LIO and tip_guard. It must be
-# up BEFORE FAST-LIO, which waits on IMU messages to initialise. To fall
-# back to the lidar's built-in IMU, set VN_IMU=0 and the FAST-LIO launch
-# below reverts to the previously validated mapping_mid360.launch.
-VN_IMU="${VN_IMU:-1}"
-if [ "$VN_IMU" = "1" ]; then
-  echo "[2b/5] VectorNav VN-100"
-  # A SIGTERM'd vnpub leaves the sensor streaming binary at 921600; the next
-  # driver start parses that backlog as register replies and segfaults
-  # (observed: exit code -11). Silence async output before opening it.
-  # Resolve next to this script first so a repo checkout works, then fall
-  # back to the deployed layout where only the script itself is copied to
-  # $HOME. Hardcoding $HOME meant the repo copy could never run it.
-  VN_RESET=""
-  for candidate in "$(dirname "$0")/vn_reset.py" "$HOME/vn_reset.py"; do
-    [ -f "$candidate" ] && { VN_RESET="$candidate"; break; }
-  done
-  if [ -n "$VN_RESET" ]; then
-    python3 "$VN_RESET" 2>&1 | sed 's/^/  vn_reset: /' || \
-      echo "  vn_reset failed - continuing, driver may still negotiate"
-  else
-    echo "  vn_reset.py not found - the driver may segfault on a stale stream"
-  fi
-  source "$HOME/catkin_ws/devel/setup.bash"
-  setsid nohup roslaunch base_model vectornav.launch \
-    > "$LOG/live_vectornav.log" 2>&1 < /dev/null &
-  for i in $(seq 1 20); do
-    timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1 && break
-    sleep 1
-  done
-  if ! timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1; then
-    echo "ERROR: /vectornav/IMU silent (check /dev/vn cable)"; exit 6
-  fi
-  echo "  VN-100 OK"
-  FASTLIO_LAUNCH="mapping_mid360_vn100.launch"
-else
-  echo "  VN_IMU=0 - falling back to the lidar's built-in IMU"
-  FASTLIO_LAUNCH="mapping_mid360.launch"
-fi
-
 echo "[3/5] FAST-LIO (keep the wheelchair STILL for a few seconds)"
 source "$HOME/fast_lio_ws/devel/setup.bash"
-setsid nohup roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
+setsid nohup roslaunch fast_lio mapping_mid360.launch rviz:=false \
   > "$LOG/live_fastlio.log" 2>&1 < /dev/null &
 for i in $(seq 1 20); do
   timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1 && break
@@ -172,11 +90,7 @@ fi
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
 setsid nohup rosrun static_livox_localization safety_gate.py \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
-if [ "$VN_IMU" = "1" ]; then
-  IMU_TOPIC="${IMU_TOPIC:-/vectornav/IMU}"
-else
-  IMU_TOPIC="${IMU_TOPIC:-/livox/imu}"
-fi
+IMU_TOPIC="${IMU_TOPIC:-/livox/imu}"
 setsid nohup rosrun static_livox_localization tip_guard.py \
   _imu_topic:="$IMU_TOPIC" \
   > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
@@ -198,10 +112,8 @@ mkdir -p "$HOME/localization_trials"
 setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics \
-  /fast_lio_icp/initialpose \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
-  /waypoint_follower/status /tip_guard/status /Odometry \
-  /livox/imu /vectornav/IMU \
+  /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

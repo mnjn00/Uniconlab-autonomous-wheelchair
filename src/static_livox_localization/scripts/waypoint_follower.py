@@ -13,13 +13,9 @@ Per control cycle:
   - obstacle guard: slow near obstacles/pedestrians, stop when close
   - stuck-obstacle bypass: after 10 s, side-step within the band only
   - slope guard and DEGRADED-localization slowdown, tilt aborts
-  - speed policy: 1.5 m/s cap (typical powered-wheelchair pace)
-    with speed-scaled obstacle guard distances, curvature
-    slowdown, accel/yaw-rate limiting; tip_guard adds closed-loop
-    climb assist so slopes get torque without tipping
+  - speed policy: 0.5 m/s cap, curvature slowdown, accel/yaw-rate limiting
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
-    stale pose/cloud/base, any non-TRACKING localization state (with a bounded
-    DEGRADED grace period), manual joystick mode, or
+    stale pose/cloud/base, LOST localization, manual joystick mode, or
     geofence violation, and always sends stop on shutdown.
 """
 
@@ -36,15 +32,10 @@ from std_msgs.msg import Int16MultiArray, String
 from std_srvs.srv import SetBool, SetBoolResponse
 
 import sensor_msgs.point_cloud2 as pc2
-
-from body_frame import (LIDAR_IN_BODY_XYZ,
-                        LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
-from localization_policy import localization_hold_reason
-from safety_band import SafetyBand
 import tf.transformations as tft
 
-MAX_SPEED = 1.5
-SLOPE_SPEED = 0.6
+MAX_SPEED = 0.5
+SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
 MAX_ACCEL = 0.18
@@ -52,58 +43,34 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
-# obstacle guard distances scale with speed: braking distance + sensing
-# latency must always fit inside the stop radius (near-stationary floor
-# 0.9 m, 1.8 m+ at full speed)
-GUARD_STOP_MIN_M = 0.9
-GUARD_STOP_PER_MPS = 1.2
-GUARD_SLOW_EXTRA_M = 1.2
+GUARD_STOP_M = 1.1
+GUARD_SLOW_M = 2.2
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
+CHAIR_HALF_WIDTH = 0.35
+BAND_MARGIN = 0.10
+BAND_FLOOR = 0.15
+NARROW_BAND_WIDTH = 1.2
 NARROW_SPEED = 0.2
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
-# on steep terrain, hug the proven driven line: creep, shorter
-# lookahead (no corner cutting), and no lateral bypass - the line
-# driven on 7/7 is the one place the camber is known passable
-STEEP_PITCH_RAD = math.radians(4.0)
-STEEP_SPEED = 0.3
-STEEP_LOOKAHEAD_FACTOR = 0.6
 BYPASS_AFTER_S = 10.0
-# micro offsets first: street furniture (barrier bars, sign posts)
-# usually needs only a small shift; large offsets after
-BYPASS_OFFSETS = (0.35, -0.35, 0.6, -0.6, 1.0, -1.0)
-MICRO_BYPASS_M = 0.4
+BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
-# static attitude backstop only - dynamic tip detection lives in
-# tip_guard (50 Hz deviation/rate/accel). Hanyang's steepest route ramp
-# measures ~10 deg fused pitch and its cambered ramps ~6.3 deg roll, so
-# both aborts sit above the measured terrain with margin while staying
-# far below static rollover attitudes.
-MAX_TILT_ROLL = math.radians(11.0)
-MAX_TILT_PITCH = math.radians(12.0)
+MAX_TILT_ROLL = math.radians(6.0)
+MAX_TILT_PITCH = math.radians(8.0)
 BAND_RECOVER_MAX = 0.5
 GEOFENCE_M = 3.5
 AUTO_MODE = 65
-DEGRADED_STOP_S = 3.0
-NEAREST_RESYNC_M = 2.0
-# the chord from the chair to the target is sampled at this spacing and every
-# sample must be in band; clamping only the endpoint checked nothing between
-CHORD_SAMPLE_M = 0.25
-MIN_LOOKAHEAD_M = 0.9
-LOOKAHEAD_BACKOFF_M = 0.4
 
 
 class CloudAccumulator:
     """Merge ~1 s of sparse MID360 scans into the current body frame."""
 
-    def __init__(self, window_s=0.6, lidar_in_body=LIDAR_IN_BODY_XYZ,
-                 lidar_in_body_yaw=LIDAR_IN_BODY_YAW_RAD):
+    def __init__(self, window_s=1.0):
         self.window_s = window_s
-        self.lidar_in_body = lidar_in_body
-        self.lidar_in_body_yaw = lidar_in_body_yaw
         self.scans = []
         self.odoms = []
 
@@ -152,9 +119,54 @@ class CloudAccumulator:
             parts.append(pts @ M[:3, :3].T + M[:3, 3])
         if not parts:
             return None, rospy.Time(0)
-        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
-                               self.lidar_in_body_yaw)
-        return merged, rospy.Time.from_sec(newest)
+        return np.vstack(parts), rospy.Time.from_sec(newest)
+
+
+class SafetyBand:
+    """Per-station drop-free lateral limits along the route (map frame)."""
+
+    def __init__(self, path):
+        data = json.load(open(path))
+        self.xy = np.array([[s["x"], s["y"]] for s in data["stations"]])
+        heading = np.radians([s["heading_deg"] for s in data["stations"]])
+        self.normals = np.stack([-np.sin(heading), np.cos(heading)], axis=1)
+        usable_left, usable_right, narrow = [], [], []
+        for s in data["stations"]:
+            # the driven line itself is proven safe, so never shrink the
+            # usable band below +-BAND_FLOOR; narrow stations creep instead
+            usable_left.append(
+                max(s["left_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
+            usable_right.append(
+                max(s["right_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
+            narrow.append(
+                s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
+        self.left = np.array(usable_left)
+        self.right = np.array(usable_right)
+        self.narrow = np.array(narrow)
+
+    def lateral_limits(self, point):
+        d = np.linalg.norm(self.xy - point, axis=1)
+        order = np.argsort(d)[:2]
+        k = int(order[0])
+        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
+        lo = -max(self.right[j] for j in order)
+        hi = max(self.left[j] for j in order)
+        return lateral, lo, hi
+
+    def contains(self, point, grace=0.0):
+        lateral, lo, hi = self.lateral_limits(point)
+        return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
+
+    def is_narrow(self, point):
+        d = np.linalg.norm(self.xy - point, axis=1)
+        return bool(self.narrow[int(np.argmin(d))])
+
+    def clamp(self, point):
+        d = np.linalg.norm(self.xy - point, axis=1)
+        k = int(np.argmin(d))
+        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
+        clamped = min(max(lateral, -self.right[k]), self.left[k])
+        return self.xy[k] + self.normals[k] * clamped
 
 
 class WaypointFollower:
@@ -166,17 +178,6 @@ class WaypointFollower:
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
         self.band = SafetyBand(rospy.get_param("~safety_band"))
         self.sensor_height = rospy.get_param("~sensor_height", 0.30)
-        # operator-authorized band grace for SMALL bypass offsets only:
-        # lets the chair dodge mapped-as-step street furniture when a
-        # human on site confirms the adjacent surface is flat. Default
-        # off; never applies to large offsets.
-        self.micro_bypass_grace = rospy.get_param(
-            "~micro_bypass_grace", 0.0)
-        # how far outside the usable band the chair may sit and still
-        # creep back on its own; raise only with an operator on site
-        # (e.g. after a manual reposition past street furniture)
-        self.band_recover_max = rospy.get_param(
-            "~band_recover_max", BAND_RECOVER_MAX)
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))
 
@@ -188,7 +189,6 @@ class WaypointFollower:
         self.pose_roll = 0.0
         self.pose_stamp = rospy.Time(0)
         self.tracking_state = ""
-        self.degraded_since = None
         self.drive_mode = None
         self.wheel_status_stamp = rospy.Time(0)
         self.route_locked = False
@@ -199,7 +199,6 @@ class WaypointFollower:
         self.current_speed = 0.0
         self.blocked_since = None
         self.lateral_offset = 0.0
-        self.chord_speed_cap = MAX_SPEED
         self.last_yaw_rate = 0.0
         self.status = "PAUSED"
 
@@ -263,8 +262,7 @@ class WaypointFollower:
             return 0.0  # no data = treat as blocked
         pts = self.cloud
         ground_plane = -self.sensor_height
-        guard_slow = self.guard_stop() + GUARD_SLOW_EXTRA_M
-        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < guard_slow + 0.6) &
+        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < GUARD_SLOW_M + 0.6) &
              (np.abs(pts[:, 1] - lateral_shift) < CORRIDOR_HALF_WIDTH))
         zone = pts[m]
         if not len(zone):
@@ -275,10 +273,6 @@ class WaypointFollower:
             return None
         return float(np.percentile(obstacles[:, 0], 5))
 
-    def guard_stop(self):
-        return max(GUARD_STOP_MIN_M,
-                   0.6 + GUARD_STOP_PER_MPS * self.current_speed)
-
     def bypass_target_ok(self, offset):
         """A lateral bypass is allowed only if the offset corridor stays
         inside the safety band for the next few meters."""
@@ -286,14 +280,10 @@ class WaypointFollower:
             return False
         heading = np.array([math.cos(self.pose_yaw), math.sin(self.pose_yaw)])
         normal = np.array([-heading[1], heading[0]])
-        grace = self.micro_bypass_grace if abs(offset) <= MICRO_BYPASS_M else 0.0
         for ahead in (0.5, 1.5, 2.5, 3.5):
             p = self.pose_xy + heading * ahead + normal * offset
-            if not self.band.contains(p, grace=grace):
+            if not self.band.contains(p):
                 return False
-        if grace > 0.0:
-            rospy.logwarn("micro-bypass using operator-authorized band "
-                          "grace %.2f m (offset %+.2f)", grace, offset)
         return True
 
     def send_stop(self):
@@ -307,27 +297,16 @@ class WaypointFollower:
             self.nearest_index = int(np.argmin(d))
             self.route_locked = True
         window_end = min(self.nearest_index + 15, len(self.waypoints))
-        windowed_index = int(
+        self.nearest_index = int(
             self.nearest_index + np.argmin(d[self.nearest_index:window_end]))
-        global_index = int(np.argmin(d))
-        if d[global_index] + NEAREST_RESYNC_M < d[windowed_index]:
-            rospy.logwarn(
-                "waypoint_follower: position diverged from windowed search "
-                "(wp %d, %.1fm) vs global nearest (wp %d, %.1fm) - resyncing",
-                windowed_index, d[windowed_index], global_index, d[global_index])
-            self.nearest_index = global_index
-        else:
-            self.nearest_index = windowed_index
         lookahead = 1.0 + 1.6 * self.current_speed
-        if abs(self.pose_pitch) > STEEP_PITCH_RAD:
-            lookahead = max(0.8, lookahead * STEEP_LOOKAHEAD_FACTOR)
-        # A straight chord can only stay inside a +-0.15 m band on curves
-        # gentler than about a 10 m radius, so on tighter corners the answer
-        # is a SHORTER lookahead - i.e. less speed - not a collapsed target.
-        # Measured on the shipped route: 3.4 m chords are in band at 91.5% of
-        # driven-line positions, 1.8 m at 98.9%, and ~1 m essentially always.
-        lookahead, self.chord_speed_cap = self.safe_lookahead(lookahead)
-        target = self.lookahead_point(lookahead)
+        target = self.waypoints[-1].copy()
+        acc = 0.0
+        for i in range(self.nearest_index, len(self.waypoints) - 1):
+            acc += np.linalg.norm(self.waypoints[i + 1] - self.waypoints[i])
+            if acc >= lookahead:
+                target = self.waypoints[i + 1].copy()
+                break
         if abs(self.lateral_offset) > 0.01:
             direction = target - self.pose_xy
             n = np.linalg.norm(direction)
@@ -337,81 +316,8 @@ class WaypointFollower:
         # never steer to a point outside the drop-free band
         return self.band.clamp(target)
 
-    def safe_lookahead(self, wanted):
-        """Longest lookahead whose chord stays in band, and the speed it implies.
-
-        Returns (lookahead, speed_cap). The chord is what the chair actually
-        traverses; band.clamp only ever constrained the ENDPOINT, and since
-        that endpoint was a route waypoint its lateral offset was ~0, so the
-        clamp was a no-op and nothing checked the path in between.
-
-        The shipped route makes this necessary rather than theoretical: 4 of
-        its 85 waypoints lie OUTSIDE the band and 8 of 84 chords leave it,
-        because the 353-station driven line was sparsified to 85 points
-        without regard for the band - cutting corners by up to 0.63 m where
-        the usable band is often 0.15 m. Filed separately; until the route is
-        regenerated this is what keeps a wheel on the pavement.
-        """
-        candidate = wanted
-        while candidate >= MIN_LOOKAHEAD_M:
-            target = self.band.clamp(self.lookahead_point(candidate))
-            if self.chord_in_band(target):
-                implied = max(0.0, (candidate - 1.0) / 1.6)
-                return candidate, (MAX_SPEED if candidate >= wanted - 1e-9
-                                   else max(CREEP_SPEED, implied))
-            candidate -= LOOKAHEAD_BACKOFF_M
-        # even the shortest chord is not provably safe: creep, and say so
-        rospy.logwarn_throttle(
-            5.0, "waypoint_follower: no band-safe chord at this pose, creeping")
-        return MIN_LOOKAHEAD_M, CREEP_SPEED
-
-    def lookahead_point(self, lookahead):
-        """Point `lookahead` metres along the route polyline from the chair.
-
-        Interpolated WITHIN a segment rather than snapped to a waypoint. The
-        deployed route has 85 waypoints over 353 m - median spacing 4.60 m,
-        and 63 of 84 segments longer than the 3.4 m maximum lookahead - so
-        snapping made the target "the next waypoint" almost every cycle. The
-        effective lookahead was then 4.6-6.9 m, 2-7x what was asked for, and
-        STEEP_LOOKAHEAD_FACTOR (which exists to stop corner-cutting on steep
-        ground) could never take effect at all.
-        """
-        start = self.waypoints[self.nearest_index]
-        remaining = lookahead
-        for i in range(self.nearest_index, len(self.waypoints) - 1):
-            a = self.waypoints[i] if i > self.nearest_index else start
-            b = self.waypoints[i + 1]
-            seg = np.linalg.norm(b - a)
-            if seg < 1e-6:
-                continue
-            if remaining <= seg:
-                return a + (b - a) * (remaining / seg)
-            remaining -= seg
-        return self.waypoints[-1].copy()
-
-    def chord_in_band(self, target):
-        """Is every sample along pose->target inside the band?
-
-        Uses the same OFF_BAND_GRACE the containment hold already tolerates,
-        so this cannot refuse a line the hold logic would accept.
-        """
-        span = float(np.linalg.norm(target - self.pose_xy))
-        if span < 1e-6:
-            return True
-        steps = max(2, int(math.ceil(span / CHORD_SAMPLE_M)))
-        for k in range(1, steps + 1):
-            point = self.pose_xy + (target - self.pose_xy) * (float(k) / steps)
-            if not self.band.contains(point, grace=OFF_BAND_GRACE):
-                return False
-        return True
-
     def step(self):
         now = rospy.Time.now()
-        if self.tracking_state == "DEGRADED":
-            if self.degraded_since is None:
-                self.degraded_since = now
-        else:
-            self.degraded_since = None
         reason = None
         if not self.enabled or self.done:
             reason = "DONE" if self.done else "PAUSED"
@@ -420,26 +326,20 @@ class WaypointFollower:
             reason = "NO_POSE"
         elif (now - self.cloud_stamp).to_sec() > 1.0:
             reason = "NO_CLOUD"
-        else:
-            degraded_age_s = None if self.degraded_since is None else \
-                (now - self.degraded_since).to_sec()
-            reason = localization_hold_reason(
-                self.tracking_state, degraded_age_s, DEGRADED_STOP_S)
-        if reason is None and \
-                (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
+        elif self.tracking_state == "LOST":
+            reason = "LOCALIZATION_LOST"
+        elif (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
             reason = "BASE_STALE"
-        elif reason is None and self.drive_mode is not None and \
-                self.drive_mode != AUTO_MODE:
+        elif self.drive_mode is not None and self.drive_mode != AUTO_MODE:
             reason = "MANUAL_MODE"
-        elif reason is None and (
-                abs(self.pose_roll) > MAX_TILT_ROLL or
-                abs(self.pose_pitch) > MAX_TILT_PITCH):
+        elif abs(self.pose_roll) > MAX_TILT_ROLL or \
+                abs(self.pose_pitch) > MAX_TILT_PITCH:
             reason = "TILT_LIMIT"
-        elif reason is None and self.route_locked and np.min(np.linalg.norm(
+        elif self.route_locked and np.min(np.linalg.norm(
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             reason = "OFF_ROUTE"
-        elif reason is None and self.route_locked and not self.band.contains(
-                self.pose_xy, grace=self.band_recover_max):
+        elif self.route_locked and not self.band.contains(
+                self.pose_xy, grace=BAND_RECOVER_MAX):
             reason = "OFF_BAND"
         if reason:
             if reason != self.status:
@@ -465,23 +365,19 @@ class WaypointFollower:
             allowed = min(allowed, CREEP_SPEED)
         if self.band.is_narrow(self.pose_xy):
             allowed = min(allowed, NARROW_SPEED)
-        # a chord longer than the band allows is answered with less speed,
-        # which shortens the lookahead, which shortens the chord
-        allowed = min(allowed, self.chord_speed_cap)
         if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
             allowed = min(allowed, SLOPE_SPEED)
         if self.tracking_state == "DEGRADED":
             allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
-        guard_stop = self.guard_stop()
-        guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
         if obstacle_dist is not None:
-            if obstacle_dist < guard_stop:
+            if obstacle_dist < GUARD_STOP_M:
                 blocking = "OBSTACLE"
                 allowed = 0.0
-            elif obstacle_dist < guard_slow:
-                ratio = (obstacle_dist - guard_stop) / GUARD_SLOW_EXTRA_M
+            elif obstacle_dist < GUARD_SLOW_M:
+                ratio = (obstacle_dist - GUARD_STOP_M) / \
+                    (GUARD_SLOW_M - GUARD_STOP_M)
                 allowed = min(allowed,
                               CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
 
@@ -492,7 +388,7 @@ class WaypointFollower:
                     abs(self.lateral_offset) < 0.01:
                 for offset in BYPASS_OFFSETS:
                     clear = self.obstacle_distance(offset)
-                    if (clear is None or clear > guard_slow) and \
+                    if (clear is None or clear > GUARD_SLOW_M) and \
                             self.bypass_target_ok(offset):
                         self.lateral_offset = offset
                         rospy.logwarn(
@@ -506,7 +402,7 @@ class WaypointFollower:
             self.blocked_since = None
             if abs(self.lateral_offset) > 0.01:
                 back = self.obstacle_distance(0.0)
-                if back is None or back > guard_slow:
+                if back is None or back > GUARD_SLOW_M:
                     self.lateral_offset = 0.0
                     rospy.loginfo("bypass complete, rejoining route")
 

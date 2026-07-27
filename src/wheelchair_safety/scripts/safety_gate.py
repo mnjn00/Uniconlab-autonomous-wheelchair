@@ -514,12 +514,6 @@ class EvidencePairBuffer:
         )
 
 
-# below this the commanded speed is effectively zero and the ratio is
-# meaningless; an in-place rotation is a deliberate manoeuvre, not a
-# scaled-down arc
-CURVATURE_MIN_LINEAR_MPS = 0.05
-
-
 @dataclass(frozen=True)
 class SafetyConfig:
     stale_timeout_s: float = 0.30
@@ -979,29 +973,8 @@ class SafetyGateCore:
                 if not _finite(evidence.max_angular_rps) or evidence.max_angular_rps < 0.0:
                     return VelocityCommand()
                 angular = min(angular, evidence.max_angular_rps)
-        capped_linear = _clamp(cmd.linear_x, -linear, linear)
-        capped_angular = _clamp(cmd.angular_z, -angular, angular)
-        # Preserve the PATH, not just the two axes. Clamping linear and
-        # angular independently turns a planner-validated arc into a tighter
-        # one that was never collision-checked: DWA validates (0.55, 0.6) as
-        # a 0.92 m radius, a collision CAUTION cuts linear to 0.10, and what
-        # goes out is a 0.17 m radius - the chair pivots nearly in place,
-        # sweeping its corners out to 0.86 m instead of translating away.
-        # Every structured supervisor can only ever cap linear (their status
-        # messages carry no angular field), so this is the common case, not
-        # an edge one. Scaling angular by the same factor keeps the curvature
-        # the planner checked.
-        if abs(cmd.linear_x) > CURVATURE_MIN_LINEAR_MPS:
-            scale = abs(capped_linear) / abs(cmd.linear_x)
-            if scale < 1.0:
-                # scale the REQUESTED rate, not the already-capped one:
-                # capping first and scaling after compounds the two and
-                # under-turns. The angular cap still binds afterwards, so a
-                # command whose curvature the cap alone already satisfied is
-                # unchanged.
-                capped_angular = _clamp(cmd.angular_z * scale,
-                                        -angular, angular)
-        return VelocityCommand(capped_linear, capped_angular)
+        return VelocityCommand(_clamp(cmd.linear_x, -linear, linear),
+                               _clamp(cmd.angular_z, -angular, angular))
 
     def _stop(self, mask, ages):
         fault_bits = INTERNAL_FAULT | CLOCK | DEADLINE_MISS | GRAPH_TOPOLOGY

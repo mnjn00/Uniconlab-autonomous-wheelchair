@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero-route.png" alt="Hanyang University Unicon Lab, Robotics - Autonomous Wheelchair" width="100%" />
+  <img src="docs/assets/hero-route.png" alt="UniconLab autonomous wheelchair route map" width="100%" />
 </p>
 
 <h1 align="center">UniconLab Autonomous Wheelchair</h1>
@@ -323,7 +323,6 @@ See [`contracts/wp0/A16-release-authority.yaml`](contracts/wp0/A16-release-autho
 ## Documentation
 
 - [Operator runbook](docs/operator_runbook.md)
-- [Livox 이동 로컬라이제이션 수동 정합 런북](docs/livox_moving_localization_ko.md)
 - [Replay and offline mapping](docs/replay_and_mapping.md)
 - [Interfaces and ownership](docs/interfaces.md)
 - [Simulator fidelity](docs/simulator_fidelity.md)

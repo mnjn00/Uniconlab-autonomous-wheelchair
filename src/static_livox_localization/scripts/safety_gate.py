@@ -19,9 +19,6 @@ from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Odometry
 
 import sensor_msgs.point_cloud2 as pc2
-
-from body_frame import (LIDAR_IN_BODY_XYZ,
-                        LIDAR_IN_BODY_YAW_RAD, body_to_lidar)
 import tf.transformations as tft
 
 
@@ -33,11 +30,8 @@ class CloudAccumulator:
     false-trigger. Scans are motion-compensated via /Odometry.
     """
 
-    def __init__(self, window_s=0.6, lidar_in_body=LIDAR_IN_BODY_XYZ,
-                 lidar_in_body_yaw=LIDAR_IN_BODY_YAW_RAD):
+    def __init__(self, window_s=1.0):
         self.window_s = window_s
-        self.lidar_in_body = lidar_in_body
-        self.lidar_in_body_yaw = lidar_in_body_yaw
         self.scans = []
         self.odoms = []
 
@@ -85,19 +79,16 @@ class CloudAccumulator:
             parts.append(pts @ M[:3, :3].T + M[:3, 3])
         if not parts:
             return None, rospy.Time(0)
-        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
-                               self.lidar_in_body_yaw)
-        return merged, rospy.Time.from_sec(newest_stamp)
+        return np.vstack(parts), rospy.Time.from_sec(newest_stamp)
 
 
 GATE_HZ = 15.0
 INPUT_STALE_S = 0.6
 CLOUD_STALE_S = 1.0
-HARD_V_LIMIT = 1.6
+HARD_V_LIMIT = 0.6
 HARD_W_LIMIT = 0.6
-STOP_DISTANCE_MIN_M = 0.8
-STOP_DISTANCE_PER_MPS = 1.5
-CHECK_RANGE_M = 3.0
+STOP_DISTANCE_M = 0.8
+CHECK_RANGE_M = 1.4
 HALF_WIDTH_M = 0.5
 SENSOR_HEIGHT_M = 0.30
 OBSTACLE_MIN_Z = 0.15
@@ -147,10 +138,8 @@ class SafetyGate:
             return ""
         rel = zone[:, 2] - ground_plane
         obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)]
-        stop_distance = max(STOP_DISTANCE_MIN_M,
-                            STOP_DISTANCE_PER_MPS * abs(self.raw.linear.x))
         if len(obstacles) >= 5 and \
-                np.percentile(obstacles[:, 0], 5) < stop_distance:
+                np.percentile(obstacles[:, 0], 5) < STOP_DISTANCE_M:
             return "OBSTACLE"
         return ""
 

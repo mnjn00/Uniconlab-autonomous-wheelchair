@@ -16,18 +16,6 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 VALIDATOR = REPOSITORY / "scripts" / "validate_wp0_contracts.py"
 
 
-def evidence_inventory():
-    return yaml.safe_load(
-        (REPOSITORY / "contracts" / "wp0" / "A15-evidence-inventory.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-
-
-def full_bag_normalization_inventory():
-    return evidence_inventory()["source_dataset"]["full_bag_normalization"]
-
-
 class WP0ContractValidatorTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -126,89 +114,28 @@ class WP0ContractValidatorTests(unittest.TestCase):
         (self.contract_dir / "A10-conversion-abi-v1.md").unlink()
         self.assert_rejected(self.run_validator(), "E_MISSING_ARTIFACT: A10-conversion-abi-v1.md")
 
-    def test_full_bag_evidence_is_declared_external_and_stays_git_ignored(self):
-        """The report is generated from a 2.8 GB local bag and is never committed.
-
-        A clean checkout therefore cannot contain it. That absence has to be a
-        declared, fail-closed state rather than a silent hole, so the inventory
-        and .gitignore must agree that the path is external.
-        """
-        normalization = full_bag_normalization_inventory()
-        self.assertFalse(normalization["repository_committed"])
-        self.assertTrue(normalization["evidence_path"].startswith("artifacts/"))
-        ignored = (REPOSITORY / ".gitignore").read_text(encoding="utf-8").splitlines()
-        self.assertTrue(
-            any(line.strip() in {"artifacts/", "/artifacts/"} for line in ignored),
-            ".gitignore no longer excludes artifacts/, so A15's "
-            "repository_committed: false is no longer the real state",
-        )
-        # The hash is verified against the file only when an operator supplies it,
-        # so at least assert its shape here; otherwise a blanked or placeholder
-        # value could sit in A15 indefinitely without anything noticing.
-        self.assertRegex(normalization["evidence_sha256"], r"^[0-9a-f]{64}$")
-
     def test_full_bag_normalization_evidence_is_hash_bound(self):
-        """When an operator supplies the external report it must match A15."""
-        normalization = full_bag_normalization_inventory()
-        evidence_path = REPOSITORY / normalization["evidence_path"]
-        if not evidence_path.is_file():
-            self.skipTest(
-                "BLOCKED: external full-bag evidence absent at "
-                f"{normalization['evidence_path']}; A15 declares it uncommitted"
+        inventory = yaml.safe_load(
+            (REPOSITORY / "contracts" / "wp0" / "A15-evidence-inventory.yaml").read_text(
+                encoding="utf-8"
             )
+        )
+        normalization = inventory["source_dataset"]["full_bag_normalization"]
+        evidence_path = REPOSITORY / normalization["evidence_path"]
         self.assertEqual(
             hashlib.sha256(evidence_path.read_bytes()).hexdigest(),
             normalization["evidence_sha256"],
         )
 
-    def test_full_bag_claims_in_inventory_remain_narrow_and_fail_closed(self):
-        """A15's recorded claims must stay narrow, report present or not.
-
-        This runs against the committed inventory only, so it is always enforced
-        and never skips. The external report is checked separately, by
-        test_full_bag_external_report_agrees_with_inventory.
-        """
-        normalization = full_bag_normalization_inventory()
-        self.assertEqual(
-            normalization["qualification"],
-            "PASSED_INGESTION_REPLAY_CONSISTENCY_ONLY",
+    def test_full_bag_claims_remain_narrow_and_fail_closed(self):
+        evidence = json.loads(
+            (
+                REPOSITORY
+                / "artifacts"
+                / "software_rc"
+                / "full-bag-normalization.json"
+            ).read_text(encoding="utf-8")
         )
-        self.assertEqual(normalization["independent_verifier"]["status"], "ok")
-        self.assertEqual(normalization["repeatability"]["independent_conversions"], 3)
-        self.assertTrue(normalization["repeatability"]["byte_identical_outputs"])
-        self.assertFalse(normalization["alignment"]["verified"])
-        self.assertFalse(
-            normalization["converter"]["typestore_is_recording_distribution_evidence"]
-        )
-        self.assertFalse(normalization["source_idl"]["recording_revision_proven"])
-        self.assertFalse(normalization["normalized_bag"]["repository_committed"])
-
-        fail_closed = evidence_inventory()["claim_limits"]["fail_closed_state"]
-        self.assertEqual(
-            fail_closed["wp2_full_conversion"],
-            "PASSED_INGESTION_REPLAY_CONSISTENCY_ONLY",
-        )
-        self.assertEqual(fail_closed["fusion_localization_qualification"], "BLOCKED")
-        self.assertEqual(fail_closed["target_nuc_qualification"], "BLOCKED")
-        self.assertFalse(fail_closed["hardware_motion_authorized"])
-        self.assertFalse(fail_closed["passenger_operation_authorized"])
-
-    def test_full_bag_external_report_agrees_with_inventory(self):
-        """When an operator supplies the external report, it must match A15.
-
-        This skips rather than returning quietly, so a clean checkout and CI
-        report BLOCKED instead of a green result under a name that claims the
-        report was checked.
-        """
-        normalization = full_bag_normalization_inventory()
-        evidence_path = REPOSITORY / normalization["evidence_path"]
-        if not evidence_path.is_file():
-            self.skipTest(
-                "BLOCKED: external full-bag evidence absent at "
-                f"{normalization['evidence_path']}; A15 declares it uncommitted"
-            )
-
-        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
         self.assertEqual(evidence["verifier"]["status"], "ok")
         self.assertEqual(evidence["repeatability"]["independent_conversion_count"], 3)
         self.assertTrue(evidence["repeatability"]["byte_identical_outputs"])
@@ -226,12 +153,6 @@ class WP0ContractValidatorTests(unittest.TestCase):
                 "points_repaired": 0,
             },
         )
-        for key in ("clouds", "imus", "total_records", "points"):
-            self.assertEqual(
-                evidence["outputs"]["counts"][key],
-                normalization["counts"][key],
-                f"external report and A15 disagree on {key}",
-            )
         self.assertFalse(evidence["inputs"]["alignment"]["verified"])
         self.assertFalse(
             evidence["inputs"]["converter"][

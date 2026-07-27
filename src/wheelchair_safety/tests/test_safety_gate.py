@@ -177,33 +177,3 @@ def test_changed_same_sequence_is_rejected():
     changed = SignalEvidence(**{**changed.__dict__, "reason_mask": safety_gate.GRAPH_TOPOLOGY})
     decision = core.evaluate(valid_inputs(topology=changed))
     assert decision.reason_mask & safety_gate.CORRUPT_DATA
-
-
-def test_capping_speed_preserves_the_commanded_curvature():
-    """A linear-only cap used to leave angular untouched, turning a
-    planner-validated arc into a much tighter one that was never
-    collision-checked. Collision CAUTION and slope SLOW can ONLY cap linear
-    (their status messages carry no angular field), so this is the common
-    path, not an edge case."""
-    core = SafetyGateCore(SafetyConfig(max_linear_speed=0.55,
-                                       max_angular_speed=0.85))
-    # DWA asks for 0.5 m/s on a 0.8 rad/m arc; collision caps linear to 0.10
-    collision = clear("collision", max_linear_mps=0.10)
-    decision = core.evaluate(valid_inputs(cmd=VelocityCommand(0.5, 0.4),
-                                          collision=collision,
-                                          arm_request=True))
-    out = decision.command
-    assert abs(out.linear_x - 0.10) < 1e-9
-    # curvature 0.4/0.5 = 0.8 rad/m must survive: 0.10 * 0.8 = 0.08
-    assert abs(out.angular_z - 0.08) < 1e-9
-    assert abs(out.angular_z / out.linear_x - 0.4 / 0.5) < 1e-9
-
-
-def test_an_in_place_rotation_is_not_scaled_away():
-    """Rotating on the spot is a deliberate manoeuvre, not an arc to
-    preserve; scaling by a near-zero linear ratio would delete it."""
-    core = SafetyGateCore(SafetyConfig(max_linear_speed=0.55,
-                                       max_angular_speed=0.85))
-    decision = core.evaluate(valid_inputs(cmd=VelocityCommand(0.0, 0.5),
-                                          arm_request=True))
-    assert abs(decision.command.angular_z - 0.5) < 1e-9

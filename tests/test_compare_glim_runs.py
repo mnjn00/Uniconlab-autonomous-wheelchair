@@ -103,7 +103,7 @@ class CompareGlimRunsTests(unittest.TestCase):
 
     def test_repeatability_passes_when_loop_target_is_false(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
+            root = Path(temporary)
             self.write_artifact_tree(root)
             exit_code, report = self.compare(root)
 
@@ -128,7 +128,7 @@ class CompareGlimRunsTests(unittest.TestCase):
         }
         for name, changes in cases.items():
             with self.subTest(gate=name), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary).resolve()
+                root = Path(temporary)
                 self.write_artifact_tree(root, **changes)
                 exit_code, report = self.compare(root)
 
@@ -139,7 +139,7 @@ class CompareGlimRunsTests(unittest.TestCase):
     def test_invalid_run_structure_or_integrity_fails(self):
         for kind in ("malformed", "missing", "hash_mismatch", "failed"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary).resolve()
+                root = Path(temporary)
                 statuses = ["success", "success", "failed"] if kind == "failed" else None
                 self.write_artifact_tree(root, statuses=statuses)
                 trajectory = root / "run-03/trajectory.csv"
@@ -162,7 +162,7 @@ class CompareGlimRunsTests(unittest.TestCase):
 
     def test_loop_diagnostic_preserves_numeric_values_and_limitation(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
+            root = Path(temporary)
             self.write_artifact_tree(root)
             _, report = self.compare(root)
 
@@ -178,7 +178,7 @@ class CompareGlimRunsTests(unittest.TestCase):
         cases = ("skeletal", "input", "config", "image", "seed", "threads", "escape", "tolerance")
         for kind in cases:
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary).resolve()
+                root = Path(temporary)
                 self.write_artifact_tree(root)
                 manifest_path = root / "repro_manifest.json"
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -213,7 +213,7 @@ class CompareGlimRunsTests(unittest.TestCase):
     def test_symlinked_run_or_artifact_fails(self):
         for kind in ("run", "artifact"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary).resolve()
+                root = Path(temporary)
                 self.write_artifact_tree(root)
                 if kind == "run":
                     (root / "run-01").rename(root / "real-run")
