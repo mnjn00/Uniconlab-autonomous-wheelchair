@@ -25,9 +25,18 @@ ser = serial.Serial(
   bytesize = serial.EIGHTBITS,
   parity   = serial.PARITY_NONE,
   stopbits = serial.STOPBITS_ONE,
+  # Without a timeout, ser.read() blocks forever and rospy.is_shutdown()
+  # is never re-checked, so the node cannot exit cleanly - and ord() on an
+  # empty read would raise. RX() treats a timeout as "no byte yet".
+  timeout  = 0.1,
 )
 
 WATCHDOG_TIMEOUT_S = 0.6
+AUTO_MODE = 65
+MANUAL_MODE = 77
+# Every status frame in the 2026-07-25 and 2026-07-27 field bags has the
+# controller's fixed 11-byte layout: [72, mode, 6 payload, checksum, 13, 10].
+STATUS_FRAME_LEN = 11
 
 
 class UARTCommunication():
@@ -50,21 +59,44 @@ class UARTCommunication():
     return (~(sum(ckdata))+1) & 0xFF
 
   def RX(self):
-    self.wheel_data.append(ord(ser.read()) & 0xFF)
-    if self.wheel_data[0] == 72:
-      if self.wheel_data[-2:] == [13,10]:
-        if self.wheel_data[-3] == self.Checksum(self.wheel_data[1:-3]):
-          uart_msg = Int16MultiArray()
-          uart_msg.data = self.wheel_data
-          self.uart_pub.publish(uart_msg)
-          self.mode = self.wheel_data[1]
-          self.wheel_data = []
-        else:
-          self.wheel_data = []
-      else:
-        pass
-    else:
+    byte = ser.read()
+    if not byte:
+      return                      # read timeout, not a frame boundary
+    self.wheel_data.append(ord(byte) & 0xFF)
+    if len(self.wheel_data) > STATUS_FRAME_LEN:
+      # a frame that never terminates would otherwise grow for the life of
+      # the process; resync instead of buffering line noise forever
+      rospy.logwarn_throttle(5.0, 'uart: oversized frame, resyncing')
       self.wheel_data = []
+      return
+    if self.wheel_data[0] != 72:
+      self.wheel_data = []
+      return
+    if self.wheel_data[-2:] != [13,10]:
+      return
+    # A checksum-valid truncated frame is still not a controller status frame.
+    # In particular, [72, 65, 191, 13, 10] passes the checksum and would latch
+    # AUTO without the exact-length check.
+    if len(self.wheel_data) != STATUS_FRAME_LEN:
+      rospy.logwarn_throttle(
+          5.0, 'uart: unexpected frame length (%d bytes), discarding',
+          len(self.wheel_data))
+      self.wheel_data = []
+      return
+    if self.wheel_data[-3] != self.Checksum(self.wheel_data[1:-3]):
+      self.wheel_data = []
+      return
+    mode = self.wheel_data[1]
+    uart_msg = Int16MultiArray()
+    uart_msg.data = self.wheel_data
+    self.uart_pub.publish(uart_msg)
+    # Only the two defined modes may be latched. Anything else leaves the
+    # previous mode alone rather than becoming a third, unhandled state.
+    if mode in (AUTO_MODE, MANUAL_MODE):
+      self.mode = mode
+    else:
+      rospy.logwarn_throttle(5.0, 'uart: unknown mode byte %d ignored', mode)
+    self.wheel_data = []
 
   def TX(self, wheel_cmd):
     cmd_data = [72] + wheel_cmd + [self.Checksum(wheel_cmd),13,10]
@@ -88,6 +120,9 @@ class UARTCommunication():
       self.TX([65] + self.stop_cmd)
 
   def ModeCallback(self, msg):
+    if msg.data not in (AUTO_MODE, MANUAL_MODE):
+      rospy.logwarn('uart: ignoring unknown mode command %d', msg.data)
+      return
     self.mode = msg.data
     if self.mode == 65:
       print('\n\n[[[ Auto Mode ]]]')
@@ -100,6 +135,25 @@ class UARTCommunication():
       pass
 
 
+def stop_motors(uart):
+  """Best-effort stop frame. Called on EVERY exit path.
+
+  The whole point of this file is that the motors stop when the command
+  stream dies - but only KeyboardInterrupt used to be caught, so a
+  SerialException from a USB re-enumeration or a jostled cable fell
+  straight through to `finally`, closed the port and exited WITHOUT ever
+  sending a stop. The last commanded speed stays latched in the motor
+  controller and the watchdog timer dies with the process: exactly the
+  failure this node exists to prevent, one level down.
+  """
+  for mode in (AUTO_MODE, MANUAL_MODE):
+    try:
+      uart.TX([mode] + uart.stop_cmd)
+    except Exception as exc:                       # noqa: BLE001
+      rospy.logerr('uart: could not send stop frame for mode %d: %s',
+                   mode, exc)
+
+
 if __name__=="__main__":
   uart = UARTCommunication()
   try:
@@ -109,6 +163,14 @@ if __name__=="__main__":
   except KeyboardInterrupt:
     print('keyboard interrupt')
 
+  except Exception as exc:                         # noqa: BLE001
+    # log loudly: this path means the link died mid-drive
+    rospy.logfatal('uart: link failed (%s) - stopping motors and exiting',
+                   exc)
+
   finally:
-    ser.close()
-    pass
+    stop_motors(uart)
+    try:
+      ser.close()
+    except Exception:                              # noqa: BLE001
+      pass
