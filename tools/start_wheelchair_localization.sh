@@ -2,8 +2,14 @@
 # One-command field startup: driver -> FAST-LIO -> localization(+RViz) -> auto seed.
 set -eo pipefail
 
-MAP="${MAP:-$HOME/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd}"
-TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/livox_raw_20260707/traj_lidar.txt}"
+# Map merged from three passes (07/07 + 07/25), pose-graph optimised with
+# 1460 submaps over 27519 frames. Deploy with tools/deploy_merged_map.sh,
+# which converts the .ply GLIM emits into the .pcd the localizer reads.
+# The previous single-pass map is still selectable:
+#   MAP=$HOME/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd \
+#   TRAJ=$HOME/wheelchair_localization_maps/livox_raw_20260707/traj_lidar.txt ./start_wheelchair_localization.sh
+MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725.pcd}"
+TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
 RVIZ="${RVIZ:-true}"
 LOG=$HOME
 
@@ -125,8 +131,8 @@ done
 echo "  tip_guard armed - watch /tip_guard/status; if it stays"
 echo "  CONFIG_UNVERIFIED for more than ~30s of driving, the IMU axis"
 echo "  needs checking (see IMU_TOPIC / rosparam ~gyro_pitch_axis/sign)"
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_waypoints.json}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_safety_band.json}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260727_new_route_waypoints.json}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260727_new_route_safety_band.json}"
 setsid nohup rosrun static_livox_localization waypoint_follower.py \
   _route:="$ROUTE" _safety_band:="$BAND" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &

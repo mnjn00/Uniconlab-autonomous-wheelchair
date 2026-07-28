@@ -19,6 +19,7 @@ import numpy as np
 ROOT = Path(__file__).parents[3]
 sys.path.insert(0, str(ROOT / "src" / "static_livox_localization" / "scripts"))
 
+import safety_band  # noqa: E402
 from safety_band import (  # noqa: E402
     BAND_FLOOR, CHAIR_HALF_WIDTH, SafetyBand)
 
@@ -208,3 +209,31 @@ def test_baseline_lookahead_backs_off_only_at_the_measured_tight_station():
             assert band.chord_is_contained(
                 station, backed_off, grace=0.10)
     assert unsafe == [201]
+
+
+def test_clearance_is_chosen_from_the_measured_drop_not_applied_uniformly():
+    """A shallow lip must not cost the same 0.45 m of usable width as a kerb
+    into a roadway - that inset on both sides is what left this route too
+    narrow to step around a pedestrian."""
+    full = safety_band.CHAIR_HALF_WIDTH + safety_band.BAND_MARGIN
+
+    assert safety_band.edge_clearance(0.0) == safety_band.EDGE_MARGIN
+    assert safety_band.edge_clearance(
+        safety_band.DROP_SEVERE_M - 0.01) == safety_band.EDGE_MARGIN
+    assert safety_band.edge_clearance(safety_band.DROP_SEVERE_M) == full
+    assert safety_band.edge_clearance(0.25) == full
+    assert safety_band.EDGE_MARGIN < full
+
+
+def test_an_unseen_edge_is_treated_as_a_drop_not_as_open_ground():
+    """No returns past the limit means the scan could not see what is
+    there. Absence of evidence must not read as evidence of flat ground."""
+    full = safety_band.CHAIR_HALF_WIDTH + safety_band.BAND_MARGIN
+    assert safety_band.edge_clearance(-1.0) == full
+
+
+def test_a_band_without_drop_fields_keeps_the_conservative_inset():
+    """Bands generated before depth measurement existed must behave exactly
+    as they were validated, not silently inherit the tighter margin."""
+    full = safety_band.CHAIR_HALF_WIDTH + safety_band.BAND_MARGIN
+    assert safety_band.edge_clearance(None) == full

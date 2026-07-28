@@ -42,9 +42,32 @@ def test_follower_keeps_wheelchair_inside_map_safety_band():
 
 def test_follower_speed_policy_is_bounded():
     text = follower_text()
-    assert "MAX_SPEED = 0.5" in text
+    assert "MAX_SPEED = 1.2" in text
     assert "SLOPE_SPEED = 0.3" in text
     assert "MAX_ACCEL" in text and "MAX_DECEL" in text
+
+
+def test_obstacle_stop_radius_covers_braking_distance_at_full_speed():
+    """The stop radius must not be a constant. At MAX_SPEED the chair needs
+    MAX_SPEED^2 / (2 * MAX_DECEL) just to brake, so a fixed radius chosen
+    for a slower cap puts the stop point past the obstacle."""
+    import re
+
+    text = follower_text()
+    values = {}
+    for name in ("MAX_SPEED", "MAX_DECEL", "GUARD_STOP_MIN_M",
+                 "GUARD_STOP_PER_MPS"):
+        match = re.search(r"^%s = ([0-9.]+)$" % name, text, re.M)
+        assert match, "%s must be a module-level constant" % name
+        values[name] = float(match.group(1))
+
+    braking = values["MAX_SPEED"] ** 2 / (2 * values["MAX_DECEL"])
+    stop_radius = (values["GUARD_STOP_MIN_M"] +
+                   values["GUARD_STOP_PER_MPS"] * values["MAX_SPEED"])
+    assert stop_radius > braking, (
+        "stop radius %.2f m does not cover %.2f m of braking at %.2f m/s"
+        % (stop_radius, braking, values["MAX_SPEED"]))
+    assert "self.guard_stop()" in text and "self.guard_slow()" in text
 
 
 def test_follower_bypasses_static_obstacles_only_inside_band():

@@ -5,6 +5,22 @@ ground within ~2.4 m (vertical FOV -7 deg at a 0.3 m mount), so there is no
 live kerb or drop detection at all - containment inside this band, derived
 offline from the prior map, is what keeps a wheel on the pavement.
 
+Clearance is chosen per edge from the measured depth of the step that
+bounded it, not applied uniformly:
+
+  - A real kerb into a road (>= DROP_SEVERE_M) keeps the full
+    CHAIR_HALF_WIDTH + BAND_MARGIN inset, so the outer wheel physically
+    cannot reach the edge.
+  - A shallow lip, a gentle camber change, or open ground keeps only
+    EDGE_MARGIN. A uniform half-width inset costs 0.45 m of usable width
+    on BOTH sides; on this route that left several stretches too narrow
+    for the chair to step around a pedestrian or a parked obstacle, so it
+    would stop and wait instead of passing. Trading clearance for
+    passability is only sound where the map shows nothing to fall off,
+    which is what the per-edge depth establishes.
+  - An edge the scan could not see past (depth < 0, no returns) is
+    treated as severe. Absence of data is not evidence of flat ground.
+
 Deliberately free of ROS imports so the geometry can be unit-tested against
 the shipped band JSON; see test/test_safety_band.py.
 """
@@ -15,6 +31,13 @@ import numpy as np
 
 CHAIR_HALF_WIDTH = 0.35
 BAND_MARGIN = 0.10
+# Clearance kept from an edge with no real drop behind it. Small on
+# purpose: it is what buys the lateral room to pass obstacles.
+EDGE_MARGIN = 0.075
+# A step at least this deep is treated as a fall hazard and gets the full
+# chair-half-width inset. Below it the wheel rides over a lip instead of
+# dropping off; standard kerbs into a roadway are 0.10-0.20 m.
+DROP_SEVERE_M = 0.12
 # the driven line itself is proven safe, so never shrink the usable band
 # below this; narrow stations creep instead of holding
 BAND_FLOOR = 0.15
@@ -22,6 +45,18 @@ NARROW_BAND_WIDTH = 1.2
 # clamp re-evaluates because moving a point changes which stations
 # bracket it; two passes converge on the shipped band
 CLAMP_MAX_PASSES = 3
+
+
+def edge_clearance(drop_m):
+    """Inset to keep from an edge whose bounding step is `drop_m` deep.
+
+    Bands generated before drop measurement existed carry no depth field;
+    those are treated as severe, so an old band keeps exactly the
+    conservative behaviour it was validated with.
+    """
+    if drop_m is None or drop_m < 0.0 or drop_m >= DROP_SEVERE_M:
+        return CHAIR_HALF_WIDTH + BAND_MARGIN
+    return EDGE_MARGIN
 
 
 class SafetyBand:
@@ -32,10 +67,12 @@ class SafetyBand:
         self.normals = np.stack([-np.sin(heading), np.cos(heading)], axis=1)
         usable_left, usable_right, narrow = [], [], []
         for s in data["stations"]:
-            usable_left.append(
-                max(s["left_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
-            usable_right.append(
-                max(s["right_m"] - CHAIR_HALF_WIDTH - BAND_MARGIN, BAND_FLOOR))
+            usable_left.append(max(
+                s["left_m"] - edge_clearance(s.get("left_drop_m")),
+                BAND_FLOOR))
+            usable_right.append(max(
+                s["right_m"] - edge_clearance(s.get("right_drop_m")),
+                BAND_FLOOR))
             narrow.append(s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
         self.left = np.array(usable_left)
         self.right = np.array(usable_right)

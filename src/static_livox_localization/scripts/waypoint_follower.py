@@ -10,10 +10,13 @@ scan is used for what the sensor CAN see: obstacles and pedestrians.
 Per control cycle:
   - band containment: the current position must lie inside the safety band;
     steering targets and bypass offsets are clamped into the band
-  - obstacle guard: slow near obstacles/pedestrians, stop when close
-  - stuck-obstacle bypass: after 10 s, side-step within the band only
+  - obstacle guard: slow near obstacles/pedestrians, stop when close, with
+    stop and slow radii scaled to the speed being carried
+  - obstacle vs pedestrian: anything still blocking after 3 s is stepped
+    around within the band; anything that clears sooner is waited out and
+    driving resumes as soon as the corridor is clear
   - slope guard and bounded DEGRADED-localization grace
-  - speed policy: 0.5 m/s cap, curvature slowdown, accel/yaw-rate limiting
+  - speed policy: 1.2 m/s cap, curvature slowdown, accel/yaw-rate limiting
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST or sustained DEGRADED localization, manual
     joystick mode, or geofence violation, and always stops on shutdown.
@@ -36,7 +39,12 @@ from localization_policy import localization_hold_reason
 from safety_band import SafetyBand
 import tf.transformations as tft
 
-MAX_SPEED = 0.5
+# Matched to how the route is actually driven. Measured over the
+# 2026-07-27 manual run of this route (full_debug_20260727_214306.bag,
+# /fast_lio_icp/pose, spin-in-place bookends trimmed): median 0.96 m/s,
+# p75 1.00, p90 1.21, p95 1.58. The cap sits at the measured p90 so the
+# chair can hold the operator's steady pace instead of trailing it.
+MAX_SPEED = 1.2
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
@@ -45,14 +53,25 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
-GUARD_STOP_M = 1.1
-GUARD_SLOW_M = 2.2
+# Obstacle guard distances scale with speed. A fixed 1.1 m stop radius was
+# only ever safe at the 0.5 m/s cap it was chosen for: braking alone needs
+# v^2 / (2 * MAX_DECEL), which is 1.2 m at 1.2 m/s, before any allowance for
+# the ~0.5 s it takes a return to pass through the 1 s scan accumulator and
+# the 10 Hz control loop. Raising the speed without raising this would have
+# put the stop point behind the obstacle.
+GUARD_STOP_MIN_M = 0.9
+GUARD_STOP_PER_MPS = 1.2
+GUARD_SLOW_EXTRA_M = 1.2
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
 NARROW_SPEED = 0.2
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
-BYPASS_AFTER_S = 10.0
+# What separates "an obstacle" from "a person". Anything still in the way
+# after this long is treated as parked and gets stepped around; anything
+# that clears sooner - a pedestrian crossing the path - is simply waited
+# out, and driving resumes the moment the corridor is clear again.
+BYPASS_AFTER_S = 3.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
@@ -211,6 +230,14 @@ class WaypointFollower:
                                message="ENABLED" if self.enabled else "PAUSED")
 
     # ------------------------------------------------------------ safety
+    def guard_stop(self):
+        """Stop radius for the speed the chair is actually carrying."""
+        return GUARD_STOP_MIN_M + GUARD_STOP_PER_MPS * max(
+            0.0, self.current_speed)
+
+    def guard_slow(self):
+        return self.guard_stop() + GUARD_SLOW_EXTRA_M
+
     def obstacle_distance(self, lateral_shift=0.0):
         """Nearest obstacle in the forward corridor from the live scan,
         or None. The scan sees people and objects, not near ground."""
@@ -218,7 +245,7 @@ class WaypointFollower:
             return 0.0  # no data = treat as blocked
         pts = self.cloud
         ground_plane = -self.sensor_height
-        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < GUARD_SLOW_M + 0.6) &
+        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < self.guard_slow() + 0.6) &
              (np.abs(pts[:, 1] - lateral_shift) < CORRIDOR_HALF_WIDTH))
         zone = pts[m]
         if not len(zone):
@@ -402,13 +429,14 @@ class WaypointFollower:
             allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
+        guard_stop = self.guard_stop()
+        guard_slow = self.guard_slow()
         if obstacle_dist is not None:
-            if obstacle_dist < GUARD_STOP_M:
+            if obstacle_dist < guard_stop:
                 blocking = "OBSTACLE"
                 allowed = 0.0
-            elif obstacle_dist < GUARD_SLOW_M:
-                ratio = (obstacle_dist - GUARD_STOP_M) / \
-                    (GUARD_SLOW_M - GUARD_STOP_M)
+            elif obstacle_dist < guard_slow:
+                ratio = (obstacle_dist - guard_stop) / GUARD_SLOW_EXTRA_M
                 allowed = min(allowed,
                               CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
 
@@ -419,7 +447,7 @@ class WaypointFollower:
                     abs(self.lateral_offset) < 0.01:
                 for offset in BYPASS_OFFSETS:
                     clear = self.obstacle_distance(offset)
-                    if (clear is None or clear > GUARD_SLOW_M) and \
+                    if (clear is None or clear > guard_slow) and \
                             self.bypass_target_ok(offset):
                         self.lateral_offset = offset
                         rospy.logwarn(
@@ -433,7 +461,7 @@ class WaypointFollower:
             self.blocked_since = None
             if abs(self.lateral_offset) > 0.01:
                 back = self.obstacle_distance(0.0)
-                if back is None or back > GUARD_SLOW_M:
+                if back is None or back > guard_slow:
                     self.lateral_offset = 0.0
                     rospy.loginfo("bypass complete, rejoining route")
 
