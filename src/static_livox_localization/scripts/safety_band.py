@@ -14,7 +14,11 @@ import json
 import numpy as np
 
 CHAIR_HALF_WIDTH = 0.35
-BAND_MARGIN = 0.10
+# Keep-out beyond the chair's own half-width. Deliberately small: the
+# band's job is to stop the wheels leaving the pavement, not to
+# reserve room, and a fat margin was making narrow stretches
+# impassable whenever a pedestrian had to be side-stepped.
+BAND_MARGIN = 0.075
 # the driven line itself is proven safe, so never shrink the usable band
 # below this; narrow stations creep instead of holding
 BAND_FLOOR = 0.15

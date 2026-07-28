@@ -40,11 +40,46 @@ def test_follower_keeps_wheelchair_inside_map_safety_band():
     assert "CHAIR_HALF_WIDTH" in band and "BAND_MARGIN" in band
 
 
+def follower_constant(name):
+    import re
+    text = follower_text()
+    match = re.search(r"^%s = ([0-9.]+)$" % name, text, re.MULTILINE)
+    assert match, "constant %s not found" % name
+    return float(match.group(1))
+
+
 def test_follower_speed_policy_is_bounded():
     text = follower_text()
-    assert "MAX_SPEED = 0.5" in text
     assert "SLOPE_SPEED = 0.3" in text
     assert "MAX_ACCEL" in text and "MAX_DECEL" in text
+    # a powered wheelchair pace, not a literal pinned by this test - the
+    # cruise speed is a field-measured value and is expected to change
+    assert 0.3 <= follower_constant("MAX_SPEED") <= 1.5
+
+
+def test_stop_radius_covers_braking_distance_at_full_speed():
+    """The guard has to stop the chair before it reaches an obstacle, so
+    the stop radius must exceed braking distance plus everything the chair
+    covers while the obstacle is still working through cloud accumulation
+    and the control cycle. A fixed radius silently stops satisfying this
+    the moment the cruise speed is raised, which is exactly what the
+    speed-scaled form prevents."""
+    v = follower_constant("MAX_SPEED")
+    decel = follower_constant("MAX_DECEL")
+    stop_radius = (follower_constant("GUARD_STOP_MIN_M") +
+                   follower_constant("GUARD_STOP_PER_MPS") * v)
+    braking = v * v / (2.0 * decel)
+    # 1 s of cloud accumulation plus one 10 Hz control period
+    latency_travel = v * (1.0 + 1.0 / follower_constant("CONTROL_HZ"))
+    assert stop_radius >= braking + latency_travel
+
+
+def test_obstacle_scan_window_reaches_past_the_slow_radius():
+    """Seeing only as far as the stop radius means an obstacle is already
+    inside braking distance the first time it is detected."""
+    text = follower_text()
+    assert "window = self.guard_stop() + GUARD_SLOW_EXTRA_M + 0.6" in text
+    assert "pts[:, 0] < window" in text
 
 
 def test_follower_bypasses_static_obstacles_only_inside_band():

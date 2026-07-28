@@ -36,7 +36,7 @@ from localization_policy import localization_hold_reason
 from safety_band import SafetyBand
 import tf.transformations as tft
 
-MAX_SPEED = 0.5
+MAX_SPEED = 1.1
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
@@ -45,14 +45,24 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
-GUARD_STOP_M = 1.1
-GUARD_SLOW_M = 2.2
+# Obstacle guard distances scale with speed: at MAX_SPEED the chair
+# needs v^2/(2*MAX_DECEL) = 1.0 m to brake, plus up to ~1.2 s of
+# sensing+control latency (1 s cloud accumulation, 10 Hz control) at
+# 1.1 m/s = 1.3 m more. A fixed 1.1 m stop radius was sized for the
+# old 0.5 m/s cap and is not enough once the chair cruises faster.
+GUARD_STOP_MIN_M = 0.9
+GUARD_STOP_PER_MPS = 1.4
+GUARD_SLOW_EXTRA_M = 1.2
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
 NARROW_SPEED = 0.2
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
-BYPASS_AFTER_S = 10.0
+# People clear the path on their own within a couple of seconds, so a
+# blocker still there after 3 s is treated as scenery and side-stepped.
+# Anything that moves out of the corridor sooner simply stops blocking
+# and the chair resumes without ever planning a bypass.
+BYPASS_AFTER_S = 3.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
@@ -222,7 +232,11 @@ class WaypointFollower:
             return 0.0  # no data = treat as blocked
         pts = self.cloud
         ground_plane = -self.sensor_height
-        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < GUARD_SLOW_M + 0.6) &
+        # The scan window has to reach past the slow radius, or the chair
+        # meets an obstacle already inside its own braking distance with
+        # no room left to have slowed down for it first.
+        window = self.guard_stop() + GUARD_SLOW_EXTRA_M + 0.6
+        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < window) &
              (np.abs(pts[:, 1] - lateral_shift) < CORRIDOR_HALF_WIDTH))
         zone = pts[m]
         if not len(zone):
@@ -251,6 +265,13 @@ class WaypointFollower:
         self.cmd_pub.publish(Twist())
 
     # ------------------------------------------------------------ control
+    def guard_stop(self):
+        """Stop radius for the CURRENT speed: braking distance plus the
+        distance covered while a new obstacle is still working its way
+        through cloud accumulation and the control cycle."""
+        return GUARD_STOP_MIN_M + GUARD_STOP_PER_MPS * max(
+            0.0, self.current_speed)
+
     def pure_pursuit_target(self):
         d = np.linalg.norm(self.waypoints - self.pose_xy, axis=1)
         if not self.route_locked:
@@ -410,13 +431,14 @@ class WaypointFollower:
             allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
+        guard_stop = self.guard_stop()
+        guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
         if obstacle_dist is not None:
-            if obstacle_dist < GUARD_STOP_M:
+            if obstacle_dist < guard_stop:
                 blocking = "OBSTACLE"
                 allowed = 0.0
-            elif obstacle_dist < GUARD_SLOW_M:
-                ratio = (obstacle_dist - GUARD_STOP_M) / \
-                    (GUARD_SLOW_M - GUARD_STOP_M)
+            elif obstacle_dist < guard_slow:
+                ratio = (obstacle_dist - guard_stop) / GUARD_SLOW_EXTRA_M
                 allowed = min(allowed,
                               CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
 
@@ -427,7 +449,7 @@ class WaypointFollower:
                     abs(self.lateral_offset) < 0.01:
                 for offset in BYPASS_OFFSETS:
                     clear = self.obstacle_distance(offset)
-                    if (clear is None or clear > GUARD_SLOW_M) and \
+                    if (clear is None or clear > guard_slow) and \
                             self.bypass_target_ok(offset):
                         self.lateral_offset = offset
                         rospy.logwarn(
@@ -441,7 +463,7 @@ class WaypointFollower:
             self.blocked_since = None
             if abs(self.lateral_offset) > 0.01:
                 back = self.obstacle_distance(0.0)
-                if back is None or back > GUARD_SLOW_M:
+                if back is None or back > guard_slow:
                     self.lateral_offset = 0.0
                     rospy.loginfo("bypass complete, rejoining route")
 

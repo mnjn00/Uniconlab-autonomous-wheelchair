@@ -2,8 +2,12 @@
 # One-command field startup: driver -> FAST-LIO -> localization(+RViz) -> auto seed.
 set -eo pipefail
 
-MAP="${MAP:-$HOME/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd}"
-TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/livox_raw_20260707/traj_lidar.txt}"
+# Merged 3-pass map (07/07 + two 07/25 runs), voxelised to 0.20 m the
+# same way the 07/07 map was - the raw merge is 37.2 M points, far past
+# what the localiser can register against in real time. Same frame as
+# the 07/07 map, so existing routes and bands stay valid.
+MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725/merged_0707_0725_0p20m_xyzi.pcd}"
+TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725/traj_lidar.txt}"
 RVIZ="${RVIZ:-true}"
 LOG=$HOME
 
@@ -125,8 +129,8 @@ done
 echo "  tip_guard armed - watch /tip_guard/status; if it stays"
 echo "  CONFIG_UNVERIFIED for more than ~30s of driving, the IMU axis"
 echo "  needs checking (see IMU_TOPIC / rosparam ~gyro_pitch_axis/sign)"
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_waypoints.json}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/aejimun_to_gongsen_safety_band.json}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260727_new_route_waypoints.json}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260727_new_route_safety_band.json}"
 setsid nohup rosrun static_livox_localization waypoint_follower.py \
   _route:="$ROUTE" _safety_band:="$BAND" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &
