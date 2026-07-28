@@ -16,7 +16,8 @@ Per control cycle:
     around within the band; anything that clears sooner is waited out and
     driving resumes as soon as the corridor is clear
   - slope guard and bounded DEGRADED-localization grace
-  - speed policy: 1.2 m/s cap, curvature slowdown, accel/yaw-rate limiting
+  - speed policy: 0.6 m/s cap (operator-directed), curvature slowdown,
+    accel/yaw-rate limiting
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST or sustained DEGRADED localization, manual
     joystick mode, or geofence violation, and always stops on shutdown.
@@ -54,9 +55,9 @@ import tf.transformations as tft
 # Matched to how the route is actually driven. Measured over the
 # 2026-07-27 manual run of this route (full_debug_20260727_214306.bag,
 # /fast_lio_icp/pose, spin-in-place bookends trimmed): median 0.96 m/s,
-# p75 1.00, p90 1.21, p95 1.58. The cap sits at the measured p90 so the
-# chair can hold the operator's steady pace instead of trailing it.
-MAX_SPEED = 1.2
+# p75 1.00, p90 1.21, p95 1.58. The operator directed 0.6 m/s for the
+# 0727 field run; the measured p90 remains the upper reference.
+MAX_SPEED = 0.6
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
@@ -65,6 +66,13 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
+# Obstacle detection is limited to a forward cone. The MID360 sees
+# 360 deg but only the forward sector matters for driving; side and
+# rear returns are the rider, the wheelchair frame, and irrelevant
+# scenery. The cone half-angle and minimum range together exclude the
+# rider's legs and the wheelchair footrest from the obstacle guard.
+FORWARD_FOV_HALF_DEG = 50.0
+CORRIDOR_MIN_RANGE_M = 0.50
 # Obstacle guard distances scale with speed. A fixed 1.1 m stop radius was
 # only ever safe at the 0.5 m/s cap it was chosen for: braking alone needs
 # v^2 / (2 * MAX_DECEL), which is 1.2 m at 1.2 m/s, before any allowance for
@@ -320,13 +328,19 @@ class WaypointFollower:
 
     def obstacle_distance(self, lateral_shift=0.0):
         """Nearest obstacle in the forward corridor from the live scan,
-        or None. The scan sees people and objects, not near ground."""
+        or None. The scan sees people and objects, not near ground.
+        Detection is limited to a forward FOV cone; the rider's body
+        and the wheelchair frame behind the minimum range are excluded."""
         if self.cloud is None or len(self.cloud) < 100:
             return 0.0  # no data = treat as blocked
         pts = self.cloud
         ground_plane = -self.sensor_height
-        m = ((pts[:, 0] > 0.25) & (pts[:, 0] < self.guard_slow() + 0.6) &
-             (np.abs(pts[:, 1] - lateral_shift) < CORRIDOR_HALF_WIDTH))
+        dy = pts[:, 1] - lateral_shift
+        azimuth = np.abs(np.degrees(np.arctan2(dy, pts[:, 0])))
+        m = ((pts[:, 0] > CORRIDOR_MIN_RANGE_M) &
+             (pts[:, 0] < self.guard_slow() + 0.6) &
+             (azimuth < FORWARD_FOV_HALF_DEG) &
+             (np.abs(dy) < CORRIDOR_HALF_WIDTH))
         zone = pts[m]
         if not len(zone):
             return None

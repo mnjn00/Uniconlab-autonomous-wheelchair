@@ -27,3 +27,8 @@ artifacts/
 .vscode/
 .idea/
 .DS_Store
+
+# Agent/tool session state
+.omc/
+.omo/
+.claude/

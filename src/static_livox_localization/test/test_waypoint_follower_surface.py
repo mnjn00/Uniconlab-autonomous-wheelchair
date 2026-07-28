@@ -42,9 +42,17 @@ def test_follower_keeps_wheelchair_inside_map_safety_band():
 
 def test_follower_speed_policy_is_bounded():
     text = follower_text()
-    assert "MAX_SPEED = 1.2" in text
+    assert "MAX_SPEED = 0.6" in text
     assert "SLOPE_SPEED = 0.3" in text
     assert "MAX_ACCEL" in text and "MAX_DECEL" in text
+
+
+def test_follower_obstacle_detection_uses_forward_fov_cone():
+    text = follower_text()
+    assert "FORWARD_FOV_HALF_DEG = 50.0" in text
+    assert "CORRIDOR_MIN_RANGE_M = 0.50" in text
+    assert "azimuth < FORWARD_FOV_HALF_DEG" in text
+    assert "pts[:, 0] > CORRIDOR_MIN_RANGE_M" in text
 
 
 def test_obstacle_stop_radius_covers_braking_distance_at_full_speed():
@@ -124,6 +132,8 @@ def test_field_nodes_and_sibling_policy_modules_are_installed_together():
     for path in (
             "scripts/waypoint_follower.py",
             "scripts/tip_guard.py",
+            "scripts/safety_gate.py",
+            "scripts/obstacle_clusters.py",
             "scripts/body_frame.py",
             "scripts/localization_policy.py",
             "scripts/safety_band.py",
@@ -151,6 +161,13 @@ def test_the_gate_corrects_the_same_frame_independently():
     gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
     assert "body_to_lidar" in gate and "lidar_extrinsics" in gate
     assert 'rospy.get_param("~body_frame_profile")' in gate
+
+
+def test_the_gate_uses_the_same_forward_fov_cone():
+    gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
+    assert "FORWARD_FOV_HALF_DEG = 50.0" in gate
+    assert "CORRIDOR_MIN_RANGE_M = 0.50" in gate
+    assert "azimuth < FORWARD_FOV_HALF_DEG" in gate
 
 
 def test_the_route_is_read_in_the_body_frame_it_was_captured_in():

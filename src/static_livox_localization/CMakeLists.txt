@@ -46,6 +46,7 @@ catkin_install_python(
     scripts/tip_guard.py
     scripts/waypoint_follower.py
     scripts/safety_gate.py
+    scripts/obstacle_clusters.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(

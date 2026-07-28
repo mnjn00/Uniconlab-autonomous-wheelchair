@@ -122,6 +122,11 @@ HALF_WIDTH_M = 0.5
 SENSOR_HEIGHT_M = 0.30
 OBSTACLE_MIN_Z = 0.15
 OBSTACLE_MAX_Z = 1.9
+# Forward FOV cone: the gate only checks obstacles the chair is
+# driving toward. Side/rear returns are the rider and the wheelchair
+# frame; the minimum range skips the rider's knees and footrest.
+FORWARD_FOV_HALF_DEG = 50.0
+CORRIDOR_MIN_RANGE_M = 0.50
 
 
 class SafetyGate:
@@ -159,12 +164,17 @@ class SafetyGate:
         """Obstacle-only check: the MID360 cannot see near ground (vertical
         FOV -7 deg, low mount), so drop protection is the follower's
         map-band containment; this gate independently blocks visible
-        obstacles and stale sensing."""
+        obstacles and stale sensing. Detection is limited to a forward
+        FOV cone so the rider and wheelchair frame are never treated
+        as obstacles."""
         if self.cloud is None or len(self.cloud) < 100:
             return "NO_CLOUD"
         pts = self.cloud
         ground_plane = -SENSOR_HEIGHT_M
-        zone = pts[(pts[:, 0] > 0.25) & (pts[:, 0] < CHECK_RANGE_M) &
+        azimuth = np.abs(np.degrees(np.arctan2(pts[:, 1], pts[:, 0])))
+        zone = pts[(pts[:, 0] > CORRIDOR_MIN_RANGE_M) &
+                   (pts[:, 0] < CHECK_RANGE_M) &
+                   (azimuth < FORWARD_FOV_HALF_DEG) &
                    (np.abs(pts[:, 1]) < HALF_WIDTH_M)]
         if not len(zone):
             return ""
