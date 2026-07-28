@@ -33,6 +33,7 @@ from std_srvs.srv import SetBool, SetBoolResponse
 
 import sensor_msgs.point_cloud2 as pc2
 from localization_policy import localization_hold_reason
+from body_frame import body_to_lidar, lidar_extrinsics
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -145,6 +146,18 @@ class WaypointFollower:
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
         self.band = SafetyBand(rospy.get_param("~safety_band"))
         self.sensor_height = rospy.get_param("~sensor_height", 0.30)
+        # /cloud_registered_body arrives in FAST-LIO's IMU BODY frame,
+        # which is only the lidar frame when FAST-LIO runs on the lidar's
+        # built-in IMU. With the VN-100 driving it the body origin sits
+        # 14.5 cm behind and 6.8 cm below the lidar and is yawed 2.80 deg,
+        # and every geometry constant below (sensor height, corridor
+        # half-width, stop distances) was tuned in the lidar/chair frame.
+        # Left uncorrected that reads obstacles 14.5 cm farther away than
+        # they are and skews the corridor by 0.17 m at 3.4 m - more than
+        # the chair's own half-width. The profile is required rather than
+        # defaulted so a silent mismatch is impossible.
+        self.body_offset, self.body_rotation = lidar_extrinsics(
+            rospy.get_param("~body_frame_profile"))
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))
 
@@ -201,7 +214,9 @@ class WaypointFollower:
 
     def on_cloud(self, message):
         self.accumulator.add_cloud(message)
-        self.cloud, self.cloud_stamp = self.accumulator.merged()
+        cloud, self.cloud_stamp = self.accumulator.merged()
+        self.cloud = None if cloud is None else body_to_lidar(
+            cloud, self.body_offset, self.body_rotation)
 
     def on_odom(self, message):
         self.accumulator.add_odom(message)

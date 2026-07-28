@@ -140,3 +140,20 @@ def test_field_nodes_and_sibling_policy_modules_are_installed_together():
             "scripts/safety_band.py",
             "scripts/tip_guard_policy.py"):
         assert path in cmake
+
+
+def test_follower_requires_an_explicit_body_frame_profile():
+    """/cloud_registered_body is in FAST-LIO's IMU body frame, which is
+    only the lidar frame when FAST-LIO runs on the built-in IMU. Defaulting
+    the profile would let a VN-100 run silently read obstacles 14.5 cm
+    farther away than they are, so it has to be stated."""
+    text = follower_text()
+    assert 'rospy.get_param("~body_frame_profile")' in text
+    assert "lidar_extrinsics(" in text
+
+
+def test_scan_is_moved_into_the_lidar_frame_before_any_geometry():
+    text = follower_text()
+    correction = text.index("body_to_lidar(")
+    obstacle_use = text.index("def obstacle_distance")
+    assert correction < obstacle_use
