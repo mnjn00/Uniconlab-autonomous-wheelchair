@@ -1,6 +1,7 @@
 {
  "frame": "map",
  "source": "traj_lidar.txt 2026-07-07 outbound leg",
+ "body_frame_profile": "builtin",
  "count": 85,
  "waypoints": [
   {

@@ -1,6 +1,7 @@
 {
  "frame": "map",
  "source": "full_debug_20260727_214306.bag /fast_lio_icp/pose, spin-in-place bookends trimmed",
+ "body_frame_profile": "builtin",
  "count": 119,
  "waypoints": [
   {

@@ -46,6 +46,37 @@ _PROFILES = {
 }
 
 
+def _body_T_lidar(profile):
+    offset, rotation = lidar_extrinsics(profile)
+    matrix = np.eye(4)
+    matrix[:3, :3] = np.asarray(rotation, dtype=np.float64)
+    matrix[:3, 3] = np.asarray(offset, dtype=np.float64)
+    return matrix
+
+
+def pose_correction(pose_profile, route_profile):
+    """Express a pose given in `pose_profile`'s body frame in the body frame
+    the route was captured in.
+
+    FAST-LIO reports the pose of its IMU body frame, so the origin moves
+    when the inertial source changes: 15.5 cm along the chair's forward
+    axis and 2.80 deg in heading between the two profiles here. A route is
+    a recording of that origin's path, so a route captured on one profile
+    and driven on another is compared against the wrong point. Simulating
+    the follower's own steering loop over the 2026-07-27 route, the
+    mismatch costs 7 cm of mean cross-track (0.092 m -> 0.164 m), against a
+    kerb clearance budget of 0.45 m.
+
+        map_T_body_route = map_T_body_pose . body_pose_T_lidar
+                                           . (body_route_T_lidar)^-1
+
+    Identity when the profiles match, so this is inert on a route driven
+    with the sensor it was recorded on.
+    """
+    return _body_T_lidar(pose_profile) @ np.linalg.inv(
+        _body_T_lidar(route_profile))
+
+
 def lidar_extrinsics(profile):
     try:
         return _PROFILES[profile]

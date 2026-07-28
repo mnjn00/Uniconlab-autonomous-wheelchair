@@ -45,7 +45,8 @@ import sensor_msgs.point_cloud2 as pc2
 # which imports the modules directly, still passes.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from body_frame import body_to_lidar, lidar_extrinsics
+from body_frame import (body_to_lidar, lidar_extrinsics,
+                        pose_correction)
 from localization_policy import localization_hold_reason
 from safety_band import SafetyBand
 import tf.transformations as tft
@@ -197,6 +198,26 @@ class WaypointFollower:
         self.route_locked = False
         profile = str(rospy.get_param("~body_frame_profile"))
         lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
+        # A route records the path of FAST-LIO's IMU body origin, so it is
+        # only comparable to a pose read in the SAME body frame. Refuse to
+        # guess: an unlabelled route is of unknown provenance, and reading
+        # it in the wrong frame silently spends part of the kerb clearance
+        # budget rather than failing.
+        if "body_frame_profile" not in route:
+            raise rospy.ROSInitException(
+                "route %s does not say which body frame it was captured in; "
+                "add body_frame_profile (see body_frame.py)"
+                % rospy.get_param("~route"))
+        self.pose_correction = pose_correction(
+            profile, str(route["body_frame_profile"]))
+        if str(route["body_frame_profile"]) != profile:
+            rospy.logwarn(
+                "route captured on the %s body frame but running %s: "
+                "correcting pose by %.3f m / %.2f deg",
+                route["body_frame_profile"], profile,
+                float(np.linalg.norm(self.pose_correction[:3, 3])),
+                math.degrees(math.atan2(self.pose_correction[1, 0],
+                                        self.pose_correction[0, 0])))
         self.accumulator = CloudAccumulator(
             lidar_in_body, lidar_to_body_rotation)
         self.cloud = None
@@ -230,8 +251,11 @@ class WaypointFollower:
     def on_pose(self, message):
         p = message.pose.pose.position
         q = message.pose.pose.orientation
-        _, pitch, yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])
-        self.pose_xy = np.array([p.x, p.y])
+        pose = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
+        pose[:3, 3] = (p.x, p.y, p.z)
+        pose = pose @ self.pose_correction
+        _, pitch, yaw = tft.euler_from_matrix(pose)
+        self.pose_xy = np.array([pose[0, 3], pose[1, 3]])
         self.pose_yaw = yaw
         self.pose_pitch = pitch
         self.pose_stamp = message.header.stamp

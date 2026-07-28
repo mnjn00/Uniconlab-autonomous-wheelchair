@@ -139,7 +139,7 @@ def test_scan_geometry_is_corrected_into_the_lidar_frame():
     accumulator must undo the configured extrinsic rather than each constant
     being re-derived."""
     text = follower_text()
-    assert "from body_frame import body_to_lidar, lidar_extrinsics" in text
+    assert "body_to_lidar" in text and "lidar_extrinsics" in text
     assert 'rospy.get_param("~body_frame_profile")' in text
     assert "body_to_lidar(np.vstack(parts)" in text
 
@@ -149,5 +149,22 @@ def test_the_gate_corrects_the_same_frame_independently():
     If it read the body frame while the follower read the lidar frame, the
     two would disagree about where an obstacle is by the extrinsic."""
     gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
-    assert "from body_frame import body_to_lidar, lidar_extrinsics" in gate
+    assert "body_to_lidar" in gate and "lidar_extrinsics" in gate
     assert 'rospy.get_param("~body_frame_profile")' in gate
+
+
+def test_the_route_is_read_in_the_body_frame_it_was_captured_in():
+    """A route records the path of FAST-LIO's IMU body origin, so it is only
+    comparable to a pose read in the SAME body frame. The two profiles here
+    are 15.5 cm and 2.80 deg apart; simulating the follower's own steering
+    loop over the 2026-07-27 route, ignoring that costs 7 cm of mean
+    cross-track against a 0.45 m kerb clearance budget."""
+    text = follower_text()
+    assert "pose_correction" in text
+    assert 'route["body_frame_profile"]' in text
+    # an unlabelled route must fail rather than be guessed at
+    assert '"body_frame_profile" not in route' in text
+    # and the correction has to reach the pose actually used
+    assert "pose @ self.pose_correction" in text
+    assert text.index("self.pose_correction = pose_correction") < text.index(
+        "pose = pose @ self.pose_correction")
