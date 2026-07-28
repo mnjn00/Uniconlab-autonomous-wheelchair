@@ -70,6 +70,12 @@ class DistanceBand:
     def clamp(self, target):
         return target
 
+    def recentre(self, target):
+        """This double models chord distance only, so the safe-side lean is
+        a no-op here - the lean's own behaviour is covered in
+        test_safety_band."""
+        return target
+
     def chord_is_contained(self, start, target, grace=0.0):
         return np.linalg.norm(target - start) <= self.safe_distance + 1e-9
 

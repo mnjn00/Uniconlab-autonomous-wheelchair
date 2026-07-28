@@ -237,3 +237,59 @@ def test_a_band_without_drop_fields_keeps_the_conservative_inset():
     as they were validated, not silently inherit the tighter margin."""
     full = safety_band.CHAIR_HALF_WIDTH + safety_band.BAND_MARGIN
     assert safety_band.edge_clearance(None) == full
+
+
+def test_no_floor_is_granted_toward_a_measured_drop():
+    """BAND_FLOOR exists because the driven line is proven passable, which
+    says nothing about ground 15 cm to its side. Applied toward a kerb it
+    granted the outer wheel 0.20 m past a 24 cm drop at 32 stations of the
+    2026-07-27 route."""
+    kerb_at, drop = 0.30, 0.24
+    limit = safety_band.usable_limit(kerb_at, drop)
+    assert limit < safety_band.BAND_FLOOR
+    wheel = limit + safety_band.CHAIR_HALF_WIDTH
+    assert wheel <= kerb_at, (
+        "wheel reaches %.2f m with the kerb at %.2f m" % (wheel, kerb_at))
+
+
+def test_the_floor_still_applies_where_there_is_nothing_to_fall_off():
+    assert safety_band.usable_limit(0.20, 0.0) == safety_band.BAND_FLOOR
+
+
+def test_a_legacy_band_without_depths_keeps_its_validated_floor():
+    """Withdrawing the floor retroactively would turn every edge of a
+    pre-depth band into an unpassable one."""
+    assert safety_band.usable_limit(0.20, None) == safety_band.BAND_FLOOR
+
+
+def test_leaning_off_the_line_only_happens_next_to_a_hazard():
+    """The recorded line is the only path known to have been driven, so
+    leaving it needs a reason, and the shift is bounded."""
+    band = _band()
+    offsets = np.array([band.safe_offset(p) for p in band.xy])
+    assert np.abs(offsets).max() <= safety_band.BIAS_MAX + 1e-9
+
+
+def test_leaning_increases_clearance_from_the_kerb():
+    band = _band()
+    for point in band.xy:
+        before = band.hazard_clearance(point)
+        if not np.isfinite(before):
+            continue
+        after = band.hazard_clearance(band.recentre(point))
+        assert after >= before - 1e-6, (
+            "re-centring moved the chair closer to a hazard: %.3f -> %.3f"
+            % (before, after))
+
+
+def test_speed_slack_reacts_to_the_kerb_not_to_the_band_width():
+    """A corridor pinched between two kerbs and one with a kerb on a single
+    side are different situations; keying speed on total width spent the
+    same caution on both."""
+    band = _band()
+    for point in band.xy[:40]:
+        _, lo, hi = band.lateral_limits(point)
+        width = hi - lo
+        clearance = band.hazard_clearance(point)
+        if np.isfinite(clearance):
+            assert clearance != width

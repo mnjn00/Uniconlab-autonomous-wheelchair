@@ -22,6 +22,11 @@ BIN = 0.3
 MAX_LAT = 6.0
 STEP = 0.07
 STATION_SPACING = 1.0
+# Sub-bin refinement of the edge found by the coarse walk. BIN has to stay
+# wide enough that its 15th percentile is a stable ground estimate, but the
+# edge itself can then be located far more precisely inside it.
+FINE = 0.05
+MIN_SLICE_POINTS = 3
 # Ground search window, relative to the route's own height at that station.
 # Taking the 15th percentile of a whole vertical column only finds ground
 # where ground points dominate it. On a map merged from several passes the
@@ -120,6 +125,30 @@ for k in range(len(stations)):
                 break
             prev = prof[b]
             limit = i * BIN
+        if stopped_at is not None:
+            # The coarse walk only knows WHICH BIN the step is in, so the
+            # edge is quantised to BIN. That quantisation is not a rounding
+            # detail: it lands the kerb anywhere within +-BIN/2, and the
+            # follower has to hold that much extra clearance to cover it -
+            # on this route +-0.15 m, the same size as the margins being
+            # traded. Re-walk the stopping bin in FINE slices to place the
+            # edge where the height actually breaks.
+            outward = direction * ls
+            refined = limit
+            level = prev
+            edge = limit
+            while edge < limit + BIN - 1e-9:
+                near, far = edge, edge + FINE
+                slice_z = zs2[(outward >= near) & (outward < far)]
+                if len(slice_z) < MIN_SLICE_POINTS:
+                    break
+                z = float(np.percentile(slice_z, 15))
+                if abs(z - level) > STEP:
+                    break
+                level = z
+                refined = far
+                edge = far
+            limit = refined
         if stopped_at is None:
             # No observed step: either open ground out to MAX_LAT, or the
             # scan has no returns past the limit. A gap is NOT evidence of

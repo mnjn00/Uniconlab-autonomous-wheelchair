@@ -42,9 +42,23 @@ DROP_SEVERE_M = 0.12
 # below this; narrow stations creep instead of holding
 BAND_FLOOR = 0.15
 NARROW_BAND_WIDTH = 1.2
+# Cap on how far the planned line may be shifted from the recorded one.
+# The recorded line is the only path known to have been driven, so leaving
+# it is justified by moving away from a hazard and by nothing else.
+BIAS_MAX = 0.5
 # clamp re-evaluates because moving a point changes which stations
 # bracket it; two passes converge on the shipped band
 CLAMP_MAX_PASSES = 3
+# The safe-side lean has the same re-bracketing hazard as clamp, so it is
+# verified against the hazard geometry and backed off until it holds.
+RECENTRE_MAX_PASSES = 4
+RECENTRE_MIN_SHIFT = 0.02
+
+
+def is_severe(drop_m):
+    """True where crossing the edge means falling, or where the scan could
+    not see past it. Unknown counts as severe."""
+    return drop_m is None or drop_m < 0.0 or drop_m >= DROP_SEVERE_M
 
 
 def edge_clearance(drop_m):
@@ -54,9 +68,34 @@ def edge_clearance(drop_m):
     those are treated as severe, so an old band keeps exactly the
     conservative behaviour it was validated with.
     """
-    if drop_m is None or drop_m < 0.0 or drop_m >= DROP_SEVERE_M:
+    if is_severe(drop_m):
         return CHAIR_HALF_WIDTH + BAND_MARGIN
     return EDGE_MARGIN
+
+
+def usable_limit(raw_m, drop_m):
+    """How far the chair centre may sit from the driven line on one side.
+
+    BAND_FLOOR exists because the driven line itself is proven passable, so
+    a station whose computed limit collapses should still allow a little
+    room rather than holding. That reasoning only holds for ground the
+    chair may actually occupy: applied toward a kerb it grants clearance
+    the map says is not there. Measured on the 2026-07-27 route before the
+    edge positions were refined, it permitted the outer wheel 0.20 m past a
+    24 cm drop at 32 stations. Toward a fall hazard there is therefore no
+    floor - the limit is whatever the kerb leaves, even if that is negative,
+    which simply means the chair must sit off the line toward the other
+    side.
+    """
+    strict = raw_m - edge_clearance(drop_m)
+    if drop_m is not None and is_severe(drop_m):
+        # a MEASURED hazard: no floor toward it
+        return strict
+    # No depth field at all means a band generated before depths were
+    # measured. Those keep the floor, and therefore exactly the behaviour
+    # they were validated with - withdrawing it retroactively would turn
+    # every legacy edge into an unpassable one.
+    return max(strict, BAND_FLOOR)
 
 
 class SafetyBand:
@@ -66,17 +105,24 @@ class SafetyBand:
         heading = np.radians([s["heading_deg"] for s in data["stations"]])
         self.normals = np.stack([-np.sin(heading), np.cos(heading)], axis=1)
         usable_left, usable_right, narrow = [], [], []
+        edge_left, edge_right, sev_left, sev_right = [], [], [], []
         for s in data["stations"]:
-            usable_left.append(max(
-                s["left_m"] - edge_clearance(s.get("left_drop_m")),
-                BAND_FLOOR))
-            usable_right.append(max(
-                s["right_m"] - edge_clearance(s.get("right_drop_m")),
-                BAND_FLOOR))
+            usable_left.append(
+                usable_limit(s["left_m"], s.get("left_drop_m")))
+            usable_right.append(
+                usable_limit(s["right_m"], s.get("right_drop_m")))
             narrow.append(s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
+            edge_left.append(s["left_m"])
+            edge_right.append(s["right_m"])
+            sev_left.append(is_severe(s.get("left_drop_m")))
+            sev_right.append(is_severe(s.get("right_drop_m")))
         self.left = np.array(usable_left)
         self.right = np.array(usable_right)
         self.narrow = np.array(narrow)
+        self.edge_left = np.array(edge_left)
+        self.edge_right = np.array(edge_right)
+        self.severe_left = np.array(sev_left)
+        self.severe_right = np.array(sev_right)
 
     def lateral_limits(self, point):
         """Signed cross-track offset and the limits that bracket it.
@@ -100,6 +146,98 @@ class SafetyBand:
     def contains(self, point, grace=0.0):
         lateral, lo, hi = self.lateral_limits(point)
         return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
+
+    def hazard_clearance(self, point):
+        """Distance from the nearest WHEEL to the nearest fall hazard.
+
+        This, not the band's total width, is what a speed policy should
+        react to. A 1.4 m band with a kerb on one side and open pavement on
+        the other is not the same situation as 1.4 m pinched between two
+        kerbs, and slowing identically for both spends most of the caution
+        where there is nothing to fall off. Returns a large number where no
+        severe edge brackets the point.
+        """
+        d = np.linalg.norm(self.xy - point, axis=1)
+        order = np.argsort(d)[:2]
+        k = int(order[0])
+        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
+        gaps = []
+        for j in order:
+            if self.severe_left[j]:
+                gaps.append(self.edge_left[j] - lateral - CHAIR_HALF_WIDTH)
+            if self.severe_right[j]:
+                gaps.append(lateral + self.edge_right[j] - CHAIR_HALF_WIDTH)
+        return min(gaps) if gaps else float("inf")
+
+    def safe_offset(self, point):
+        """Lateral position that puts the most distance between the wheels
+        and the mapped hazards, capped and kept inside the usable band.
+
+        Defined from the hazard geometry, not from the middle of the usable
+        interval: BAND_FLOOR and the per-edge clearance rule both distort
+        that interval, so its midpoint is not where the chair is furthest
+        from a fall. With hazards both sides the best position is midway
+        between them; with one, move away from it as far as the band and
+        the cap allow.
+        """
+        d = np.linalg.norm(self.xy - point, axis=1)
+        order = np.argsort(d)[:2]
+        _, lo, hi = self.lateral_limits(point)
+        if hi < lo:
+            # no admissible lateral position: report the least-bad one and
+            # let containment decide whether to hold
+            return 0.5 * (lo + hi)
+        # Bracketing stations are 1 m apart and the chair lies between
+        # them, so the binding edge is the nearer of the two - the same
+        # pair, and the same min, that lateral_limits and
+        # hazard_clearance use. Optimising against the nearest station
+        # alone moved the chair toward a neighbour's closer kerb.
+        left_bad = any(self.severe_left[j] for j in order)
+        right_bad = any(self.severe_right[j] for j in order)
+        left_edge = min(self.edge_left[j] for j in order)
+        right_edge = min(self.edge_right[j] for j in order)
+        if left_bad and right_bad:
+            ideal = 0.5 * (left_edge - right_edge)
+        elif left_bad:
+            # move away from the kerb, but not past the point where the
+            # opposite edge becomes the closer one
+            ideal = max(-BIAS_MAX, 0.5 * (left_edge - right_edge))
+        elif right_bad:
+            ideal = min(BIAS_MAX, 0.5 * (left_edge - right_edge))
+        else:
+            # nothing to lean away from; stay on the proven line
+            return 0.0
+        ideal = min(max(ideal, -BIAS_MAX), BIAS_MAX)
+        return min(max(ideal, lo), hi)
+
+    def recentre(self, point):
+        """Shift a point laterally onto its safe_offset, but only if that
+        actually helps.
+
+        Moving the point changes which stations bracket it, so the position
+        that looked best against one pair can be measured against another:
+        on the shipped band, leaning 0.50 m off station 300 handed the point
+        to station 299, whose kerb is 2.4 m nearer, and clearance fell from
+        3.55 m to 1.55 m. The shift is therefore verified after the fact and
+        halved until it is an improvement, falling back to not moving at
+        all - the recorded line is always an acceptable answer.
+        """
+        base = self.hazard_clearance(point)
+        if not np.isfinite(base):
+            return point
+        d = np.linalg.norm(self.xy - point, axis=1)
+        k = int(np.argmin(d))
+        lateral = float(np.dot(point - self.xy[k], self.normals[k]))
+        shift = self.safe_offset(point) - lateral
+        for _ in range(RECENTRE_MAX_PASSES):
+            if abs(shift) < RECENTRE_MIN_SHIFT:
+                break
+            candidate = point + self.normals[k] * shift
+            if self.contains(candidate) and \
+                    self.hazard_clearance(candidate) >= base - 1e-9:
+                return candidate
+            shift *= 0.5
+        return np.asarray(point, dtype=float)
 
     def is_narrow(self, point):
         d = np.linalg.norm(self.xy - point, axis=1)

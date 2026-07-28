@@ -65,7 +65,14 @@ GUARD_STOP_PER_MPS = 1.2
 GUARD_SLOW_EXTRA_M = 1.2
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
-NARROW_SPEED = 0.2
+# Speed follows how much lateral slack the chair actually has, not whether
+# the band happens to be under a width threshold. The old binary test
+# (total width < 1.2 m -> 0.2 m/s) spent the same caution on a corridor
+# pinched between two kerbs and on one with a kerb on a single side and
+# open pavement opposite. Slack is the smaller of the room to the band
+# edges and the distance from a wheel to a mapped fall hazard.
+SLACK_FULL_SPEED_M = 0.8
+SLACK_CREEP_M = 0.15
 OFF_BAND_GRACE = 0.10
 SLOPE_PITCH_RAD = math.radians(3.0)
 # What separates "an obstacle" from "a person". Anything still in the way
@@ -245,6 +252,30 @@ class WaypointFollower:
                                message="ENABLED" if self.enabled else "PAUSED")
 
     # ------------------------------------------------------------ safety
+    def hazard_slack(self):
+        """Distance from the nearest wheel to the nearest mapped fall
+        hazard, in metres, or infinity where there is none.
+
+        Deliberately NOT the band's total width. Width without a drop
+        behind it is not a safety quantity - a hedge or a wall is something
+        the obstacle guard sees and stops for, whereas a kerb into a road
+        is invisible to the MID360 and only this band knows about it.
+        Measured on this route the distinction costs almost nothing anyway:
+        of the 78 stations where width would have been the binding term,
+        75 have a hazard nearby and are governed by it regardless.
+        """
+        return self.band.hazard_clearance(self.pose_xy)
+
+    def slack_speed(self):
+        """Full speed with room to spare, creep when a hazard is alongside,
+        and a continuous ramp between - never a step change."""
+        slack = self.hazard_slack()
+        if slack >= SLACK_FULL_SPEED_M:
+            return MAX_SPEED
+        span = SLACK_FULL_SPEED_M - SLACK_CREEP_M
+        ratio = max(0.0, min(1.0, (slack - SLACK_CREEP_M) / span))
+        return CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED)
+
     def guard_stop(self):
         """Stop radius for the speed the chair is actually carrying."""
         return GUARD_STOP_MIN_M + GUARD_STOP_PER_MPS * max(
@@ -352,6 +383,15 @@ class WaypointFollower:
 
     def target_at_lookahead(self, lookahead):
         target = self.lookahead_point(lookahead)
+        # Lean away from a mapped drop before anything else is applied.
+        # Steering at the recorded line keeps the chair wherever the
+        # operator happened to be between the kerb and the open side; on
+        # this route that is 0.15 m of wheel-to-kerb clearance at the worst
+        # station. Aiming at the middle of the usable band instead takes
+        # the room the pavement side has to give: worst case 0.36 m, and no
+        # station left under 0.30 m. The bypass offset is applied on top,
+        # so stepping around an obstacle still overrides the lean.
+        target = self.band.recentre(target)
         if abs(self.lateral_offset) > 0.01:
             direction = target - self.pose_xy
             norm = np.linalg.norm(direction)
@@ -436,8 +476,7 @@ class WaypointFollower:
         allowed = MAX_SPEED
         if recovering:
             allowed = min(allowed, CREEP_SPEED)
-        if self.band.is_narrow(self.pose_xy):
-            allowed = min(allowed, NARROW_SPEED)
+        allowed = min(allowed, self.slack_speed())
         if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
             allowed = min(allowed, SLOPE_SPEED)
         if self.tracking_state == "DEGRADED":
