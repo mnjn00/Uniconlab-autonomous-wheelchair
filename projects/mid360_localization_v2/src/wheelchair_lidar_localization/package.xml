@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>wheelchair_lidar_localization</name>
+  <version>0.1.0</version>
+  <description>Fixed-map localization using FAST-LIO2 odometry, FPFH-TEASER global registration, and FastVGICP tracking.</description>
+  <maintainer email="maintainer@example.com">Uniconlab</maintainer>
+  <license>GPL-2.0-only</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>diagnostic_msgs</depend>
+  <depend>fast_gicp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>hdl_global_localization</depend>
+  <depend>nav_msgs</depend>
+  <depend>libssl-dev</depend>
+  <depend>pcl_conversions</depend>
+  <depend>pcl_ros</depend>
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_eigen</depend>
+  <depend>tf2_ros</depend>
+  <exec_depend>fast_lio</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
+  <exec_depend>rosgraph</exec_depend>
+  <exec_depend>rostopic</exec_depend>
+  <test_depend>python3-nose</test_depend>
+  <test_depend>rostest</test_depend>
+
+  <export/>
+</package>

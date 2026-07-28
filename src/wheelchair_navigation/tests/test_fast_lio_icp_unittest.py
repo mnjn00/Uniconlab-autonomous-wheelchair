@@ -18,5 +18,16 @@ class FastLioIcpSourceTest(unittest.TestCase):
     def test_fast_lio_icp_is_listed_as_supported(self):
         self.assertIn("fast_lio_icp", adapter.VALID_SOURCES)
 
+    def test_pose_sequence_must_match_diagnostic_reset_epoch(self):
+        self.assertTrue(
+            adapter.pose_reset_binding_matches("fast_lio_icp", 3, 3)
+        )
+        self.assertFalse(
+            adapter.pose_reset_binding_matches("fast_lio_icp", 2, 3)
+        )
+        self.assertFalse(
+            adapter.pose_reset_binding_matches("fast_lio_icp", 0, None)
+        )
+
 if __name__ == "__main__":
     unittest.main()

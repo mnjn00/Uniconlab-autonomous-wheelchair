@@ -1,0 +1,54 @@
+# Candidate parameters only. Freeze them after replay/closed-course calibration;
+# the independent localization_guard remains the authority for OK/LOST.
+map_frame: map
+odom_frame: odom
+body_frame: body
+base_frame: base_footprint
+fastlio_odom_topic: /Odometry
+fastlio_body_cloud_topic: /cloud_registered_body
+
+# This must fail if hdl_global_localization was built without ENABLE_TEASER.
+global_engine: FPFH_TEASER
+automatic_initialization: true
+
+rolling_window_s: 1.5
+max_cloud_frames: 15
+max_cloud_odom_skew_s: 0.08
+submap_voxel_m: 0.20
+min_submap_points: 700
+
+stationary_linear_mps: 0.03
+stationary_angular_radps: 0.05
+stationary_hold_s: 2.0
+
+tracking_period_s: 0.50
+global_period_s: 1.0
+local_map_radius_m: 18.0
+local_map_z_half_extent_m: 4.0
+vgicp_voxel_m: 0.30
+max_correspondence_m: 1.0
+max_iterations: 64
+num_threads: 4
+inlier_distance_m: 0.30
+correction_alpha: 0.25
+
+tracking:
+  max_fitness: 0.20
+  min_inlier_ratio: 0.35
+  max_correction_translation_m: 0.35
+  max_correction_rotation_deg: 6.0
+
+global:
+  max_fitness: 0.30
+  min_inlier_ratio: 0.25
+  max_refinement_translation_m: 2.0
+  max_refinement_rotation_deg: 30.0
+  consensus_count: 3
+  consensus_translation_m: 0.25
+  consensus_rotation_deg: 4.0
+  max_map_to_odom_tilt_deg: 5.0
+  max_candidates: 5
+
+degraded_after_failures: 1
+lost_after_failures: 6
+recovery_confirmations: 3

@@ -1,0 +1,17 @@
+repositories:
+  FAST_LIO:
+    type: git
+    url: https://github.com/hku-mars/FAST_LIO.git
+    version: 7cc4175de6f8ba2edf34bab02a42195b141027e9
+  fast_gicp:
+    type: git
+    url: https://github.com/koide3/fast_gicp.git
+    version: 0e7ec1441c99f7be453db2ea216d5de029387417
+  hdl_global_localization:
+    type: git
+    url: https://github.com/koide3/hdl_global_localization.git
+    version: a6a6b69929ac371d9531d0dcdef3c1593fd49245
+  livox_ros_driver2:
+    type: git
+    url: https://github.com/Livox-SDK/livox_ros_driver2.git
+    version: 13eb05e4e6dd7a765b934d0c5fd6236676a57b49

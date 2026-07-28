@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,7 +23,7 @@ include(ExternalProject)
+ if(ENABLE_TEASER)
+   ExternalProject_Add(teaser
+     GIT_REPOSITORY https://github.com/koide3/TEASER-plusplus
+-    GIT_TAG master
++    GIT_TAG d87b310eba15caa992d8f3fa9084f976d0f6a907
+     BUILD_IN_SOURCE
+     CMAKE_ARGS -DBUILD_TESTS=OFF -DBUILD_PYTHON_BINDINGS=OFF -DBUILD_DOC=OFF -DBUILD_TEASER_FPFH=ON -DCMAKE_INSTALL_PREFIX=${CATKIN_DEVEL_PREFIX}
+     INSTALL_COMMAND make install

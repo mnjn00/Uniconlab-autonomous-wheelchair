@@ -1,0 +1,69 @@
+<launch>
+  <arg name="map_path"/>
+  <arg name="map_id"/>
+  <arg name="map_sha256"/>
+  <arg name="start_driver" default="false"/>
+  <arg name="start_fast_lio" default="true"/>
+  <arg name="rviz" default="false"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+
+  <!-- Driver2 is the official Mid-360 driver. Its native CustomMsg keeps
+       per-point offset_time, which FAST-LIO2 requires for deskewing. -->
+  <include if="$(arg start_driver)"
+           file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360.launch">
+    <arg name="rviz_enable" value="false"/>
+    <arg name="rosbag_enable" value="false"/>
+    <arg name="publish_freq" value="10.0"/>
+    <arg name="lidar_bag" value="false"/>
+    <arg name="imu_bag" value="false"/>
+  </include>
+
+  <!-- The official Mid-360 configuration selects /livox/imu, i.e. the
+       ICM40609 inside the LiDAR. PCD saving is explicitly disabled here. -->
+  <group if="$(arg start_fast_lio)">
+    <rosparam command="load" file="$(find fast_lio)/config/mid360.yaml"/>
+    <param name="feature_extract_enable" type="bool" value="false"/>
+    <param name="point_filter_num" type="int" value="3"/>
+    <param name="max_iteration" type="int" value="3"/>
+    <param name="filter_size_surf" type="double" value="0.5"/>
+    <param name="filter_size_map" type="double" value="0.5"/>
+    <param name="cube_side_length" type="double" value="1000"/>
+    <param name="runtime_pos_log_enable" type="bool" value="false"/>
+    <param name="pcd_save/pcd_save_en" type="bool" value="false"/>
+    <param name="publish/tf_en" type="bool" value="false"/>
+    <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping"
+          output="screen" required="true"/>
+  </group>
+
+  <!-- Load the upstream parameters before starting its service node. It
+       starts on BBS safely; the localizer switches it to FPFH_TEASER and
+       refuses to continue if TEASER support is absent. -->
+  <rosparam command="load"
+            file="$(find hdl_global_localization)/config/general_config.yaml"
+            ns="/hdl_global_localization"/>
+  <rosparam command="load"
+            file="$(find hdl_global_localization)/config/fpfh_config.yaml"
+            ns="/hdl_global_localization"/>
+  <rosparam command="load"
+            file="$(find hdl_global_localization)/config/ransac_config.yaml"
+            ns="/hdl_global_localization"/>
+  <rosparam command="load"
+            file="$(find hdl_global_localization)/config/teaser_config.yaml"
+            ns="/hdl_global_localization"/>
+  <node pkg="hdl_global_localization" type="hdl_global_localization_node"
+        name="hdl_global_localization" output="screen" required="true"/>
+
+  <node pkg="wheelchair_lidar_localization" type="wheelchair_map_localizer"
+        name="wheelchair_map_localizer" output="screen" required="true">
+    <rosparam command="load"
+              file="$(find wheelchair_lidar_localization)/config/localization.yaml"/>
+    <param name="map_path" value="$(arg map_path)"/>
+    <param name="map_id" value="$(arg map_id)"/>
+    <param name="map_sha256" value="$(arg map_sha256)"/>
+  </node>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz"
+        name="localization_rviz" output="screen"/>
+</launch>

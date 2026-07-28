@@ -224,6 +224,15 @@ def parse_reset_count(value: float) -> Optional[int]:
     return parsed if numeric == parsed else None
 
 
+def pose_reset_binding_matches(
+    source: str, pose_sequence: int, reset_count: Optional[int]
+) -> bool:
+    """Bind split pose/diagnostic topics for the native FAST-LIO source."""
+    if reset_count is None:
+        return False
+    return source != "fast_lio_icp" or int(pose_sequence) == reset_count
+
+
 class LocalizationAdapterNode:
     """ROS wrapper for candidate publication and sole untrusted TF ownership."""
 
@@ -369,7 +378,11 @@ class LocalizationAdapterNode:
         source_map_sha256 = self.metadata.get("map_sha256", self.map_sha256)
         if pose.header.frame_id.lstrip("/") != "map":
             return
-        if reset_count is None or not pose_evidence_is_finite(pose.pose.pose, pose.pose.covariance):
+        if not pose_reset_binding_matches(
+            self.source, pose.header.seq, reset_count
+        ):
+            return
+        if not pose_evidence_is_finite(pose.pose.pose, pose.pose.covariance):
             return
         if (source_map_id, source_map_sha256) != (self.map_id, self.map_sha256):
             return
