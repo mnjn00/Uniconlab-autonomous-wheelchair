@@ -75,3 +75,40 @@ def test_uart_mode_initialized_and_tx_locked():
     assert "self.mode = None" in text
     assert "self.tx_lock" in text
     assert "with self.tx_lock:" in text
+
+
+def _constant(text, name):
+    import re
+
+    match = re.search(r"^%s = ([0-9.]+)$" % name, text, re.M)
+    assert match, "%s must be a module-level constant" % name
+    return float(match.group(1))
+
+
+def test_speed_ceilings_rise_along_the_chain_so_none_becomes_the_real_limit():
+    """Each stage bounds the one before it, so the ceilings must be ordered
+    follower <= gate <= final relay. When they are not, the tightest one
+    silently becomes the speed limit with nothing reporting it: the gate sat
+    at 0.6 m/s while the follower was raised to 1.2, which would have halved
+    every command at the gate with no error raised anywhere."""
+    follower = (ROOT / "src" / "static_livox_localization" / "scripts"
+                / "waypoint_follower.py").read_text(encoding="utf-8")
+    policy = (ROOT / "src" / "static_livox_localization" / "scripts"
+              / "tip_guard_policy.py").read_text(encoding="utf-8")
+
+    planned = _constant(follower, "MAX_SPEED")
+    gated = _constant(gate_text(), "HARD_V_LIMIT")
+    final = _constant(policy, "ABSOLUTE_V_LIMIT")
+
+    assert planned <= gated, (
+        "gate ceiling %.2f is below the planner's %.2f - the gate is the "
+        "real speed limit" % (gated, planned))
+    assert gated <= final, (
+        "final-stage ceiling %.2f is below the gate's %.2f" % (final, gated))
+
+
+def test_gate_yaw_ceiling_is_not_below_what_the_planner_asks_for():
+    follower = (ROOT / "src" / "static_livox_localization" / "scripts"
+                / "waypoint_follower.py").read_text(encoding="utf-8")
+    assert _constant(follower, "MAX_YAW_RATE") <= _constant(
+        gate_text(), "HARD_W_LIMIT")

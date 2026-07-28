@@ -95,10 +95,19 @@ class CloudAccumulator:
 GATE_HZ = 15.0
 INPUT_STALE_S = 0.6
 CLOUD_STALE_S = 1.0
-HARD_V_LIMIT = 0.6
+# Ceilings, not setpoints: this gate exists to bound whatever the planner
+# asks for, so HARD_V_LIMIT must sit ABOVE the follower's MAX_SPEED or it
+# silently becomes the real speed limit. It was 0.6 while the follower
+# asked for 0.5; raising the follower to the measured 1.2 m/s without
+# raising this would have halved the commanded speed at this stage with no
+# error anywhere. test_safety_chain asserts the ordering holds.
+HARD_V_LIMIT = 1.4
 HARD_W_LIMIT = 0.6
-STOP_DISTANCE_M = 0.8
-CHECK_RANGE_M = 1.4
+# The chair leaves this stage at up to HARD_V_LIMIT and is brought to rest
+# by the final relay at 2 * HARD_DECEL, so the stop radius has to cover
+# that plus this gate's own 15 Hz cycle and the scan's arrival lag.
+STOP_DISTANCE_M = 1.0
+CHECK_RANGE_M = 2.0
 HALF_WIDTH_M = 0.5
 SENSOR_HEIGHT_M = 0.30
 OBSTACLE_MIN_Z = 0.15
