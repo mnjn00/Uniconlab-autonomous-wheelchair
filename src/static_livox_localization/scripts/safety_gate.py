@@ -19,6 +19,7 @@ from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Odometry
 
 import sensor_msgs.point_cloud2 as pc2
+from body_frame import body_to_lidar, lidar_extrinsics
 import tf.transformations as tft
 
 
@@ -28,10 +29,17 @@ class CloudAccumulator:
     A single 0.1 s sweep leaves the forward corridor nearly empty (the
     non-repetitive pattern needs accumulation), so per-scan ground checks
     false-trigger. Scans are motion-compensated via /Odometry.
+
+    The merged cloud is expressed in the lidar frame: FAST-LIO publishes
+    /cloud_registered_body in the IMU body frame, which the VN-100 swap
+    moved away from the lidar, while this gate's corridor half-width and
+    stop distance are lidar-frame quantities.
     """
 
-    def __init__(self, window_s=1.0):
+    def __init__(self, lidar_in_body, lidar_to_body_rotation, window_s=1.0):
         self.window_s = window_s
+        self.lidar_in_body = lidar_in_body
+        self.lidar_to_body_rotation = lidar_to_body_rotation
         self.scans = []
         self.odoms = []
 
@@ -79,7 +87,9 @@ class CloudAccumulator:
             parts.append(pts @ M[:3, :3].T + M[:3, 3])
         if not parts:
             return None, rospy.Time(0)
-        return np.vstack(parts), rospy.Time.from_sec(newest_stamp)
+        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
+                               self.lidar_to_body_rotation)
+        return merged, rospy.Time.from_sec(newest_stamp)
 
 
 GATE_HZ = 15.0
@@ -100,7 +110,10 @@ class SafetyGate:
         rospy.init_node("safety_gate")
         self.raw = Twist()
         self.raw_stamp = rospy.Time(0)
-        self.accumulator = CloudAccumulator()
+        profile = str(rospy.get_param("~body_frame_profile"))
+        lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
+        self.accumulator = CloudAccumulator(
+            lidar_in_body, lidar_to_body_rotation)
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""

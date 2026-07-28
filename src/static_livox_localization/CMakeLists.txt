@@ -49,6 +49,7 @@ catkin_install_python(
 )
 install(
   FILES
+    scripts/body_frame.py
     scripts/localization_policy.py
     scripts/safety_band.py
     scripts/tip_guard_policy.py

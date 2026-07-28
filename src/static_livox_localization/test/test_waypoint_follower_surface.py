@@ -124,7 +124,30 @@ def test_field_nodes_and_sibling_policy_modules_are_installed_together():
     for path in (
             "scripts/waypoint_follower.py",
             "scripts/tip_guard.py",
+            "scripts/body_frame.py",
             "scripts/localization_policy.py",
             "scripts/safety_band.py",
             "scripts/tip_guard_policy.py"):
         assert path in cmake
+
+
+def test_scan_geometry_is_corrected_into_the_lidar_frame():
+    """FAST-LIO publishes /cloud_registered_body in the IMU body frame. With
+    the VN-100 that frame sits 14.5 cm forward, 6.8 cm up and yawed 2.80 deg
+    from the lidar, while every geometry constant here - sensor height,
+    corridor half-width, guard distances - is a lidar-frame quantity. The
+    accumulator must undo the configured extrinsic rather than each constant
+    being re-derived."""
+    text = follower_text()
+    assert "from body_frame import body_to_lidar, lidar_extrinsics" in text
+    assert 'rospy.get_param("~body_frame_profile")' in text
+    assert "body_to_lidar(np.vstack(parts)" in text
+
+
+def test_the_gate_corrects_the_same_frame_independently():
+    """The gate is a second, independent opinion on the forward corridor.
+    If it read the body frame while the follower read the lidar frame, the
+    two would disagree about where an obstacle is by the extrinsic."""
+    gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
+    assert "from body_frame import body_to_lidar, lidar_extrinsics" in gate
+    assert 'rospy.get_param("~body_frame_profile")' in gate

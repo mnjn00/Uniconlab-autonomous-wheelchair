@@ -73,9 +73,50 @@ if ! timeout 3 rostopic echo -n1 /livox/lidar/header >/dev/null 2>&1; then
 fi
 echo "  lidar OK"
 
+# The VN-100 is the inertial half of the localization solution and must
+# be publishing BEFORE FAST-LIO, which blocks waiting for IMU messages to
+# initialise. VN_IMU=0 reverts to the lidar's built-in IMU: it selects the
+# previously validated mapping_mid360.launch and the matching body-frame
+# profile, so the swap can be backed out on its own.
+VN_IMU="${VN_IMU:-1}"
+if [ "$VN_IMU" = "1" ]; then
+  echo "[2b/5] VectorNav VN-100"
+  # A SIGTERM'd vnpub leaves the sensor streaming binary at 921600; the
+  # next driver start parses that backlog as register replies and
+  # segfaults. Silence async output before opening it.
+  VN_RESET=""
+  for candidate in "$(dirname "$0")/vn_reset.py" "$HOME/vn_reset.py"; do
+    [ -f "$candidate" ] && { VN_RESET="$candidate"; break; }
+  done
+  if [ -n "$VN_RESET" ]; then
+    python3 "$VN_RESET" 2>&1 | sed 's/^/  vn_reset: /' || \
+      echo "  vn_reset failed - continuing, driver may still negotiate"
+  else
+    echo "  WARNING: vn_reset.py not found; the driver may segfault on a"
+    echo "           stale stream. Expected next to this script or in \$HOME."
+  fi
+  source "$HOME/catkin_ws/devel/setup.bash"
+  setsid nohup roslaunch base_model vectornav.launch \
+    > "$LOG/live_vectornav.log" 2>&1 < /dev/null &
+  for i in $(seq 1 20); do
+    timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1; then
+    echo "ERROR: /vectornav/IMU silent (check /dev/vn cable)"; exit 6
+  fi
+  echo "  VN-100 OK"
+  FASTLIO_LAUNCH="mapping_mid360_vn100.launch"
+  BODY_FRAME_PROFILE="vn100"
+else
+  echo "  VN_IMU=0 - falling back to the lidar's built-in IMU"
+  FASTLIO_LAUNCH="mapping_mid360.launch"
+  BODY_FRAME_PROFILE="builtin"
+fi
+
 echo "[3/5] FAST-LIO (keep the wheelchair STILL for a few seconds)"
 source "$HOME/fast_lio_ws/devel/setup.bash"
-setsid nohup roslaunch fast_lio mapping_mid360.launch rviz:=false \
+setsid nohup roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
   > "$LOG/live_fastlio.log" 2>&1 < /dev/null &
 for i in $(seq 1 20); do
   timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1 && break
@@ -119,29 +160,27 @@ if ! timeout 3 rostopic echo -n1 /wheel_status >/dev/null 2>&1; then
 fi
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
 setsid nohup rosrun static_livox_localization safety_gate.py \
+  _body_frame_profile:="$BODY_FRAME_PROFILE" \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
-IMU_TOPIC="${IMU_TOPIC:-/livox/imu}"
 setsid nohup rosrun static_livox_localization tip_guard.py \
-  _imu_topic:="$IMU_TOPIC" \
   > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
 for i in $(seq 1 10); do
   timeout 2 rostopic echo -n1 /tip_guard/status >/dev/null 2>&1 && break
   sleep 1
 done
-echo "  tip_guard armed - watch /tip_guard/status; if it stays"
-echo "  CONFIG_UNVERIFIED for more than ~30s of driving, the IMU axis"
-echo "  needs checking (see IMU_TOPIC / rosparam ~gyro_pitch_axis/sign)"
+echo "  final-stage relay up - watch /tip_guard/status"
 ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260727_new_route_waypoints.json}"
 BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260727_new_route_safety_band.json}"
 setsid nohup rosrun static_livox_localization waypoint_follower.py \
   _route:="$ROUTE" _safety_band:="$BAND" \
+  _body_frame_profile:="$BODY_FRAME_PROFILE" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &
 
 echo "[7/7] black-box recorder"
 mkdir -p "$HOME/localization_trials"
 setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
-  /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics \
+  /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics /vectornav/IMU \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &

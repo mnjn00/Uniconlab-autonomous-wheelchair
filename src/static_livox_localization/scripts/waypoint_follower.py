@@ -35,6 +35,7 @@ from std_msgs.msg import Int16MultiArray, String
 from std_srvs.srv import SetBool, SetBoolResponse
 
 import sensor_msgs.point_cloud2 as pc2
+from body_frame import body_to_lidar, lidar_extrinsics
 from localization_policy import localization_hold_reason
 from safety_band import SafetyBand
 import tf.transformations as tft
@@ -86,10 +87,19 @@ LOOKAHEAD_BACKOFF_M = 0.4
 
 
 class CloudAccumulator:
-    """Merge ~1 s of sparse MID360 scans into the current body frame."""
+    """Merge ~1 s of sparse MID360 scans and express them in the lidar frame.
 
-    def __init__(self, window_s=1.0):
+    FAST-LIO publishes /cloud_registered_body in the IMU body frame. With
+    the VN-100 that is no longer the lidar frame, and every geometry
+    constant here (sensor height, corridor half-width, guard distances)
+    was tuned in the lidar/chair frame, so the configured extrinsic is
+    inverted once here rather than each constant being re-derived.
+    """
+
+    def __init__(self, lidar_in_body, lidar_to_body_rotation, window_s=1.0):
         self.window_s = window_s
+        self.lidar_in_body = lidar_in_body
+        self.lidar_to_body_rotation = lidar_to_body_rotation
         self.scans = []
         self.odoms = []
 
@@ -138,7 +148,9 @@ class CloudAccumulator:
             parts.append(pts @ M[:3, :3].T + M[:3, 3])
         if not parts:
             return None, rospy.Time(0)
-        return np.vstack(parts), rospy.Time.from_sec(newest)
+        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
+                               self.lidar_to_body_rotation)
+        return merged, rospy.Time.from_sec(newest)
 
 
 
@@ -166,7 +178,10 @@ class WaypointFollower:
         self.drive_mode = None
         self.wheel_status_stamp = rospy.Time(0)
         self.route_locked = False
-        self.accumulator = CloudAccumulator()
+        profile = str(rospy.get_param("~body_frame_profile"))
+        lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
+        self.accumulator = CloudAccumulator(
+            lidar_in_body, lidar_to_body_rotation)
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.nearest_index = 0
