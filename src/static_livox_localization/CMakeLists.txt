@@ -45,6 +45,7 @@ catkin_install_python(
     scripts/enable_auto_correction_after_seed.py
     scripts/tip_guard.py
     scripts/waypoint_follower.py
+    scripts/safety_gate.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(

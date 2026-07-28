@@ -24,6 +24,8 @@ Per control cycle:
 
 import json
 import math
+import os
+import sys
 
 import numpy as np
 import rospy
@@ -35,6 +37,14 @@ from std_msgs.msg import Int16MultiArray, String
 from std_srvs.srv import SetBool, SetBoolResponse
 
 import sensor_msgs.point_cloud2 as pc2
+# catkin_install_python leaves a relay in devel/lib that exec()s this file,
+# so sys.path[0] is the relay's directory, not this one, and the policy
+# modules sitting beside this file are not importable - the relay does set
+# __file__ to this source path, so recover the directory from it. Without
+# this the node dies at import on the vehicle while every offline test,
+# which imports the modules directly, still passes.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from body_frame import body_to_lidar, lidar_extrinsics
 from localization_policy import localization_hold_reason
 from safety_band import SafetyBand

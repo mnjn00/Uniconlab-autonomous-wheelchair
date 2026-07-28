@@ -14,9 +14,20 @@ chain because downstream code authorizes /cmd_vel only from caller
 "/tip_guard".
 """
 
+import os
+import sys
+
 import rospy
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
+# catkin_install_python leaves a relay in devel/lib that exec()s this file,
+# so sys.path[0] is the relay's directory, not this one, and the policy
+# modules sitting beside this file are not importable - the relay does set
+# __file__ to this source path, so recover the directory from it. Without
+# this the node dies at import on the vehicle while every offline test,
+# which imports the modules directly, still passes.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from tip_guard_policy import next_linear_speed
 
 GUARD_HZ = 50.0
