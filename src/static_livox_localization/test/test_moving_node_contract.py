@@ -60,3 +60,35 @@ def test_cmake_builds_moving_node_separately_from_static_node():
     assert "add_executable(moving_icp_localizer" in cmake
     assert "add_executable(static_icp_localizer" in cmake
 
+
+
+def test_pose_tf_and_path_stamps_never_repeat_or_go_backwards():
+    """A correction is matched to a HISTORICAL odometry sample that the
+    odometry callback has usually already published. Re-publishing against
+    it re-sent map->odom at a stamp tf2 already held, so tf2 dropped the
+    corrected transform as TF_REPEATED_DATA and it only reached the tree on
+    the next odometry message. Measured over full_debug_20260727_214306.bag
+    before the fix: 425 of 5079 map->camera_init transforms were repeats
+    and 425 of 5078 pose stamps went backwards, by up to 1.50 s, while
+    every other transform in the system was clean."""
+    text = node_text()
+    guard = "if (has_published_ && odom.stamp <= last_published_stamp_) return;"
+    assert guard in text
+    assert "last_published_stamp_ = odom.stamp;" in text
+    # the guard has to sit ahead of every publish in that function
+    start = text.index("void publish_pose_tf_path_locked")
+    assert text.index(guard, start) < text.index("pose_pub_.publish", start)
+    assert text.index(guard, start) < text.index("path_pub_.publish", start)
+    assert text.index(guard, start) < text.index("sendTransform", start)
+
+
+def test_a_correction_is_published_against_the_freshest_odometry():
+    """The correction is the same either way; applying it to the newest
+    base pose is what keeps the stamp moving forward."""
+    text = node_text()
+    assert "void publish_correction_locked" in text
+    assert ("publish_pose_tf_path_locked(has_latest_odom_ ? latest_odom_ "
+            ": matched);") in text
+    # both accepted-correction branches must go through it, not straight
+    # to the raw publisher
+    assert text.count("publish_correction_locked(odom);") == 2

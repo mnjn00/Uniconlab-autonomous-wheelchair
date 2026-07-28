@@ -452,14 +452,14 @@ class MovingIcpLocalizer {
           } else {
             state_machine_.observe(true, stamp.toSec());
           }
-          publish_pose_tf_path_locked(odom);
+          publish_correction_locked(odom);
         }
         publish_diagnostic_locked(consensus.reason, registration, decision);
       } else {
         map_T_odom_ = static_livox_localization::limit_map_T_odom_step(
             map_T_odom_, candidate_map_T_odom, tracking_config_);
         state_machine_.observe(true, stamp.toSec());
-        publish_pose_tf_path_locked(odom);
+        publish_correction_locked(odom);
         publish_diagnostic_locked(decision.reason, registration, decision);
       }
     } else {
@@ -474,7 +474,34 @@ class MovingIcpLocalizer {
     }
   }
 
+  // A correction is computed from a cloud, which is matched to a
+  // HISTORICAL odometry sample - one the odometry callback has usually
+  // already published pose/TF/path for. Re-publishing against that sample
+  // re-sent map->odom at a timestamp tf2 already held, so tf2 rejected it
+  // as TF_REPEATED_DATA and the corrected transform never entered the tree
+  // at that instant; it only appeared on the next odometry message. It
+  // also walked /fast_lio_icp/pose backwards. Measured over
+  // full_debug_20260727_214306.bag: 425 of 5079 map->camera_init
+  // transforms were repeats, and 425 of 5078 pose stamps went backwards by
+  // up to 1.50 s, while every other transform in the system was clean.
+  //
+  // The correction belongs on the newest odometry instead - same
+  // correction, applied to a fresher base pose, at a stamp that moves
+  // forward. When no newer sample has arrived the publish is simply
+  // skipped: map_T_odom_ already holds the correction and the next
+  // odometry callback carries it, which is what effectively happened
+  // before, minus the rejected message and the log spam.
+  void publish_correction_locked(const OdomSample& matched) {
+    publish_pose_tf_path_locked(has_latest_odom_ ? latest_odom_ : matched);
+  }
+
   void publish_pose_tf_path_locked(const OdomSample& odom) {
+    // Timestamps must never repeat or go backwards on these topics: tf2
+    // drops a repeated stamp outright, and consumers age a pose against
+    // its own stamp.
+    if (has_published_ && odom.stamp <= last_published_stamp_) return;
+    has_published_ = true;
+    last_published_stamp_ = odom.stamp;
     const Eigen::Isometry3d& odom_T_base = odom.odom_T_base;
     const Eigen::Isometry3d map_T_base = map_T_odom_ * odom_T_base;
     geometry_msgs::PoseWithCovarianceStamped pose_message;
@@ -596,6 +623,8 @@ class MovingIcpLocalizer {
   Eigen::Isometry3d map_T_odom_ = Eigen::Isometry3d::Identity();
   bool has_seed_ = false;
   bool has_latest_odom_ = false;
+  bool has_published_ = false;
+  ros::Time last_published_stamp_;
   bool has_seed_map_T_odom_guess_ = false;
   bool has_map_T_odom_ = false;
   bool correction_in_progress_ = false;
