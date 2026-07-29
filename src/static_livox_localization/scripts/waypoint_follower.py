@@ -431,15 +431,19 @@ class WaypointFollower:
 
     def target_at_lookahead(self, lookahead):
         target = self.lookahead_point(lookahead)
-        # Lean away from a mapped drop before anything else is applied.
-        # Steering at the recorded line keeps the chair wherever the
-        # operator happened to be between the kerb and the open side; on
-        # this route that is 0.15 m of wheel-to-kerb clearance at the worst
-        # station. Aiming at the middle of the usable band instead takes
-        # the room the pavement side has to give: worst case 0.36 m, and no
-        # station left under 0.30 m. The bypass offset is applied on top,
-        # so stepping around an obstacle still overrides the lean.
-        target = self.band.recentre(target)
+        # Steer at the recorded line. Aiming at the middle of the usable
+        # band instead was tried and driven: it moves the target off that
+        # line by up to 1.10 m (6 of 75 waypoints beyond 0.5 m), and in the
+        # field the chair wandered 2.68 m off the line at wp 7 - which the
+        # lean displaces by +0.50 m - and later headed for a kerb until it
+        # was stopped by hand.
+        #
+        # The asymmetry is the point: the recorded line is where a person
+        # actually drove, while the band edges come from a step-detection
+        # heuristic over the map. Trading a proven path for an inferred
+        # midpoint means any error in the inferred kerb steers straight at
+        # the real one. Containment below still clamps into the band, so
+        # the band constrains the chair without commanding it.
         if abs(self.lateral_offset) > 0.01:
             direction = target - self.pose_xy
             norm = np.linalg.norm(direction)

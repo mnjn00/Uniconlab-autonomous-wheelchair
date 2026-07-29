@@ -30,7 +30,11 @@ def test_assisted_tracking_uses_tight_roi_consensus_and_small_corrections():
     config = yaml.safe_load(
         (ROOT / "config" / "moving_localization.yaml").read_text(encoding="utf-8")
     )
-    assert config["roi_radius"] == 8.0
+    # The ROI must be wide enough to contain the geometry that fixes the
+    # pose, not just the ground around the chair. 8 m was measured on the
+    # chair to score 0.19 where 20 m scored 0.44 at the same place, so the
+    # contract pins a floor rather than the old value.
+    assert config["roi_radius"] >= 15.0
     assert config["required_consistent_candidates"] == 3
     assert config["candidate_translation_tolerance_m"] == 0.30
     assert config["candidate_yaw_tolerance_deg"] == 3.0

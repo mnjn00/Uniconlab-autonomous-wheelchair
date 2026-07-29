@@ -34,10 +34,14 @@ RegistrationResult register_cloud(
   pcl::CropBox<pcl::PointXYZI> crop;
   crop.setInputCloud(map);
   const Eigen::Vector3d c = seed.translation();
-  crop.setMin(Eigen::Vector4f(c.x() - config.roi_radius, c.y() - config.roi_radius,
-                             c.z() - config.roi_z_half_extent, 1.0f));
-  crop.setMax(Eigen::Vector4f(c.x() + config.roi_radius, c.y() + config.roi_radius,
-                             c.z() + config.roi_z_half_extent, 1.0f));
+  const Eigen::Vector3f roi_min(c.x() - config.roi_radius,
+                                c.y() - config.roi_radius,
+                                c.z() - config.roi_z_half_extent);
+  const Eigen::Vector3f roi_max(c.x() + config.roi_radius,
+                                c.y() + config.roi_radius,
+                                c.z() + config.roi_z_half_extent);
+  crop.setMin(Eigen::Vector4f(roi_min.x(), roi_min.y(), roi_min.z(), 1.0f));
+  crop.setMax(Eigen::Vector4f(roi_max.x(), roi_max.y(), roi_max.z(), 1.0f));
   pcl::PointCloud<pcl::PointXYZI>::Ptr target(new pcl::PointCloud<pcl::PointXYZI>);
   crop.filter(*target);
   result.source_points = static_cast<int>(source->size());
@@ -62,22 +66,38 @@ RegistrationResult register_cloud(
   const double translation = delta.translation().norm();
   const double rotation = Eigen::AngleAxisd(delta.rotation()).angle();
 
+  // Score only the scan points the map could ever explain. The scan runs
+  // out to the lidar's full range while the target is cropped to the ROI
+  // box, so counting the points beyond that box as outliers measured how
+  // far the lidar sees rather than how well the pose fits: an open street
+  // scored worse than a narrow one at the same alignment. Measured on the
+  // chair, this held the ratio near 0.18 while the same points scored
+  // 0.87 once restricted to the ROI, and it sank further as the chair
+  // drove into open ground.
+  //
+  // The direction is fixed too. Taking whichever cloud happened to be
+  // smaller flipped the question between "how much of what I see is
+  // mapped" and "how much of the map do I see" as the clouds changed
+  // size; only the former measures localization, since the latter falls
+  // with occlusion and with map richness.
   pcl::KdTreeFLANN<pcl::PointXYZI> tree;
-  const pcl::PointCloud<pcl::PointXYZI>::ConstPtr sparser =
-      aligned->size() <= target->size() ? aligned : target;
-  const pcl::PointCloud<pcl::PointXYZI>::ConstPtr denser =
-      aligned->size() <= target->size() ? target : aligned;
-  tree.setInputCloud(denser);
+  tree.setInputCloud(target);
   int inliers = 0;
+  int scored = 0;
   std::vector<int> index(1);
   std::vector<float> distance(1);
   const double threshold2 = config.max_correspondence * config.max_correspondence;
-  for (const auto& point : sparser->points) {
+  for (const auto& point : aligned->points) {
+    if (point.x < roi_min.x() || point.x > roi_max.x() ||
+        point.y < roi_min.y() || point.y > roi_max.y() ||
+        point.z < roi_min.z() || point.z > roi_max.z()) {
+      continue;
+    }
+    ++scored;
     if (tree.nearestKSearch(point, 1, index, distance) == 1 && distance[0] <= threshold2) ++inliers;
   }
-  result.inlier_ratio = sparser->empty()
-                            ? 0.0
-                            : static_cast<double>(inliers) / sparser->size();
+  result.inlier_ratio =
+      scored == 0 ? 0.0 : static_cast<double>(inliers) / scored;
   result.converged = std::isfinite(result.fitness) && result.fitness <= config.max_fitness &&
                      translation <= config.max_seed_translation &&
                      rotation <= config.max_seed_rotation_rad;

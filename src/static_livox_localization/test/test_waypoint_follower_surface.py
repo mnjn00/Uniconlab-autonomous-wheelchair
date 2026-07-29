@@ -185,3 +185,17 @@ def test_the_route_is_read_in_the_body_frame_it_was_captured_in():
     assert "pose @ self.pose_correction" in text
     assert text.index("self.pose_correction = pose_correction") < text.index(
         "pose = pose @ self.pose_correction")
+
+
+def test_steering_follows_the_recorded_line_not_the_band_midpoint():
+    """Aiming at the band's safe_offset displaced the steering target by up
+    to 1.10 m from the line a person actually drove, and in the field the
+    chair wandered 2.68 m off at wp 7 and later headed for a kerb. The band
+    is derived from a step-detection heuristic; it may CONTAIN the chair
+    (clamp) but must not COMMAND it away from the proven path."""
+    text = follower_text()
+    steer = text.index("def target_at_lookahead")
+    end = text.index("def ", steer + 10)
+    body = text[steer:end]
+    assert "recentre" not in body
+    assert "self.band.clamp(target)" in body

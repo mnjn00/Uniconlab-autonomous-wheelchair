@@ -24,7 +24,12 @@ max_cloud_samples: 20
 max_submap_points: 120000
 
 voxel_resolution: 0.20
-roi_radius: 8.0
+# 8 m covered barely more than the ground immediately around the chair,
+# which on open pavement is close to featureless for a horizontal fix. At
+# 20 m the target carries the buildings and kerbs that actually constrain
+# the pose: measured on the chair, the inlier ratio went from 0.19 to
+# 0.44 at the same place, and held 0.53-0.79 while driving.
+roi_radius: 20.0
 roi_z_half_extent: 5.0
 max_correspondence: 0.5
 max_iterations: 64
