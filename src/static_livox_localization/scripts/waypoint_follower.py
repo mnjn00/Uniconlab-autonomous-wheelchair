@@ -61,6 +61,12 @@ MAX_SPEED = 0.6
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
+# Speed floor while steering hard, scaled by how hard. At full yaw the
+# faster wheel then runs near the 1.3 km/h the loaded chair was measured
+# to need before it rotates at all; below that a turn is commanded and
+# simply does not occur. The wheel guard defends the same floor
+# independently, so a slow command still turns even if this is bypassed.
+TURN_FLOOR_SPEED = 0.30
 MAX_ACCEL = 0.18
 MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
@@ -587,8 +593,17 @@ class WaypointFollower:
         yaw_rate = max(self.last_yaw_rate - slew,
                        min(self.last_yaw_rate + slew, yaw_rate))
         self.last_yaw_rate = yaw_rate
+        # Slowing for a turn must not slow past the speed at which the base
+        # can still perform one. The wheel encoder sends tenths of a km/h,
+        # and below roughly 1.3 km/h at the faster wheel the loaded chair
+        # was measured not to rotate at all - so commanding a hard turn at a
+        # crawl asks for something that never arrives, then arrives at once.
+        # The floor rises with how hard the turn is.
+        turning = min(abs(yaw_rate) / MAX_YAW_RATE, 1.0)
+        curvature_floor = TURN_FLOOR_SPEED * turning
         allowed = min(allowed,
-                      max(0.12, MAX_SPEED * (1.0 - abs(heading_error) / 1.2)))
+                      max(curvature_floor, CREEP_SPEED,
+                          MAX_SPEED * (1.0 - abs(heading_error) / 1.2)))
         if blocking:
             allowed = 0.0
 
