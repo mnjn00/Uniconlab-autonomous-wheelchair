@@ -1,8 +1,8 @@
 {
  "frame": "map",
- "source": "full_debug_20260727_214306.bag /fast_lio_icp/pose, complete drive kept end to end (no bookend trim)",
+ "source": "full_debug_20260727_214306.bag /fast_lio_icp/pose, cut at the tail spin onset (t=439 s); all forward driving kept",
  "body_frame_profile": "builtin",
- "count": 79,
+ "count": 75,
  "waypoints": [
   {
    "x": -0.08,
@@ -449,34 +449,10 @@
    "yaw_deg": 97.2
   },
   {
-   "x": 225.1,
-   "y": 27.83,
-   "z": -6.17,
-   "yaw_deg": 118.5
-  },
-  {
-   "x": 224.7,
-   "y": 29.24,
-   "z": -6.16,
-   "yaw_deg": 32.1
-  },
-  {
-   "x": 224.69,
-   "y": 28.89,
-   "z": -6.16,
-   "yaw_deg": 176.1
-  },
-  {
-   "x": 225.51,
-   "y": 28.73,
-   "z": -6.15,
-   "yaw_deg": -59.1
-  },
-  {
-   "x": 226.96,
-   "y": 25.63,
-   "z": -6.47,
-   "yaw_deg": -68.9
+   "x": 225.41,
+   "y": 27.25,
+   "z": -6.2,
+   "yaw_deg": 119.2
   }
  ]
 }
