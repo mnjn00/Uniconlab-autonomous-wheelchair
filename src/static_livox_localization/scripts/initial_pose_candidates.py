@@ -65,6 +65,25 @@ def load_known_start(
     if not isinstance(first, dict):
         raise KnownStartRouteError("invalid_waypoint", route_path)
 
+    # A backwards start heading is not a small error: seeded as the prior it
+    # points ICP away from every surface it should match, so verification
+    # cannot converge and initialization falls through to the global search
+    # every time. A route generated from a spin-in-place start did exactly
+    # that, storing -175 deg where the chair actually faced +4 deg. The
+    # chair drives forwards, so the recorded heading and the direction the
+    # route immediately travels cannot be more than a right angle apart.
+    if len(waypoints) >= 2 and isinstance(waypoints[1], dict):
+        second = waypoints[1]
+        travel = math.degrees(math.atan2(
+            _finite_number(second.get("y"), "y", route_path)
+            - _finite_number(first.get("y"), "y", route_path),
+            _finite_number(second.get("x"), "x", route_path)
+            - _finite_number(first.get("x"), "x", route_path),
+        ))
+        heading = _finite_number(first.get("yaw_deg"), "yaw_deg", route_path)
+        if abs((heading - travel + 180.0) % 360.0 - 180.0) > 90.0:
+            raise KnownStartRouteError("start_heading_reversed", route_path)
+
     return InitializationCandidate(
         x=_finite_number(first.get("x"), "x", route_path),
         y=_finite_number(first.get("y"), "y", route_path),

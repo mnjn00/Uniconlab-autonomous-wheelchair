@@ -141,3 +141,45 @@ def test_handshake_accepts_only_same_generation_after_verifying():
     assert module.seed_was_acknowledged(manual, 10, 3)
     assert not module.tracking_was_verified(tracking, 11, 4, False)
     assert module.tracking_was_verified(tracking, 11, 4, True)
+
+
+def test_known_start_rejects_a_route_that_faces_away_from_its_own_path(tmp_path):
+    """The 0727 route stored -175 deg where the chair actually faced +4 deg:
+    generated from a spin-in-place start, the polyline direction between
+    consecutive samples was arbitrary. Seeded as the initialization prior it
+    aimed ICP backwards, so verification could never converge and every
+    startup fell through to the global search."""
+    route = tmp_path / "reversed.json"
+    route.write_text(json.dumps({
+        "frame": "map",
+        "body_frame_profile": "builtin",
+        "count": 2,
+        "waypoints": [
+            {"x": 0.0, "y": 0.0, "z": 0.0, "yaw_deg": -175.4},
+            {"x": 4.4, "y": 1.0, "z": 0.0, "yaw_deg": 10.0},
+        ],
+    }), encoding="utf-8")
+
+    module = load_module()
+    with pytest.raises(module.KnownStartRouteError) as raised:
+        module.load_known_start(route, "map", "builtin")
+    assert "start_heading_reversed" in str(raised.value)
+
+
+def test_known_start_accepts_a_heading_that_merely_lags_the_first_turn(tmp_path):
+    """Facing a little off the first segment is normal - the chair turns as
+    it pulls away - so only a reversal is refused."""
+    route = tmp_path / "ok.json"
+    route.write_text(json.dumps({
+        "frame": "map",
+        "body_frame_profile": "builtin",
+        "count": 2,
+        "waypoints": [
+            {"x": 0.0, "y": 0.0, "z": 0.0, "yaw_deg": 3.7},
+            {"x": 4.4, "y": 1.0, "z": 0.0, "yaw_deg": 10.0},
+        ],
+    }), encoding="utf-8")
+
+    module = load_module()
+    candidate = module.load_known_start(route, "map", "builtin")
+    assert abs(math.degrees(candidate.yaw_rad) - 3.7) < 1e-6
