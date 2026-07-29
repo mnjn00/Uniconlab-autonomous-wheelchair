@@ -2,14 +2,26 @@
 # One-command field startup: driver -> FAST-LIO -> localization(+RViz) -> auto seed.
 set -eo pipefail
 
-# Map merged from three passes (07/07 + 07/25), pose-graph optimised with
-# 1460 submaps over 27519 frames. Deploy with tools/deploy_merged_map.sh,
-# which converts the .ply GLIM emits into the .pcd the localizer reads.
-# The previous single-pass map is still selectable:
-#   MAP=$HOME/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd \
-#   TRAJ=$HOME/wheelchair_localization_maps/livox_raw_20260707/traj_lidar.txt ./start_wheelchair_localization.sh
-MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725.pcd}"
+# Map merged from the 07/07 + 07/25 passes. The 594 MB mergedmap.ply is the
+# immutable source; deploy_merged_map.sh verifies it and installs the pinned
+# 0.20 m runtime PCD used by both auto-init and ICP.
+# A map override is fail-closed: MAP, MAP_SHA256, MAP_ID, and TRAJ must be
+# supplied together so every localization and preview node sees one identity.
+MAP_OVERRIDE_COUNT=0
+[ "${MAP+x}" = "x" ] && MAP_OVERRIDE_COUNT=$((MAP_OVERRIDE_COUNT + 1))
+[ "${MAP_SHA256+x}" = "x" ] && MAP_OVERRIDE_COUNT=$((MAP_OVERRIDE_COUNT + 1))
+[ "${MAP_ID+x}" = "x" ] && MAP_OVERRIDE_COUNT=$((MAP_OVERRIDE_COUNT + 1))
+[ "${TRAJ+x}" = "x" ] && MAP_OVERRIDE_COUNT=$((MAP_OVERRIDE_COUNT + 1))
+if [ "$MAP_OVERRIDE_COUNT" -ne 0 ] && [ "$MAP_OVERRIDE_COUNT" -ne 4 ]; then
+  echo "ERROR: override MAP, MAP_SHA256, MAP_ID, and TRAJ together" >&2
+  exit 64
+fi
+MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd}"
+MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
+MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
 TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260727_new_route_waypoints.json}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260727_new_route_safety_band.json}"
 RVIZ="${RVIZ:-true}"
 LOG=$HOME
 
@@ -73,12 +85,9 @@ if ! timeout 3 rostopic echo -n1 /livox/lidar/header >/dev/null 2>&1; then
 fi
 echo "  lidar OK"
 
-# The VN-100 is the inertial half of the localization solution and must
-# be publishing BEFORE FAST-LIO, which blocks waiting for IMU messages to
-# initialise. VN_IMU=0 reverts to the lidar's built-in IMU: it selects the
-# previously validated mapping_mid360.launch and the matching body-frame
-# profile, so the swap can be backed out on its own.
-VN_IMU="${VN_IMU:-1}"
+# The 0727 route was recorded with the MID-360's built-in IMU. Keep that
+# sensor/profile as the default; VN_IMU=1 remains an explicit override.
+VN_IMU="${VN_IMU:-0}"
 if [ "$VN_IMU" = "1" ]; then
   echo "[2b/5] VectorNav VN-100"
   # A SIGTERM'd vnpub leaves the sensor streaming binary at 921600; the
@@ -109,7 +118,16 @@ if [ "$VN_IMU" = "1" ]; then
   FASTLIO_LAUNCH="mapping_mid360_vn100.launch"
   BODY_FRAME_PROFILE="vn100"
 else
-  echo "  VN_IMU=0 - falling back to the lidar's built-in IMU"
+  echo "  VN_IMU=0 - using the lidar's built-in IMU"
+  for i in $(seq 1 20); do
+    timeout 3 rostopic echo -n1 /livox/imu/header >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! timeout 3 rostopic echo -n1 /livox/imu/header >/dev/null 2>&1; then
+    echo "ERROR: /livox/imu not publishing; FAST-LIO was not started"
+    exit 8
+  fi
+  echo "  Livox IMU OK"
   FASTLIO_LAUNCH="mapping_mid360.launch"
   BODY_FRAME_PROFILE="builtin"
 fi
@@ -129,20 +147,50 @@ echo "  odometry OK"
 
 echo "[4/5] localization + rviz + auto init"
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
+rosparam set /fast_lio_icp/auto_initialization_verified false
 setsid nohup roslaunch static_livox_localization moving_localization.launch \
-  rviz:="$RVIZ" auto_init:=true auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
+  rviz:="$RVIZ" auto_init:=true \
+  map_path:="$MAP" map_sha256:="$MAP_SHA256" map_id:="$MAP_ID" \
+  auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
+  auto_init_route:="$ROUTE" \
+  auto_init_body_frame_profile:="$BODY_FRAME_PROFILE" \
   > "$LOG/live_localization.log" 2>&1 < /dev/null &
 
 echo "[5/7] waiting for TRACKING (auto seed + consensus)"
 LOCALIZED=0
-for i in $(seq 1 45); do
-  STATE=$(timeout 3 rostopic echo -n1 /fast_lio_icp/localization_diagnostics/status[0]/message 2>/dev/null | head -1)
+AUTO_INIT_SEEN=0
+AUTO_INIT_TIMEOUT_S="${AUTO_INIT_TIMEOUT_S:-180}"
+case "$AUTO_INIT_TIMEOUT_S" in
+  *[!0-9]*|"") echo "ERROR: AUTO_INIT_TIMEOUT_S must be an integer"; exit 9 ;;
+esac
+AUTO_INIT_DEADLINE=$(( $(date +%s) + AUTO_INIT_TIMEOUT_S ))
+while [ "$(date +%s)" -lt "$AUTO_INIT_DEADLINE" ]; do
+  STATE=$(
+    timeout 3 rostopic echo -n1 \
+      /fast_lio_icp/localization_diagnostics/status[0]/message \
+      2>/dev/null | head -1 || true
+  )
+  AUTO_INITIALIZATION_VERIFIED=$(
+    rosparam get /fast_lio_icp/auto_initialization_verified 2>/dev/null ||
+      echo false
+  )
   echo "  state: $STATE"
-  echo "$STATE" | grep -q TRACKING && { LOCALIZED=1; break; }
+  if echo "$STATE" | grep -q TRACKING &&
+     [ "$AUTO_INITIALIZATION_VERIFIED" = "true" ]; then
+    LOCALIZED=1
+    break
+  fi
+  if rosnode ping -c1 /auto_initial_pose >/dev/null 2>&1; then
+    AUTO_INIT_SEEN=1
+  elif [ "$AUTO_INIT_SEEN" = "1" ]; then
+    echo "  auto initializer exited without TRACKING"
+    break
+  fi
   sleep 2
 done
 if [ "$LOCALIZED" != "1" ]; then
-  echo "WARNING: not TRACKING yet. Seed manually in RViz, then re-run or continue by hand."
+  echo "WARNING: not TRACKING after automatic prior/global fallback."
+  echo "Inspect $LOG/live_localization.log; use the documented manual seed only after review."
   exit 4
 fi
 echo "LOCALIZED"
@@ -169,8 +217,6 @@ for i in $(seq 1 10); do
   sleep 1
 done
 echo "  final-stage relay up - watch /tip_guard/status"
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260727_new_route_waypoints.json}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260727_new_route_safety_band.json}"
 setsid nohup rosrun static_livox_localization waypoint_follower.py \
   _route:="$ROUTE" _safety_band:="$BAND" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \

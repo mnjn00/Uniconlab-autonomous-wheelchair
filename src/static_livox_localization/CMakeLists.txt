@@ -42,6 +42,7 @@ catkin_install_python(
     scripts/replay_metrics.py
     scripts/reference_marker.py
     scripts/localization_state_marker.py
+    scripts/auto_initial_pose.py
     scripts/enable_auto_correction_after_seed.py
     scripts/tip_guard.py
     scripts/waypoint_follower.py
@@ -52,6 +53,8 @@ catkin_install_python(
 install(
   FILES
     scripts/body_frame.py
+    scripts/initial_pose_candidates.py
+    scripts/initial_pose_global_search.py
     scripts/localization_policy.py
     scripts/safety_band.py
     scripts/tip_guard_policy.py

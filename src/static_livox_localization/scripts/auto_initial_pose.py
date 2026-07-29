@@ -1,67 +1,44 @@
 #!/usr/bin/env python3
-"""Global initial-pose search: seed the localizer without an operator click.
+"""Known-start localization with verified global-search fallback.
 
-Accumulates a short odometry-compensated submap, scores candidate poses
-sampled along the mapping trajectory by map-inlier fraction (KD-tree), then
-publishes the best candidates as /fast_lio_icp/initialpose one at a time.
-Each candidate must still pass the localizer's own consensus verification
-(VERIFYING -> TRACKING), so a wrong hypothesis is rejected and the next one
-is tried automatically.
+The first waypoint of the selected route is an explicit pose prior when the
+wheelchair is placed at its known start. It is sent directly to the localizer,
+which still requires ICP consensus (VERIFYING -> TRACKING). Only when that
+normal initialization fails does this node build a KD-tree and run the more
+expensive global trajectory search.
 """
 
 import argparse
+import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import rospy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from diagnostic_msgs.msg import DiagnosticArray
 from nav_msgs.msg import Odometry
-from scipy.spatial import cKDTree
 from sensor_msgs.msg import PointCloud2
 from std_srvs.srv import SetBool
 
 import sensor_msgs.point_cloud2 as pc2
 import tf.transformations as tft
 
-
-def load_pcd_xyz(path):
-    with open(path, "rb") as f:
-        header = b""
-        while not header.endswith(b"DATA binary\n"):
-            byte = f.read(1)
-            if not byte or len(header) > 8192:
-                raise RuntimeError("unsupported PCD (need binary)")
-            header += byte
-        fields = 4 if b"intensity" in header else 3
-        data = np.frombuffer(f.read(), dtype=np.float32)
-    points = data.reshape(-1, fields)[:, :3]
-    return points[np.isfinite(points).all(axis=1)]
-
-
-def load_candidates(traj_path, spacing):
-    rows = np.loadtxt(traj_path)
-    positions = rows[:, 1:4]
-    keep = [0]
-    for index in range(1, len(positions)):
-        if np.linalg.norm(positions[index, :2] - positions[keep[-1], :2]) >= spacing:
-            keep.append(index)
-    candidates = []
-    for index in keep:
-        x, y, z = positions[index]
-        nxt = positions[min(index + 5, len(positions) - 1)]
-        heading = np.arctan2(nxt[1] - y, nxt[0] - x)
-        candidates.append((x, y, z, heading))
-    return candidates
-
-
-def voxel_downsample(points, size, cap):
-    keys = np.floor(points / size).astype(np.int64)
-    _, unique_idx = np.unique(keys, axis=0, return_index=True)
-    sampled = points[np.sort(unique_idx)]
-    if len(sampled) > cap:
-        sampled = sampled[np.random.RandomState(0).choice(len(sampled), cap, False)]
-    return sampled
+from initial_pose_candidates import (
+    KnownStartRouteError,
+    initialization_attempts,
+    load_known_start,
+    seed_was_acknowledged,
+    tracking_was_verified,
+)
+from initial_pose_global_search import (
+    load_pcd_xyz,
+    load_trajectory_candidates,
+    score_global_candidates,
+    voxel_downsample,
+)
 
 
 class SubmapCollector:
@@ -69,7 +46,9 @@ class SubmapCollector:
         self.window_s = window_s
         self.odom = []
         self.clouds = []
-        self.odom_sub = rospy.Subscriber("/Odometry", Odometry, self.on_odom, queue_size=100)
+        self.odom_sub = rospy.Subscriber(
+            "/Odometry", Odometry, self.on_odom, queue_size=100
+        )
         self.cloud_sub = rospy.Subscriber(
             "/cloud_registered_body", PointCloud2, self.on_cloud, queue_size=10)
 
@@ -114,10 +93,157 @@ class SubmapCollector:
         return (inv @ hom.T).T[:, :3].astype(np.float32)
 
 
+def try_candidate(candidate, rank, state, seed_pub, enable, verify_timeout):
+    """Publish one seed and let the downstream ICP consensus accept or reject it."""
+
+    score_text = "prior" if candidate.score is None else "{:.3f}".format(
+        candidate.score
+    )
+    rospy.loginfo(
+        "trying candidate %d: source=%s score=%s (%.1f, %.1f) yaw=%.0f",
+        rank,
+        candidate.source,
+        score_text,
+        candidate.x,
+        candidate.y,
+        np.degrees(candidate.yaw_rad),
+    )
+    try:
+        rospy.wait_for_service(
+            "/fast_lio_icp/enable_auto_correction", timeout=10.0
+        )
+    except rospy.ROSException as error:
+        rospy.logerr("auto-correction service unavailable: %s", error)
+        return False
+    connection_deadline = rospy.Time.now() + rospy.Duration(5.0)
+    while (
+        not rospy.is_shutdown()
+        and seed_pub.get_num_connections() == 0
+        and rospy.Time.now() < connection_deadline
+    ):
+        rospy.sleep(0.1)
+    if seed_pub.get_num_connections() == 0:
+        rospy.logerr("initial-pose subscriber unavailable")
+        return False
+
+    diagnostic_deadline = rospy.Time.now() + rospy.Duration(5.0)
+    while (
+        not rospy.is_shutdown()
+        and state["reset_count"] is None
+        and rospy.Time.now() < diagnostic_deadline
+    ):
+        rospy.sleep(0.1)
+    if state["reset_count"] is None:
+        rospy.logerr("localization diagnostics unavailable")
+        return False
+
+    try:
+        disabled = enable(False)
+    except rospy.ServiceException as error:
+        rospy.logerr(
+            "failed to disable correction before candidate %d: %s",
+            rank,
+            error,
+        )
+        return False
+    if not disabled.success:
+        rospy.logerr(
+            "failed to disable correction before candidate %d: %s",
+            rank,
+            disabled.message,
+        )
+        return False
+
+    baseline_reset_count = state["reset_count"]
+    baseline_sequence = state["sequence"]
+    seed = PoseWithCovarianceStamped()
+    seed.header.frame_id = "map"
+    seed.header.stamp = rospy.Time.now()
+    seed.pose.pose.position.x = candidate.x
+    seed.pose.pose.position.y = candidate.y
+    seed.pose.pose.position.z = candidate.z
+    q = tft.quaternion_from_euler(0, 0, candidate.yaw_rad)
+    seed.pose.pose.orientation.x = q[0]
+    seed.pose.pose.orientation.y = q[1]
+    seed.pose.pose.orientation.z = q[2]
+    seed.pose.pose.orientation.w = q[3]
+    seed_pub.publish(seed)
+
+    acknowledgement_deadline = rospy.Time.now() + rospy.Duration(5.0)
+    while not rospy.is_shutdown() and rospy.Time.now() < acknowledgement_deadline:
+        if seed_was_acknowledged(
+            state, baseline_sequence, baseline_reset_count
+        ):
+            break
+        rospy.sleep(0.1)
+    else:
+        rospy.logwarn("candidate seed was not acknowledged")
+        return False
+
+    candidate_reset_count = state["reset_count"]
+    before_enable_sequence = state["sequence"]
+    try:
+        response = enable(True)
+    except rospy.ServiceException as error:
+        rospy.logwarn("candidate %d could not be enabled: %s", rank, error)
+        disable_correction(enable, rank)
+        return False
+    if not response.success:
+        rospy.logwarn("candidate %d was not enabled: %s", rank, response.message)
+        disable_correction(enable, rank)
+        return False
+
+    saw_verifying = response.message == "VERIFYING"
+    verify_deadline = rospy.Time.now() + rospy.Duration(verify_timeout)
+    while not rospy.is_shutdown() and rospy.Time.now() < verify_deadline:
+        if (
+            state["reset_count"] == candidate_reset_count
+            and state["message"] == "VERIFYING"
+        ):
+            saw_verifying = True
+        if tracking_was_verified(
+            state,
+            before_enable_sequence,
+            candidate_reset_count,
+            saw_verifying,
+        ):
+            rospy.loginfo("initialized: candidate %d verified (TRACKING)", rank)
+            return True
+        rospy.sleep(0.5)
+    rospy.logwarn("candidate %d failed verification", rank)
+    disable_correction(enable, rank)
+    return False
+
+
+def disable_correction(enable, rank):
+    """Fail closed so a timed-out candidate cannot later become active."""
+
+    try:
+        response = enable(False)
+    except rospy.ServiceException as error:
+        rospy.logerr(
+            "failed to disable correction after candidate %d: %s", rank, error
+        )
+        return
+    if not response.success:
+        rospy.logerr(
+            "correction remained enabled after candidate %d: %s",
+            rank,
+            response.message,
+        )
+
+
 def main():
+    rospy.init_node("auto_initial_pose")
+    rospy.set_param("/fast_lio_icp/auto_initialization_verified", False)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--map", required=True)
-    parser.add_argument("--traj", required=True)
+    parser.add_argument("--map", default=rospy.get_param("~map", ""))
+    parser.add_argument("--traj", default=rospy.get_param("~traj", ""))
+    parser.add_argument("--route", default=rospy.get_param("~route", ""))
+    parser.add_argument(
+        "--body-frame-profile",
+        default=rospy.get_param("~body_frame_profile", ""),
+    )
     parser.add_argument("--spacing", type=float, default=3.0)
     parser.add_argument("--inlier-radius", type=float, default=0.45)
     parser.add_argument("--min-score", type=float, default=0.25)
@@ -127,15 +253,56 @@ def main():
     parser.add_argument("--verify-timeout", type=float, default=20.0)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(rospy.myargv(sys.argv)[1:])
-
-    rospy.init_node("auto_initial_pose")
-    rospy.loginfo("loading map and trajectory")
-    map_points = load_pcd_xyz(args.map)
-    tree = cKDTree(map_points)
-    candidates = load_candidates(args.traj, args.spacing)
-    rospy.loginfo("%d trajectory candidates", len(candidates))
+    for argument in ("map", "traj", "route", "body_frame_profile"):
+        if not getattr(args, argument):
+            parser.error("--{} or private ROS parameter ~{} is required".format(
+                argument.replace("_", "-"), argument
+            ))
+    try:
+        route_prior = load_known_start(
+            Path(args.route), "map", args.body_frame_profile
+        )
+    except KnownStartRouteError as error:
+        rospy.logerr("invalid known-start route: %s", error)
+        return 5
 
     collector = SubmapCollector(args.window_s)
+    state = {"message": "", "reset_count": None, "sequence": 0}
+
+    def on_diag(message):
+        for status in message.status:
+            if status.name == "fast_lio_icp":
+                state["message"] = status.message
+                values = {item.key: item.value for item in status.values}
+                try:
+                    state["reset_count"] = int(values["reset_count"])
+                except (KeyError, ValueError):
+                    state["reset_count"] = None
+                state["sequence"] += 1
+
+    seed_pub = None
+    enable = None
+    if not args.dry_run:
+        rospy.Subscriber(
+            "/fast_lio_icp/localization_diagnostics",
+            DiagnosticArray,
+            on_diag,
+            queue_size=5,
+        )
+        seed_pub = rospy.Publisher(
+            "/fast_lio_icp/initialpose", PoseWithCovarianceStamped, queue_size=1
+        )
+        enable = rospy.ServiceProxy(
+            "/fast_lio_icp/enable_auto_correction", SetBool
+        )
+        rospy.sleep(0.5)
+        if try_candidate(route_prior, 1, state, seed_pub, enable, args.verify_timeout):
+            rospy.set_param(
+                "/fast_lio_icp/auto_initialization_verified", True
+            )
+            return 0
+        rospy.logwarn("known start was not verified; starting global fallback")
+
     deadline = rospy.Time.now() + rospy.Duration(30.0)
     submap = None
     while not rospy.is_shutdown() and rospy.Time.now() < deadline:
@@ -151,73 +318,50 @@ def main():
     sample = voxel_downsample(submap, 0.4, 1800)
     rospy.loginfo("submap sample: %d points", len(sample))
 
-    yaw_offsets = (0.0, np.pi, np.pi / 4, -np.pi / 4, 3 * np.pi / 4, -3 * np.pi / 4)
-    scored = []
-    ones = np.ones((len(sample), 1), np.float32)
-    for x, y, z, heading in candidates:
-        for offset in yaw_offsets:
-            yaw = heading + offset
-            c, s = np.cos(yaw), np.sin(yaw)
-            R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], np.float32)
-            world = sample @ R.T + np.array([x, y, z], np.float32)
-            dists, _ = tree.query(world, k=1, distance_upper_bound=args.inlier_radius)
-            score = float(np.isfinite(dists).mean())
-            scored.append((score, x, y, z, yaw))
-    scored.sort(key=lambda item: -item[0])
+    rospy.loginfo("loading runtime map and mapping trajectory for global fallback")
+    map_points = load_pcd_xyz(Path(args.map))
+    candidates = load_trajectory_candidates(Path(args.traj), args.spacing)
+    rospy.loginfo("%d trajectory candidates", len(candidates))
+
+    scored = score_global_candidates(
+        sample,
+        map_points,
+        candidates,
+        args.inlier_radius,
+    )
 
     rospy.loginfo("top candidates:")
-    for score, x, y, z, yaw in scored[:6]:
+    for candidate in scored[:6]:
         rospy.loginfo("  score=%.3f  (%.1f, %.1f, %.1f) yaw=%.0fdeg",
-                      score, x, y, z, np.degrees(yaw))
+                      candidate.score, candidate.x, candidate.y, candidate.z,
+                      np.degrees(candidate.yaw_rad))
 
     if args.dry_run:
         return 0
-    if scored[0][0] < args.min_score:
-        rospy.logerr("best score %.3f below threshold %.2f - not seeding",
-                     scored[0][0], args.min_score)
+    attempts = initialization_attempts(None, scored, args.min_score, args.top)
+    if not attempts:
+        best = scored[0].score if scored else 0.0
+        rospy.logerr(
+            "best global score %.3f below threshold %.2f - no fallback",
+            best,
+            args.min_score,
+        )
         return 3
 
-    state = {"message": ""}
-
-    def on_diag(message):
-        for status in message.status:
-            if status.name == "fast_lio_icp":
-                state["message"] = status.message
-
-    rospy.Subscriber("/fast_lio_icp/localization_diagnostics",
-                     DiagnosticArray, on_diag, queue_size=5)
-    seed_pub = rospy.Publisher("/fast_lio_icp/initialpose",
-                               PoseWithCovarianceStamped, queue_size=1)
-    rospy.sleep(0.5)
-    enable = rospy.ServiceProxy("/fast_lio_icp/enable_auto_correction", SetBool)
-
-    for rank, (score, x, y, z, yaw) in enumerate(scored[:args.top]):
-        if score < args.min_score:
-            break
-        rospy.loginfo("trying candidate %d: score=%.3f (%.1f, %.1f) yaw=%.0f",
-                      rank + 1, score, x, y, np.degrees(yaw))
-        seed = PoseWithCovarianceStamped()
-        seed.header.frame_id = "map"
-        seed.header.stamp = rospy.Time.now()
-        seed.pose.pose.position.x = x
-        seed.pose.pose.position.y = y
-        seed.pose.pose.position.z = z
-        q = tft.quaternion_from_euler(0, 0, yaw)
-        seed.pose.pose.orientation.x = q[0]
-        seed.pose.pose.orientation.y = q[1]
-        seed.pose.pose.orientation.z = q[2]
-        seed.pose.pose.orientation.w = q[3]
-        seed_pub.publish(seed)
-        rospy.sleep(1.0)
-        rospy.wait_for_service("/fast_lio_icp/enable_auto_correction", timeout=10.0)
-        enable(True)
-        verify_deadline = rospy.Time.now() + rospy.Duration(args.verify_timeout)
-        while not rospy.is_shutdown() and rospy.Time.now() < verify_deadline:
-            if state["message"] == "TRACKING":
-                rospy.loginfo("initialized: candidate %d verified (TRACKING)", rank + 1)
-                return 0
-            rospy.sleep(0.5)
-        rospy.logwarn("candidate %d failed verification, trying next", rank + 1)
+    for rank, candidate in enumerate(attempts, start=2):
+        if try_candidate(
+            candidate,
+            rank,
+            state,
+            seed_pub,
+            enable,
+            args.verify_timeout,
+        ):
+            rospy.set_param(
+                "/fast_lio_icp/auto_initialization_verified", True
+            )
+            return 0
+        rospy.logwarn("candidate %d failed verification, trying next", rank)
     rospy.logerr("no candidate passed verification")
     return 4
 

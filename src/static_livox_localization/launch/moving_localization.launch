@@ -3,8 +3,13 @@
   <arg name="visualization" default="true"/>
   <arg name="rviz" default="false"/>
   <arg name="auto_init" default="false"/>
-  <arg name="auto_init_map" default="/home/mprp3/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd"/>
-  <arg name="auto_init_traj" default="/home/mprp3/wheelchair_localization_maps/livox_raw_20260707/traj_lidar.txt"/>
+  <arg name="map_path" default="/home/mprp3/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd"/>
+  <arg name="map_sha256" default="ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"/>
+  <arg name="map_id" default="merged_0707_0725_v1"/>
+  <arg name="auto_init_map" default="$(arg map_path)"/>
+  <arg name="auto_init_traj" default="/home/mprp3/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt"/>
+  <arg name="auto_init_route" default="/home/mprp3/wheelchair_localization_src/routes/20260727_new_route_waypoints.json"/>
+  <arg name="auto_init_body_frame_profile" default="builtin"/>
 
   <node pkg="static_livox_localization"
         type="moving_icp_localizer"
@@ -12,6 +17,9 @@
         output="screen"
         required="true">
     <rosparam command="load" file="$(arg config)"/>
+    <param name="map_path" value="$(arg map_path)"/>
+    <param name="map_sha256" value="$(arg map_sha256)"/>
+    <param name="map_id" value="$(arg map_id)"/>
   </node>
 
   <group if="$(arg visualization)">
@@ -20,6 +28,9 @@
           name="bounded_cloud_preview"
           output="screen">
       <rosparam command="load" file="$(arg config)"/>
+      <param name="map_path" value="$(arg map_path)"/>
+      <param name="map_sha256" value="$(arg map_sha256)"/>
+      <param name="map_id" value="$(arg map_id)"/>
     </node>
 
     <node pkg="static_livox_localization"
@@ -27,6 +38,9 @@
           name="map_preview_publisher"
           output="screen">
       <rosparam command="load" file="$(arg config)"/>
+      <param name="map_path" value="$(arg map_path)"/>
+      <param name="map_sha256" value="$(arg map_sha256)"/>
+      <param name="map_id" value="$(arg map_id)"/>
     </node>
     <node pkg="static_livox_localization"
           type="reference_marker.py"
@@ -49,7 +63,11 @@
         pkg="static_livox_localization"
         type="auto_initial_pose.py"
         name="auto_initial_pose"
-        output="screen"
-        args="--map $(arg auto_init_map) --traj $(arg auto_init_traj)"/>
+        output="screen">
+    <param name="map" value="$(arg auto_init_map)"/>
+    <param name="traj" value="$(arg auto_init_traj)"/>
+    <param name="route" value="$(arg auto_init_route)"/>
+    <param name="body_frame_profile" value="$(arg auto_init_body_frame_profile)"/>
+  </node>
 </launch>
 

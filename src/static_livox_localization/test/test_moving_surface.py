@@ -37,8 +37,8 @@ def test_moving_config_declares_fixed_map_and_tracking_contract():
     ):
         assert key in config_text
 
-    assert "livox_raw_20260707_0p20m_xyzi.pcd" in config_text
-    assert "b985cd2b49c796809c3dfe8ae79e39717454e27e725cd4495d695ea95c6628dc" in config_text
+    assert "merged_0707_0725_0p20m_xyzi.pcd" in config_text
+    assert "ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431" in config_text
 
 def test_moving_config_accepts_observed_stationary_calibration_band():
     config = yaml.safe_load(
