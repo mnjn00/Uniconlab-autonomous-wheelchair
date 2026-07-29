@@ -1,6 +1,6 @@
-map_path: /home/mprp3/wheelchair_localization_maps/livox_raw_20260707/livox_raw_20260707_0p20m_xyzi.pcd
-map_sha256: b985cd2b49c796809c3dfe8ae79e39717454e27e725cd4495d695ea95c6628dc
-map_id: livox_raw_20260707
+map_path: /home/mprp3/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd
+map_sha256: ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431
+map_id: merged_0707_0725_v1
 map_preview_topic: /fast_lio_icp/map_preview
 map_preview_voxel_resolution: 0.75
 
