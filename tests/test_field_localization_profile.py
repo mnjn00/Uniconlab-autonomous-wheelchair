@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -75,12 +76,20 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_0727_route():
     assert route["frame"] == band["frame"] == "map"
     assert route["body_frame_profile"] == "builtin"
     assert "full_debug_20260727_214306.bag" in route["source"]
-    assert route["waypoints"][0] == {
-        "x": 5.15,
-        "y": 1.13,
-        "z": -0.12,
-        "yaw_deg": 14.2,
-    }
+    # The route must start where the recorded drive started, not where a
+    # bookend trim left it. Trimming the spin-in-place bookends also removed
+    # 5.3 m of real driving from the head of the route, which put the first
+    # waypoint outside the follower's 3.5 m geofence from the parking spot -
+    # the chair held OFF_ROUTE instead of pulling away. Pin the property,
+    # not one hand-copied waypoint.
+    origin = (0.0, 0.0)
+    first = route["waypoints"][0]
+    start_offset = math.hypot(first["x"] - origin[0], first["y"] - origin[1])
+    assert start_offset < 3.5, (
+        "route starts %.2f m from the recorded origin, beyond the "
+        "follower geofence" % start_offset
+    )
+    assert set(first) == {"x", "y", "z", "yaw_deg"}
     assert 'rostopic echo -n1 /livox/imu/header' in startup
 
 
