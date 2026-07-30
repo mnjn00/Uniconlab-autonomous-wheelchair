@@ -134,16 +134,58 @@ fi
 
 echo "[3/5] FAST-LIO (keep the wheelchair STILL for a few seconds)"
 source "$HOME/fast_lio_ws/devel/setup.bash"
-setsid nohup roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
-  > "$LOG/live_fastlio.log" 2>&1 < /dev/null &
-for i in $(seq 1 20); do
-  timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1 && break
+
+start_fastlio() {
+  # Kill the roslaunch wrapper as well as the node: left running it keeps the
+  # laserMapping name registered, and the replacement would evict the old node
+  # through a name conflict instead of starting cleanly.
+  pkill -f '[r]oslaunch fast_lio' 2>/dev/null || true
+  pkill -f '[f]astlio_mapping' 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    pgrep -f '[f]astlio_mapping' >/dev/null 2>&1 || break
+    sleep 1
+  done
   sleep 2
+  setsid nohup roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
+    > "$LOG/live_fastlio.log" 2>&1 < /dev/null &
+  for _ in $(seq 1 20); do
+    timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+
+# FAST-LIO fixes gravity and IMU bias from its first seconds on the assumption
+# the chair is stationary. Wheeling it into position and starting immediately -
+# or a rider still settling - tilts that estimate, and a tilted gravity vector
+# integrates into velocity until the odometry runs away in its own frame. No
+# initial pose can correct it, because the seed only sets map-to-odom and the
+# odom underneath is what is wrong. Parked, the fault is measurable in seconds,
+# so it is measured here rather than left to the operator to notice mid-drive.
+FASTLIO_HEALTH_RETRIES="${FASTLIO_HEALTH_RETRIES:-1}"
+FASTLIO_HEALTH_S="${FASTLIO_HEALTH_S:-8.0}"
+attempt=0
+while : ; do
+  if ! start_fastlio; then
+    echo "ERROR: /Odometry not publishing"; exit 3
+  fi
+  echo "  odometry OK - checking init health (do not move the chair)"
+  source "$HOME/livox_static_localization_ws/devel/setup.bash"
+  if rosrun static_livox_localization fastlio_init_health.py \
+      _duration_s:="$FASTLIO_HEALTH_S" 2>&1 | sed 's/^/  health: /'; then
+    echo "  FAST-LIO init OK"
+    break
+  fi
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt "$FASTLIO_HEALTH_RETRIES" ]; then
+    echo "ERROR: FAST-LIO keeps initializing badly after $attempt attempts."
+    echo "  Its odometry drifts while parked, so localization cannot hold."
+    echo "  Keep the chair and rider completely still, then rerun."
+    exit 10
+  fi
+  echo "  restarting FAST-LIO (attempt $((attempt + 1)))"
 done
-if ! timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1; then
-  echo "ERROR: /Odometry not publishing"; exit 3
-fi
-echo "  odometry OK"
+source "$HOME/fast_lio_ws/devel/setup.bash"
 
 echo "[4/5] localization + rviz + auto init"
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
@@ -154,6 +196,7 @@ setsid nohup roslaunch static_livox_localization moving_localization.launch \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
   auto_init_route:="$ROUTE" \
   auto_init_body_frame_profile:="$BODY_FRAME_PROFILE" \
+  auto_init_min_refined_score:="${MIN_REFINED_SCORE:-0.80}" \
   > "$LOG/live_localization.log" 2>&1 < /dev/null &
 
 echo "[5/7] waiting for TRACKING (auto seed + consensus)"

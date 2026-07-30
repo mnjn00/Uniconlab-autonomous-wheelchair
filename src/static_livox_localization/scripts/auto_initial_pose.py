@@ -34,9 +34,13 @@ from initial_pose_candidates import (
     tracking_was_verified,
 )
 from initial_pose_global_search import (
+    decide_fix,
+    diverse_shortlist,
     load_pcd_xyz,
     load_trajectory_candidates,
+    refine_candidates,
     score_global_candidates,
+    structural_sample,
     voxel_downsample,
 )
 
@@ -248,6 +252,12 @@ def main():
     parser.add_argument("--inlier-radius", type=float, default=0.45)
     parser.add_argument("--min-score", type=float, default=0.25)
     parser.add_argument("--top", type=int, default=4)
+    parser.add_argument("--refine-top", type=int, default=4)
+    parser.add_argument(
+        "--min-refined-score",
+        type=float,
+        default=rospy.get_param("~min_refined_score", 0.80),
+    )
     parser.add_argument("--window-s", type=float, default=2.0)
     parser.add_argument("--max-range", type=float, default=25.0)
     parser.add_argument("--verify-timeout", type=float, default=20.0)
@@ -315,8 +325,22 @@ def main():
         return 2
     ranges = np.linalg.norm(submap[:, :2], axis=1)
     submap = submap[ranges < args.max_range]
-    sample = voxel_downsample(submap, 0.4, 1800)
-    rospy.loginfo("submap sample: %d points", len(sample))
+    # Filter before downsampling so the whole point budget is spent on geometry
+    # that can distinguish one place from another, not on pavement.
+    structure, ground_removed = structural_sample(submap)
+    sample = voxel_downsample(structure, 0.4, 1800)
+    if ground_removed:
+        rospy.loginfo(
+            "submap sample: %d structural points (of %d, ground removed)",
+            len(sample),
+            len(submap),
+        )
+    else:
+        rospy.logwarn(
+            "submap sample: %d points, too little vertical structure to "
+            "separate ground - the fix here is weakly constrained",
+            len(sample),
+        )
 
     rospy.loginfo("loading runtime map and mapping trajectory for global fallback")
     map_points = load_pcd_xyz(Path(args.map))
@@ -330,19 +354,82 @@ def main():
         args.inlier_radius,
     )
 
-    rospy.loginfo("top candidates:")
+    rospy.loginfo("top coarse candidates:")
     for candidate in scored[:6]:
         rospy.loginfo("  score=%.3f  (%.1f, %.1f, %.1f) yaw=%.0fdeg",
                       candidate.score, candidate.x, candidate.y, candidate.z,
                       np.degrees(candidate.yaw_rad))
 
+    # Coarse hypotheses sit on the recorded trajectory at a fixed spacing and
+    # yaw step, so the best of them only brackets the answer. The localizer
+    # matches at 0.5 m correspondence and cannot close a bracket that wide, so
+    # each shortlisted pose is walked onto the map before it is offered as a
+    # seed.
+    shortlist = diverse_shortlist(scored, args.refine_top)
+    rospy.loginfo(
+        "shortlisted %d distinct hypotheses from %d scored",
+        len(shortlist),
+        len(scored),
+    )
+    started = rospy.Time.now()
+    refined = refine_candidates(
+        sample, map_points, shortlist, args.inlier_radius
+    )
+    rospy.loginfo(
+        "refined %d candidates in %.1f s:",
+        len(refined),
+        (rospy.Time.now() - started).to_sec(),
+    )
+    for candidate in refined:
+        rospy.loginfo("  score=%.3f  (%.2f, %.2f, %.2f) yaw=%.1fdeg",
+                      candidate.score, candidate.x, candidate.y, candidate.z,
+                      np.degrees(candidate.yaw_rad))
+
     if args.dry_run:
         return 0
-    attempts = initialization_attempts(None, scored, args.min_score, args.top)
-    if not attempts:
-        best = scored[0].score if scored else 0.0
+
+    # Verification downstream proves a candidate is self-consistent, not that
+    # it is the right place, so a plausible wrong pose would pass and the
+    # follower would drive a route computed from it. Refuse instead.
+    decision = decide_fix(refined, args.min_refined_score)
+    if decision.reason == "ambiguous":
         rospy.logerr(
-            "best global score %.3f below threshold %.2f - no fallback",
+            "position is ambiguous: (%.1f, %.1f) yaw=%.0f scores %.3f and "
+            "(%.1f, %.1f) yaw=%.0f scores %.3f. This scan does not identify "
+            "where the chair is - move it somewhere with more distinct "
+            "surroundings, or start from the recorded route start.",
+            refined[0].x, refined[0].y, np.degrees(refined[0].yaw_rad),
+            refined[0].score,
+            decision.rival.x, decision.rival.y,
+            np.degrees(decision.rival.yaw_rad), decision.rival.score,
+        )
+        return 6
+    if decision.reason == "weak_support":
+        rospy.logerr(
+            "best fix (%.1f, %.1f) yaw=%.0f explains only %.3f of what the "
+            "chair can see, below %.2f. Too little of the surroundings is in "
+            "the map to place the chair here - start from the recorded route "
+            "start, or relax ~min_refined_score once it is calibrated on this "
+            "route.",
+            decision.rival.x, decision.rival.y,
+            np.degrees(decision.rival.yaw_rad), decision.rival.score,
+            args.min_refined_score,
+        )
+        return 7
+    if decision.candidate is None:
+        rospy.logerr("global fallback produced no candidate")
+        return 3
+    rospy.loginfo(
+        "accepted fix (%.2f, %.2f) yaw=%.1f score=%.3f",
+        decision.candidate.x, decision.candidate.y,
+        np.degrees(decision.candidate.yaw_rad), decision.candidate.score,
+    )
+
+    attempts = initialization_attempts(None, refined, args.min_score, args.top)
+    if not attempts:
+        best = refined[0].score if refined else 0.0
+        rospy.logerr(
+            "best refined global score %.3f below threshold %.2f - no fallback",
             best,
             args.min_score,
         )

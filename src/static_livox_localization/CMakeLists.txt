@@ -43,6 +43,7 @@ catkin_install_python(
     scripts/reference_marker.py
     scripts/localization_state_marker.py
     scripts/auto_initial_pose.py
+    scripts/fastlio_init_health.py
     scripts/enable_auto_correction_after_seed.py
     scripts/tip_guard.py
     scripts/waypoint_follower.py
