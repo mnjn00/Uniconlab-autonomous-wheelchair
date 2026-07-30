@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="UNICON 자율주행 휠체어의 경로 밴드, 제어권, 인식, 로컬라이제이션, 맵, 검증 문제를 실제 근거로 시각화한 팀 공유 보고서">
+  <title>UNICON 상용화 차단 문제 시각 보고서</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 이동</a>
+  <div class="report-shell">
+    <header class="report-header">
+      <span class="eyebrow">UNICON commercial readiness</span>
+      <h1>지금 필요한 것은 더 빠른 주행이 아니라, 안전 경계를 증거로 닫는 일입니다</h1>
+      <p>0727 경로의 실제 실패 위치부터 바퀴 명령, 장애물 인식, 로컬라이제이션, 맵 자산, 현장 검증까지 팀이 같은 화면에서 판단하도록 정리했습니다.</p>
+      <div class="decision-line">현재 판단: 승객 탑승과 캠퍼스 일반 주행은 NO-GO입니다. 무승객 제한 검증은 아래 Gate 0부터 순서대로 진행할 수 있습니다.</div>
+    </header>
+
+    <nav class="anchor-nav" aria-label="보고서 이동">
+      <a href="#summary">한눈에 보기</a>
+      <a href="#route-band">경로 밴드</a>
+      <a href="#authority">바퀴 명령</a>
+      <a href="#geometry">검사 궤적</a>
+      <a href="#perception">인식과 정합</a>
+      <a href="#map">맵 자산</a>
+      <a href="#qualification">검증 공백</a>
+      <a href="#closure">닫는 순서</a>
+    </nav>
+
+    <main id="main">
+      <section class="report-section" id="summary">
+        <header class="section-header">
+          <h2>코드의 기능보다 실제 바퀴까지 이어지는 증거가 부족합니다</h2>
+          <p>아래 여덟 항목은 기능 유무가 아니라 현재 상용 운행을 열 수 없는 이유입니다.</p>
+        </header>
+        <div class="metric-strip" aria-label="핵심 현황">
+          <div class="metric is-active">
+            <span class="metric-label">현재 릴리스 판단</span>
+            <strong class="metric-value">NO-GO</strong>
+            <span class="metric-note">승객과 일반 캠퍼스 주행</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">핵심 차단 항목</span>
+            <strong class="metric-value">8</strong>
+            <span class="metric-note">P0 수준으로 함께 추적</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">추적된 물리 결과</span>
+            <strong class="metric-value">0</strong>
+            <span class="metric-note">현재 저장소의 완료 근거</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">허용 가능한 다음 단계</span>
+            <strong class="metric-value">Gate 0</strong>
+            <span class="metric-note">단일 바퀴 명령 경로 확인</span>
+          </div>
+        </div>
+
+        <div class="issue-ledger" role="table" aria-label="상용화 차단 문제 원장">
+          <div class="ledger-row is-header" role="row">
+            <span role="columnheader">우선순위</span>
+            <span role="columnheader">문제</span>
+            <span role="columnheader">현재 관측</span>
+            <span role="columnheader">닫는 조건</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority is-active" role="cell">P0-1</span>
+            <strong role="cell">최종 바퀴 명령 경로 분리</strong>
+            <span role="cell">강한 안전 증거 경로는 시뮬레이션 또는 읽기 전용에서 끝나고, 현장 구동은 별도 경로를 사용합니다.</span>
+            <span role="cell">안전 게이트 뒤 하나의 액추에이터 체인과 실제 바퀴 명령 에코를 증명합니다.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-2</span>
+            <strong role="cell">0727 경로 밴드 자체 불일치</strong>
+            <span role="cell">중심 35개, 밴드 연결선 42개, 기록 경로점 9개, 기록 경로 연결선 17개가 런타임 판정을 통과하지 못합니다.</span>
+            <span role="cell">동일 판정식으로 모든 중심과 연결선이 통과하는 새 번들을 만듭니다.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-3</span>
+            <strong role="cell">검사한 궤적과 내보낸 명령 불일치</strong>
+            <span role="cell">검사 반경 1.375 m와 방출 반경 0.25 m, 요청 yaw 0.5와 복원 yaw 0.2058이 다릅니다.</span>
+            <span role="cell">최종 바퀴 명령을 같은 기하로 재검사하고 HIL에서 대조합니다.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-4</span>
+            <strong role="cell">탑승자와 음의 장애물 인식 경계</strong>
+            <span role="cell">자기 몸체 마스크의 높이 경계가 없고, 남은 점이 5개 미만이면 점유가 해제될 수 있으며 낙차 전용 라이브 채널이 없습니다.</span>
+            <span role="cell">높이 제한, 센서 무효 안전 정지, 낙차 실측 채널을 함께 검증합니다.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-5</span>
+            <strong role="cell">자동 정합과 재획득 실패 처리</strong>
+            <span role="cell">엄격 후보가 실패한 뒤 더 약한 후보로 내려갈 수 있고, 오래된 클라우드와 시간 한계의 현장 근거가 부족합니다.</span>
+            <span role="cell">시작점 자동 정합, 신뢰도 저하, 재획득 실패를 실제 센서로 재현하고 안전 정지를 확인합니다.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-6</span>
+            <strong role="cell">맵 자산 수명주기 미완성</strong>
+            <span role="cell">실행용 다운샘플 선택은 합리적이지만 NUC 성능, 해시, 서명, 버전 롤백 근거가 없습니다.</span>
+            <span role="cell">실행 시간 예산과 맵 무결성, 배포 이력을 함께 기록합니다.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-7</span>
+            <strong role="cell">현장 및 HIL 검증 공백</strong>
+            <span role="cell">라이브 23개 시나리오는 PLATFORM_UNAVAILABLE이고 추적된 물리 완료 결과는 0개입니다.</span>
+            <span role="cell">HIL, 비상 정지, 제동, 무승객 폐쇄코스 결과를 반복 가능한 형태로 남깁니다.</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-8</span>
+            <strong role="cell">상용 안전 경계와 승인 체계</strong>
+            <span role="cell">소프트웨어 검사는 강하지만 EMC, 인간공학, 운행 승인과 장애 대응 책임의 완료 근거가 없습니다.</span>
+            <span role="cell">각 Gate의 승인자, 실패 중단 조건, 배포 서명을 명시합니다.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section" id="route-band">
+        <header class="section-header">
+          <h2>0727 경로는 문제 위치가 다섯 구간에 반복되고, 고립된 실패도 남아 있습니다</h2>
+          <p>실제 실행 맵과 저장된 JSON을 현재 런타임 판정식, grace 0.10 m로 다시 검사했습니다.</p>
+        </header>
+        <div class="metric-strip" aria-label="0727 경로 밴드 검사 결과">
+          <div class="metric is-active">
+            <span class="metric-label">거부된 밴드 중심</span>
+            <strong class="metric-value">35</strong>
+            <span class="metric-note">371개 기준점 중</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">실패한 밴드 연결선</span>
+            <strong class="metric-value">42</strong>
+            <span class="metric-note">인접 기준점 사이</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">거부된 기록 경로점</span>
+            <strong class="metric-value">9</strong>
+            <span class="metric-note">75개 경로점 중</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">실패한 기록 연결선</span>
+            <strong class="metric-value">17</strong>
+            <span class="metric-note">경로점 사이 이동선</span>
+          </div>
+        </div>
+
+        <div class="legend" aria-label="경로 그림 범례">
+          <span class="legend-item"><span class="legend-mark band-center"></span>밴드 중심선</span>
+          <span class="legend-item"><span class="legend-mark band-edge"></span>저장된 좌우 경계</span>
+          <span class="legend-item"><span class="legend-mark rejected-center"></span>거부된 밴드 중심</span>
+          <span class="legend-item"><span class="legend-mark failed-chord"></span>실패한 밴드 연결선</span>
+          <span class="legend-item"><span class="legend-mark rejected-route"></span>거부된 기록 경로점</span>
+          <span class="legend-item"><span class="legend-mark failed-route"></span>실패한 기록 연결선</span>
+        </div>
+
+        <figure class="evidence-figure route-overview">
+          <img src="assets/route-band-overview.png" width="1800" height="920" loading="lazy" decoding="async" fetchpriority="low" alt="실제 포인트클라우드 맵 위에 0727 밴드 중심선과 좌우 경계를 그리고, 런타임에서 거부된 중심과 실패한 연결선을 파란색으로 표시한 전체 경로 지도. 반복 실패 구간 A, B, C, D, E가 표시되어 있다.">
+          <figcaption>전체 지도. 파란 실선과 원은 밴드 판정 실패, 파란 점선과 마름모는 기록 경로 판정 실패입니다. A부터 E는 아래 확대 구간과 연결됩니다.</figcaption>
+        </figure>
+
+        <figure class="evidence-figure hotspot-sheet">
+          <img src="assets/route-band-hotspots.png" width="1800" height="1120" loading="lazy" decoding="async" fetchpriority="low" alt="실패가 반복되는 다섯 구간 확대 지도. A는 station 96부터 114, B는 124부터 152, C는 201부터 213, D는 285부터 288, E는 368부터 370이다.">
+          <figcaption>반복 실패 확대. A와 B는 긴 직선 구간, C는 급한 방향 전환, D는 직선의 짧은 실패, E는 끝점 부근에 집중됩니다.</figcaption>
+        </figure>
+        <div class="text-alt"><strong>해석 주의:</strong> 이 그림은 저장된 밴드가 자기 자신의 런타임 포함 판정과 충돌하는 위치를 보여 줍니다. 실제 연석 침범이나 충돌을 재현했다는 뜻은 아니며, 현장 주행 전에 경로 번들을 다시 만들어야 한다는 차단 근거입니다.<span class="source-note">입력: <code>routes/20260727_new_route_safety_band.json</code>, <code>routes/20260727_new_route_waypoints.json</code>, 실행 맵 <code>merged_0707_0725_0p20m_xyzi.pcd</code>. 판정: <code>src/static_livox_localization/scripts/safety_band.py</code>.</span></div>
+      </section>
+
+      <section class="report-section" id="authority">
+        <header class="section-header">
+          <h2>안전 판단이 강한 경로와 실제 바퀴를 움직이는 경로가 하나로 증명되지 않았습니다</h2>
+          <p>코드에 안전 로직이 있어도 최종 모터 명령이 그 로직을 반드시 통과한다는 현장 증거가 필요합니다.</p>
+        </header>
+        <figure class="evidence-figure">
+          <svg class="diagram" viewBox="0 0 1280 520" role="img" aria-labelledby="authority-title authority-desc">
+            <title id="authority-title">현재 분리된 명령 권한과 필요한 단일 경로</title>
+            <desc id="authority-desc">강한 안전 증거 경로는 cmd_vel_safe 뒤에서 시뮬레이션 또는 읽기 전용으로 끝나고, 현장 바퀴는 별도 gate와 외부 wheel launch를 거친다. 필요한 상태는 하나의 안전 gate 뒤에서 wheel controller와 motor로 이어지는 경로다.</desc>
+            <rect class="surface" x="0" y="0" width="1280" height="520"/>
+            <text class="value" x="55" y="55">현재 관측</text>
+            <rect class="node" x="55" y="90" width="220" height="70"/>
+            <text class="ink" x="88" y="132" font-size="21">안전 증거 입력</text>
+            <path class="line" d="M275 125 H350"/>
+            <rect class="node" x="350" y="90" width="250" height="70"/>
+            <text class="ink" x="391" y="120" font-size="19">safety core</text>
+            <text class="muted" x="382" y="145" font-size="16">/cmd_vel_safe</text>
+            <path class="line" d="M600 125 H675"/>
+            <rect class="node" x="675" y="90" width="260" height="70"/>
+            <text class="ink" x="711" y="120" font-size="19">시뮬레이션 또는</text>
+            <text class="muted" x="735" y="145" font-size="16">읽기 전용 shadow</text>
+            <rect class="node" x="55" y="210" width="220" height="70"/>
+            <text class="ink" x="95" y="252" font-size="21">현장 주행 입력</text>
+            <path class="line" d="M275 245 H350"/>
+            <rect class="node" x="350" y="210" width="250" height="70"/>
+            <text class="ink" x="408" y="252" font-size="20">별도 gate</text>
+            <path class="accent-line" d="M600 245 H675"/>
+            <rect class="accent-stroke" x="675" y="210" width="260" height="70"/>
+            <text class="ink" x="704" y="240" font-size="18">base_model/wheel.launch</text>
+            <text class="muted" x="776" y="264" font-size="16">외부 경계</text>
+            <path class="accent-line" d="M935 245 H1010"/>
+            <rect class="accent-stroke" x="1010" y="210" width="210" height="70"/>
+            <text class="ink" x="1070" y="252" font-size="21">모터</text>
+            <text class="value" x="55" y="365">닫는 상태</text>
+            <rect class="node" x="55" y="395" width="220" height="70"/>
+            <text class="ink" x="91" y="437" font-size="21">모든 주행 입력</text>
+            <path class="accent-line" d="M275 430 H350"/>
+            <rect class="accent-stroke" x="350" y="395" width="250" height="70"/>
+            <text class="ink" x="394" y="425" font-size="19">하나의 안전 gate</text>
+            <text class="muted" x="395" y="450" font-size="16">E-stop 포함</text>
+            <path class="accent-line" d="M600 430 H675"/>
+            <rect class="node" x="675" y="395" width="260" height="70"/>
+            <text class="ink" x="720" y="437" font-size="20">wheel controller</text>
+            <path class="line" d="M935 430 H1010"/>
+            <rect class="node" x="1010" y="395" width="210" height="70"/>
+            <text class="ink" x="1042" y="425" font-size="19">모터 + 명령 에코</text>
+            <text class="muted" x="1062" y="450" font-size="16">실측 근거 저장</text>
+          </svg>
+          <figcaption>파란색은 현재 증거가 끊기는 현장 경계와 앞으로 하나로 묶어야 할 안전 gate를 표시합니다.</figcaption>
+        </figure>
+      </section>
+
+      <section class="report-section" id="geometry">
+        <header class="section-header">
+          <h2>안전 검사가 본 궤적과 실제로 내보낸 궤적이 다릅니다</h2>
+          <p>같은 명령을 검사하고 방출하지 않으면 통과 판정이 실제 바퀴 움직임을 보증하지 못합니다.</p>
+        </header>
+        <div class="diagram-grid">
+          <article class="diagram-card is-active">
+            <h3>회전 반경 불일치</h3>
+            <p>검사 반경은 방출 반경의 5.5배입니다.</p>
+            <svg class="diagram" viewBox="0 0 560 360" role="img" aria-label="0.25 미터 방출 반경 원과 1.375 미터 검사 반경 원 비교">
+              <rect class="surface" x="0" y="0" width="560" height="360"/>
+              <circle cx="280" cy="190" r="130" fill="none" stroke="#0B5FFF" stroke-width="5"/>
+              <circle cx="280" cy="190" r="24" fill="#FFFFFF" stroke="#1A1A1A" stroke-width="3"/>
+              <line x1="280" y1="190" x2="410" y2="190" stroke="#0B5FFF" stroke-width="4"/>
+              <line x1="280" y1="190" x2="304" y2="190" stroke="#1A1A1A" stroke-width="4"/>
+              <text class="value" x="326" y="170">검사 1.375 m</text>
+              <text class="label" x="305" y="220">방출 0.25 m</text>
+            </svg>
+          </article>
+          <article class="diagram-card">
+            <h3>yaw 복원 불일치</h3>
+            <p>요청값 0.5가 최종 단계에서 0.2058로 복원됩니다.</p>
+            <svg class="diagram" viewBox="0 0 560 360" role="img" aria-label="요청 yaw 0.5와 복원 yaw 0.2058 막대 비교">
+              <rect class="surface" x="0" y="0" width="560" height="360"/>
+              <text class="label" x="55" y="100">요청</text>
+              <rect x="140" y="70" width="330" height="50" fill="#0B5FFF"/>
+              <text class="value" x="480" y="105">0.5</text>
+              <text class="label" x="55" y="225">복원</text>
+              <rect x="140" y="195" width="136" height="50" fill="#9CA3AF"/>
+              <text class="value" x="290" y="230">0.2058</text>
+              <line x1="140" y1="280" x2="470" y2="280" stroke="#D1D5DB" stroke-width="2"/>
+              <text class="label" x="140" y="310">같은 단위 기준 상대 길이</text>
+            </svg>
+          </article>
+        </div>
+        <div class="text-alt"><strong>닫는 조건:</strong> planner가 검사한 twist, safety gate가 승인한 twist, wheel controller가 받은 twist를 같은 타임스탬프로 기록하고 HIL에서 기하가 일치해야 합니다.</div>
+      </section>
+
+      <section class="report-section" id="perception">
+        <header class="section-header">
+          <h2>센서가 조용해지는 상황을 “안전함”으로 오해하지 않게 해야 합니다</h2>
+          <p>탑승자 마스크, 낙차, 자동 정합은 각각 동작하지만 실패 상태를 보수적으로 묶는 현장 증거가 부족합니다.</p>
+        </header>
+        <div class="diagram-grid">
+          <article class="diagram-card is-active">
+            <h3>장애물 인식 경계</h3>
+            <p>후면 탑승자를 제외하되 실제 장애물과 낙차 신호를 지우지 않아야 합니다.</p>
+            <svg class="diagram" viewBox="0 0 600 430" role="img" aria-label="라이다 포인트에서 자기 몸체 마스크와 전방 관심영역을 거쳐 장애물과 낙차 채널로 나누는 필요한 인식 구조">
+              <rect class="surface" x="0" y="0" width="600" height="430"/>
+              <rect class="node" x="55" y="45" width="210" height="65"/>
+              <text class="ink" x="105" y="84" font-size="20">Livox 포인트</text>
+              <path class="accent-line" d="M160 110 V150"/>
+              <rect class="accent-stroke" x="55" y="150" width="210" height="85"/>
+              <text class="ink" x="88" y="182" font-size="19">3D 자기 몸체 마스크</text>
+              <text class="muted" x="100" y="210" font-size="16">후면 + 높이 경계</text>
+              <path class="accent-line" d="M160 235 V275"/>
+              <rect class="node" x="55" y="275" width="210" height="85"/>
+              <text class="ink" x="94" y="307" font-size="19">전방 FOV + 유효성</text>
+              <text class="muted" x="90" y="335" font-size="16">점 부족은 안전 정지</text>
+              <path class="line" d="M265 318 H340 V190 H385"/>
+              <path class="line" d="M340 318 V335 H385"/>
+              <rect class="node" x="385" y="150" width="165" height="75"/>
+              <text class="ink" x="430" y="182" font-size="19">장애물</text>
+              <text class="muted" x="414" y="207" font-size="16">양의 점유</text>
+              <rect class="node" x="385" y="295" width="165" height="75"/>
+              <text class="ink" x="435" y="327" font-size="19">낙차</text>
+              <text class="muted" x="408" y="352" font-size="16">음의 장애물</text>
+            </svg>
+          </article>
+          <article class="diagram-card">
+            <h3>로컬라이제이션 회복</h3>
+            <p>시작점에서 자동 정합되더라도 신뢰가 떨어질 때 더 약한 후보로 조용히 내려가면 안 됩니다.</p>
+            <svg class="diagram" viewBox="0 0 600 430" role="img" aria-label="시작점 시드, Livox IMU와 스캔 정합, 품질 gate, 주행 또는 안전 정지로 나뉘는 로컬라이제이션 구조">
+              <rect class="surface" x="0" y="0" width="600" height="430"/>
+              <rect class="node" x="45" y="45" width="205" height="70"/>
+              <text class="ink" x="85" y="75" font-size="19">시작점 시드</text>
+              <text class="muted" x="69" y="99" font-size="16">맵 근처 초기 자세</text>
+              <rect class="node" x="350" y="45" width="205" height="70"/>
+              <text class="ink" x="390" y="75" font-size="19">Livox IMU</text>
+              <text class="muted" x="379" y="99" font-size="16">자세 변화 보조</text>
+              <path class="line" d="M147 115 V155 H300"/>
+              <path class="line" d="M452 115 V155 H300"/>
+              <rect class="node" x="195" y="155" width="210" height="75"/>
+              <text class="ink" x="235" y="188" font-size="19">스캔 대 맵 정합</text>
+              <text class="muted" x="239" y="213" font-size="16">후보 + 공분산</text>
+              <path class="accent-line" d="M300 230 V270"/>
+              <rect class="accent-stroke" x="195" y="270" width="210" height="75"/>
+              <text class="ink" x="253" y="303" font-size="19">품질 gate</text>
+              <text class="muted" x="219" y="328" font-size="16">신선도 + 시간 한계</text>
+              <path class="line" d="M195 307 H105 V370"/>
+              <path class="accent-line" d="M405 307 H495 V370"/>
+              <text class="ink" x="55" y="405" font-size="19">통과: 제한 주행</text>
+              <text class="ink" x="425" y="405" font-size="19">실패: 안전 정지</text>
+            </svg>
+          </article>
+        </div>
+        <div class="text-alt"><strong>핵심 원칙:</strong> 포인트 부족, 오래된 클라우드, 정합 시간 초과, 품질 미달은 장애물 없음이나 위치 확정이 아니라 “센서 판단 불가”로 분리해야 합니다.</div>
+      </section>
+
+      <section class="report-section" id="map">
+        <header class="section-header">
+          <h2>594 MB 원본 맵은 보관용으로 과도하지 않지만, 실행용으로 그대로 쓰면 위험합니다</h2>
+          <p>현재 0.20 m 실행 맵은 점 수를 92.75% 줄였습니다. 문제는 크기 자체보다 장비 성능과 배포 무결성을 아직 닫지 못한 점입니다.</p>
+        </header>
+        <div class="bar-chart" aria-label="원본과 실행 맵 비교">
+          <div class="bar-row">
+            <strong>원본 PLY</strong>
+            <div class="bar-track"><div class="bar-fill" style="width: 100%"></div></div>
+            <span class="bar-value">594,886,982 B<br>37,180,425 points</span>
+          </div>
+          <div class="bar-row">
+            <strong>실행 PCD 0.20 m</strong>
+            <div class="bar-track"><div class="bar-fill is-active" style="width: 7.25%"></div></div>
+            <span class="bar-value">43,141,936 B<br>2,696,359 points</span>
+          </div>
+        </div>
+        <div class="diagram-grid">
+          <article class="diagram-card">
+            <h3>현재 판단</h3>
+            <p>원본은 재생성 가능한 기준 자산으로 보관하고, 실행에는 다운샘플 PCD를 쓰는 방향이 맞습니다.</p>
+          </article>
+          <article class="diagram-card is-active">
+            <h3>아직 필요한 근거</h3>
+            <p>NUC에서 초기 로드 시간, 메모리, 정합 지연을 측정하고 맵 해시, 버전, 서명, 롤백을 배포 기록에 묶어야 합니다.</p>
+          </article>
+        </div>
+        <p class="source-note">원본: <code>/Volumes/무제/merged_0707_0725_v1/mergedmap.ply</code>. 실행: <code>merged_0707_0725_0p20m_xyzi.pcd</code>. 92.75%는 점 수 기준 감소율입니다.</p>
+      </section>
+
+      <section class="report-section" id="qualification">
+        <header class="section-header">
+          <h2>테스트가 많은 것은 강점이지만, 실제 휠체어가 안전하다는 증거와 같지는 않습니다</h2>
+          <p>소프트웨어 회귀 검사는 상당히 쌓였고, 현장과 물리 검증은 아직 다른 열에 남아 있습니다.</p>
+        </header>
+        <div class="comparison">
+          <article class="comparison-panel">
+            <h3>소프트웨어 근거</h3>
+            <span class="number">강함</span>
+            <p>365개 중 365개 테스트가 분류되었습니다.</p>
+            <p>핵심 묶음 853개와 추가 104개가 통과했습니다.</p>
+            <p>보안 묶음 297개가 통과했습니다.</p>
+            <p>전체 실행은 7 failed, 1422 passed, 1 skipped, 190 subtests였습니다.</p>
+          </article>
+          <article class="comparison-panel is-active">
+            <h3>물리 및 현장 근거</h3>
+            <span class="number">미완성</span>
+            <p>라이브 23개 시나리오는 PLATFORM_UNAVAILABLE입니다.</p>
+            <p>추적된 물리 완료 결과는 0개입니다.</p>
+            <p>HIL, 비상 정지, 제동, EMC, 인간공학, 무승객 폐쇄코스 근거가 아직 승인 묶음으로 남아 있지 않습니다.</p>
+          </article>
+        </div>
+        <div class="text-alt"><strong>해석:</strong> “테스트가 없다”가 아니라 “코드 검사는 강하지만 실제 액추에이터와 사람 주변 운행의 안전 자격이 아직 별도 공백”입니다.</div>
+      </section>
+
+      <section class="report-section" id="closure">
+        <header class="section-header">
+          <h2>팀은 Gate 0부터 하나씩 닫고, 이전 Gate의 근거 없이는 다음 주행 권한을 열지 않습니다</h2>
+          <p>담당 영역과 완료 증거를 같은 순서로 묶으면 문제를 기능 목록이 아니라 릴리스 조건으로 관리할 수 있습니다.</p>
+        </header>
+        <div class="gate-list" aria-label="검증 Gate 순서">
+          <article class="gate">
+            <strong>Gate 0</strong>
+            <span>제어권 단일화</span>
+            <span>실제 바퀴 명령 에코, E-stop, 별도 우회 경로 없음</span>
+          </article>
+          <article class="gate">
+            <strong>Gate 1</strong>
+            <span>정적 결정성</span>
+            <span>0727 밴드 전수 통과, 맵 해시, 같은 입력의 같은 결과</span>
+          </article>
+          <article class="gate">
+            <strong>Gate 2</strong>
+            <span>HIL 및 센서 실패</span>
+            <span>기하 일치, 포인트 부족, stale cloud, 정합 실패 안전 정지</span>
+          </article>
+          <article class="gate">
+            <strong>Gate 3</strong>
+            <span>무승객 폐쇄코스</span>
+            <span>비상 정지, 제동, 낙차, 사람 접근, 반복 주행 결과</span>
+          </article>
+        </div>
+
+        <div class="issue-ledger" role="table" aria-label="팀 담당 영역별 완료 증거">
+          <div class="ledger-row is-header" role="row">
+            <span role="columnheader">Gate</span>
+            <span role="columnheader">담당 영역</span>
+            <span role="columnheader">지금 공유할 작업</span>
+            <span role="columnheader">완료로 인정할 근거</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority is-active" role="cell">G0</span>
+            <strong role="cell">Controls / Safety</strong>
+            <span role="cell">현장 액추에이터 체인과 우회 가능한 cmd 토픽을 한 장으로 확정합니다.</span>
+            <span role="cell">모터 입력 에코와 E-stop 동작 로그</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">G1</span>
+            <strong role="cell">Autonomy / Mapping</strong>
+            <span role="cell">A부터 E와 고립 실패를 수정하고 같은 검사기를 CI에 넣습니다.</span>
+            <span role="cell">중심과 모든 연결선 100% 통과, 맵 해시</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">G2</span>
+            <strong role="cell">Perception / Localization</strong>
+            <span role="cell">탑승자 3D 마스크, 전방 FOV, 낙차, Livox IMU, 자동 정합 실패 상태를 연결합니다.</span>
+            <span role="cell">HIL fault injection과 안전 정지 로그</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">G3</span>
+            <strong role="cell">QA / Release</strong>
+            <span role="cell">무승객 폐쇄코스 절차와 중단 기준을 승인 문서로 고정합니다.</span>
+            <span role="cell">반복 결과, 영상, 로그, 승인 서명</span>
+          </div>
+        </div>
+
+        <h3 class="ledger-title">근거 파일</h3>
+        <ul class="source-list">
+          <li><a href="../../../routes/20260727_new_route_safety_band.json">0727 안전 밴드 JSON</a>과 <a href="../../../routes/20260727_new_route_waypoints.json">0727 기록 경로 JSON</a></li>
+          <li><a href="../../../src/static_livox_localization/scripts/safety_band.py">실제 SafetyBand 런타임 판정 코드</a></li>
+          <li><a href="../../../.omo/ulw-research/20260730-115236/SYNTHESIS.md">전수조사 종합 근거</a>와 <a href="../../../.omo/ulw-research/20260730-115236/wave-3-route-bundle.md">경로 번들 상세 감사</a></li>
+          <li><a href="assets/route-band-audit.json">이 보고서에 사용한 경로 판정 결과 JSON</a></li>
+        </ul>
+      </section>
+    </main>
+
+    <footer class="report-footer">
+      기준일 2026-07-30. 이 보고서는 저장소와 연결된 맵 자산에서 관측 가능한 증거를 요약하며, 현장 안전 인증이나 승객 운행 승인을 대신하지 않습니다.
+    </footer>
+  </div>
+</body>
+</html>

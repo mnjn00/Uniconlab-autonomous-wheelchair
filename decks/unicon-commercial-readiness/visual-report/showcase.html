@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UNICON 시각 보고서 프리미티브</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 이동</a>
+  <div class="report-shell">
+    <header class="report-header">
+      <h1>측정된 문제를 한눈에 찾고, 바로 담당자와 공유합니다</h1>
+      <p>정밀 그리드, 단일 파란 강조, 네모난 증거 면, 쉬운 한국어를 모든 시각화에 동일하게 적용합니다.</p>
+      <div class="decision-line">현재 차단 근거: 실제 좌표와 실행 결과가 있는 문제만 파란색으로 강조합니다.</div>
+    </header>
+
+    <nav class="anchor-nav" aria-label="프리미티브 이동">
+      <a href="#metrics">측정값</a>
+      <a href="#figure">근거 그림</a>
+      <a href="#ledger">문제 원장</a>
+      <a href="#comparison">비교</a>
+    </nav>
+
+    <main id="main">
+      <section class="report-section" id="metrics">
+        <header class="section-header">
+          <h2>큰 숫자는 성공 점수가 아니라 현재 막히는 범위를 설명합니다</h2>
+          <p>측정값과 물리 검증 범위를 같은 시야에 둡니다.</p>
+        </header>
+        <div class="metric-strip" aria-label="측정값 예시">
+          <div class="metric is-active">
+            <span class="metric-label">현재 차단 근거</span>
+            <strong class="metric-value">35</strong>
+            <span class="metric-note">371개 밴드 기준점 중 중심 거부</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">연결 이동선 실패</span>
+            <strong class="metric-value">42</strong>
+            <span class="metric-note">인접 기준점 사이</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">주행 경로점 거부</span>
+            <strong class="metric-value">9</strong>
+            <span class="metric-note">75개 기록 경로점 중</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">물리 검증</span>
+            <strong class="metric-value">0</strong>
+            <span class="metric-note">승객·폐쇄코스 근거는 아직 없음</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section" id="figure">
+        <header class="section-header">
+          <h2>그림은 문제 위치와 판정 경계를 먼저 보여 줍니다</h2>
+          <p>캡션과 텍스트 대안이 그림의 의미를 반복해 줍니다.</p>
+        </header>
+        <figure class="evidence-figure">
+          <svg class="diagram" viewBox="0 0 1200 360" role="img" aria-labelledby="showcase-figure-title showcase-figure-desc">
+            <title id="showcase-figure-title">근거 그림 프리미티브</title>
+            <desc id="showcase-figure-desc">회색 경로 위에서 파란색 실패 구간 하나가 강조된 예시입니다.</desc>
+            <rect class="surface" x="0" y="0" width="1200" height="360"/>
+            <path class="line" d="M80 230 C250 80 420 280 610 150 C770 45 930 110 1120 230"/>
+            <path class="accent-line" d="M505 212 C545 190 575 170 610 150 C650 124 684 108 720 100"/>
+            <rect class="node" x="470" y="255" width="320" height="62"/>
+            <rect class="accent-fill" x="470" y="255" width="6" height="62"/>
+            <text class="ink" x="492" y="282" font-size="20" font-weight="700">실패 구간 B</text>
+            <text class="muted" x="492" y="306" font-size="16">연결 이동선이 허용 밴드를 벗어남</text>
+          </svg>
+          <figcaption>파랑은 한 가지 문제만 지목하고, 회색은 위치 맥락을 유지합니다.</figcaption>
+        </figure>
+      </section>
+
+      <section class="report-section" id="ledger">
+        <header class="section-header">
+          <h2>문제 원장은 관측과 해결 조건을 같은 줄에 둡니다</h2>
+          <p>팀원이 “그래서 무엇을 닫아야 하나”를 바로 찾게 합니다.</p>
+        </header>
+        <div class="issue-ledger" role="table" aria-label="문제 원장 예시">
+          <div class="ledger-row is-header" role="row">
+            <span role="columnheader">우선순위</span>
+            <span role="columnheader">문제</span>
+            <span role="columnheader">관측</span>
+            <span role="columnheader">닫는 조건</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority is-active" role="cell">P0-2</span>
+            <strong role="cell">0727 경로 밴드 실패</strong>
+            <span role="cell">35개 중심, 42개 인접 이동선 실패</span>
+            <span role="cell">모든 중심과 연결선 재검사 통과</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">P0-3</span>
+            <strong role="cell">검사 궤적과 명령 궤적 불일치</strong>
+            <span role="cell">0.25 m와 1.375 m 반경 차이</span>
+            <span role="cell">최종 바퀴 명령을 같은 기하로 HIL 대조</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="report-section" id="comparison">
+        <header class="section-header">
+          <h2>비교는 한쪽만 파란색으로 표시해 결론을 흐리지 않습니다</h2>
+          <p>양쪽 모두 문장과 숫자로 읽히며, 색상 없이도 차이를 알 수 있습니다.</p>
+        </header>
+        <div class="comparison">
+          <article class="comparison-panel is-active">
+            <h3>현재 차단</h3>
+            <span class="number">NO-GO</span>
+            <p>실제 승객·캠퍼스 운행 권한은 열지 않습니다.</p>
+          </article>
+          <article class="comparison-panel">
+            <h3>허용 범위</h3>
+            <span class="number">검증만 진행</span>
+            <p>경로 수정, HIL, 무승객 폐쇄코스 근거 수집을 진행합니다.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="report-footer">
+      프리미티브 기준: <code>ppt-consulting-precision-grid</code>. 그림과 수치는 실제 근거에 연결합니다.
+    </footer>
+  </div>
+</body>
+</html>

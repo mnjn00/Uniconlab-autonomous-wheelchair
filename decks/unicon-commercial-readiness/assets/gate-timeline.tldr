@@ -1,0 +1,996 @@
+{
+  "store": {
+    "shape:gate-badge-0-circle": {
+      "x": 12,
+      "y": 28.533500000000004,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-0-circle",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "a3NJoCCV",
+      "props": {
+        "geo": "ellipse",
+        "dash": "solid",
+        "url": "",
+        "w": 29.333,
+        "h": 29.333,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "none",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-arrow-1": {
+      "x": 205.6,
+      "y": 43.2,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-arrow-1",
+      "type": "arrow",
+      "parentId": "page:page",
+      "index": "a8gQNgqV",
+      "props": {
+        "kind": "arc",
+        "labelColor": "black",
+        "color": "black",
+        "fill": "none",
+        "dash": "solid",
+        "size": "s",
+        "arrowheadStart": "none",
+        "arrowheadEnd": "triangle",
+        "font": "sans",
+        "start": {
+          "x": 0,
+          "y": 0
+        },
+        "end": {
+          "x": 24,
+          "y": 0
+        },
+        "bend": 0,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        },
+        "labelPosition": 0.5,
+        "scale": 1,
+        "elbowMidPoint": 0.5
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-arrow-2": {
+      "x": 439.2,
+      "y": 43.2,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-arrow-2",
+      "type": "arrow",
+      "parentId": "page:page",
+      "index": "aCmpzwmG",
+      "props": {
+        "kind": "arc",
+        "labelColor": "black",
+        "color": "black",
+        "fill": "none",
+        "dash": "solid",
+        "size": "s",
+        "arrowheadStart": "none",
+        "arrowheadEnd": "triangle",
+        "font": "sans",
+        "start": {
+          "x": 0,
+          "y": 0
+        },
+        "end": {
+          "x": 24,
+          "y": 0
+        },
+        "bend": 0,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        },
+        "labelPosition": 0.5,
+        "scale": 1,
+        "elbowMidPoint": 0.5
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-arrow-3": {
+      "x": 568,
+      "y": 90.4,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-arrow-3",
+      "type": "arrow",
+      "parentId": "page:page",
+      "index": "aGxjKD0V",
+      "props": {
+        "kind": "arc",
+        "labelColor": "black",
+        "color": "black",
+        "fill": "none",
+        "dash": "solid",
+        "size": "s",
+        "arrowheadStart": "none",
+        "arrowheadEnd": "triangle",
+        "font": "sans",
+        "start": {
+          "x": 0,
+          "y": 0
+        },
+        "end": {
+          "x": 0,
+          "y": 20
+        },
+        "bend": 0,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        },
+        "labelPosition": 0.5,
+        "scale": 1,
+        "elbowMidPoint": 0.5
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-arrow-4": {
+      "x": 463.2,
+      "y": 157.60000000000002,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-arrow-4",
+      "type": "arrow",
+      "parentId": "page:page",
+      "index": "aK3ZBbEV",
+      "props": {
+        "kind": "arc",
+        "labelColor": "black",
+        "color": "black",
+        "fill": "none",
+        "dash": "solid",
+        "size": "s",
+        "arrowheadStart": "none",
+        "arrowheadEnd": "triangle",
+        "font": "sans",
+        "start": {
+          "x": 0,
+          "y": 0
+        },
+        "end": {
+          "x": -24,
+          "y": 0
+        },
+        "bend": 0,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        },
+        "labelPosition": 0.5,
+        "scale": 1,
+        "elbowMidPoint": 0.5
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-arrow-5": {
+      "x": 229.6,
+      "y": 157.60000000000002,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-arrow-5",
+      "type": "arrow",
+      "parentId": "page:page",
+      "index": "aOzFxwTl",
+      "props": {
+        "kind": "arc",
+        "labelColor": "black",
+        "color": "black",
+        "fill": "none",
+        "dash": "solid",
+        "size": "s",
+        "arrowheadStart": "none",
+        "arrowheadEnd": "triangle",
+        "font": "sans",
+        "start": {
+          "x": 0,
+          "y": 0
+        },
+        "end": {
+          "x": -24,
+          "y": 0
+        },
+        "bend": 0,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        },
+        "labelPosition": 0.5,
+        "scale": 1,
+        "elbowMidPoint": 0.5
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-node-0": {
+      "x": 0,
+      "y": 0,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-node-0",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "a2AT9OaV",
+      "props": {
+        "geo": "rectangle",
+        "dash": "solid",
+        "url": "",
+        "w": 201.6,
+        "h": 86.4,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "semi",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "현재 · Truth 동결"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-node-1": {
+      "x": 233.6,
+      "y": 0,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-node-1",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "a5ZUw1rG",
+      "props": {
+        "geo": "rectangle",
+        "dash": "solid",
+        "url": "",
+        "w": 201.6,
+        "h": 86.4,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "semi",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "필수 · 단일 chain"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-node-2": {
+      "x": 467.2,
+      "y": 0,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-node-2",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "a9XtmV0V",
+      "props": {
+        "geo": "rectangle",
+        "dash": "solid",
+        "url": "",
+        "w": 201.6,
+        "h": 86.4,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "semi",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "증거 뒤 · NUC HIL"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-node-3": {
+      "x": 467.2,
+      "y": 114.4,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-node-3",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aDl7MNSV",
+      "props": {
+        "geo": "rectangle",
+        "dash": "solid",
+        "url": "",
+        "w": 201.6,
+        "h": 86.4,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "semi",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "별도 · 무승객 코스"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-node-4": {
+      "x": 233.6,
+      "y": 114.4,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-node-4",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aHNzcGUd",
+      "props": {
+        "geo": "rectangle",
+        "dash": "solid",
+        "url": "",
+        "w": 201.6,
+        "h": 86.4,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "semi",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "미래 · 제품 검증"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-node-5": {
+      "x": 0,
+      "y": 114.4,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-node-5",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aLCue1TV",
+      "props": {
+        "geo": "rectangle",
+        "dash": "solid",
+        "url": "",
+        "w": 201.6,
+        "h": 86.4,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "semi",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "검토 · 제한 pilot"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-5-number": {
+      "x": 12,
+      "y": 147.9335,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-5-number",
+      "type": "text",
+      "parentId": "page:page",
+      "index": "aNqWCMQV",
+      "props": {
+        "color": "black",
+        "size": "s",
+        "font": "sans",
+        "textAlign": "middle",
+        "w": 29.333,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "5"
+                }
+              ]
+            }
+          ]
+        },
+        "scale": 1,
+        "autoSize": false
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-4-number": {
+      "x": 245.6,
+      "y": 147.9335,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-4-number",
+      "type": "text",
+      "parentId": "page:page",
+      "index": "aJL2WijV",
+      "props": {
+        "color": "black",
+        "size": "s",
+        "font": "sans",
+        "textAlign": "middle",
+        "w": 29.333,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "4"
+                }
+              ]
+            }
+          ]
+        },
+        "scale": 1,
+        "autoSize": false
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-3-number": {
+      "x": 479.2,
+      "y": 147.9335,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-3-number",
+      "type": "text",
+      "parentId": "page:page",
+      "index": "aF6FzCll",
+      "props": {
+        "color": "black",
+        "size": "s",
+        "font": "sans",
+        "textAlign": "middle",
+        "w": 29.333,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "3"
+                }
+              ]
+            }
+          ]
+        },
+        "scale": 1,
+        "autoSize": false
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-2-number": {
+      "x": 479.2,
+      "y": 33.533500000000004,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-2-number",
+      "type": "text",
+      "parentId": "page:page",
+      "index": "aBDTQdNV",
+      "props": {
+        "color": "black",
+        "size": "s",
+        "font": "sans",
+        "textAlign": "middle",
+        "w": 29.333,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "2"
+                }
+              ]
+            }
+          ]
+        },
+        "scale": 1,
+        "autoSize": false
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-1-number": {
+      "x": 245.6,
+      "y": 33.533500000000004,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-1-number",
+      "type": "text",
+      "parentId": "page:page",
+      "index": "a7BOIPNV",
+      "props": {
+        "color": "black",
+        "size": "s",
+        "font": "sans",
+        "textAlign": "middle",
+        "w": 29.333,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "1"
+                }
+              ]
+            }
+          ]
+        },
+        "scale": 1,
+        "autoSize": false
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-0-number": {
+      "x": 12,
+      "y": 33.533500000000004,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-0-number",
+      "type": "text",
+      "parentId": "page:page",
+      "index": "a4zQ7Fzd",
+      "props": {
+        "color": "black",
+        "size": "s",
+        "font": "sans",
+        "textAlign": "middle",
+        "w": 29.333,
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "0"
+                }
+              ]
+            }
+          ]
+        },
+        "scale": 1,
+        "autoSize": false
+      },
+      "typeName": "shape"
+    },
+    "page:page": {
+      "meta": {},
+      "id": "page:page",
+      "name": "Diagram",
+      "index": "a1",
+      "typeName": "page"
+    },
+    "shape:gate-badge-5-circle": {
+      "x": 12,
+      "y": 142.9335,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-5-circle",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aMFUEsUO",
+      "props": {
+        "geo": "ellipse",
+        "dash": "solid",
+        "url": "",
+        "w": 29.333,
+        "h": 29.333,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "none",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-active-edge": {
+      "x": 233.6,
+      "y": 0,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-active-edge",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aPwWzysl",
+      "props": {
+        "geo": "rectangle",
+        "dash": "solid",
+        "url": "",
+        "w": 4,
+        "h": 86.4,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "blue",
+        "fill": "solid",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-4-circle": {
+      "x": 245.6,
+      "y": 142.9335,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-4-circle",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aIMU615G",
+      "props": {
+        "geo": "ellipse",
+        "dash": "solid",
+        "url": "",
+        "w": 29.333,
+        "h": 29.333,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "none",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-3-circle": {
+      "x": 479.2,
+      "y": 142.9335,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-3-circle",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aEUwTeIG",
+      "props": {
+        "geo": "ellipse",
+        "dash": "solid",
+        "url": "",
+        "w": 29.333,
+        "h": 29.333,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "none",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-2-circle": {
+      "x": 479.2,
+      "y": 28.533500000000004,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-2-circle",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "aAP1PejV",
+      "props": {
+        "geo": "ellipse",
+        "dash": "solid",
+        "url": "",
+        "w": 29.333,
+        "h": 29.333,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "none",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    },
+    "shape:gate-badge-1-circle": {
+      "x": 245.6,
+      "y": 28.533500000000004,
+      "rotation": 0,
+      "isLocked": false,
+      "opacity": 1,
+      "meta": {},
+      "id": "shape:gate-badge-1-circle",
+      "type": "geo",
+      "parentId": "page:page",
+      "index": "a6r5JlUG",
+      "props": {
+        "geo": "ellipse",
+        "dash": "solid",
+        "url": "",
+        "w": 29.333,
+        "h": 29.333,
+        "growY": 0,
+        "scale": 1,
+        "labelColor": "black",
+        "color": "grey",
+        "fill": "none",
+        "size": "s",
+        "font": "sans",
+        "align": "middle",
+        "verticalAlign": "middle",
+        "richText": {
+          "type": "doc",
+          "content": [
+            {
+              "type": "paragraph"
+            }
+          ]
+        }
+      },
+      "typeName": "shape"
+    }
+  },
+  "schema": {
+    "schemaVersion": 2,
+    "sequences": {
+      "com.tldraw.store": 5,
+      "com.tldraw.asset": 1,
+      "com.tldraw.camera": 1,
+      "com.tldraw.document": 2,
+      "com.tldraw.instance": 26,
+      "com.tldraw.instance_page_state": 5,
+      "com.tldraw.page": 1,
+      "com.tldraw.instance_presence": 6,
+      "com.tldraw.pointer": 1,
+      "com.tldraw.shape": 4,
+      "com.tldraw.asset.bookmark": 2,
+      "com.tldraw.asset.image": 6,
+      "com.tldraw.asset.video": 5,
+      "com.tldraw.shape.group": 0,
+      "com.tldraw.shape.text": 4,
+      "com.tldraw.shape.bookmark": 2,
+      "com.tldraw.shape.draw": 4,
+      "com.tldraw.shape.geo": 11,
+      "com.tldraw.shape.note": 10,
+      "com.tldraw.shape.line": 5,
+      "com.tldraw.shape.frame": 1,
+      "com.tldraw.shape.arrow": 8,
+      "com.tldraw.shape.highlight": 3,
+      "com.tldraw.shape.embed": 4,
+      "com.tldraw.shape.image": 5,
+      "com.tldraw.shape.video": 4,
+      "com.tldraw.binding.arrow": 1
+    }
+  }
+}
