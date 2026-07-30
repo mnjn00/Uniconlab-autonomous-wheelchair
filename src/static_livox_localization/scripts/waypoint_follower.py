@@ -49,6 +49,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import (body_to_lidar, lidar_extrinsics,
                         pose_correction)
 from localization_policy import localization_hold_reason
+from motion_safety import (MotionEstimate, PoseMotionEstimator,
+                           motion_hold_reason, stopping_envelope)
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -79,15 +81,13 @@ CORRIDOR_HALF_WIDTH = 0.45
 # rider's legs and the wheelchair footrest from the obstacle guard.
 FORWARD_FOV_HALF_DEG = 50.0
 CORRIDOR_MIN_RANGE_M = 0.50
-# Obstacle guard distances scale with speed. A fixed 1.1 m stop radius was
-# only ever safe at the 0.5 m/s cap it was chosen for: braking alone needs
-# v^2 / (2 * MAX_DECEL), which is 1.2 m at 1.2 m/s, before any allowance for
-# the ~0.5 s it takes a return to pass through the 1 s scan accumulator and
-# the 10 Hz control loop. Raising the speed without raising this would have
-# put the stop point behind the obstacle.
 GUARD_STOP_MIN_M = 0.9
-GUARD_STOP_PER_MPS = 1.2
 GUARD_SLOW_EXTRA_M = 1.2
+ACCUMULATION_WINDOW_S = 1.0
+PIPELINE_BUDGET_S = 0.2
+MIN_BRAKE_DECEL_MPS2 = 0.5
+MIN_YAW_DECEL_RPS2 = 0.5
+ODOM_STALE_S = 0.35
 OBSTACLE_MIN_Z = 0.18
 OBSTACLE_MAX_Z = 1.9
 # Speed follows how much lateral slack the chair actually has, not whether
@@ -234,6 +234,11 @@ class WaypointFollower:
                                         self.pose_correction[0, 0])))
         self.accumulator = CloudAccumulator(
             lidar_in_body, lidar_to_body_rotation)
+        odom_frame = str(rospy.get_param("~odom_frame", "camera_init"))
+        base_frame = str(rospy.get_param("~base_frame", "body"))
+        self.motion_estimator = PoseMotionEstimator(odom_frame, base_frame)
+        self.motion = MotionEstimate(
+            False, 0.0, 0.0, 0.0, 0.0, "ODOM_INITIALIZING")
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.nearest_index = 0
@@ -280,6 +285,16 @@ class WaypointFollower:
 
     def on_odom(self, message):
         self.accumulator.add_odom(message)
+        q = message.pose.pose.orientation
+        p = message.pose.pose.position
+        self.motion = self.motion_estimator.update(
+            source_stamp_s=message.header.stamp.to_sec(),
+            receipt_stamp_s=rospy.Time.now().to_sec(),
+            frame_id=message.header.frame_id,
+            child_frame_id=message.child_frame_id,
+            x=p.x,
+            y=p.y,
+            quaternion_xyzw=(q.x, q.y, q.z, q.w))
 
     def on_diag(self, message):
         for status in message.status:
@@ -325,9 +340,23 @@ class WaypointFollower:
         return CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED)
 
     def guard_stop(self):
-        """Stop radius for the speed the chair is actually carrying."""
-        return GUARD_STOP_MIN_M + GUARD_STOP_PER_MPS * max(
-            0.0, self.current_speed)
+        """Stop radius from measured motion, scan age, and braking physics."""
+        if not self.motion.valid:
+            return float("inf")
+        cloud_age = max(
+            0.0, rospy.Time.now().to_sec() - self.cloud_stamp.to_sec())
+        envelope = stopping_envelope(
+            measured_speed_mps=self.motion.linear_speed_mps,
+            requested_speed_mps=self.current_speed,
+            measured_yaw_rate_rps=self.motion.angular_speed_rps,
+            requested_yaw_rate_rps=self.last_yaw_rate,
+            cloud_age_s=cloud_age,
+            accumulation_s=ACCUMULATION_WINDOW_S,
+            pipeline_s=PIPELINE_BUDGET_S,
+            min_linear_decel_mps2=MIN_BRAKE_DECEL_MPS2,
+            min_angular_decel_rps2=MIN_YAW_DECEL_RPS2,
+            geometry_margin_m=GUARD_STOP_MIN_M)
+        return envelope.distance_m
 
     def guard_slow(self):
         return self.guard_stop() + GUARD_SLOW_EXTRA_M
@@ -496,10 +525,13 @@ class WaypointFollower:
         elif (now - self.cloud_stamp).to_sec() > 1.0:
             reason = "NO_CLOUD"
         else:
-            degraded_age_s = None if self.degraded_since is None else \
-                (now - self.degraded_since).to_sec()
-            reason = localization_hold_reason(
-                self.tracking_state, degraded_age_s, DEGRADED_STOP_S)
+            reason = motion_hold_reason(
+                self.motion, now.to_sec(), ODOM_STALE_S)
+            if not reason:
+                degraded_age_s = None if self.degraded_since is None else \
+                    (now - self.degraded_since).to_sec()
+                reason = localization_hold_reason(
+                    self.tracking_state, degraded_age_s, DEGRADED_STOP_S)
         if reason is None and \
                 (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
             reason = "BASE_STALE"

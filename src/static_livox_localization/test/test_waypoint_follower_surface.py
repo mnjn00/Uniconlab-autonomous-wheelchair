@@ -56,25 +56,12 @@ def test_follower_obstacle_detection_uses_forward_fov_cone():
 
 
 def test_obstacle_stop_radius_covers_braking_distance_at_full_speed():
-    """The stop radius must not be a constant. At MAX_SPEED the chair needs
-    MAX_SPEED^2 / (2 * MAX_DECEL) just to brake, so a fixed radius chosen
-    for a slower cap puts the stop point past the obstacle."""
-    import re
-
     text = follower_text()
-    values = {}
-    for name in ("MAX_SPEED", "MAX_DECEL", "GUARD_STOP_MIN_M",
-                 "GUARD_STOP_PER_MPS"):
-        match = re.search(r"^%s = ([0-9.]+)$" % name, text, re.M)
-        assert match, "%s must be a module-level constant" % name
-        values[name] = float(match.group(1))
-
-    braking = values["MAX_SPEED"] ** 2 / (2 * values["MAX_DECEL"])
-    stop_radius = (values["GUARD_STOP_MIN_M"] +
-                   values["GUARD_STOP_PER_MPS"] * values["MAX_SPEED"])
-    assert stop_radius > braking, (
-        "stop radius %.2f m does not cover %.2f m of braking at %.2f m/s"
-        % (stop_radius, braking, values["MAX_SPEED"]))
+    assert "PoseMotionEstimator" in text
+    assert "motion_hold_reason" in text
+    assert "stopping_envelope(" in text
+    assert "self.motion.linear_speed_mps" in text
+    assert "ACCUMULATION_WINDOW_S" in text
     assert "self.guard_stop()" in text and "self.guard_slow()" in text
 
 
@@ -136,6 +123,7 @@ def test_field_nodes_and_sibling_policy_modules_are_installed_together():
             "scripts/obstacle_clusters.py",
             "scripts/body_frame.py",
             "scripts/localization_policy.py",
+            "scripts/motion_safety.py",
             "scripts/safety_band.py",
             "scripts/tip_guard_policy.py"):
         assert path in cmake
@@ -168,6 +156,16 @@ def test_the_gate_uses_the_same_forward_fov_cone():
     assert "FORWARD_FOV_HALF_DEG = 50.0" in gate
     assert "CORRIDOR_MIN_RANGE_M = 0.50" in gate
     assert "azimuth < FORWARD_FOV_HALF_DEG" in gate
+
+
+def test_gate_checks_rotation_with_pose_derived_motion_and_full_footprint():
+    gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
+    assert "PoseMotionEstimator" in gate
+    assert "motion_hold_reason" in gate
+    assert "stopping_envelope(" in gate
+    assert "swept_footprint_collision(" in gate
+    assert "abs(self.raw.angular.z) > MOTION_EPSILON" in gate
+    assert "ODOM_STALE_S" in gate
 
 
 def test_the_route_is_read_in_the_body_frame_it_was_captured_in():

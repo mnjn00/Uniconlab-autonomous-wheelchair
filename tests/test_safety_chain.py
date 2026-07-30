@@ -55,6 +55,14 @@ def test_gate_forbids_reverse_and_clamps_speeds():
     assert "HARD_W_LIMIT" in text
 
 
+def test_gate_bounds_raw_command_before_building_the_swept_path():
+    text = gate_text()
+    bound = text.index("requested_speed = max(0.0, min(HARD_V_LIMIT")
+    envelope = text.index("envelope = stopping_envelope(")
+    sweep = text.index("swept_footprint_collision(")
+    assert bound < envelope < sweep
+
+
 def test_uart_watchdog_stops_motors_when_command_stream_dies():
     text = uart_text()
     assert "WATCHDOG_TIMEOUT_S = 0.6" in text

@@ -57,6 +57,7 @@ install(
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py
     scripts/localization_policy.py
+    scripts/motion_safety.py
     scripts/safety_band.py
     scripts/tip_guard_policy.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

@@ -2,15 +2,17 @@
 """Independent obstacle safety gate between the planner and tip_guard.
 
 Deliberately knows nothing about routes or planning: it forwards
-/cmd_vel_raw to /cmd_vel_gated only when its OWN forward-corridor check
-passes, clamps speeds, replaces stale or missing input with a stop, and
-publishes continuously so the chain always has a live command stream.
+/cmd_vel_raw to /cmd_vel_gated only when its own dynamic stopping-distance
+and swept-footprint checks pass, clamps speeds, replaces stale or missing
+input with a stop, and publishes continuously so the chain always has a
+live command stream.
 tip_guard.py is the final stage after this (rate-limited relay with its
 own staleness fail-safe); wheel_cmd_tmp.py/uart.py consume its output on
 /cmd_vel. If the planner misbehaves or dies, this gate stops the chair;
 if this gate dies, tip_guard's own staleness check stops the chair; if
 that dies too, the uart-level watchdog stops the chair.
 """
+import math
 import os
 import sys
 
@@ -30,6 +32,9 @@ import sensor_msgs.point_cloud2 as pc2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from body_frame import body_to_lidar, lidar_extrinsics
+from motion_safety import (MotionEstimate, PoseMotionEstimator,
+                           filter_obstacle_points, motion_hold_reason,
+                           stopping_envelope, swept_footprint_collision)
 import tf.transformations as tft
 
 
@@ -105,6 +110,8 @@ class CloudAccumulator:
 GATE_HZ = 15.0
 INPUT_STALE_S = 0.6
 CLOUD_STALE_S = 1.0
+ODOM_STALE_S = 0.35
+MOTION_EPSILON = 0.02
 # Ceilings, not setpoints: this gate exists to bound whatever the planner
 # asks for, so HARD_V_LIMIT must sit ABOVE the follower's MAX_SPEED or it
 # silently becomes the real speed limit. It was 0.6 while the follower
@@ -113,15 +120,23 @@ CLOUD_STALE_S = 1.0
 # error anywhere. test_safety_chain asserts the ordering holds.
 HARD_V_LIMIT = 1.4
 HARD_W_LIMIT = 0.6
-# The chair leaves this stage at up to HARD_V_LIMIT and is brought to rest
-# by the final relay at 2 * HARD_DECEL, so the stop radius has to cover
-# that plus this gate's own 15 Hz cycle and the scan's arrival lag.
-STOP_DISTANCE_M = 1.0
-CHECK_RANGE_M = 2.0
 HALF_WIDTH_M = 0.5
 SENSOR_HEIGHT_M = 0.30
 OBSTACLE_MIN_Z = 0.15
 OBSTACLE_MAX_Z = 1.9
+ACCUMULATION_WINDOW_S = 1.0
+PIPELINE_BUDGET_S = 0.2
+MIN_BRAKE_DECEL_MPS2 = 0.5
+MIN_YAW_DECEL_RPS2 = 0.5
+GEOMETRY_MARGIN_M = 0.9
+FORWARD_CHECK_EXTRA_M = 0.6
+FOOTPRINT_FRONT_M = 0.50
+FOOTPRINT_REAR_M = 0.50
+FOOTPRINT_HALF_WIDTH_M = 0.30
+SWEEP_MARGIN_M = 0.15
+RIDER_EXCLUDE_X_MIN_M = -1.0
+RIDER_EXCLUDE_X_MAX_M = 0.55
+RIDER_EXCLUDE_HALF_WIDTH_M = 0.40
 # Forward FOV cone: the gate only checks obstacles the chair is
 # driving toward. Side/rear returns are the rider and the wheelchair
 # frame; the minimum range skips the rider's knees and footrest.
@@ -138,6 +153,11 @@ class SafetyGate:
         lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
         self.accumulator = CloudAccumulator(
             lidar_in_body, lidar_to_body_rotation)
+        odom_frame = str(rospy.get_param("~odom_frame", "camera_init"))
+        base_frame = str(rospy.get_param("~base_frame", "body"))
+        self.motion_estimator = PoseMotionEstimator(odom_frame, base_frame)
+        self.motion = MotionEstimate(
+            False, 0.0, 0.0, 0.0, 0.0, "ODOM_INITIALIZING")
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""
@@ -159,30 +179,81 @@ class SafetyGate:
 
     def on_odom(self, message):
         self.accumulator.add_odom(message)
+        q = message.pose.pose.orientation
+        p = message.pose.pose.position
+        self.motion = self.motion_estimator.update(
+            source_stamp_s=message.header.stamp.to_sec(),
+            receipt_stamp_s=rospy.Time.now().to_sec(),
+            frame_id=message.header.frame_id,
+            child_frame_id=message.child_frame_id,
+            x=p.x,
+            y=p.y,
+            quaternion_xyzw=(q.x, q.y, q.z, q.w))
 
-    def forward_blocked(self):
-        """Obstacle-only check: the MID360 cannot see near ground (vertical
-        FOV -7 deg, low mount), so drop protection is the follower's
-        map-band containment; this gate independently blocks visible
-        obstacles and stale sensing. Detection is limited to a forward
-        FOV cone so the rider and wheelchair frame are never treated
-        as obstacles."""
+    def motion_blocked(self, now):
+        """Check visible obstacles; drop safety remains map-band containment."""
         if self.cloud is None or len(self.cloud) < 100:
             return "NO_CLOUD"
-        pts = self.cloud
-        ground_plane = -SENSOR_HEIGHT_M
-        azimuth = np.abs(np.degrees(np.arctan2(pts[:, 1], pts[:, 0])))
-        zone = pts[(pts[:, 0] > CORRIDOR_MIN_RANGE_M) &
-                   (pts[:, 0] < CHECK_RANGE_M) &
-                   (azimuth < FORWARD_FOV_HALF_DEG) &
-                   (np.abs(pts[:, 1]) < HALF_WIDTH_M)]
-        if not len(zone):
-            return ""
-        rel = zone[:, 2] - ground_plane
-        obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)]
-        if len(obstacles) >= 5 and \
-                np.percentile(obstacles[:, 0], 5) < STOP_DISTANCE_M:
+        reason = motion_hold_reason(
+            self.motion, now.to_sec(), ODOM_STALE_S)
+        if reason:
+            return reason
+
+        requested_speed = max(0.0, min(HARD_V_LIMIT,
+                                       self.raw.linear.x))
+        requested_yaw_rate = max(
+            -HARD_W_LIMIT, min(HARD_W_LIMIT, self.raw.angular.z))
+        cloud_age = max(0.0, (now - self.cloud_stamp).to_sec())
+        envelope = stopping_envelope(
+            measured_speed_mps=self.motion.linear_speed_mps,
+            requested_speed_mps=requested_speed,
+            measured_yaw_rate_rps=self.motion.angular_speed_rps,
+            requested_yaw_rate_rps=requested_yaw_rate,
+            cloud_age_s=cloud_age,
+            accumulation_s=ACCUMULATION_WINDOW_S,
+            pipeline_s=PIPELINE_BUDGET_S,
+            min_linear_decel_mps2=MIN_BRAKE_DECEL_MPS2,
+            min_angular_decel_rps2=MIN_YAW_DECEL_RPS2,
+            geometry_margin_m=GEOMETRY_MARGIN_M)
+        obstacles = filter_obstacle_points(
+            self.cloud,
+            sensor_height_m=SENSOR_HEIGHT_M,
+            min_height_m=OBSTACLE_MIN_Z,
+            max_height_m=OBSTACLE_MAX_Z,
+            self_x_min_m=RIDER_EXCLUDE_X_MIN_M,
+            self_x_max_m=RIDER_EXCLUDE_X_MAX_M,
+            self_half_width_m=RIDER_EXCLUDE_HALF_WIDTH_M)
+
+        if len(obstacles):
+            azimuth = np.abs(np.degrees(np.arctan2(
+                obstacles[:, 1], obstacles[:, 0])))
+            zone = obstacles[
+                (obstacles[:, 0] > CORRIDOR_MIN_RANGE_M) &
+                (obstacles[:, 0] <
+                 envelope.distance_m + FORWARD_CHECK_EXTRA_M) &
+                (azimuth < FORWARD_FOV_HALF_DEG) &
+                (np.abs(obstacles[:, 1]) < HALF_WIDTH_M)]
+        else:
+            zone = obstacles
+        if len(zone) >= 5 and \
+                np.percentile(zone[:, 0], 5) < envelope.distance_m:
             return "OBSTACLE"
+
+        speed = max(self.motion.linear_speed_mps, requested_speed)
+        yaw_rates = [requested_yaw_rate]
+        if abs(self.motion.angular_speed_rps - requested_yaw_rate) > 0.05:
+            yaw_rates.append(self.motion.angular_speed_rps)
+        for yaw_rate in yaw_rates:
+            if swept_footprint_collision(
+                    obstacles,
+                    linear_speed_mps=speed,
+                    angular_speed_rps=yaw_rate,
+                    horizon_s=envelope.horizon_s,
+                    front_m=FOOTPRINT_FRONT_M,
+                    rear_m=FOOTPRINT_REAR_M,
+                    half_width_m=FOOTPRINT_HALF_WIDTH_M,
+                    margin_m=SWEEP_MARGIN_M):
+                return "OBSTACLE_SWEEP"
         return ""
 
     def spin(self):
@@ -195,12 +266,20 @@ class SafetyGate:
                 reason = "INPUT_STALE"
             elif (now - self.cloud_stamp).to_sec() > CLOUD_STALE_S:
                 reason = "CLOUD_STALE"
+            elif not math.isfinite(self.raw.linear.x) or \
+                    not math.isfinite(self.raw.angular.z):
+                reason = "INPUT_INVALID"
+            elif self.raw.linear.x < -MOTION_EPSILON:
+                reason = "REVERSE"
             else:
-                wants_motion = abs(self.raw.linear.x) > 0.02
+                wants_motion = \
+                    abs(self.raw.linear.x) > MOTION_EPSILON or \
+                    abs(self.raw.angular.z) > MOTION_EPSILON
                 if wants_motion:
-                    reason = self.forward_blocked()
+                    reason = self.motion_blocked(now)
                 if not reason:
-                    out.linear.x = max(0.0, min(HARD_V_LIMIT, self.raw.linear.x))
+                    out.linear.x = max(0.0, min(HARD_V_LIMIT,
+                                                self.raw.linear.x))
                     out.angular.z = max(-HARD_W_LIMIT,
                                         min(HARD_W_LIMIT, self.raw.angular.z))
             if reason and reason != self.blocked_reason:
