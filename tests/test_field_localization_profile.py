@@ -66,6 +66,18 @@ def test_map_deployer_pins_the_supplied_canonical_and_runtime_artifacts():
     assert "2696359" in deploy
 
 
+def test_deployment_installs_the_bringup_script():
+    """The bringup lives in $HOME, outside the checkout, so `git pull` does not
+    touch it. Left behind, a deployment verifies clean and still brings the
+    vehicle up on the previous route and band, without the gates added since."""
+    push = (ROOT / "tools" / "push_to_nuc.sh").read_text(encoding="utf-8")
+
+    assert "start_wheelchair_localization.sh" in push
+    assert "BRINGUP_DST" in push
+    # and it has to be checked, not just copied
+    assert "did not install cleanly" in push
+
+
 def test_the_deploy_script_and_the_bringup_name_the_same_route():
     """Deployment verifies and records a route/band pair by name. When that
     pair drifts from the one the bringup actually launches with, the record

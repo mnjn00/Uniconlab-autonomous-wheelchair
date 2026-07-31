@@ -294,6 +294,21 @@ $BUILD_CMD >/tmp/nuc_build.log 2>&1 || {
   exit 1; }
 echo "  build OK"
 
+# The bringup lives in $HOME, outside the checkout, so a pull does not touch
+# it. Left behind it launches the previous route and band and skips whatever
+# gates were added since - a deployment that verifies clean and still brings
+# the vehicle up on superseded configuration.
+BRINGUP_SRC="$REPO/tools/start_wheelchair_localization.sh"
+BRINGUP_DST="$HOME/start_wheelchair_localization.sh"
+[ -f "$BRINGUP_SRC" ] || {
+  echo "ERROR: $BRINGUP_SRC missing" >&2; exit 1; }
+install -m 0755 "$BRINGUP_SRC" "$BRINGUP_DST"
+SRC_SUM="$(sha256sum "$BRINGUP_SRC" | awk '{print $1}')"
+DST_SUM="$(sha256sum "$BRINGUP_DST" | awk '{print $1}')"
+[ "$SRC_SUM" = "$DST_SUM" ] || {
+  echo "ERROR: bringup script did not install cleanly" >&2; exit 1; }
+echo "  bringup installed: $BRINGUP_DST (${SRC_SUM:0:12})"
+
 case "$STAGE" in
   "$MAPS"/.incoming-"$DEST".*) ;;
   *) echo "ERROR: refusing to clean unexpected staging path" >&2; exit 1 ;;
