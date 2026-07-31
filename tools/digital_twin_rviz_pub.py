@@ -27,7 +27,7 @@ from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 import tf.transformations as tft
 
-SENSOR_HEIGHT = 0.30
+SENSOR_HEIGHT = 0.725
 VERT_FOV_MIN = math.radians(-7.0)
 VERT_FOV_MAX = math.radians(52.0)
 SCAN_RADIUS = 12.0

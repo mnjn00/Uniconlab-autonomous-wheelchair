@@ -2,10 +2,15 @@
 """Safety-guarded waypoint follower for the wheelchair.
 
 Drop safety comes from the map, not the live scan: the MID360 (vertical FOV
--7..+52 deg, ~0.3 m mount) cannot see ground within ~2.4 m, so curbs are
+-7..+52 deg, 0.725 m mount) cannot see ground within ~5.9 m, so curbs are
 avoided by keeping the wheelchair inside the pre-computed drop-free lateral
 band along the route (tools/make_route_safety_band.py). The live accumulated
 scan is used for what the sensor CAN see: obstacles and pedestrians.
+
+That blind radius was documented as 2.4 m until the mount height was
+measured on 2026-07-31. It followed from a 0.30 m mount that was never a
+measurement, and 0.725/tan(7 deg) is 5.9 m - so the band is carrying more
+of the drop safety than the number here used to admit, not less.
 
 Per control cycle:
   - band containment: the current position must lie inside the safety band;
@@ -156,7 +161,7 @@ class WaypointFollower:
         self.waypoints = np.array(
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
         self.band = SafetyBand(rospy.get_param("~safety_band"))
-        self.sensor_height = rospy.get_param("~sensor_height", 0.30)
+        self.sensor_height = rospy.get_param("~sensor_height", 0.725)
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))
 

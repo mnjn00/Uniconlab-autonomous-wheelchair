@@ -48,7 +48,7 @@ import tf.transformations as tft
 
 PROCESS_HZ = 5.0
 WINDOW_S = 0.6
-SENSOR_HEIGHT_M = 0.30
+SENSOR_HEIGHT_M = 0.725
 # Forward-only FOV: the rider sits behind and around the lidar, so
 # rear/side returns are the rider's body, the wheelchair frame, and
 # irrelevant scenery. Clustering is limited to the forward sector the
@@ -64,7 +64,13 @@ FORWARD_FOV_HALF_DEG = 50.0
 # the rider's body sits CHAIR_CENTRE_IN_BODY_XYZ[1] = -0.173 m from it.
 RIDER_EXCLUDE_X = (-1.0, 0.55)
 RIDER_EXCLUDE_Y_HALF = 0.40
-RIDER_EXCLUDE_Z = (-0.5, 1.8)
+# Raw lidar z, not height above ground, so this moved when the mount height
+# was corrected. The lower bound has to sit BELOW the ground plane or the
+# rider's feet and the footrest fall outside the box and get clustered as an
+# obstacle riding along in front of the chair. At the old 0.30 m mount, -0.5
+# was 0.2 m under the ground; at the measured 0.725 m it was 0.225 m ABOVE
+# it, which leaves everything below the rider's shins exposed.
+RIDER_EXCLUDE_Z = (-SENSOR_HEIGHT_M - 0.1, 1.8)
 # 0.20 m cells: small enough that a person standing 0.3 m from a car
 # keeps an empty cell column between them (8-connectivity would bridge
 # that gap at 0.25 m), large enough that accumulated scans still fill

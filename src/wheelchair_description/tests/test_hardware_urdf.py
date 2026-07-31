@@ -91,13 +91,13 @@ def test_hardware_sensor_frames_encode_the_measured_left_armrest_mount() -> None
     assert _joint_transform(root, "lidar_joint") == (
         "base_link",
         "lidar_link",
-        "0.246 0.14971 0.300",
+        "0.246 0.14971 0.725",
         "0 0 0",
     )
     assert _joint_transform(root, "imu_joint") == (
         "base_link",
         "imu_link",
-        "0.257 0.173 0.25588",
+        "0.257 0.173 0.68088",
         "0 0 0",
     )
     assert _joint_transform(root, "fast_lio_body_joint") == (

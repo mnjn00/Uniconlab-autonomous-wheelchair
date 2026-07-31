@@ -17,7 +17,17 @@
   The horizontal body offset was fitted from six physical in-place rotations.
   Re-measure it whenever the sensor mount moves. The remaining legacy chassis
   dimensions are copied, not newly certified physical measurements.
+
+  Sensor height is measured, as of 2026-07-31: the Livox optical origin sits
+  0.725 m above the ground, and imu_link follows from it through the built-in
+  extrinsic (0.725 - 0.04412). It was 0.300 m here, which was never a
+  measurement - it was the placeholder SENSOR_HEIGHT_M the perception code
+  carried, and both the lidar and the IMU height were anchored to it. The
+  0727 map disagrees with it by 0.47 m: sampling the merged cloud under 77
+  flat patches of the recorded trajectory puts the lidar 0.775 m up
+  (sd 0.018), which is 0.05 m above the tape and nowhere near 0.300.
 -->
+
 <robot name="wheelchair_hardware" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <material name="frame_black"><color rgba="0.02 0.02 0.02 1.0"/></material>
   <material name="wheel_blue"><color rgba="0.20 0.24 0.29 1.0"/></material>
@@ -195,7 +205,7 @@
   <joint name="lidar_joint" type="fixed">
     <parent link="base_link"/>
     <child link="lidar_link"/>
-    <origin xyz="0.246 0.14971 0.300" rpy="0 0 0"/>
+    <origin xyz="0.246 0.14971 0.725" rpy="0 0 0"/>
   </joint>
 
   <link name="imu_link"/>
@@ -203,7 +213,7 @@
   <joint name="imu_joint" type="fixed">
     <parent link="base_link"/>
     <child link="imu_link"/>
-    <origin xyz="0.257 0.173 0.25588" rpy="0 0 0"/>
+    <origin xyz="0.257 0.173 0.68088" rpy="0 0 0"/>
   </joint>
 
   <link name="body"/>
