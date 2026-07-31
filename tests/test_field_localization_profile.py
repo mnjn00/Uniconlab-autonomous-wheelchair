@@ -72,11 +72,20 @@ def test_the_deploy_script_and_the_bringup_name_the_same_route():
     describes a drive that did not happen - and the old files still being on
     disk is exactly what lets it pass unnoticed."""
     deploy = (ROOT / "tools" / "deploy_merged_map.sh").read_text(encoding="utf-8")
+    push = (ROOT / "tools" / "push_to_nuc.sh").read_text(encoding="utf-8")
     startup = (ROOT / "tools" / "start_wheelchair_localization.sh").read_text(
         encoding="utf-8")
 
     assert 'ROUTE_NAME="%s"' % ROUTE_NAME in deploy
     assert 'BAND_NAME="%s"' % BAND_NAME in deploy
+    # push_to_nuc verifies the pair again on the NUC after the pull, so it has
+    # to name the same one; it named the superseded pair while deploy did too.
+    assert ROUTE_NAME in push
+    assert BAND_NAME in push
+    for superseded in ("20260727_new_route_waypoints.json",
+                       "20260727_new_route_safety_band.json"):
+        assert superseded not in deploy, superseded
+        assert superseded not in push, superseded
     assert shell_default(startup, "ROUTE").endswith("/" + ROUTE_NAME)
     assert shell_default(startup, "BAND").endswith("/" + BAND_NAME)
 

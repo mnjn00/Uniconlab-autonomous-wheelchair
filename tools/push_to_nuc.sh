@@ -143,7 +143,12 @@ esac
 
 say "copying canonical + runtime maps into staging"
 printf -v encoded_stage '%q' "$REMOTE_STAGE"
-COPYFILE_DISABLE=1 tar -C "$MAP_SRC" -cf - \
+# --no-xattrs as well as COPYFILE_DISABLE: current macOS stamps
+# com.apple.provenance on downloaded files, and bsdtar writes it as a
+# LIBARCHIVE.xattr header that GNU tar on the NUC rejects. The receiver then
+# exits, the pipe breaks, and the sender reports an unexpected EOF - a
+# transfer failure that looks like a network fault and is not.
+COPYFILE_DISABLE=1 tar --no-xattrs -C "$MAP_SRC" -cf - \
   mergedmap.ply merged_0707_0725_0p20m_xyzi.pcd traj_lidar.txt |
   ssh -o BatchMode=yes "$NUC" "tar -xf - -C $encoded_stage"
 
@@ -208,16 +213,17 @@ REMOTE_DIRTY="$(git status --porcelain --untracked-files=all -- \
   exit 1
 }
 
-for f in routes/20260727_new_route_waypoints.json \
-         routes/20260727_new_route_safety_band.json; do
+for f in routes/20260727_chair_centred_waypoints.json \
+         routes/20260727_chair_centred_safety_band.json; do
   [ -f "$f" ] || { echo "ERROR: $f missing after pull" >&2; exit 1; }
 done
 python3 -c "
 import json
-w = json.load(open('routes/20260727_new_route_waypoints.json'))
-b = json.load(open('routes/20260727_new_route_safety_band.json'))
+w = json.load(open('routes/20260727_chair_centred_waypoints.json'))
+b = json.load(open('routes/20260727_chair_centred_safety_band.json'))
 assert all('z' in p for p in w['waypoints']), 'waypoints need z'
-assert any('left_drop_m' in s for s in b['stations']), 'band needs drop depths'
+assert w.get('reference_point') == 'chair_centre', 'route must be chair-centred'
+assert any('left_kind' in s for s in b['stations']), 'band needs edge kinds'
 print('  route: %d waypoints (with height)' % w['count'])
 print('  band : %d stations (with drop depths)' % len(b['stations']))
 "
