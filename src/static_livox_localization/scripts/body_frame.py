@@ -62,7 +62,17 @@ LIDAR_TO_BODY_ROTATION_BUILTIN = (
 # them jointly, so the two routes to the number agree to 3 mm.
 #
 # Re-measure if the sensor is ever remounted. Nothing detects that on its own.
-CHAIR_CENTRE_IN_BODY_XYZ = (-0.517, -0.173, 0.0)
+#
+# 2026-07-31: superseded by the operator's physical measurement, 0.500 m
+# forward and 0.200 m left. That is 0.017 m and 0.027 m from the spin fit -
+# inside the +-0.03 m between-spin spread above, so the two do not actually
+# disagree; the tape is simply the more direct instrument for a distance to a
+# wheel axle, where the fit had to infer the axle from how the chair turned.
+#
+# A route records which offset it was built with, and the follower uses the
+# route's, not this one. Anything else silently drives a recorded path about a
+# different point than it was recorded about.
+CHAIR_CENTRE_IN_BODY_XYZ = (-0.500, -0.200, 0.0)
 
 REFERENCE_BODY = "body"
 REFERENCE_CHAIR_CENTRE = "chair_centre"
@@ -107,8 +117,16 @@ def pose_correction(pose_profile, route_profile):
         _body_T_lidar(route_profile))
 
 
-def reference_correction(route_reference):
+def reference_correction(route_reference,
+                         chair_centre_xyz=CHAIR_CENTRE_IN_BODY_XYZ):
     """body_T_reference for the point a route is expressed about.
+
+    chair_centre_xyz defaults to the current measurement but is overridable,
+    because a route is a recording ABOUT a point and reproducing it means
+    measuring the chair about that same point. Feeding a newer offset in here
+    while the route still holds the older one displaces the whole drive by the
+    difference - the chair would faithfully track a line 0.03 m from the one
+    the operator actually drove, with nothing to show for it.
 
     Composed AFTER pose_correction, so it is applied in the body frame and
     therefore rotates with the chair. Applying it in the map frame instead
@@ -124,9 +142,28 @@ def reference_correction(route_reference):
     if route_reference == REFERENCE_BODY:
         return matrix
     if route_reference == REFERENCE_CHAIR_CENTRE:
-        matrix[:3, 3] = np.asarray(CHAIR_CENTRE_IN_BODY_XYZ, dtype=np.float64)
+        matrix[:3, 3] = np.asarray(chair_centre_xyz, dtype=np.float64)
         return matrix
     raise ValueError("unknown route reference point: %s" % route_reference)
+
+
+def route_chair_centre(route):
+    """The offset a route was built about, or the current one if it is silent.
+
+    Routes written before the offset was recorded in them carry no field, and
+    those all predate any change to it, so the current value is what they were
+    made with. Once the field is there it wins - the recording is the
+    authority on its own reference point.
+    """
+    declared = route.get("chair_centre_in_body_xyz")
+    if declared is None:
+        return tuple(CHAIR_CENTRE_IN_BODY_XYZ)
+    if len(declared) != 3 or not all(
+            isinstance(v, (int, float)) for v in declared):
+        raise ValueError(
+            "route declares an unusable chair_centre_in_body_xyz: %r"
+            % (declared,))
+    return tuple(float(v) for v in declared)
 
 
 def lidar_extrinsics(profile):

@@ -38,19 +38,25 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import body_frame  # noqa: E402
 
 
-def test_the_measured_offset_is_the_one_the_spins_produced():
+def test_the_measured_offset_is_the_operators_measurement():
     """Guards the constant against a silent edit: it is a measurement, and
-    changing it changes where the chair believes its wheels are."""
+    changing it changes where the chair believes its wheels are.
+
+    0.500/0.200 measured physically on 2026-07-31, superseding the
+    0.517/0.173 fitted from six in-place rotations. The two agree to within
+    that fit's own +-0.03 m between-spin spread, so this is a sharper
+    instrument rather than a contradiction - a tape reaches the wheel axle
+    directly, where the fit had to infer it from how the chair turned."""
     forward, left, up = body_frame.CHAIR_CENTRE_IN_BODY_XYZ
 
-    assert forward == pytest.approx(-0.517, abs=5e-4)
-    assert left == pytest.approx(-0.173, abs=5e-4)
+    assert forward == pytest.approx(-0.500, abs=5e-4)
+    assert left == pytest.approx(-0.200, abs=5e-4)
     assert up == 0.0
 
 
 def test_the_correction_moves_the_pose_to_the_chair_centre():
-    """Facing along +x, the chair centre is 0.517 m behind the sensor and
-    0.173 m to its right."""
+    """Facing along +x, the chair centre is 0.500 m behind the sensor and
+    0.200 m to its right."""
     correction = body_frame.reference_correction(
         body_frame.REFERENCE_CHAIR_CENTRE)
     pose = np.eye(4)
@@ -58,8 +64,8 @@ def test_the_correction_moves_the_pose_to_the_chair_centre():
 
     centred = pose @ correction
 
-    assert centred[0, 3] == pytest.approx(10.0 - 0.517)
-    assert centred[1, 3] == pytest.approx(5.0 - 0.173)
+    assert centred[0, 3] == pytest.approx(10.0 - 0.500)
+    assert centred[1, 3] == pytest.approx(5.0 - 0.200)
 
 
 def test_the_correction_rotates_with_the_chair():
@@ -79,8 +85,8 @@ def test_the_correction_rotates_with_the_chair():
         body_frame.REFERENCE_CHAIR_CENTRE)
 
     # forward is +y here, left is -x
-    assert centred[0, 3] == pytest.approx(0.173)
-    assert centred[1, 3] == pytest.approx(-0.517)
+    assert centred[0, 3] == pytest.approx(0.200)
+    assert centred[1, 3] == pytest.approx(-0.500)
 
 
 def test_a_body_referenced_route_is_left_exactly_as_it_was():

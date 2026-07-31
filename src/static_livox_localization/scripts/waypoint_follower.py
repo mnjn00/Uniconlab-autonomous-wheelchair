@@ -66,7 +66,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, REFERENCE_BODY,
                         lidar_extrinsics, pose_correction,
-                        reference_correction)
+                        reference_correction, route_chair_centre)
 from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S, GO_ROUND,
                            Threat, avoidance_decision, is_stale,
                            nearest_threat, parse_summary)
@@ -202,9 +202,25 @@ class WaypointFollower:
                 "reference_point: \"%s\" for a sensor-path route, or "
                 "re-express it with tools/recentre_route_to_chair.py"
                 % (rospy.get_param("~route"), REFERENCE_BODY))
+        # The route's own offset, not the current one. Reproducing a recorded
+        # drive means measuring the chair about the point it was recorded
+        # about; taking the newer number here would slide the whole path
+        # sideways by the difference and call it tracking.
+        route_centre = route_chair_centre(route)
         self.pose_correction = pose_correction(
             profile, str(route["body_frame_profile"])) @ reference_correction(
-                str(route["reference_point"]))
+                str(route["reference_point"]), route_centre)
+        drift = float(np.linalg.norm(
+            np.asarray(route_centre) - np.asarray(CHAIR_CENTRE_IN_BODY_XYZ)))
+        if drift > 1e-6:
+            rospy.logwarn(
+                "route was built about (%.3f, %.3f), the chair is now "
+                "measured at (%.3f, %.3f) - driving the route about its own "
+                "point so the path is reproduced, but the band's clearances "
+                "are stated %.3f m from where the chair centre actually is",
+                route_centre[0], route_centre[1],
+                CHAIR_CENTRE_IN_BODY_XYZ[0], CHAIR_CENTRE_IN_BODY_XYZ[1],
+                drift)
         if str(route["reference_point"]) == REFERENCE_BODY:
             rospy.logwarn(
                 "route is about the sensor, not the chair centre: the chair "

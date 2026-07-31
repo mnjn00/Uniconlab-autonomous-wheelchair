@@ -14,9 +14,14 @@
     imu_link/body   FAST-LIO built-in IMU body origin
     lidar_link      Livox optical origin
 
-  The horizontal body offset was fitted from six physical in-place rotations.
-  Re-measure it whenever the sensor mount moves. The remaining legacy chassis
-  dimensions are copied, not newly certified physical measurements.
+  The horizontal body offset is measured: imu_link sits 0.500 m forward and
+  0.200 m left of the axle midpoint (operator, 2026-07-31). It supersedes the
+  0.517/0.173 fitted from six in-place rotations, which it agrees with to
+  within that fit's own +-0.03 m spread. Routes recorded under the fitted
+  value still carry it and are still driven about it - see
+  body_frame.route_chair_centre. Re-measure whenever the mount moves; nothing
+  detects that on its own. The remaining legacy chassis dimensions are copied,
+  not newly certified physical measurements.
 
   Sensor height is measured, as of 2026-07-31: the Livox optical origin sits
   0.725 m above the ground, and imu_link follows from it through the built-in
@@ -205,7 +210,7 @@
   <joint name="lidar_joint" type="fixed">
     <parent link="base_link"/>
     <child link="lidar_link"/>
-    <origin xyz="0.246 0.14971 0.725" rpy="0 0 0"/>
+    <origin xyz="0.229 0.17671 0.725" rpy="0 0 0"/>
   </joint>
 
   <link name="imu_link"/>
@@ -213,7 +218,7 @@
   <joint name="imu_joint" type="fixed">
     <parent link="base_link"/>
     <child link="imu_link"/>
-    <origin xyz="0.257 0.173 0.68088" rpy="0 0 0"/>
+    <origin xyz="0.240 0.200 0.68088" rpy="0 0 0"/>
   </joint>
 
   <link name="body"/>

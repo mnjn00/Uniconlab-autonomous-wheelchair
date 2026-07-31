@@ -298,16 +298,22 @@ echo "  build OK"
 # it. Left behind it launches the previous route and band and skips whatever
 # gates were added since - a deployment that verifies clean and still brings
 # the vehicle up on superseded configuration.
-BRINGUP_SRC="$REPO/tools/start_wheelchair_localization.sh"
-BRINGUP_DST="$HOME/start_wheelchair_localization.sh"
-[ -f "$BRINGUP_SRC" ] || {
-  echo "ERROR: $BRINGUP_SRC missing" >&2; exit 1; }
-install -m 0755 "$BRINGUP_SRC" "$BRINGUP_DST"
-SRC_SUM="$(sha256sum "$BRINGUP_SRC" | awk '{print $1}')"
-DST_SUM="$(sha256sum "$BRINGUP_DST" | awk '{print $1}')"
-[ "$SRC_SUM" = "$DST_SUM" ] || {
-  echo "ERROR: bringup script did not install cleanly" >&2; exit 1; }
-echo "  bringup installed: $BRINGUP_DST (${SRC_SUM:0:12})"
+# trial_0727.sh / go.sh / stop.sh travel with it. They are what gets typed at
+# the chair, so leaving a stale copy behind is the same failure one step
+# further on: a run brought up on last week's settings by a script that looks
+# right.
+for script in start_wheelchair_localization.sh trial_0727.sh go.sh stop.sh; do
+  BRINGUP_SRC="$REPO/tools/$script"
+  BRINGUP_DST="$HOME/$script"
+  [ -f "$BRINGUP_SRC" ] || {
+    echo "ERROR: $BRINGUP_SRC missing" >&2; exit 1; }
+  install -m 0755 "$BRINGUP_SRC" "$BRINGUP_DST"
+  SRC_SUM="$(sha256sum "$BRINGUP_SRC" | awk '{print $1}')"
+  DST_SUM="$(sha256sum "$BRINGUP_DST" | awk '{print $1}')"
+  [ "$SRC_SUM" = "$DST_SUM" ] || {
+    echo "ERROR: $script did not install cleanly" >&2; exit 1; }
+  echo "  installed: $BRINGUP_DST (${SRC_SUM:0:12})"
+done
 
 case "$STAGE" in
   "$MAPS"/.incoming-"$DEST".*) ;;

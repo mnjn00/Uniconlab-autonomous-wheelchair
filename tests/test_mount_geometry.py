@@ -33,6 +33,10 @@ HARDWARE_URDF = (ROOT / "src" / "wheelchair_description" / "urdf"
 MOUNT_HEIGHT_M = 0.725
 # Livox optical origin relative to imu_link, built-in IMU profile.
 LIDAR_ABOVE_IMU_M = 0.04412
+# imu_link relative to the axle midpoint, measured 2026-07-31.
+IMU_FORWARD_M = 0.500
+IMU_LEFT_M = 0.200
+BASE_LINK_FORWARD_M = 0.260
 
 
 def constant(path, name):
@@ -100,6 +104,95 @@ def test_the_rider_exclusion_box_reaches_below_the_ground():
     floor = match.group(1).strip()
     assert "SENSOR_HEIGHT_M" in floor, (
         "the exclusion floor is a bare number again: %s" % floor)
+
+
+def test_the_urdf_horizontal_offset_is_the_measured_one():
+    """imu_link is the point FAST-LIO reports, so this is where the whole
+    stack thinks the sensor is relative to the wheels."""
+    text = HARDWARE_URDF.read_text(encoding="utf-8")
+    imu = re.search(
+        r'<joint name="imu_joint".*?origin xyz="([-0-9. ]+)"', text, re.DOTALL)
+    x, y, _z = (float(v) for v in imu.group(1).split())
+    assert abs(x - (IMU_FORWARD_M - BASE_LINK_FORWARD_M)) < 1e-6
+    assert abs(y - IMU_LEFT_M) < 1e-6
+
+
+def test_the_urdf_lidar_offset_follows_from_the_imu_through_the_extrinsic():
+    """Two sensor joints, one physical mount. The lidar is not independently
+    measured - it is imu_link plus the built-in extrinsic - and deriving it
+    any other way is how the height ended up wrong in both at once."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "body_frame", SCRIPTS / "body_frame.py")
+    body_frame = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(body_frame)
+    extrinsic = body_frame.LIDAR_IN_BODY_XYZ_BUILTIN
+
+    text = HARDWARE_URDF.read_text(encoding="utf-8")
+    lidar = re.search(
+        r'<joint name="lidar_joint".*?origin xyz="([-0-9. ]+)"', text,
+        re.DOTALL)
+    got = [float(v) for v in lidar.group(1).split()]
+    expected = [IMU_FORWARD_M - BASE_LINK_FORWARD_M + extrinsic[0],
+                IMU_LEFT_M + extrinsic[1],
+                MOUNT_HEIGHT_M]
+    assert all(abs(a - b) < 1e-5 for a, b in zip(got, expected)), \
+        "lidar_joint %s, expected %s" % (got, expected)
+
+
+def test_the_body_frame_constant_agrees_with_the_urdf():
+    """CHAIR_CENTRE_IN_BODY_XYZ is the same measurement read the other way
+    round: the chair centre expressed in the sensor's frame."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "body_frame", SCRIPTS / "body_frame.py")
+    body_frame = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(body_frame)
+
+    assert body_frame.CHAIR_CENTRE_IN_BODY_XYZ[0] == -IMU_FORWARD_M
+    assert body_frame.CHAIR_CENTRE_IN_BODY_XYZ[1] == -IMU_LEFT_M
+
+
+def test_a_route_is_driven_about_the_point_it_was_recorded_about():
+    """Reproducing a recorded drive means measuring the chair about the same
+    point the recording used. Taking the current constant instead slides the
+    whole path over by the difference and still reports it as tracking - so
+    the route's own declaration wins, and the follower says when they
+    differ."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "body_frame", SCRIPTS / "body_frame.py")
+    body_frame = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(body_frame)
+
+    recorded = {"chair_centre_in_body_xyz": [-0.517, -0.173, 0.0]}
+    assert body_frame.route_chair_centre(recorded) == (-0.517, -0.173, 0.0)
+    # A route that predates the field carries no declaration and predates any
+    # change, so the current value is what it was made with.
+    assert body_frame.route_chair_centre({}) == \
+        tuple(body_frame.CHAIR_CENTRE_IN_BODY_XYZ)
+
+    correction = body_frame.reference_correction(
+        body_frame.REFERENCE_CHAIR_CENTRE, (-0.517, -0.173, 0.0))
+    assert abs(correction[0, 3] + 0.517) < 1e-9
+    assert abs(correction[1, 3] + 0.173) < 1e-9
+
+    follower = (SCRIPTS / "waypoint_follower.py").read_text(encoding="utf-8")
+    assert "route_chair_centre(route)" in follower
+    assert 'reference_correction(\n                str(route["reference_point"]), route_centre)' \
+        in follower
+
+
+def test_the_shipped_route_declares_what_it_was_built_about():
+    import json
+    route = ROOT / "routes" / "20260727_chair_centred_waypoints.json"
+    if not route.exists():
+        pytest.skip("route is not shipped")
+    declared = json.loads(route.read_text(encoding="utf-8")).get(
+        "chair_centre_in_body_xyz")
+    assert declared is not None, (
+        "the 0727 route stopped saying which point it is about; without it "
+        "the follower would silently drive it about the current one")
 
 
 def test_the_blind_radius_in_the_docstring_follows_from_the_mount():
