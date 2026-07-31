@@ -10,17 +10,24 @@ displacement, so the 0.2 m polyline step absorbs it on its own, and the
 chair can then start from where it was actually parked instead of
 5.3 m down the path (past the follower's 3.5 m geofence).
 
-Spacing is set by how far the polyline is allowed to depart from the path it
-replaces, not by a curvature estimate. The band is computed about the
-polyline - it casts its lateral rays perpendicular to it - so wherever the
-polyline cuts a corner, the band measures the clearance of a line the chair
-was never on, at an angle the chair was never at. Bounding the sag bounds
-exactly that error. Straights, where the sag is zero, are capped at 6 m.
+The route IS the resampled trace. It is not a set of chosen waypoints, because
+the band is computed about the route - it casts its lateral rays perpendicular
+to it - so any departure from the driven path becomes a clearance measured off
+a line the chair was never on, at an angle it was never at.
 
-Choosing spacing from curvature did not bound it: on the 0727 route it emitted
-14 gaps of 5-6 m that each spanned 20 to 131 degrees of real turning, putting
-the driven path up to 1.49 m from its own recorded line, and 10 percent of
-band stations then refused the line the chair demonstrably drove.
+Two spacing rules were tried and both put that error back by construction. A
+curvature estimate left 5-6 m gaps spanning up to 131 degrees of real turning,
+with the driven path 1.36 m from its own recorded line and 10 percent of band
+stations refusing the line the chair demonstrably drove. Bounding the chord
+sag brought that to 0.39 m, which is better and still an invented displacement
+in a budget whose margin is 0.10 m. Carrying every resampled point removes the
+question: the only departure left is the resampling step itself.
+
+The trace is smoothed nowhere. Every consumer already averages over at least a
+metre - the band takes its station heading over a 2 m baseline, pure pursuit
+interpolates a lookahead 0.9 m or further ahead - and a moving average was
+measured displacing the line by up to 0.55 m at corners, which is the error
+being removed.
 
 The route records the body-frame profile it was captured under: FAST-LIO
 reports the pose of its IMU body frame, so a route driven on a different
@@ -51,21 +58,12 @@ import sys
 
 import numpy as np
 
-MAX_SPACING = 6.0
 POLYLINE_STEP = 0.2
-# Largest perpendicular distance the polyline may sit from the path it
-# replaces. This is an error in where the band believes the chair was, so it
-# is sized against BAND_MARGIN (0.10 m) rather than against the 0.45 m
-# clearance: at 0.10 m the polyline is never further from the truth than the
-# margin the band is trying to hold.
-MAX_SAG = 0.10
-# Half-width of the moving average applied before waypoints are placed, in
-# 0.2 m polyline steps. Smoothing is needed - the raw polyline turns by up to
-# 27 deg between consecutive steps - but it displaces the line as well, and
-# that displacement lands in the band exactly like a sampling error would.
-# Measured on the 0727 trace: kernel 5 moves the line by up to 0.548 m,
-# kernel 2 by 0.251 m, while still removing the step-to-step jitter.
-SMOOTH_KERNEL = 2
+# The start heading is compared against the direction the route first travels,
+# and over one 0.2 m step that direction is noise: the raw polyline turns by up
+# to 27 deg between consecutive steps. Measure the travel direction over at
+# least this much route instead.
+GUARD_BASELINE_M = 1.0
 
 
 def polyline(xy, z, yaw):
@@ -76,59 +74,18 @@ def polyline(xy, z, yaw):
             points.append(p)
             heights.append(pz)
             headings.append(py)
+    # The final partial step is still route. Dropping it ended the route up to
+    # POLYLINE_STEP short of where the drive did, which is the opposite of
+    # keeping the recording end to end.
+    if len(xy) > 1 and not np.array_equal(points[-1], xy[-1]):
+        points.append(xy[-1])
+        heights.append(z[-1])
+        headings.append(yaw[-1])
     return np.array(points), np.array(heights), np.array(headings)
 
 
-def smooth(points, kernel=SMOOTH_KERNEL):
-    padded = np.vstack([points[:1].repeat(kernel, 0), points,
-                        points[-1:].repeat(kernel, 0)])
-    stack = np.vstack([
-        padded[i:len(padded) - 2 * kernel + i] for i in range(2 * kernel + 1)
-    ]).reshape(2 * kernel + 1, -1, 2)
-    return stack.mean(axis=0)
 
 
-def chord_sag(points, a, b):
-    """Largest perpendicular distance from chord a->b to the arc between."""
-
-    if b - a < 2:
-        return 0.0
-    start = points[a]
-    span = points[b] - start
-    length = float(np.hypot(span[0], span[1]))
-    if length < 1e-9:
-        return 0.0
-    offsets = points[a + 1:b] - start
-    cross = np.abs(offsets[:, 0] * span[1] - offsets[:, 1] * span[0]) / length
-    return float(cross.max())
-
-
-def pick_waypoints(points, max_sag=MAX_SAG, max_spacing=MAX_SPACING):
-    """Indices whose polyline holds `points` to within `max_sag`.
-
-    Greedy rather than optimal: extend the current span until either the sag
-    or the chord length would break, then cut at the last index that held.
-    Optimal placement would need a handful fewer waypoints and is not worth
-    the complexity - the cost of an extra waypoint is nothing, and the cost
-    of a span that lies about where the chair was is a band measured off the
-    driven line.
-    """
-
-    count = len(points)
-    if count <= 2:
-        return list(range(count))
-    picked = [0]
-    anchor = 0
-    for index in range(1, count):
-        span = points[index] - points[anchor]
-        too_long = float(np.hypot(span[0], span[1])) >= max_spacing
-        if too_long or chord_sag(points, anchor, index) > max_sag:
-            cut = index - 1 if index - 1 > anchor else index
-            picked.append(cut)
-            anchor = cut
-    if picked[-1] != count - 1:
-        picked.append(count - 1)
-    return picked
 
 
 def main():
@@ -149,28 +106,26 @@ def main():
     print("trace %d poses -> polyline %d pts, %.0f m (kept end to end)"
           % (len(rows), len(line), length))
 
-    # Smoothing is for the geometry the waypoints sit on, not for the
-    # decision: the sag is measured against the smoothed line so a waypoint
-    # is not placed to chase sensor noise, while the heading written into
-    # each waypoint stays the recorded one.
-    curve = smooth(line)
-    picked = pick_waypoints(curve)
-
     waypoints = [{
-        "x": round(float(curve[i][0]), 2),
-        "y": round(float(curve[i][1]), 2),
+        "x": round(float(line[i][0]), 3),
+        "y": round(float(line[i][1]), 3),
         "z": round(float(heights[min(i, len(heights) - 1)]), 2),
         "yaw_deg": round(float(np.degrees(
             headings[min(i, len(headings) - 1)])), 1),
-    } for i in picked]
+    } for i in range(len(line))]
 
     # The first waypoint is the auto-init seed, so a backwards heading
     # there costs a whole initialization. Compare it against the direction
     # the route immediately travels: a chair cannot be driving forwards
     # while facing away from where it goes.
+    ahead = next(
+        (w for w in waypoints
+         if math.hypot(w["x"] - waypoints[0]["x"],
+                       w["y"] - waypoints[0]["y"]) >= GUARD_BASELINE_M),
+        waypoints[-1])
     travel = math.degrees(math.atan2(
-        waypoints[1]["y"] - waypoints[0]["y"],
-        waypoints[1]["x"] - waypoints[0]["x"]))
+        ahead["y"] - waypoints[0]["y"],
+        ahead["x"] - waypoints[0]["x"]))
     disagreement = abs((waypoints[0]["yaw_deg"] - travel + 180) % 360 - 180)
     print("start heading %.1f deg vs first travel direction %.1f deg "
           "(%.1f deg apart)"

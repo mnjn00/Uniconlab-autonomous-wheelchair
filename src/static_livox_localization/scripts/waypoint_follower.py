@@ -115,6 +115,11 @@ GEOFENCE_M = 3.5
 AUTO_MODE = 65
 DEGRADED_STOP_S = 3.0
 NEAREST_RESYNC_M = 2.0
+# How far ahead the nearest-point search may advance in one cycle. Generous
+# against the 0.06 m the chair covers per 10 Hz cycle at full speed, and the
+# global-nearest resync below still catches a real divergence.
+PROGRESS_WINDOW_M = 20.0
+ROUTE_STEP_M = 0.2
 MIN_LOOKAHEAD_M = 0.9
 LOOKAHEAD_BACKOFF_M = 0.4
 
@@ -429,7 +434,13 @@ class WaypointFollower:
         if not self.route_locked:
             self.nearest_index = int(np.argmin(d))
             self.route_locked = True
-        window_end = min(self.nearest_index + 15, len(self.waypoints))
+        # Distance-based, not index-based: the route carries the resampled
+        # trace, so an index window would mean whatever the resampling step
+        # happens to be. 15 waypoints was 75 m at the old 5 m spacing and
+        # would be 3 m at 0.2 m.
+        window_end = min(
+            self.nearest_index + int(PROGRESS_WINDOW_M / ROUTE_STEP_M) + 1,
+            len(self.waypoints))
         windowed_index = int(
             self.nearest_index + np.argmin(d[self.nearest_index:window_end]))
         global_index = int(np.argmin(d))

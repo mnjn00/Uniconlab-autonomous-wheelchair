@@ -9,6 +9,9 @@ from typing import Mapping, NamedTuple, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Baseline for the start-heading check; mirrors the route generator's own.
+GUARD_BASELINE_M = 1.0
+
 from body_frame import (  # noqa: E402
     CHAIR_CENTRE_IN_BODY_XYZ,
     REFERENCE_BODY,
@@ -83,12 +86,25 @@ def load_known_start(
     # chair drives forwards, so the recorded heading and the direction the
     # route immediately travels cannot be more than a right angle apart.
     if len(waypoints) >= 2 and isinstance(waypoints[1], dict):
+        # Over one resampling step the travel direction is noise - the route
+        # carries the trace itself, so consecutive points are 0.2 m apart and
+        # the raw path turns by up to 27 deg between them. Measure it over a
+        # baseline long enough to mean something.
+        first_x = _finite_number(first.get("x"), "x", route_path)
+        first_y = _finite_number(first.get("y"), "y", route_path)
         second = waypoints[1]
+        for candidate in waypoints[1:]:
+            if not isinstance(candidate, dict):
+                continue
+            gap = math.hypot(
+                _finite_number(candidate.get("x"), "x", route_path) - first_x,
+                _finite_number(candidate.get("y"), "y", route_path) - first_y)
+            second = candidate
+            if gap >= GUARD_BASELINE_M:
+                break
         travel = math.degrees(math.atan2(
-            _finite_number(second.get("y"), "y", route_path)
-            - _finite_number(first.get("y"), "y", route_path),
-            _finite_number(second.get("x"), "x", route_path)
-            - _finite_number(first.get("x"), "x", route_path),
+            _finite_number(second.get("y"), "y", route_path) - first_y,
+            _finite_number(second.get("x"), "x", route_path) - first_x,
         ))
         heading = _finite_number(first.get("yaw_deg"), "yaw_deg", route_path)
         if abs((heading - travel + 180.0) % 360.0 - 180.0) > 90.0:
