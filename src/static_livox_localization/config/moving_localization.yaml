@@ -34,6 +34,24 @@ roi_z_half_extent: 5.0
 max_correspondence: 0.5
 max_iterations: 64
 min_points: 500
+# Validated on 2026-07-31: two complete autonomous runs of the 0727 route,
+# 1446 points end to end, 154 samples taken while actually driving.
+#
+#   inlier_ratio  0.9666 .. 1.0000  (mean 0.9949)   gate 0.20
+#   fitness       0.0137 .. 0.0329  (mean 0.0219)   gate 0.28
+#   state         TRACKING for every driving sample in both runs
+#
+# The two runs agree to within 0.0006 on both means, which is what makes
+# this a measurement rather than one lucky lap. Worst case leaves 4.8x the
+# inlier gate and 8.5x under the fitness ceiling, so these thresholds are
+# nowhere near binding on this route - they are sized for a worse day.
+#
+# One thing they do NOT cover: while PARKED at the goal 20 minutes after
+# run 2 finished, the fix degraded to inlier 0.124-0.262 and crossed this
+# gate four times, with fitness still inside its ceiling at 0.186-0.229. So
+# the end of the route is the weakest geometry on it. Nothing was driving,
+# and the driving envelope above is untouched by it, but a stage that ends
+# by holding position there should expect DEGRADED and not read it as new.
 max_fitness: 0.28
 min_inlier_ratio: 0.20
 
