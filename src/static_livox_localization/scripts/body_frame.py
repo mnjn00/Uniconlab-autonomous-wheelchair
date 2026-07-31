@@ -37,6 +37,36 @@ LIDAR_TO_BODY_ROTATION_BUILTIN = (
     (0.0, 0.0, 1.0),
 )
 
+# Where the chair's centre sits in the body frame FAST-LIO reports.
+#
+# The sensor is mounted at the front of the LEFT armrest, so the point every
+# pose is about is neither the middle of the chair nor on its centreline. That
+# was measured rather than assumed, from the 2026-07-27 route recording
+# itself: both spin-in-place bookends were fitted jointly for
+#
+#     p_body(map) = centre(map) + R(yaw) . r
+#
+# over 215 poses covering 371 deg and 798 deg, giving r = (0.517 forward,
+# 0.173 left) with a 22.5 mm residual - the 798 deg spin alone fits to 7.5 mm.
+# Four clean spins in the 0707/0725 mapping runs bracket the same value, so the
+# mount did not move between mapping and recording. The chair's wheels are
+# symmetric about its centre, so a true spin in place turns about that centre
+# and the fitted r IS the mounting offset; a spin with unequal wheel speeds
+# would have degraded the residual instead.
+#
+# Between-spin spread across all six measurements is about +-0.03 m, which is
+# the honest uncertainty - five times smaller than the 0.173 m error that
+# ignoring this leaves behind. tools/measure_mount_offset.py re-derives it from
+# any bag containing a spin; run on the same recording it reports
+# (-0.514, -0.171) by averaging the two spins separately rather than fitting
+# them jointly, so the two routes to the number agree to 3 mm.
+#
+# Re-measure if the sensor is ever remounted. Nothing detects that on its own.
+CHAIR_CENTRE_IN_BODY_XYZ = (-0.517, -0.173, 0.0)
+
+REFERENCE_BODY = "body"
+REFERENCE_CHAIR_CENTRE = "chair_centre"
+
 _PROFILES = {
     "vn100": (LIDAR_IN_BODY_XYZ, LIDAR_TO_BODY_ROTATION),
     "builtin": (
@@ -75,6 +105,28 @@ def pose_correction(pose_profile, route_profile):
     """
     return _body_T_lidar(pose_profile) @ np.linalg.inv(
         _body_T_lidar(route_profile))
+
+
+def reference_correction(route_reference):
+    """body_T_reference for the point a route is expressed about.
+
+    Composed AFTER pose_correction, so it is applied in the body frame and
+    therefore rotates with the chair. Applying it in the map frame instead
+    would put the centre in the wrong place at every heading but due east.
+
+    Identity for a body-referenced route, so routes recorded before this
+    was measured keep exactly the behaviour they were validated with, and
+    the reference has to be declared rather than guessed - driving a
+    chair-centred route as a body-centred one displaces it 0.173 m sideways
+    with nothing to reveal the mistake.
+    """
+    matrix = np.eye(4)
+    if route_reference == REFERENCE_BODY:
+        return matrix
+    if route_reference == REFERENCE_CHAIR_CENTRE:
+        matrix[:3, 3] = np.asarray(CHAIR_CENTRE_IN_BODY_XYZ, dtype=np.float64)
+        return matrix
+    raise ValueError("unknown route reference point: %s" % route_reference)
 
 
 def lidar_extrinsics(profile):

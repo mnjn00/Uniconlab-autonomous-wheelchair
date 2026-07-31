@@ -21,6 +21,10 @@ from PIL import Image, ImageDraw
 BIN = 0.3
 MAX_LAT = 6.0
 STEP = 0.07
+# Matches safety_band.DROP_SEVERE_M: a fall the wheel drops off rather than a
+# lip it rides over. Kept here so the recorded edge kind and the consumer's
+# clearance policy cannot drift apart.
+DROP_SEVERE_M = 0.12
 STATION_SPACING = 1.0
 # Sub-bin refinement of the edge found by the coarse walk. BIN has to stay
 # wide enough that its 15th percentile is a stable ground estimate, but the
@@ -98,8 +102,11 @@ for k in range(len(stations)):
     mid = n_bins // 2
     ref_bins = [prof[b] for b in range(mid - 2, mid + 2) if b in prof]
     if not ref_bins:
+        # No ground reference at this station: nothing was measured, so
+        # both edges are unknown rather than open.
         bands.append((center[0], center[1], float(np.degrees(
-            np.arctan2(d[1], d[0]))), 0.0, 0.0))
+            np.arctan2(d[1], d[0]))), 0.0, 0.0, -1.0, -1.0,
+            "unscanned", "unscanned", 0.0, 0.0))
         continue
 
     def walk(direction):
@@ -154,21 +161,39 @@ for k in range(len(stations)):
             # scan has no returns past the limit. A gap is NOT evidence of
             # safety, so report it as unknown (-1) and let the consumer
             # apply its own policy.
-            return limit, (0.0 if limit >= (mid - 1) * BIN else -1.0)
-        # how far the ground keeps falling over the next ~1 m past the step
+            if limit >= (mid - 1) * BIN:
+                return limit, 0.0, "open", 0.0
+            return limit, -1.0, "unscanned", 0.0
+        # How far the ground keeps falling over the next ~1 m past the step -
+        # and how far it RISES, which is the half this used to throw away.
+        # depth is max(0, ...), so a kerb, wall or planter that steps UP
+        # reported exactly 0.0 and was read downstream as "nothing to fall
+        # off": EDGE_MARGIN instead of the full chair half width, and
+        # invisible to hazard_clearance. Driving into a raised kerb is not
+        # safer than driving off a dropped one, so the kind is recorded and
+        # the consumer decides.
         depth = 0.0
+        rise = 0.0
         for j in range(0, 4):
             b = stopped_at + direction * j
             if b in prof:
                 depth = max(depth, reference - prof[b])
-        return limit, round(float(depth), 3)
+                rise = max(rise, prof[b] - reference)
+        if depth >= DROP_SEVERE_M:
+            kind = "drop"
+        elif depth > 0.0:
+            kind = "lip"
+        else:
+            kind = "step_up"
+        return limit, round(float(depth), 3), kind, round(float(rise), 3)
 
-    left, left_drop = walk(+1)
-    right, right_drop = walk(-1)
+    left, left_drop, left_kind, left_rise = walk(+1)
+    right, right_drop, right_kind, right_rise = walk(-1)
     bands.append((float(center[0]), float(center[1]),
                   float(np.degrees(np.arctan2(d[1], d[0]))),
                   round(left, 2), round(right, 2),
-                  left_drop, right_drop))
+                  left_drop, right_drop,
+                  left_kind, right_kind, left_rise, right_rise))
 
 lefts = np.array([b[3] for b in bands])
 rights = np.array([b[4] for b in bands])
@@ -181,7 +206,8 @@ def smooth(a):
 lefts, rights = smooth(lefts), smooth(rights)
 # drops are NOT smoothed: a single station seeing a real kerb is exactly
 # the signal that must survive, and a median filter would erase it.
-bands = [(b[0], b[1], b[2], float(l), float(r), b[5], b[6])
+bands = [(b[0], b[1], b[2], float(l), float(r), b[5], b[6],
+          b[7], b[8], b[9], b[10])
          for b, l, r in zip(bands, lefts, rights)]
 
 width = lefts + rights
@@ -190,9 +216,15 @@ print("stations: %d" % len(bands))
 print("band width: min %.1f m, median %.1f m" % (width.min(), np.median(width)))
 narrow = [i for i, w in enumerate(width) if w < 0.9]
 print("stations narrower than 0.9 m: %s" % (narrow if narrow else "none"))
-print("edge kind: %d measured step, %d open ground, %d no returns (unknown)"
-      % (int((drops > 0).sum()), int((drops == 0).sum()),
-         int((drops < 0).sum())))
+from collections import Counter
+kinds = Counter([b[7] for b in bands]) + Counter([b[8] for b in bands])
+print("edge kind: " + ", ".join("%s=%d" % kv for kv in sorted(kinds.items())))
+rises = np.array([max(b[9], b[10]) for b in bands])
+seen_rise = rises[rises > 0]
+if len(seen_rise):
+    print("measured step RISE: median %.2f m, p90 %.2f m, max %.2f m"
+          % (np.median(seen_rise), np.percentile(seen_rise, 90),
+             seen_rise.max()))
 seen = drops[drops > 0]
 if len(seen):
     print("measured step depth: median %.2f m, p90 %.2f m, max %.2f m"
@@ -202,7 +234,9 @@ with open(out_prefix + ".json", "w") as f:
     json.dump({"frame": "map", "station_spacing_m": STATION_SPACING,
                "stations": [{"x": b[0], "y": b[1], "heading_deg": b[2],
                              "left_m": b[3], "right_m": b[4],
-                             "left_drop_m": b[5], "right_drop_m": b[6]}
+                             "left_drop_m": b[5], "right_drop_m": b[6],
+                             "left_kind": b[7], "right_kind": b[8],
+                             "left_rise_m": b[9], "right_rise_m": b[10]}
                             for b in bands]}, f, indent=1)
 
 CELL = 0.4
@@ -221,7 +255,7 @@ def px(x, y):
     return (int((x - min_x) / CELL), H - 1 - int((y - min_y) / CELL))
 
 left_pts, right_pts = [], []
-for x, y, hdg, l, r, _ldrop, _rdrop in bands:
+for x, y, hdg, l, r, _ldrop, _rdrop, _lk, _rk, _lr, _rr in bands:
     h = np.radians(hdg)
     n = np.array([-np.sin(h), np.cos(h)])
     left_pts.append(px(x + n[0] * l, y + n[1] * l))

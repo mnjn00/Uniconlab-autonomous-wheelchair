@@ -185,15 +185,22 @@ def filter_obstacle_points(
         max_height_m: float,
         self_x_min_m: float,
         self_x_max_m: float,
-        self_half_width_m: float) -> np.ndarray:
+        self_half_width_m: float,
+        self_y_centre_m: float = 0.0) -> np.ndarray:
     points = np.asarray(cloud)
     if points.ndim != 2 or points.shape[1] < 3:
         raise MotionSafetyInputError("cloud must have shape (N, 3+)")
     finite = np.all(np.isfinite(points[:, :3]), axis=1)
     relative_height = points[:, 2] + sensor_height_m
+    # Centred on the rider, not on the sensor. The sensor is mounted on the
+    # left armrest, so the body it is trying to exclude sits 0.173 m to its
+    # right; a box centred on the sensor left that much of the rider's right
+    # side outside it, and everything outside is an obstacle. Defaults to 0.0
+    # so callers that have not been told the offset keep their old behaviour.
     self_return = ((points[:, 0] >= self_x_min_m) &
                    (points[:, 0] <= self_x_max_m) &
-                   (np.abs(points[:, 1]) <= self_half_width_m))
+                   (np.abs(points[:, 1] - self_y_centre_m)
+                    <= self_half_width_m))
     keep = (finite & ~self_return &
             (relative_height > min_height_m) &
             (relative_height < max_height_m))

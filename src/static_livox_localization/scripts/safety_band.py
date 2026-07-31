@@ -55,25 +55,35 @@ RECENTRE_MAX_PASSES = 4
 RECENTRE_MIN_SHIFT = 0.02
 
 
-def is_severe(drop_m):
-    """True where crossing the edge means falling, or where the scan could
-    not see past it. Unknown counts as severe."""
+def is_severe(drop_m, kind=None):
+    """True where crossing the edge ends badly, either way the ground goes.
+
+    `kind` is what the band generator actually saw - drop, step_up, lip,
+    open or unscanned - and is authoritative when present. Without it the
+    only evidence is the depth, which measures how far the ground FALLS and
+    reports exactly 0.0 for a kerb, wall or planter that rises. That read a
+    raised edge as open pavement and gave it EDGE_MARGIN: 283 of 742 edges
+    on the 0727 route, every one of them 0.075 m of clearance from
+    something the chair cannot drive over.
+    """
+    if kind is not None:
+        return kind in ("drop", "step_up", "unscanned")
     return drop_m is None or drop_m < 0.0 or drop_m >= DROP_SEVERE_M
 
 
-def edge_clearance(drop_m):
-    """Inset to keep from an edge whose bounding step is `drop_m` deep.
+def edge_clearance(drop_m, kind=None):
+    """Inset to keep from an edge bounded by a step of `drop_m` / `kind`.
 
-    Bands generated before drop measurement existed carry no depth field;
-    those are treated as severe, so an old band keeps exactly the
-    conservative behaviour it was validated with.
+    Bands generated before depth or kind existed carry neither; those are
+    treated as severe, so an old band keeps exactly the conservative
+    behaviour it was validated with.
     """
-    if is_severe(drop_m):
+    if is_severe(drop_m, kind):
         return CHAIR_HALF_WIDTH + BAND_MARGIN
     return EDGE_MARGIN
 
 
-def usable_limit(raw_m, drop_m):
+def usable_limit(raw_m, drop_m, kind=None):
     """How far the chair centre may sit from the driven line on one side.
 
     BAND_FLOOR exists because the driven line itself is proven passable, so
@@ -87,8 +97,8 @@ def usable_limit(raw_m, drop_m):
     which simply means the chair must sit off the line toward the other
     side.
     """
-    strict = raw_m - edge_clearance(drop_m)
-    if drop_m is not None and is_severe(drop_m):
+    strict = raw_m - edge_clearance(drop_m, kind)
+    if (kind is not None or drop_m is not None) and is_severe(drop_m, kind):
         # a MEASURED hazard: no floor toward it
         return strict
     # No depth field at all means a band generated before depths were
@@ -107,15 +117,17 @@ class SafetyBand:
         usable_left, usable_right, narrow = [], [], []
         edge_left, edge_right, sev_left, sev_right = [], [], [], []
         for s in data["stations"]:
+            kind_left = s.get("left_kind")
+            kind_right = s.get("right_kind")
             usable_left.append(
-                usable_limit(s["left_m"], s.get("left_drop_m")))
+                usable_limit(s["left_m"], s.get("left_drop_m"), kind_left))
             usable_right.append(
-                usable_limit(s["right_m"], s.get("right_drop_m")))
+                usable_limit(s["right_m"], s.get("right_drop_m"), kind_right))
             narrow.append(s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
             edge_left.append(s["left_m"])
             edge_right.append(s["right_m"])
-            sev_left.append(is_severe(s.get("left_drop_m")))
-            sev_right.append(is_severe(s.get("right_drop_m")))
+            sev_left.append(is_severe(s.get("left_drop_m"), kind_left))
+            sev_right.append(is_severe(s.get("right_drop_m"), kind_right))
         self.left = np.array(usable_left)
         self.right = np.array(usable_right)
         self.narrow = np.array(narrow)

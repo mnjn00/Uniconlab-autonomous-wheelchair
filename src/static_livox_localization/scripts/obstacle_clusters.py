@@ -41,7 +41,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 import sensor_msgs.point_cloud2 as pc2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from body_frame import body_to_lidar, lidar_extrinsics
+from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
+                        lidar_extrinsics)
 import tf.transformations as tft
 
 PROCESS_HZ = 5.0
@@ -58,6 +59,8 @@ FORWARD_FOV_HALF_DEG = 50.0
 # Rider self-exclusion box in the lidar frame. The MID360 sees the
 # rider's torso, legs, and feet at close range; without this mask the
 # rider is the largest "obstacle" in every scan.
+# Centred on the rider, not the sensor: the mount is on the left armrest, so
+# the rider's body sits CHAIR_CENTRE_IN_BODY_XYZ[1] = -0.173 m from it.
 RIDER_EXCLUDE_X = (-1.0, 0.55)
 RIDER_EXCLUDE_Y_HALF = 0.40
 RIDER_EXCLUDE_Z = (-0.5, 1.8)
@@ -231,7 +234,8 @@ class ObstacleClusters:
         # rider self-exclusion
         rider = (merged[:, 0] > RIDER_EXCLUDE_X[0]) & \
                 (merged[:, 0] < RIDER_EXCLUDE_X[1]) & \
-                (np.abs(merged[:, 1]) < RIDER_EXCLUDE_Y_HALF) & \
+                (np.abs(merged[:, 1] - CHAIR_CENTRE_IN_BODY_XYZ[1])
+                 < RIDER_EXCLUDE_Y_HALF) & \
                 (merged[:, 2] > RIDER_EXCLUDE_Z[0]) & \
                 (merged[:, 2] < RIDER_EXCLUDE_Z[1])
         keep &= ~rider

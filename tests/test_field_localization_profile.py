@@ -12,8 +12,11 @@ PACKAGE = ROOT / "src" / "static_livox_localization"
 CANONICAL_SHA256 = "3639f5942101e67d8f62baf533017475146ebb681f4a8482ecaf0f2a7cec6536"
 RUNTIME_SHA256 = "ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"
 RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
-ROUTE_NAME = "20260727_new_route_waypoints.json"
-BAND_NAME = "20260727_new_route_safety_band.json"
+# The shipped pair is chair-centred. A sensor-referenced route applies every
+# clearance about a point 0.173 m left of the chair, which under-protects the
+# right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
+ROUTE_NAME = "20260727_chair_centred_waypoints.json"
+BAND_NAME = "20260727_chair_centred_safety_band.json"
 
 
 def shell_default(source, name):
@@ -90,6 +93,13 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_0727_route():
         "follower geofence" % start_offset
     )
     assert set(first) == {"x", "y", "z", "yaw_deg"}
+    # The point the route is about has to be declared and has to be the chair
+    # centre: the follower lays the chair out symmetrically around the pose,
+    # which is only true of the centre.
+    assert route["reference_point"] == "chair_centre"
+    # And the band has to carry which way each edge broke, so a kerb that
+    # rises is not read as open pavement.
+    assert {"left_kind", "right_kind"} <= set(band["stations"][0])
     assert 'rostopic echo -n1 /livox/imu/header' in startup
 
 

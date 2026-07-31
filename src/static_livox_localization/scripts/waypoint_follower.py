@@ -46,8 +46,9 @@ import sensor_msgs.point_cloud2 as pc2
 # which imports the modules directly, still passes.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from body_frame import (body_to_lidar, lidar_extrinsics,
-                        pose_correction)
+from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, REFERENCE_BODY,
+                        body_to_lidar, lidar_extrinsics, pose_correction,
+                        reference_correction)
 from localization_policy import localization_hold_reason
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            motion_hold_reason, stopping_envelope)
@@ -222,8 +223,28 @@ class WaypointFollower:
                 "route %s does not say which body frame it was captured in; "
                 "add body_frame_profile (see body_frame.py)"
                 % rospy.get_param("~route"))
+        # ... and about the same POINT. The sensor sits at the front of the
+        # left armrest, 0.517 m forward and 0.173 m left of the centre the
+        # chair turns about, so a route of the sensor's path and a route of
+        # the chair's are displaced 0.173 m sideways from each other. Every
+        # geometry constant here lays the chair out symmetrically about the
+        # pose, which is only true of the chair centre, so an undeclared
+        # reference is refused for the same reason an undeclared body frame
+        # is.
+        if "reference_point" not in route:
+            raise rospy.ROSInitException(
+                "route %s does not say which point it is about; add "
+                "reference_point: \"%s\" for a sensor-path route, or "
+                "re-express it with tools/recentre_route_to_chair.py"
+                % (rospy.get_param("~route"), REFERENCE_BODY))
         self.pose_correction = pose_correction(
-            profile, str(route["body_frame_profile"]))
+            profile, str(route["body_frame_profile"])) @ reference_correction(
+                str(route["reference_point"]))
+        if str(route["reference_point"]) == REFERENCE_BODY:
+            rospy.logwarn(
+                "route is about the sensor, not the chair centre: the chair "
+                "extends %.2f m further right than every clearance here "
+                "assumes", abs(CHAIR_CENTRE_IN_BODY_XYZ[1]))
         if str(route["body_frame_profile"]) != profile:
             rospy.logwarn(
                 "route captured on the %s body frame but running %s: "

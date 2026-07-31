@@ -31,7 +31,8 @@ import sensor_msgs.point_cloud2 as pc2
 # which imports the modules directly, still passes.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from body_frame import body_to_lidar, lidar_extrinsics
+from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
+                        lidar_extrinsics)
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            filter_obstacle_points, motion_hold_reason,
                            stopping_envelope, swept_footprint_collision)
@@ -222,7 +223,8 @@ class SafetyGate:
             max_height_m=OBSTACLE_MAX_Z,
             self_x_min_m=RIDER_EXCLUDE_X_MIN_M,
             self_x_max_m=RIDER_EXCLUDE_X_MAX_M,
-            self_half_width_m=RIDER_EXCLUDE_HALF_WIDTH_M)
+            self_half_width_m=RIDER_EXCLUDE_HALF_WIDTH_M,
+            self_y_centre_m=CHAIR_CENTRE_IN_BODY_XYZ[1])
 
         if len(obstacles):
             azimuth = np.abs(np.degrees(np.arctan2(

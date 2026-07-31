@@ -2,8 +2,18 @@
 
 import json
 import math
+import os
+import sys
 from pathlib import Path
 from typing import Mapping, NamedTuple, Optional, Sequence, Tuple
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from body_frame import (  # noqa: E402
+    CHAIR_CENTRE_IN_BODY_XYZ,
+    REFERENCE_BODY,
+    REFERENCE_CHAIR_CENTRE,
+)
 
 
 class InitializationCandidate(NamedTuple):
@@ -84,13 +94,30 @@ def load_known_start(
         if abs((heading - travel + 180.0) % 360.0 - 180.0) > 90.0:
             raise KnownStartRouteError("start_heading_reversed", route_path)
 
+    x = _finite_number(first.get("x"), "x", route_path)
+    y = _finite_number(first.get("y"), "y", route_path)
+    yaw = math.radians(
+        _finite_number(first.get("yaw_deg"), "yaw_deg", route_path)
+    )
+
+    # The seed published downstream is a pose of FAST-LIO's BODY frame, which
+    # is where the sensor is. A chair-centred route stores the chair's centre
+    # instead, 0.545 m away, so it has to be converted back or the prior is
+    # seeded half a metre from where the sensor actually is - far enough that
+    # verification either fails or, worse, converges somewhere wrong.
+    reference = document.get("reference_point", REFERENCE_BODY)
+    if reference == REFERENCE_CHAIR_CENTRE:
+        forward, left, _ = CHAIR_CENTRE_IN_BODY_XYZ
+        x -= math.cos(yaw) * forward - math.sin(yaw) * left
+        y -= math.sin(yaw) * forward + math.cos(yaw) * left
+    elif reference != REFERENCE_BODY:
+        raise KnownStartRouteError("unknown_reference_point", route_path)
+
     return InitializationCandidate(
-        x=_finite_number(first.get("x"), "x", route_path),
-        y=_finite_number(first.get("y"), "y", route_path),
+        x=x,
+        y=y,
         z=_finite_number(first.get("z", 0.0), "z", route_path),
-        yaw_rad=math.radians(
-            _finite_number(first.get("yaw_deg"), "yaw_deg", route_path)
-        ),
+        yaw_rad=yaw,
         score=None,
         source="known_start_route",
     )
