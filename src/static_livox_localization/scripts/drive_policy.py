@@ -59,14 +59,18 @@ def evaluate_holds(candidates, policies_enabled):
     return None, suppressed
 
 
-def announce(policies_enabled, node, switched_off):
+def announce(policies_enabled, node, switched_off, still_watching=()):
     """The line a node logs at startup about its own guards.
 
     Silence here is how a diagnostic build gets driven by someone who thinks
     it is the normal one, so the disabled case names every guard it dropped
-    rather than saying "diagnostic mode".
+    rather than saying "diagnostic mode". It names what is left too, and
+    says so in as many words when that is nothing - an operator deciding how
+    closely to hold the joystick needs the answer, not the question.
     """
     if policies_enabled:
         return "%s: safety policies ENABLED" % node
-    return ("%s: SAFETY POLICIES OFF - not checking %s. The joystick is the "
-            "only thing that will stop this chair." % (node, ", ".join(switched_off)))
+    return ("%s: SAFETY POLICIES OFF - not checking %s. Still watching: %s. "
+            "The joystick is the failsafe." % (
+                node, ", ".join(switched_off),
+                ", ".join(still_watching) if still_watching else "NOTHING"))

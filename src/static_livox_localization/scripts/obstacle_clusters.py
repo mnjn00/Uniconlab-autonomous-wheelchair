@@ -42,7 +42,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 import sensor_msgs.point_cloud2 as pc2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
-                        lidar_extrinsics)
+                        lidar_extrinsics, lidar_to_body)
+from cluster_tracking import UNKNOWN, Tracker
 import tf.transformations as tft
 
 PROCESS_HZ = 5.0
@@ -93,6 +94,9 @@ class Accumulator:
         self.lidar_to_body_rotation = lidar_to_body_rotation
         self.scans = []
         self.odoms = []
+        # The pose the merged cloud is expressed about, kept because motion
+        # can only be judged in a frame that does not move with the chair.
+        self.reference = None
 
     def add_odom(self, message):
         q = message.pose.pose.orientation
@@ -131,12 +135,14 @@ class Accumulator:
                       if stamp - s[0] <= WINDOW_S + 0.3]
 
     def merged(self):
+        self.reference = None
         if not self.scans:
             return None
         newest = self.scans[-1][0]
         T_ref = self.nearest(newest)
         if T_ref is None:
             return None
+        self.reference = (newest, T_ref)
         inv_ref = np.linalg.inv(T_ref)
         parts = []
         for stamp, pts in self.scans:
@@ -207,6 +213,9 @@ class ObstacleClusters:
         profile = str(rospy.get_param("~body_frame_profile", "vn100"))
         lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
         self.accumulator = Accumulator(lidar_in_body, lidar_to_body_rotation)
+        self.lidar_in_body = lidar_in_body
+        self.lidar_to_body_rotation = lidar_to_body_rotation
+        self.tracker = Tracker()
         self.marker_pub = rospy.Publisher(
             "/perception/objects", MarkerArray, queue_size=1)
         self.summary_pub = rospy.Publisher(
@@ -215,6 +224,26 @@ class ObstacleClusters:
                          self.accumulator.add_cloud, queue_size=2)
         rospy.Subscriber("/Odometry", Odometry,
                          self.accumulator.add_odom, queue_size=50)
+
+    def track(self, boxes):
+        """Follow each box in the odom frame and return its Track, or [].
+
+        Motion is only a question in a frame that does not move with the
+        chair, so this needs the pose the merged cloud was expressed about.
+        Without one there is nothing to say, and the caller reports saying
+        nothing as UNKNOWN rather than as standing still.
+        """
+        reference = self.accumulator.reference
+        if reference is None or not boxes:
+            return []
+        stamp_s, T_ref = reference
+        centres = np.array([box[1] for box in boxes], dtype=np.float64)
+        in_body = lidar_to_body(centres, self.lidar_in_body,
+                                self.lidar_to_body_rotation)
+        in_odom = in_body @ T_ref[:3, :3].T + T_ref[:3, 3]
+        return self.tracker.update(
+            [(float(point[0]), float(point[1]), boxes[i][0])
+             for i, point in enumerate(in_odom)], stamp_s)
 
     def step(self):
         merged = self.accumulator.merged()
@@ -243,22 +272,37 @@ class ObstacleClusters:
         clusters = cluster_grid(points) if len(points) else []
         clusters = sorted(clusters, key=len, reverse=True)[:MAX_CLUSTERS]
 
+        boxes = []
+        for cluster in clusters:
+            lo = cluster.min(axis=0)
+            hi = cluster.max(axis=0)
+            boxes.append((classify(cluster), (lo + hi) / 2.0,
+                          np.maximum(hi - lo, 0.1), len(cluster)))
+        tracks = self.track(boxes)
+
         markers, objects = MarkerArray(), []
         wipe = Marker()
         wipe.action = Marker.DELETEALL
         markers.markers.append(wipe)
-        for i, cluster in enumerate(clusters):
-            label = classify(cluster)
-            lo = cluster.min(axis=0)
-            hi = cluster.max(axis=0)
-            center = (lo + hi) / 2.0
-            size = np.maximum(hi - lo, 0.1)
+        for i, (label, center, size, points) in enumerate(boxes):
+            track = tracks[i] if tracks else None
             objects.append({
                 "class": label,
                 "x": round(float(center[0]), 2),
                 "y": round(float(center[1]), 2),
                 "size": [round(float(v), 2) for v in size],
-                "points": int(len(cluster)),
+                "points": int(points),
+                # A consumer that steers around what this says is parked
+                # needs to know when nothing said it. Without a reference
+                # pose there is no frame to judge motion in, and the honest
+                # answer is UNKNOWN, which every consumer handles as moving.
+                "id": 0 if track is None else int(track.id),
+                "motion": UNKNOWN if track is None else
+                          track.motion(stamp.to_sec()),
+                "speed_mps": 0.0 if track is None else
+                             round(float(track.speed_mps()), 2),
+                "age_s": 0.0 if track is None else
+                         round(float(track.age_s(stamp.to_sec())), 1),
             })
             m = Marker()
             m.header.frame_id = "body"
@@ -278,6 +322,12 @@ class ObstacleClusters:
         self.summary_pub.publish(String(data=json.dumps({
             "stamp": stamp.to_sec(),
             "status": "OK",
+            # Stated because a consumer now steers by these numbers. They
+            # are chair-aligned lidar-frame, the same frame every clearance
+            # constant in the follower is written in - NOT the "body" the
+            # markers above are drawn in, which is the IMU frame and sits
+            # 0.14 m forward of it.
+            "frame": "lidar",
             "counts": {
                 label: sum(1 for o in objects if o["class"] == label)
                 for label in CLASS_COLORS},

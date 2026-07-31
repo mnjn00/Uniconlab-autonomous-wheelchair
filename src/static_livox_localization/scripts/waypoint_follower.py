@@ -12,9 +12,13 @@ Per control cycle:
     steering targets and bypass offsets are clamped into the band
   - obstacle guard: slow near obstacles/pedestrians, stop when close, with
     stop and slow radii scaled to the speed being carried
-  - obstacle vs pedestrian: anything still blocking after 3 s is stepped
-    around within the band; anything that clears sooner is waited out and
-    driving resumes as soon as the corridor is clear
+  - parked vs moving: an object the cluster tracker has watched stand still
+    is stepped around within the band, from 5 m out so the chair drifts past
+    rather than stopping first; anything moving, or not yet watched long
+    enough to say, is waited out where it stands and driving resumes on its
+    own once the corridor is clear. Raw-scan returns carry no identity, so
+    they keep the older rule: blocking for 3 s is the only evidence of
+    parkedness they can offer
   - slope guard and bounded DEGRADED-localization grace
   - speed policy: 0.6 m/s cap (operator-directed), curvature slowdown,
     accel/yaw-rate limiting
@@ -56,10 +60,15 @@ import sensor_msgs.point_cloud2 as pc2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, REFERENCE_BODY,
-                        body_to_lidar, lidar_extrinsics, pose_correction,
+                        lidar_extrinsics, pose_correction,
                         reference_correction)
+from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S, GO_ROUND,
+                           Threat, avoidance_decision, is_stale,
+                           nearest_threat, parse_summary)
+from cluster_tracking import MOVING, UNKNOWN
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import localization_hold_reason
+from scan_accumulator import CloudAccumulator
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            motion_hold_reason, stopping_envelope)
 from safety_band import SafetyBand
@@ -117,6 +126,11 @@ SLOPE_PITCH_RAD = math.radians(3.0)
 # out, and driving resumes the moment the corridor is clear again.
 BYPASS_AFTER_S = 3.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
+# How far ahead a confirmed-parked object is stepped around. At 0.6 m/s this
+# is eight seconds of warning, which is what turns "stop, wait 3 s, then edge
+# sideways" into one continuous drift past the thing. Not longer: past this
+# the object is often not even on the stretch the chair will drive.
+PLAN_AHEAD_M = 5.0
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
@@ -132,75 +146,6 @@ PROGRESS_WINDOW_M = 20.0
 ROUTE_STEP_M = 0.2
 MIN_LOOKAHEAD_M = 0.9
 LOOKAHEAD_BACKOFF_M = 0.4
-
-
-class CloudAccumulator:
-    """Merge ~1 s of sparse MID360 scans and express them in the lidar frame.
-
-    FAST-LIO publishes /cloud_registered_body in the IMU body frame. With
-    the VN-100 that is no longer the lidar frame, and every geometry
-    constant here (sensor height, corridor half-width, guard distances)
-    was tuned in the lidar/chair frame, so the configured extrinsic is
-    inverted once here rather than each constant being re-derived.
-    """
-
-    def __init__(self, lidar_in_body, lidar_to_body_rotation, window_s=1.0):
-        self.window_s = window_s
-        self.lidar_in_body = lidar_in_body
-        self.lidar_to_body_rotation = lidar_to_body_rotation
-        self.scans = []
-        self.odoms = []
-
-    def add_odom(self, message):
-        q = message.pose.pose.orientation
-        p = message.pose.pose.position
-        T = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
-        T[:3, 3] = (p.x, p.y, p.z)
-        self.odoms.append((message.header.stamp.to_sec(), T))
-        self.odoms = self.odoms[-60:]
-
-    def nearest_odom(self, stamp):
-        if not self.odoms:
-            return None
-        times = np.array([t for t, _ in self.odoms])
-        k = int(np.argmin(np.abs(times - stamp)))
-        if abs(times[k] - stamp) > 0.15:
-            return None
-        return self.odoms[k][1]
-
-    def add_cloud(self, message):
-        pts = np.array(list(pc2.read_points(
-            message, field_names=("x", "y", "z"), skip_nans=True)),
-            dtype=np.float32)
-        stamp = message.header.stamp.to_sec()
-        self.scans.append((stamp, pts))
-        self.scans = [s for s in self.scans
-                      if stamp - s[0] <= self.window_s + 0.3]
-
-    def merged(self):
-        if not self.scans:
-            return None, rospy.Time(0)
-        newest = self.scans[-1][0]
-        T_ref = self.nearest_odom(newest)
-        if T_ref is None:
-            return None, rospy.Time(0)
-        inv_ref = np.linalg.inv(T_ref)
-        parts = []
-        for stamp, pts in self.scans:
-            if newest - stamp > self.window_s or not len(pts):
-                continue
-            T = self.nearest_odom(stamp)
-            if T is None:
-                continue
-            M = (inv_ref @ T).astype(np.float32)
-            parts.append(pts @ M[:3, :3].T + M[:3, 3])
-        if not parts:
-            return None, rospy.Time(0)
-        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
-                               self.lidar_to_body_rotation)
-        return merged, rospy.Time.from_sec(newest)
-
-
 
 
 class WaypointFollower:
@@ -285,18 +230,34 @@ class WaypointFollower:
         self.chord_safe = True
         self.last_yaw_rate = 0.0
         self.status = "PAUSED"
+        self.cluster_summary = None
+        # Deliberately NOT behind ~safety_policies. The raw corridor check is
+        # switched off with the rest of the judgements because it stops on
+        # five returns and is the loudest false-positive source in the chain;
+        # this one reads classified clusters and is what remains looking for
+        # people when everything else is off.
+        self.clusters_enabled = bool(
+            rospy.get_param("~cluster_avoidance", True))
         # Absent means guarded, and anything that arrives as a string rather
         # than a bool is truthy and therefore also guarded. Both failure
         # directions leave the guards on; the startup line below is how the
         # operator finds out which way it went.
         self.policies = bool(rospy.get_param("~safety_policies", True))
+        rospy.loginfo("cluster avoidance: %s",
+                      "ON" if self.clusters_enabled else "OFF")
         if self.policies:
             rospy.loginfo(announce(True, "waypoint_follower", []))
         else:
-            rospy.logwarn(announce(False, "waypoint_follower", [
-                "band containment", "hazard-clearance speed", "obstacles",
-                "localization health", "the motion-estimate gate",
-                "the geofence", "the slope limit"]))
+            rospy.logwarn(announce(
+                False, "waypoint_follower",
+                ["band containment", "hazard-clearance speed",
+                 "the raw corridor scan", "localization health",
+                 "the motion-estimate gate", "the geofence",
+                 "the slope limit"],
+                still_watching=(
+                    ["tracked-cluster avoidance",
+                     "the band, for whether there is room to step aside"]
+                    if self.clusters_enabled else [])))
 
         cmd_topic = rospy.get_param("~cmd_topic", "/cmd_vel_raw")
         self.cmd_pub = rospy.Publisher(cmd_topic, Twist, queue_size=1)
@@ -311,6 +272,8 @@ class WaypointFollower:
                          DiagnosticArray, self.on_diag, queue_size=5)
         rospy.Subscriber("/wheel_status", Int16MultiArray,
                          self.on_wheel_status, queue_size=5)
+        rospy.Subscriber("/perception/objects_summary", String,
+                         self.on_clusters, queue_size=2)
         rospy.Service("/waypoint_follower/start", SetBool, self.on_start)
         rospy.on_shutdown(self.send_stop)
 
@@ -328,7 +291,7 @@ class WaypointFollower:
         self.pose_stamp = message.header.stamp
 
     def on_cloud(self, message):
-        self.accumulator.add_cloud(message)
+        self.accumulator.add_cloud(message, pc2.read_points)
         self.cloud, self.cloud_stamp = self.accumulator.merged()
 
     def on_odom(self, message):
@@ -348,6 +311,17 @@ class WaypointFollower:
         for status in message.status:
             if status.name == "fast_lio_icp":
                 self.tracking_state = status.message
+
+    def on_clusters(self, message):
+        try:
+            self.cluster_summary = parse_summary(message.data)
+        except ValueError as error:
+            # Unreadable is not empty. Dropping the last good summary lets
+            # the staleness hold below stop the chair, where keeping it
+            # would drive on increasingly old object positions.
+            self.cluster_summary = None
+            rospy.logwarn_throttle(
+                5.0, "objects_summary unreadable: %s", error)
 
     def on_wheel_status(self, message):
         self.wheel_status_stamp = rospy.Time.now()
@@ -408,6 +382,113 @@ class WaypointFollower:
 
     def guard_slow(self):
         return self.guard_stop() + GUARD_SLOW_EXTRA_M
+
+    def cluster_stop_radius(self):
+        """Stop radius for the cluster guard.
+
+        guard_stop() returns infinity when the motion estimate is invalid,
+        which is right for a guard the motion gate stands behind and wrong
+        for this one: with the policies off nothing holds the chair for a
+        bad estimate, so an infinite radius would report every object as
+        blocking and the chair would never leave the start. Fall back to
+        the speed being commanded, which is known whatever the estimator
+        is doing.
+        """
+        valid = self.motion.valid
+        age = 0.0 if self.cluster_summary is None else max(
+            0.0, rospy.Time.now().to_sec() - self.cluster_summary.stamp_s)
+        envelope = stopping_envelope(
+            measured_speed_mps=(self.motion.linear_speed_mps if valid
+                                else self.current_speed),
+            requested_speed_mps=self.current_speed,
+            measured_yaw_rate_rps=(self.motion.angular_speed_rps if valid
+                                   else self.last_yaw_rate),
+            requested_yaw_rate_rps=self.last_yaw_rate,
+            cloud_age_s=age,
+            accumulation_s=CLUSTER_ACCUMULATION_S,
+            pipeline_s=PIPELINE_BUDGET_S,
+            min_linear_decel_mps2=MIN_BRAKE_DECEL_MPS2,
+            min_angular_decel_rps2=MIN_YAW_DECEL_RPS2,
+            geometry_margin_m=GUARD_STOP_MIN_M)
+        return envelope.distance_m
+
+    def stop_radius(self):
+        """The distance inside which anything reported is a stop.
+
+        Two sources with different latencies: the raw check reads the scan
+        this node accumulated itself, while a cluster summary is already a
+        publish cycle old on top of its own accumulation window. The radius
+        has to cover the OLDEST data feeding it, so with both on it is the
+        larger. With only the raw check on this is guard_stop() exactly,
+        which is the field-validated behaviour.
+        """
+        radii = []
+        if self.policies:
+            radii.append(self.guard_stop())
+        if self.clusters_enabled:
+            radii.append(self.cluster_stop_radius())
+        return max(radii) if radii else 0.0
+
+    def cluster_threat(self, lateral_shift=0.0):
+        """Nearest classified object overlapping the corridor, or None.
+
+        Same corridor half width as the raw check, but measured against each
+        object's box rather than a percentile of loose returns, so a wall
+        alongside contributes its near face instead of its point spread.
+        Nothing received yet reads as blocked, not as clear.
+        """
+        if self.cluster_summary is None:
+            return Threat(0.0, MOVING, "no summary")
+        return nearest_threat(
+            self.cluster_summary, CORRIDOR_HALF_WIDTH, lateral_shift)
+
+    def corridor_threat(self, lateral_shift=0.0):
+        """Nearest obstacle from every enabled source, or None if all clear.
+
+        A raw-scan return comes back UNKNOWN rather than parked: five points
+        in a corridor have no identity from one scan to the next, so nothing
+        that source reports can ever be watched standing still. That leaves
+        it on the old time-based rule below, which is all it ever supported.
+        """
+        nearest = None
+        if self.policies:
+            distance = self.obstacle_distance(lateral_shift)
+            if distance is not None:
+                nearest = Threat(distance, UNKNOWN, "scan")
+        if self.clusters_enabled:
+            clustered = self.cluster_threat(lateral_shift)
+            if clustered is not None and \
+                    (nearest is None or
+                     clustered.distance_m < nearest.distance_m):
+                nearest = clustered
+        return nearest
+
+    def take_a_way_round(self, clear_for_m):
+        """Offset far enough to clear the corridor without leaving the band.
+
+        The band is what makes this safe and it is checked here whatever the
+        policies are set to. Containment stopping the chair is a judgement
+        that can be switched off; the band knowing where there is room to
+        step aside is not an opinion, and without it the smallest offset on
+        offer - 0.60 m - is twice the 0.30 m median lateral clearance this
+        route actually has.
+
+        An offset lane has to be clear for clear_for_m, not merely as far as
+        the chair could brake. Checking only the stopping distance picks a
+        lane with something standing 4 m down it, which is a sidestep into
+        the second of two objects and then a stop between them.
+        """
+        for offset in BYPASS_OFFSETS:
+            clear = self.corridor_threat(offset)
+            if (clear is None or clear.distance_m > clear_for_m) and \
+                    self.bypass_target_ok(offset):
+                self.lateral_offset = offset
+                rospy.logwarn("going round a parked obstacle: offset %+.1f m",
+                              offset)
+                return True
+        rospy.logwarn_throttle(
+            10, "no side of this has room in the band - waiting")
+        return False
 
     def obstacle_distance(self, lateral_shift=0.0):
         """Nearest obstacle in the forward corridor from the live scan,
@@ -605,6 +686,17 @@ class WaypointFollower:
         if self.drive_mode is not None and self.drive_mode != AUTO_MODE:
             yield "MANUAL_MODE", OVERRIDE
             return
+        # Liveness, not judgement: with the policies off this guard is the
+        # only thing still watching for people, so a producer that died
+        # silently would leave the chair driving on an empty object list
+        # that looks exactly like clear road. Tagged OVERRIDE for the same
+        # reason BASE_STALE is - it is how the failsafe is observed to
+        # exist, not an opinion about what is out there.
+        if self.clusters_enabled and is_stale(
+                None if self.cluster_summary is None
+                else self.cluster_summary.stamp_s, now.to_sec()):
+            yield "CLUSTERS_STALE", OVERRIDE
+            return
         if self.route_locked and np.min(np.linalg.norm(
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             yield "OFF_ROUTE", POLICY
@@ -646,11 +738,11 @@ class WaypointFollower:
             not self.band.contains(self.pose_xy, grace=OFF_BAND_GRACE)
 
         # None reads downstream as "nothing in the corridor", which is what
-        # the guard being switched off has to mean here - obstacle_distance
-        # returns 0.0 for missing data, so calling it and discarding the
-        # answer would fail closed on exactly the run that must not.
-        obstacle_dist = self.obstacle_distance(self.lateral_offset) \
-            if self.policies else None
+        # a switched-off source has to mean here - obstacle_distance returns
+        # 0.0 for missing data, so calling it and discarding the answer would
+        # fail closed on exactly the run that must not.
+        threat = self.corridor_threat(self.lateral_offset)
+        obstacle_dist = None if threat is None else threat.distance_m
 
         allowed = MAX_SPEED
         if recovering:
@@ -663,8 +755,8 @@ class WaypointFollower:
                 allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
-        guard_stop = self.guard_stop()
-        guard_slow = self.guard_slow()
+        guard_stop = self.stop_radius()
+        guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
         if obstacle_dist is not None:
             if obstacle_dist < guard_stop:
                 blocking = "OBSTACLE"
@@ -674,30 +766,22 @@ class WaypointFollower:
                 allowed = min(allowed,
                               CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
 
-        if blocking == "OBSTACLE":
-            if self.blocked_since is None:
-                self.blocked_since = now
-            elif (now - self.blocked_since).to_sec() > BYPASS_AFTER_S and \
-                    abs(self.lateral_offset) < 0.01:
-                for offset in BYPASS_OFFSETS:
-                    clear = self.obstacle_distance(offset)
-                    if (clear is None or clear > guard_slow) and \
-                            self.bypass_target_ok(offset):
-                        self.lateral_offset = offset
-                        rospy.logwarn(
-                            "bypassing static obstacle: offset %+.1f m",
-                            offset)
-                        break
-                else:
-                    rospy.logwarn_throttle(
-                        10, "path blocked, no clear side - waiting")
-        elif blocking is None:
+        if blocking == "OBSTACLE" and self.blocked_since is None:
+            self.blocked_since = now
+        decision = avoidance_decision(
+            threat, blocking == "OBSTACLE",
+            None if self.blocked_since is None
+            else (now - self.blocked_since).to_sec(),
+            PLAN_AHEAD_M, BYPASS_AFTER_S)
+        if decision == GO_ROUND and abs(self.lateral_offset) < 0.01:
+            self.take_a_way_round(max(guard_slow, PLAN_AHEAD_M))
+        if blocking is None:
             self.blocked_since = None
             if abs(self.lateral_offset) > 0.01:
-                back = self.obstacle_distance(0.0)
-                if back is None or back > guard_slow:
+                back = self.corridor_threat(0.0)
+                if back is None or back.distance_m > guard_slow:
                     self.lateral_offset = 0.0
-                    rospy.loginfo("bypass complete, rejoining route")
+                    rospy.loginfo("way round complete, rejoining the line")
 
         target = self.pure_pursuit_target()
         if not self.chord_safe:

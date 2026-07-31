@@ -266,6 +266,23 @@ setsid nohup rosrun static_livox_localization safety_gate.py \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
 setsid nohup rosrun static_livox_localization tip_guard.py \
   > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
+# The follower steers around what this node reports as parked and waits for
+# what it reports as moving, so it starts BEFORE the follower and the follower
+# refuses to drive without it (HOLD:CLUSTERS_STALE). A missing producer must
+# not read as an empty road.
+setsid nohup rosrun static_livox_localization obstacle_clusters.py \
+  _body_frame_profile:="$BODY_FRAME_PROFILE" \
+  > "$LOG/live_clusters.log" 2>&1 < /dev/null &
+for i in $(seq 1 15); do
+  timeout 2 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1 && break
+  sleep 1
+done
+if ! timeout 3 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1; then
+  echo "ERROR: object clustering silent (/perception/objects_summary)" >&2
+  echo "       the follower will hold on CLUSTERS_STALE; see $LOG/live_clusters.log" >&2
+  exit 6
+fi
+echo "  object tracking up - watch /perception/objects_summary"
 for i in $(seq 1 10); do
   timeout 2 rostopic echo -n1 /tip_guard/status >/dev/null 2>&1 && break
   sleep 1
@@ -284,14 +301,17 @@ setsid nohup rosbag record --lz4 \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics /vectornav/IMU \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
+  /perception/objects_summary \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""
 if [ "$SAFETY_POLICIES" = "false" ]; then
   echo "*********************************************************************"
-  echo "SAFETY POLICIES ARE OFF. No band containment, no obstacle stop, no"
-  echo "localization hold, no geofence. The joystick is the ONLY thing that"
-  echo "will stop this chair. Keep a hand on it for the whole run."
+  echo "SAFETY POLICIES ARE OFF. No band containment, no raw-scan obstacle"
+  echo "stop, no localization hold, no geofence."
+  echo "STILL ACTIVE: tracked-cluster avoidance - the chair steers around"
+  echo "what has been seen standing still and waits for what is moving."
+  echo "The joystick is the failsafe. Keep a hand on it for the whole run."
   echo "Suppressed guards are published as WOULD_HOLD: on"
   echo "/waypoint_follower/status and recorded in the black box."
   echo "*********************************************************************"

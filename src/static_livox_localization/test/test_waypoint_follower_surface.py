@@ -69,9 +69,21 @@ def test_follower_bypasses_static_obstacles_only_inside_band():
     text = follower_text()
     assert "BYPASS_AFTER_S" in text
     assert "bypass_target_ok" in text
-    wait = text.index("no clear side - waiting")
-    bypass = text.index("bypassing static obstacle")
+    wait = text.index("no side of this has room in the band - waiting")
+    bypass = text.index("going round a parked obstacle")
     assert bypass < wait
+
+
+def test_the_band_still_vets_a_way_round_when_the_policies_are_off():
+    """Containment stopping the chair is a judgement and can be switched
+    off. The band knowing where there is room to step aside is not, and the
+    smallest offset on offer is twice this route's median lateral
+    clearance."""
+    text = follower_text()
+    start = text.index("def take_a_way_round")
+    body = text[start:text.index("\n    def ", start + 1)]
+    assert "self.bypass_target_ok(offset)" in body
+    assert "self.policies" not in body
 
 
 def test_missing_cloud_data_is_treated_as_blocked():
@@ -136,18 +148,25 @@ def test_scan_geometry_is_corrected_into_the_lidar_frame():
     corridor half-width, guard distances - is a lidar-frame quantity. The
     accumulator must undo the configured extrinsic rather than each constant
     being re-derived."""
+    accumulator = (ROOT / "scripts" / "scan_accumulator.py").read_text(
+        encoding="utf-8")
+    assert "body_to_lidar(np.vstack(parts)" in accumulator
     text = follower_text()
-    assert "body_to_lidar" in text and "lidar_extrinsics" in text
+    assert "CloudAccumulator" in text and "lidar_extrinsics" in text
     assert 'rospy.get_param("~body_frame_profile")' in text
-    assert "body_to_lidar(np.vstack(parts)" in text
 
 
-def test_the_gate_corrects_the_same_frame_independently():
-    """The gate is a second, independent opinion on the forward corridor.
-    If it read the body frame while the follower read the lidar frame, the
-    two would disagree about where an obstacle is by the extrinsic."""
+def test_the_gate_corrects_the_same_frame_as_the_follower():
+    """The gate is a second, independent opinion on the forward corridor,
+    but not on where things are. If it read the body frame while the
+    follower read the lidar frame, the two would disagree about an
+    obstacle's position by the extrinsic - so they share one accumulator
+    rather than each carrying a copy of the conversion to correct."""
     gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
-    assert "body_to_lidar" in gate and "lidar_extrinsics" in gate
+    assert "from scan_accumulator import CloudAccumulator" in gate
+    assert "from scan_accumulator import CloudAccumulator" in follower_text()
+    assert "class CloudAccumulator" not in gate
+    assert "class CloudAccumulator" not in follower_text()
     assert 'rospy.get_param("~body_frame_profile")' in gate
 
 

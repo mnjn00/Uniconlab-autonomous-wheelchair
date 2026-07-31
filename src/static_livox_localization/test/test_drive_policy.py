@@ -143,8 +143,10 @@ def test_the_obstacle_guard_is_skipped_rather_than_called_and_ignored():
     calling it and discarding the answer would fail closed on exactly the
     run that must not stop."""
     text = follower_text()
-    assert "self.obstacle_distance(self.lateral_offset) \\\n            " \
-           "if self.policies else None" in text
+    start = text.index("def corridor_threat")
+    body = text[start:text.index("\n    def ", start + 1)]
+    assert "if self.policies:\n            distance = self.obstacle_distance" \
+        in body
 
 
 # ------------------------------------------------- the real chain, end to end
@@ -195,6 +197,10 @@ def follower_at(policies, drive_mode=65, wheel_age_s=0.0):
     follower.waypoints = np.array([[0.0, 0.0], [1.0, 0.0]])
     follower.band = Band(inside=False)
     follower.policies = policies
+    # Off for these: the cluster guard adds its own hold, and what is being
+    # pinned here is the policy split, not the guard.
+    follower.clusters_enabled = False
+    follower.cluster_summary = None
     return module, follower
 
 
@@ -221,6 +227,32 @@ def test_the_joystick_reaches_the_override_past_a_suppressed_policy():
 def test_a_silent_wheel_link_reaches_the_override_past_a_suppressed_policy():
     binding, _ = resolve(False, wheel_age_s=5.0)
     assert binding == "BASE_STALE"
+
+
+def test_a_dead_cluster_producer_stops_the_chair_with_the_policies_off():
+    """Once the policies are off the cluster guard is the only thing still
+    watching for people, so a producer that died silently would leave the
+    chair driving on an empty object list - which reads exactly like clear
+    road. Tagged OVERRIDE for the same reason BASE_STALE is."""
+    _module, follower = follower_at(False)
+    follower.clusters_enabled = True
+    follower.cluster_summary = None
+
+    binding, _ = dp.evaluate_holds(
+        follower.hold_candidates(Stamp(100.0)), False)
+    assert binding == "CLUSTERS_STALE"
+
+
+def test_a_live_cluster_producer_does_not_hold_the_chair():
+    _module, follower = follower_at(False)
+    follower.clusters_enabled = True
+    follower.cluster_summary = load("cluster_guard").parse_summary(
+        '{"stamp": 99.8, "status": "OK", "objects": []}')
+
+    binding, suppressed = dp.evaluate_holds(
+        follower.hold_candidates(Stamp(100.0)), False)
+    assert binding is None
+    assert suppressed == "OFF_BAND"
 
 
 # ----------------------------------------- the guarded path did not change
@@ -310,6 +342,8 @@ def test_with_the_policies_on_every_reachable_state_decides_as_it_used_to():
             np.array([[0.0, 0.0], [1.0, 0.0]])
         follower.band = Band(inside=v["inband"])
         follower.policies = True
+        follower.clusters_enabled = False
+        follower.cluster_summary = None
 
         binding, suppressed = dp.evaluate_holds(
             follower.hold_candidates(Stamp(now)), True)

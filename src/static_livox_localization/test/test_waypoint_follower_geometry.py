@@ -12,7 +12,9 @@ SCRIPT_DIR = Path(__file__).parents[1] / "scripts"
 def load_follower_module():
     dummy = type("Dummy", (), {})
     rospy = types.ModuleType("rospy")
+    rospy.loginfo = lambda *args, **kwargs: None
     rospy.logwarn = lambda *args, **kwargs: None
+    rospy.logwarn_throttle = lambda *args, **kwargs: None
     rospy.logerr_throttle = lambda *args, **kwargs: None
 
     modules = {"rospy": rospy}

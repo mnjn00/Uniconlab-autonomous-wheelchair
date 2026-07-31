@@ -153,3 +153,26 @@ def body_to_lidar(points, offset_xyz=LIDAR_IN_BODY_XYZ,
     if rotation.shape != (3, 3):
         raise ValueError("lidar-to-body rotation must have shape (3, 3)")
     return np.linalg.solve(rotation, shifted.T).T
+
+
+def lidar_to_body(points, offset_xyz=LIDAR_IN_BODY_XYZ,
+                  lidar_to_body_rotation=LIDAR_TO_BODY_ROTATION):
+    """Express lidar-frame points (N,3) in the body frame.
+
+    The forward direction of body_to_lidar: p_body = R @ p_lidar + offset.
+
+    Needed wherever something worked out in the chair-aligned frame has to
+    go back into the frame the odometry is expressed in. Tracking is the
+    case that forced it: whether an object is moving is only a question in
+    a frame that does not move with the chair, and in the lidar frame a
+    parked car approaches at driving speed.
+    """
+    if points is None or not len(points):
+        return points
+    array = np.asarray(points, dtype=np.float64)
+    rotation = np.asarray(lidar_to_body_rotation, dtype=np.float64)
+    if array.ndim != 2 or array.shape[1] != 3:
+        raise ValueError("points must have shape (N, 3)")
+    if rotation.shape != (3, 3):
+        raise ValueError("lidar-to-body rotation must have shape (3, 3)")
+    return array @ rotation.T + np.asarray(offset_xyz, dtype=np.float64)

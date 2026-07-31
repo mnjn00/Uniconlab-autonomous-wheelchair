@@ -37,82 +37,12 @@ import sensor_msgs.point_cloud2 as pc2
 # which imports the modules directly, still passes.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
-                        lidar_extrinsics)
+from body_frame import CHAIR_CENTRE_IN_BODY_XYZ, lidar_extrinsics
 from drive_policy import announce
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            filter_obstacle_points, motion_hold_reason,
                            stopping_envelope, swept_footprint_collision)
-import tf.transformations as tft
-
-
-class CloudAccumulator:
-    """Merge ~1 s of sparse MID360 scans into the current body frame.
-
-    A single 0.1 s sweep leaves the forward corridor nearly empty (the
-    non-repetitive pattern needs accumulation), so per-scan ground checks
-    false-trigger. Scans are motion-compensated via /Odometry.
-
-    The merged cloud is expressed in the lidar frame: FAST-LIO publishes
-    /cloud_registered_body in the IMU body frame, which the VN-100 swap
-    moved away from the lidar, while this gate's corridor half-width and
-    stop distance are lidar-frame quantities.
-    """
-
-    def __init__(self, lidar_in_body, lidar_to_body_rotation, window_s=1.0):
-        self.window_s = window_s
-        self.lidar_in_body = lidar_in_body
-        self.lidar_to_body_rotation = lidar_to_body_rotation
-        self.scans = []
-        self.odoms = []
-
-    def add_odom(self, message):
-        q = message.pose.pose.orientation
-        p = message.pose.pose.position
-        T = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
-        T[:3, 3] = (p.x, p.y, p.z)
-        self.odoms.append((message.header.stamp.to_sec(), T))
-        self.odoms = self.odoms[-60:]
-
-    def nearest_odom(self, stamp):
-        if not self.odoms:
-            return None
-        times = np.array([t for t, _ in self.odoms])
-        k = int(np.argmin(np.abs(times - stamp)))
-        if abs(times[k] - stamp) > 0.15:
-            return None
-        return self.odoms[k][1]
-
-    def add_cloud(self, message):
-        pts = np.array(list(pc2.read_points(
-            message, field_names=("x", "y", "z"), skip_nans=True)),
-            dtype=np.float32)
-        stamp = message.header.stamp.to_sec()
-        self.scans.append((stamp, pts))
-        self.scans = [s for s in self.scans if stamp - s[0] <= self.window_s + 0.3]
-
-    def merged(self):
-        if not self.scans:
-            return None, rospy.Time(0)
-        newest_stamp = self.scans[-1][0]
-        T_ref = self.nearest_odom(newest_stamp)
-        if T_ref is None:
-            return None, rospy.Time(0)
-        inv_ref = np.linalg.inv(T_ref)
-        parts = []
-        for stamp, pts in self.scans:
-            if newest_stamp - stamp > self.window_s or not len(pts):
-                continue
-            T = self.nearest_odom(stamp)
-            if T is None:
-                continue
-            M = (inv_ref @ T).astype(np.float32)
-            parts.append(pts @ M[:3, :3].T + M[:3, 3])
-        if not parts:
-            return None, rospy.Time(0)
-        merged = body_to_lidar(np.vstack(parts), self.lidar_in_body,
-                               self.lidar_to_body_rotation)
-        return merged, rospy.Time.from_sec(newest_stamp)
+from scan_accumulator import CloudAccumulator
 
 
 GATE_HZ = 15.0
@@ -189,7 +119,7 @@ class SafetyGate:
         self.raw_stamp = rospy.Time.now()
 
     def on_cloud(self, message):
-        self.accumulator.add_cloud(message)
+        self.accumulator.add_cloud(message, pc2.read_points)
         self.cloud, self.cloud_stamp = self.accumulator.merged()
 
     def on_odom(self, message):
