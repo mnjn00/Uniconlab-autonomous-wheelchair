@@ -281,6 +281,11 @@ src/
 └── wheelchair_gazebo/           # simulation-only scenarios and evidence collectors
 ```
 
+`wheelchair_description` keeps two non-interchangeable entry points: the
+Gazebo-only `wheelchair.urdf.xacro` and the NUC-derived
+`wheelchair_hardware.urdf.xacro`. Hardware launch and calibration must never
+fall back to the simulation description.
+
 Additional top-level areas:
 
 | Path | Purpose |

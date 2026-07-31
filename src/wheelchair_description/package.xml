@@ -2,7 +2,7 @@
 <package format="2">
   <name>wheelchair_description</name>
   <version>0.1.0</version>
-  <description>ROS1 Noetic URDF/xacro description for a simulation-only electric wheelchair scaffold.</description>
+  <description>ROS1 Noetic wheelchair descriptions with separate simulation and measured-hardware entry points.</description>
   <maintainer email="maintainer@example.com">GJC Scaffold Maintainer</maintainer>
   <license>GPL-2.0-only</license>
 
@@ -10,6 +10,7 @@
 
   <exec_depend>xacro</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher_gui</exec_depend>
   <exec_depend>rviz</exec_depend>
   <exec_depend>gazebo_plugins</exec_depend>

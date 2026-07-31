@@ -1,0 +1,15 @@
+<launch>
+  <!-- HARDWARE ONLY: publishes the measured NUC wheelchair frames and no Gazebo plugins. -->
+  <arg name="publish_default_joint_states" default="true"/>
+  <arg name="rviz" default="false"/>
+
+  <param name="robot_description"
+         command="$(find xacro)/xacro $(find wheelchair_description)/urdf/wheelchair_hardware.urdf.xacro"/>
+
+  <node pkg="robot_state_publisher" type="robot_state_publisher"
+        name="robot_state_publisher" output="screen"/>
+  <node if="$(arg publish_default_joint_states)"
+        pkg="joint_state_publisher" type="joint_state_publisher"
+        name="joint_state_publisher" output="screen"/>
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz" output="screen"/>
+</launch>

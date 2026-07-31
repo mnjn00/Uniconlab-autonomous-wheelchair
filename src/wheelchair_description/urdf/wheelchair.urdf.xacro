@@ -1,4 +1,10 @@
 <?xml version="1.0"?>
+<!--
+  SIMULATION ONLY. This Gazebo model contains nominal sensor placement and
+  simulated plugins; it is not the measured NUC wheelchair description.
+  Hardware must use wheelchair_hardware.urdf.xacro through
+  hardware_description.launch.
+-->
 <robot name="wheelchair" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:include filename="$(find wheelchair_description)/urdf/dimensions.xacro"/>
 
