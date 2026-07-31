@@ -18,6 +18,13 @@ __pycache__/
 *.db3
 *.mcap
 *.active
+
+# ... except curated field evidence, which is the opposite of a runtime
+# artifact: a recording nobody can make again. Kept in Git LFS so the repo
+# and every NUC deployment that pulls it stay small, and checksummed in
+# blackbox/manifest.json so a copy on any disk can be verified against what
+# the vehicle actually wrote.
+!blackbox/*.bag
 *.log
 
 # Large local generated artifacts

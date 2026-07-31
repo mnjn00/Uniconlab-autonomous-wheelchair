@@ -1,0 +1,106 @@
+{
+  "_why": [
+    "Provenance for the recordings in this folder, kept as data rather than",
+    "prose so a test can check it and so it still says what these bags were",
+    "if the bags themselves ever live only on the SSD. The bags are stored",
+    "through Git LFS; sha256 is what makes a copy on any disk verifiable",
+    "against the one the vehicle wrote."
+  ],
+  "session": {
+    "date": "2026-07-31",
+    "site": "campus, International Building 108 frontage",
+    "vehicle_commit": "a8bb453",
+    "route": "routes/20260727_chair_centred_waypoints.json",
+    "route_points": 1446,
+    "map_id": "merged_0707_0725_v1",
+    "question": "does localization stay attached over the whole 0727 route",
+    "answer": "yes - TRACKING for every driving sample of both runs",
+    "configuration": {
+      "safety_policies": false,
+      "cluster_avoidance": "run 1 on until 21:49, off afterwards; run 2 off",
+      "note": [
+        "The discretionary guards were off because a band refusal or a",
+        "geofence trip would have ended the measurement while looking, from",
+        "outside a stationary chair, exactly like the lost fix it was meant",
+        "to detect. Suppressed guards were still evaluated and published as",
+        "WOULD_HOLD: on /waypoint_follower/status, which is in these bags."
+      ]
+    }
+  },
+  "measured_while_driving": {
+    "samples": 154,
+    "state": "TRACKING for all of them, both runs",
+    "inlier_ratio": {"min": 0.9666, "max": 1.0, "mean": 0.9949, "gate": 0.20},
+    "fitness": {"min": 0.0137, "max": 0.0329, "mean": 0.0219, "gate": 0.28},
+    "localization_holds": 0
+  },
+  "known_excursion": {
+    "when": "22:39:41-22:40:02, parked at the goal, 20 min after run 2 ended",
+    "inlier_ratio": {"min": 0.124, "max": 0.262},
+    "fitness": {"min": 0.186, "max": 0.229},
+    "reading": [
+      "Nothing was driving. It is the one place all evening the fix came",
+      "near its gate, so the end of this route is its weakest geometry."
+    ]
+  },
+  "bags": [
+    {
+      "file": "blackbox_20260731_212959.bag",
+      "sha256": "6535bee6a37751942a16ddbea821afa73a344479e7f7494707d2629dc00c519d",
+      "bytes": 41968273,
+      "duration_s": 1665.468,
+      "start_epoch": 1785501000.199535,
+      "end_epoch": 1785502665.667687,
+      "messages": 849884,
+      "run": "first autonomous run",
+      "contains": [
+        "Started with cluster avoidance ON and stopped at waypoint 349 for",
+        "14 minutes. Not localization: the cluster guard's bounding box",
+        "reported a diagonal wall as 0.69 m dead ahead when its nearest",
+        "point inside the corridor was 2.13 m. The follower was relaunched",
+        "with cluster avoidance off at 21:49 and the route completed.",
+        "This bag therefore holds both the defect and the recovery."
+      ],
+      "waypoints_covered": "46 to 1399"
+    },
+    {
+      "file": "blackbox_20260731_220749.bag",
+      "sha256": "423cb28bbc10081b5c2b55140e297bd8e2eb4ab7090700fa3eead45e7dbbf417",
+      "bytes": 50609401,
+      "duration_s": 1963.683,
+      "start_epoch": 1785503270.726962,
+      "end_epoch": 1785505234.410198,
+      "messages": 1003554,
+      "run": "second autonomous run, recorded end to end for video",
+      "contains": [
+        "Clean run from waypoint 1, no obstacle stop, no intervention.",
+        "Also holds the parked excursion described in known_excursion,",
+        "which happens after the route is already DONE."
+      ],
+      "waypoints_covered": "1 to 1405"
+    }
+  ],
+  "topics": [
+    "/fast_lio_icp/pose",
+    "/fast_lio_icp/localization_diagnostics",
+    "/Odometry",
+    "/livox/imu",
+    "/cmd_vel_raw",
+    "/cmd_vel_gated",
+    "/cmd_vel",
+    "/wheel_cmd",
+    "/wheel_status",
+    "/mode_cmd",
+    "/waypoint_follower/status",
+    "/tip_guard/status",
+    "/perception/objects_summary"
+  ],
+  "notes": [
+    "Both bags were written .active because the stack was killed rather",
+    "than shut down, and were reindexed on the vehicle before transfer.",
+    "The sha256 above is of the reindexed bag, not the .active original.",
+    "/perception/objects_summary is the record the cluster-guard defect",
+    "has to be fixed against: it carries every object the tracker reported,",
+    "with its motion verdict, for both runs."
+  ]
+}
