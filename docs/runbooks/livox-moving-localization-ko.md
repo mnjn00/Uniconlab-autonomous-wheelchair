@@ -4,7 +4,7 @@
 
 - 정본 지도: `mergedmap.ply`
 - 주행용 지도: `merged_0707_0725_0p20m_xyzi.pcd`
-- 경로: `20260727_new_route_waypoints.json`
+- 경로: `20260727_chair_centred_waypoints.json` (차체 중심 기준, 주행 궤적 1,446점)
 - 기본 IMU: Livox MID-360 내장 IMU
 - 최고 주행 속도: 0.6 m/s
 

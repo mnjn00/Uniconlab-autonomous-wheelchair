@@ -66,6 +66,21 @@ def test_map_deployer_pins_the_supplied_canonical_and_runtime_artifacts():
     assert "2696359" in deploy
 
 
+def test_the_deploy_script_and_the_bringup_name_the_same_route():
+    """Deployment verifies and records a route/band pair by name. When that
+    pair drifts from the one the bringup actually launches with, the record
+    describes a drive that did not happen - and the old files still being on
+    disk is exactly what lets it pass unnoticed."""
+    deploy = (ROOT / "tools" / "deploy_merged_map.sh").read_text(encoding="utf-8")
+    startup = (ROOT / "tools" / "start_wheelchair_localization.sh").read_text(
+        encoding="utf-8")
+
+    assert 'ROUTE_NAME="%s"' % ROUTE_NAME in deploy
+    assert 'BAND_NAME="%s"' % BAND_NAME in deploy
+    assert shell_default(startup, "ROUTE").endswith("/" + ROUTE_NAME)
+    assert shell_default(startup, "BAND").endswith("/" + BAND_NAME)
+
+
 def test_field_startup_defaults_to_livox_builtin_imu_and_0727_route():
     startup = (ROOT / "tools" / "start_wheelchair_localization.sh").read_text(
         encoding="utf-8"

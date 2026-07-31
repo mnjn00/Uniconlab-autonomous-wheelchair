@@ -18,8 +18,11 @@ RUNTIME_NAME="merged_0707_0725_0p20m_xyzi.pcd"
 RUNTIME_SHA256="ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"
 RUNTIME_POINTS="2696359"
 MAP_ID="merged_0707_0725_v1"
-ROUTE_NAME="20260727_new_route_waypoints.json"
-BAND_NAME="20260727_new_route_safety_band.json"
+# Must match what start_wheelchair_localization.sh actually launches with. A
+# stale pair here still passes, because the superseded files remain on disk,
+# and the deployment then records a route the chair does not drive.
+ROUTE_NAME="20260727_chair_centred_waypoints.json"
+BAND_NAME="20260727_chair_centred_safety_band.json"
 
 usage() {
   echo "usage: deploy_merged_map.sh [--verify-only] <map-directory>" >&2
