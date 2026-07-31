@@ -1,120 +1,235 @@
 {
-  "station_count": 371,
-  "route_waypoint_count": 75,
-  "grace_m": 0.1,
-  "rejected_station_indices": [
-    97,
-    98,
-    99,
-    100,
-    106,
-    107,
-    108,
-    111,
-    112,
-    113,
-    114,
-    125,
-    126,
-    143,
-    144,
-    145,
-    146,
-    147,
-    148,
-    149,
-    150,
-    202,
-    203,
-    204,
-    206,
-    207,
-    210,
-    211,
-    212,
-    213,
-    286,
-    287,
-    288,
-    369,
-    370
-  ],
-  "inverted_station_indices": [
-    97,
-    98
-  ],
-  "failed_station_chord_indices": [
-    96,
-    97,
-    98,
-    99,
-    105,
-    106,
-    107,
-    108,
-    110,
-    111,
-    112,
-    113,
-    114,
-    124,
-    125,
-    140,
-    141,
-    142,
-    143,
-    144,
-    145,
-    146,
-    147,
-    148,
-    149,
-    151,
-    152,
-    201,
-    202,
-    203,
-    205,
-    206,
-    209,
-    210,
-    211,
-    212,
-    213,
-    285,
-    286,
-    287,
-    368,
-    369
-  ],
-  "rejected_route_waypoint_indices": [
-    10,
-    18,
-    19,
-    20,
-    26,
-    37,
-    38,
-    39,
-    74
-  ],
-  "failed_route_chord_indices": [
-    9,
-    17,
-    18,
-    19,
-    20,
-    22,
-    24,
-    25,
-    26,
-    36,
-    37,
-    38,
-    39,
-    46,
-    55,
-    66,
-    73
-  ]
+  "audit": {
+    "station_count": 371,
+    "route_waypoint_count": 75,
+    "grace_m": 0.1,
+    "rejected_station_indices": [
+      97,
+      98,
+      99,
+      100,
+      106,
+      107,
+      108,
+      111,
+      112,
+      113,
+      114,
+      125,
+      126,
+      143,
+      144,
+      145,
+      146,
+      147,
+      148,
+      149,
+      150,
+      202,
+      203,
+      204,
+      206,
+      207,
+      210,
+      211,
+      212,
+      213,
+      286,
+      287,
+      288,
+      369,
+      370
+    ],
+    "inverted_station_indices": [
+      97,
+      98
+    ],
+    "failed_station_chord_indices": [
+      96,
+      97,
+      98,
+      99,
+      105,
+      106,
+      107,
+      108,
+      110,
+      111,
+      112,
+      113,
+      114,
+      124,
+      125,
+      140,
+      141,
+      142,
+      143,
+      144,
+      145,
+      146,
+      147,
+      148,
+      149,
+      151,
+      152,
+      201,
+      202,
+      203,
+      205,
+      206,
+      209,
+      210,
+      211,
+      212,
+      213,
+      285,
+      286,
+      287,
+      368,
+      369
+    ],
+    "rejected_route_waypoint_indices": [
+      10,
+      18,
+      19,
+      20,
+      26,
+      37,
+      38,
+      39,
+      74
+    ],
+    "failed_route_chord_indices": [
+      9,
+      17,
+      18,
+      19,
+      20,
+      22,
+      24,
+      25,
+      26,
+      36,
+      37,
+      38,
+      39,
+      46,
+      55,
+      66,
+      73
+    ]
+  },
+  "provenance": {
+    "generator_source": {
+      "path": "decks/unicon-commercial-readiness/visual-report/generate_route_visuals.py",
+      "bytes": 4345,
+      "sha256": "f08fb82bc666f7aa3279a0e42b31fde3231f344d91becd63607790d3e9b3f1fd"
+    },
+    "band_json": {
+      "path": "routes/20260727_new_route_safety_band.json",
+      "bytes": 69484,
+      "sha256": "730d3dacd3480e8bb329d3e5e451ee1a272b084cae89c9c9fa6addb6857efd2c"
+    },
+    "route_json": {
+      "path": "routes/20260727_new_route_waypoints.json",
+      "bytes": 5752,
+      "sha256": "02309b668470fdf3adbc66fb812621da300851e2eab6640cf892e7d0b4fbb3ba"
+    },
+    "safety_band_source": {
+      "path": "src/static_livox_localization/scripts/safety_band.py",
+      "bytes": 13237,
+      "sha256": "dfec2b77fc1331124a791bfd980c9331507dc72c9d0e06fed6e30904f22a082c"
+    },
+    "canonical_ply": {
+      "path": "/Volumes/무제/merged_0707_0725_v1/mergedmap.ply",
+      "bytes": 594886982,
+      "sha256": "3639f5942101e67d8f62baf533017475146ebb681f4a8482ecaf0f2a7cec6536"
+    },
+    "canonical_ply_points": 37180425,
+    "runtime_pcd": {
+      "path": "/Volumes/무제/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd",
+      "bytes": 43141936,
+      "sha256": "ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"
+    },
+    "runtime_pcd_points": 2696359,
+    "overview_png": {
+      "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-overview.png",
+      "bytes": 856217,
+      "sha256": "81f6e1bf928f0e794b3a4467ab560d695b0e4ac0e4eb0a61189e420ae212482e"
+    },
+    "hotspot_sheet_png": {
+      "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspots.png",
+      "bytes": 418672,
+      "sha256": "414014c5a712c9501f42fece3fdee49ec7adee832effc0585ec9274b2110ff97"
+    },
+    "hotspot_tiles": [
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-a.png",
+        "bytes": 80277,
+        "sha256": "0f905a8fcc8d8195ad79ce7c50c9a01885a5617ad2f2ae3639e1d6ebdc99a068"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-b.png",
+        "bytes": 98961,
+        "sha256": "a6a7285810830bdcd12d380b00d58f9ceca20d7e2bde089fbeaad8e22e43d39c"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-c.png",
+        "bytes": 56971,
+        "sha256": "fb71b294c8d1b4011630dbb0e25659fb3c7a95dde810d494fe878e4575af9fbe"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-d.png",
+        "bytes": 50337,
+        "sha256": "fddb256b3188da859908df575e3d4922355d5b16107e291fb4ebd98904d887bd"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-e.png",
+        "bytes": 64548,
+        "sha256": "66fc3bdbf278d1b21302a65f053a4bfeb7dae42bf92cd2098d6c9a9df11320ea"
+      }
+    ],
+    "web_assets": [
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-overview.webp",
+        "bytes": 299708,
+        "sha256": "4ca610f28ca5ff11c26289ac2cd297286b6a4f48849a0af3750158e9e5d2d3a1"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-overview-900.webp",
+        "bytes": 59312,
+        "sha256": "f9425acf24075a3d331d540de16d8a64c9658591f3bc460273c135c9a70f47ff"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspots.webp",
+        "bytes": 425850,
+        "sha256": "d5c23badb1fb1c5958c26a7acc1cf04353eeab2b4e2a37ce81a0e9ace84aa4d8"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-a-400.webp",
+        "bytes": 29280,
+        "sha256": "eb6368ae5fa749ee03121205bea12b422408bab1d886c1c01df73bf3ea6e56b0"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-b-400.webp",
+        "bytes": 24020,
+        "sha256": "ffefe8347127ce0a72051198212bf0b171bfd5c893d1cc40dd3a3822042615d3"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-c-400.webp",
+        "bytes": 47634,
+        "sha256": "94782ddf99e8505eebd5e9fe73d2fcc22eaac47b4f5797765cbc81301aa05f9f"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-d-400.webp",
+        "bytes": 39322,
+        "sha256": "8a0acec2ab24d07e152be995bb6ffeeaddfb3bfca86fc6e128e1ea2acea9e856"
+      },
+      {
+        "path": "decks/unicon-commercial-readiness/visual-report/assets/route-band-hotspot-e-400.webp",
+        "bytes": 37498,
+        "sha256": "6525049ce1c23fc24e6eeda10ac2b909e153c098c74e0b3431f7861214c7ecae"
+      }
+    ]
+  }
 }

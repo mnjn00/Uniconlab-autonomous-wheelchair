@@ -17,6 +17,10 @@ from safety_band import SafetyBand
 GRACE_M: Final = 0.10
 
 
+class RuntimeSourceMismatchError(ValueError):
+    pass
+
+
 class Station(BaseModel, frozen=True):
     x: float
     y: float
@@ -63,6 +67,11 @@ def audit_route_bundle(
 ) -> RouteAudit:
     if not safety_band_path.is_file():
         raise FileNotFoundError(safety_band_path)
+    imported_source = REPO_ROOT / "src/static_livox_localization/scripts/safety_band.py"
+    if safety_band_path.resolve() != imported_source.resolve():
+        raise RuntimeSourceMismatchError(
+            f"Expected runtime source {imported_source}, got {safety_band_path}"
+        )
     band_doc, route_doc = load_documents(band_path, route_path)
     runtime = SafetyBand(str(band_path))
     station_xy = tuple((item.x, item.y) for item in band_doc.stations)

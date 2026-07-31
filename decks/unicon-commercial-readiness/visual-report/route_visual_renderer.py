@@ -15,6 +15,8 @@ INK: Final = "#1A1A1A"
 BORDER: Final = "#D1D5DB"
 MUTED: Final = "#6B7280"
 WHITE: Final = "#FFFFFF"
+MAX_PCD_HEADER_BYTES: Final = 65_536
+MAX_PCD_POINTS: Final = 50_000_000
 CLUSTERS: Final = (
     ("A", 96, 114),
     ("B", 124, 152),
@@ -22,6 +24,14 @@ CLUSTERS: Final = (
     ("D", 285, 288),
     ("E", 368, 370),
 )
+CLUSTER_FAILURES: Final = {
+    "A": "96-99, 105-108, 110-114",
+    "B": "124-125, 140-149, 151-152",
+    "C": "201-203, 205-206, 209-213",
+    "D": "285-287",
+    "E": "368-369",
+}
+ISOLATED_ROUTE_CHORDS: Final = (("I1", 9), ("I2", 46), ("I3", 66))
 
 
 class PcdFormatError(ValueError):
@@ -37,17 +47,29 @@ class PlotData:
 
 
 def load_xyzi(path: Path) -> NDArray[np.float32]:
+    header_bytes = 0
+    point_count: int | None = None
     with path.open("rb") as stream:
         while True:
             line = stream.readline()
             if not line:
                 raise PcdFormatError("PCD DATA header not found")
-            if line.startswith(b"DATA binary"):
+            header_bytes += len(line)
+            if header_bytes > MAX_PCD_HEADER_BYTES:
+                raise PcdFormatError("PCD header exceeds 64 KiB")
+            if line.startswith(b"POINTS "):
+                point_count = int(line.split(maxsplit=1)[1])
+            if line.strip() == b"DATA binary":
                 offset = stream.tell()
                 break
-    values = np.fromfile(path, dtype="<f4", offset=offset)
-    if values.size % 4:
-        raise PcdFormatError("PCD payload is not XYZI float32")
+    if point_count is None or not 0 < point_count <= MAX_PCD_POINTS:
+        raise PcdFormatError(
+            "PCD point count is missing or outside the supported range"
+        )
+    expected_bytes = point_count * 4 * np.dtype("<f4").itemsize
+    if path.stat().st_size - offset != expected_bytes:
+        raise PcdFormatError("PCD payload size does not match POINTS for XYZI float32")
+    values = np.fromfile(path, dtype="<f4", count=point_count * 4, offset=offset)
     return values.reshape((-1, 4))[:, :2]
 
 
@@ -169,7 +191,30 @@ def render_assets(data: PlotData, output_dir: Path) -> None:
         x, y = _pixel(midpoint.x, midpoint.y, overview_bounds, overview.size)
         overview_draw.rectangle((x - 20, y - 20, x + 20, y + 20), fill=BLUE)
         overview_draw.text((x - 10, y - 17), label, fill=WHITE, font=label_font)
+    for label, chord_index in ISOLATED_ROUTE_CHORDS:
+        first = data.waypoints[chord_index]
+        second = data.waypoints[chord_index + 1]
+        x, y = _pixel(
+            (first.x + second.x) / 2,
+            (first.y + second.y) / 2,
+            overview_bounds,
+            overview.size,
+        )
+        overview_draw.rectangle((x - 25, y - 20, x + 25, y + 20), fill=BLUE)
+        overview_draw.text((x - 17, y - 17), label, fill=WHITE, font=label_font)
     overview.save(output_dir / "route-band-overview.png", optimize=True)
+    overview.save(
+        output_dir / "route-band-overview.webp",
+        format="WEBP",
+        quality=88,
+        method=6,
+    )
+    overview.resize((900, 460), Image.Resampling.LANCZOS).save(
+        output_dir / "route-band-overview-900.webp",
+        format="WEBP",
+        quality=86,
+        method=6,
+    )
 
     canvas = Image.new("RGB", (1800, 1120), WHITE)
     canvas_draw = ImageDraw.Draw(canvas)
@@ -178,14 +223,27 @@ def render_assets(data: PlotData, output_dir: Path) -> None:
         left, top = 32 + col * 590, 32 + row * 535
         bounds = plot_bounds(data.stations, start, end, 8.0)
         plot = draw_plot(data, bounds, (550, 450))
+        plot.save(output_dir / f"route-band-hotspot-{label.lower()}.png", optimize=True)
+        plot.resize((400, 327), Image.Resampling.LANCZOS).save(
+            output_dir / f"route-band-hotspot-{label.lower()}-400.webp",
+            format="WEBP",
+            quality=84,
+            method=6,
+        )
         canvas.paste(plot, (left, top + 52))
         canvas_draw.rectangle(
             (left, top, left + 550, top + 502), outline=BORDER, width=2
         )
         canvas_draw.text(
             (left + 16, top + 10),
-            f"{label}  stations {start}-{end}",
+            f"{label}  chords {CLUSTER_FAILURES[label]}",
             font=label_font,
             fill=INK,
         )
     canvas.save(output_dir / "route-band-hotspots.png", optimize=True)
+    canvas.save(
+        output_dir / "route-band-hotspots.webp",
+        format="WEBP",
+        quality=88,
+        method=6,
+    )

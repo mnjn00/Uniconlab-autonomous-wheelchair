@@ -9,6 +9,8 @@
 - 긴 PNG: [`../../../output/png/unicon-commercial-readiness-visual-report.png`](../../../output/png/unicon-commercial-readiness-visual-report.png)
 - 경로 판정 결과: [`assets/route-band-audit.json`](assets/route-band-audit.json)
 
+경로 판정 결과에는 검사 수치뿐 아니라 generator, 두 JSON, 실제 런타임 판정 코드, 실행 PCD와 생성된 모든 PNG·WebP의 byte 크기와 SHA-256이 함께 들어 있습니다. 따라서 공유된 그림이 어느 입력과 코드에서 나왔는지 다시 확인할 수 있습니다.
+
 저장소 루트에서 아래 명령을 실행하면 근거 파일 링크까지 함께 열립니다.
 
 ```bash
@@ -34,6 +36,7 @@ uv run decks/unicon-commercial-readiness/visual-report/generate_route_visuals.py
 - `routes/20260727_new_route_safety_band.json`
 - `routes/20260727_new_route_waypoints.json`
 - `src/static_livox_localization/scripts/safety_band.py`
+- `/Volumes/무제/merged_0707_0725_v1/mergedmap.ply`
 - `/Volumes/무제/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd`
 
 ## 해석 범위

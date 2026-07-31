@@ -2,7 +2,7 @@
 
 ## 0. Research Log
 
-- Embedded reference: the user selected `ppt-consulting-precision-grid`; the exact local package tokens and `/Users/minjun/unicon-wheelchair/.omo/teams/team-461f02b1/artifacts/consulting-precision-grid-constraints.md` are the visual contract.
+- Embedded reference: the user selected `ppt-consulting-precision-grid`; its package tokens and repository-local design constraints are the visual contract.
 - Existing project: the report reuses the approved commercial-readiness evidence, 14-slide decision story, and route/band runtime data.
 - Skipped Lazyweb and Imagen: this is not greenfield visual direction. The user already approved a concrete style, and the report must visualize measured engineering data rather than introduce an external visual language.
 - Design read: an internal engineering decision report for Korean technical and nontechnical teammates, using a precise consulting grid and one blue failure signal.

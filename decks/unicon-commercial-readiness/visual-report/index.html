@@ -25,6 +25,8 @@
       <a href="#geometry">검사 궤적</a>
       <a href="#perception">인식과 정합</a>
       <a href="#map">맵 자산</a>
+      <a href="#bringup">기동과 재현</a>
+      <a href="#security">보안 경계</a>
       <a href="#qualification">검증 공백</a>
       <a href="#closure">닫는 순서</a>
     </nav>
@@ -71,6 +73,12 @@
             <span role="cell">강한 안전 증거 경로는 시뮬레이션 또는 읽기 전용에서 끝나고, 현장 구동은 별도 경로를 사용합니다.</span>
             <span role="cell">안전 게이트 뒤 하나의 액추에이터 체인과 실제 바퀴 명령 에코를 증명합니다.</span>
           </div>
+          <div class="ledger-row is-header print-repeat" role="row">
+            <span role="columnheader">우선순위</span>
+            <span role="columnheader">문제</span>
+            <span role="columnheader">현재 관측</span>
+            <span role="columnheader">닫는 조건</span>
+          </div>
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">P0-2</span>
             <strong role="cell">0727 경로 밴드 자체 불일치</strong>
@@ -80,7 +88,7 @@
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">P0-3</span>
             <strong role="cell">검사한 궤적과 내보낸 명령 불일치</strong>
-            <span role="cell">검사 반경 1.375 m와 방출 반경 0.25 m, 요청 yaw 0.5와 복원 yaw 0.2058이 다릅니다.</span>
+            <span role="cell">검사 반경 1.375 m와 방출 반경 0.25 m가 다릅니다. 별도 wheel-count 재현은 yaw 0.5를 0.2058로 계산했지만 실제 외부 base 배포는 미확인입니다.</span>
             <span role="cell">최종 바퀴 명령을 같은 기하로 재검사하고 HIL에서 대조합니다.</span>
           </div>
           <div class="ledger-row" role="row">
@@ -97,21 +105,21 @@
           </div>
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">P0-6</span>
-            <strong role="cell">맵 자산 수명주기 미완성</strong>
-            <span role="cell">실행용 다운샘플 선택은 합리적이지만 NUC 성능, 해시, 서명, 버전 롤백 근거가 없습니다.</span>
-            <span role="cell">실행 시간 예산과 맵 무결성, 배포 이력을 함께 기록합니다.</span>
+            <strong role="cell">표준 기동과 검증 기준선 파손</strong>
+            <span role="cell">generic bringup은 필수 safety profile을 빠뜨리고, 선언되지 않은 인자 3개를 전달하며, clean checkout 전체 검사는 7개 실패가 남습니다.</span>
+            <span role="cell">하나의 현장 product bringup과 clean clone 검증 명령을 고정하고 실제 회귀 2개를 닫습니다.</span>
           </div>
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">P0-7</span>
-            <strong role="cell">현장 및 HIL 검증 공백</strong>
-            <span role="cell">라이브 23개 시나리오는 PLATFORM_UNAVAILABLE이고 추적된 물리 완료 결과는 0개입니다.</span>
-            <span role="cell">HIL, 비상 정지, 제동, 무승객 폐쇄코스 결과를 반복 가능한 형태로 남깁니다.</span>
+            <strong role="cell">현장 보안 경계 미완성</strong>
+            <span role="cell">추적된 legacy 경로는 인증되지 않은 ROS 명령을 UART 쓰기로 이어갈 수 있고, 실제 외부 드라이버의 서명과 NUC 최소권한 근거가 없습니다.</span>
+            <span role="cell">실제 드라이버 하나에 인증, replay 방지, 물리 interlock, 서명 배포와 SBOM을 묶습니다.</span>
           </div>
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">P0-8</span>
-            <strong role="cell">상용 안전 경계와 승인 체계</strong>
-            <span role="cell">소프트웨어 검사는 강하지만 EMC, 인간공학, 운행 승인과 장애 대응 책임의 완료 근거가 없습니다.</span>
-            <span role="cell">각 Gate의 승인자, 실패 중단 조건, 배포 서명을 명시합니다.</span>
+            <strong role="cell">제품 자격 증거 공백</strong>
+            <span role="cell">라이브 23개 시나리오는 PLATFORM_UNAVAILABLE이고 추적된 물리 완료 결과는 0개이며, EMC, 인간공학, 운행 승인 근거도 없습니다.</span>
+            <span role="cell">HIL, 무승객 폐쇄코스, 접근성, 규제와 운용 수명주기 근거를 Gate별 승인 묶음으로 남깁니다.</span>
           </div>
         </div>
       </section>
@@ -125,7 +133,7 @@
           <div class="metric is-active">
             <span class="metric-label">거부된 밴드 중심</span>
             <strong class="metric-value">35</strong>
-            <span class="metric-note">371개 기준점 중</span>
+            <span class="metric-note">371개 기준점 중, 역전 구간 2개 별도</span>
           </div>
           <div class="metric">
             <span class="metric-label">실패한 밴드 연결선</span>
@@ -154,14 +162,47 @@
         </div>
 
         <figure class="evidence-figure route-overview">
-          <img src="assets/route-band-overview.png" width="1800" height="920" loading="lazy" decoding="async" fetchpriority="low" alt="실제 포인트클라우드 맵 위에 0727 밴드 중심선과 좌우 경계를 그리고, 런타임에서 거부된 중심과 실패한 연결선을 파란색으로 표시한 전체 경로 지도. 반복 실패 구간 A, B, C, D, E가 표시되어 있다.">
-          <figcaption>전체 지도. 파란 실선과 원은 밴드 판정 실패, 파란 점선과 마름모는 기록 경로 판정 실패입니다. A부터 E는 아래 확대 구간과 연결됩니다.</figcaption>
+          <img src="assets/route-band-overview.webp" srcset="assets/route-band-overview-900.webp 900w, assets/route-band-overview.webp 1800w" sizes="(max-width: 48rem) 100vw, 90rem" width="1800" height="920" decoding="sync" alt="실제 포인트클라우드 맵 위에 0727 밴드 중심선과 좌우 경계를 그리고, 런타임에서 거부된 중심과 실패한 연결선을 파란색으로 표시한 전체 경로 지도. 반복 실패 구간 A, B, C, D, E와 고립된 기록 경로 연결선 I1, I2, I3가 표시되어 있다.">
+          <figcaption>전체 지도. 파란 실선과 원은 밴드 판정 실패, 파란 점선과 마름모는 기록 경로 판정 실패입니다. A부터 E는 아래 확대 구간, I1부터 I3은 각각 route chord 9, 46, 66의 고립 실패입니다.</figcaption>
         </figure>
 
         <figure class="evidence-figure hotspot-sheet">
-          <img src="assets/route-band-hotspots.png" width="1800" height="1120" loading="lazy" decoding="async" fetchpriority="low" alt="실패가 반복되는 다섯 구간 확대 지도. A는 station 96부터 114, B는 124부터 152, C는 201부터 213, D는 285부터 288, E는 368부터 370이다.">
-          <figcaption>반복 실패 확대. A와 B는 긴 직선 구간, C는 급한 방향 전환, D는 직선의 짧은 실패, E는 끝점 부근에 집중됩니다.</figcaption>
+          <img src="assets/route-band-hotspots.webp" width="1800" height="1120" loading="lazy" decoding="async" fetchpriority="low" alt="실패가 반복되는 다섯 구간 확대 지도. A는 station 96부터 114, B는 124부터 152, C는 201부터 213, D는 285부터 288, E는 368부터 370이다.">
+          <figcaption>반복 실패 확대. 확대 창은 A부터 E이고, 각 창 안의 정확한 실패 묶음과 전체 인덱스는 아래 목록에서 확인할 수 있습니다.</figcaption>
         </figure>
+        <div class="mobile-hotspots" aria-label="0727 반복 실패 구간 모바일 확대">
+          <figure>
+            <img src="assets/route-band-hotspot-a-400.webp" width="400" height="327" decoding="async" alt="A 구간 station 96부터 114의 반복 실패 확대 지도">
+            <figcaption><strong>A, station 96-114:</strong> 실제 실패 묶음은 96-99, 105-108, 110-114입니다.</figcaption>
+          </figure>
+          <figure>
+            <img src="assets/route-band-hotspot-b-400.webp" width="400" height="327" decoding="async" alt="B 구간 station 124부터 152의 반복 실패 확대 지도">
+            <figcaption><strong>B, station 124-152:</strong> 실제 실패 묶음은 124-125, 140-149, 151-152입니다.</figcaption>
+          </figure>
+          <figure>
+            <img src="assets/route-band-hotspot-c-400.webp" width="400" height="327" decoding="async" alt="C 구간 station 201부터 213의 반복 실패 확대 지도">
+            <figcaption><strong>C, station 201-213:</strong> 실제 실패 묶음은 201-203, 205-206, 209-213입니다.</figcaption>
+          </figure>
+          <figure>
+            <img src="assets/route-band-hotspot-d-400.webp" width="400" height="327" decoding="async" alt="D 구간 station 285부터 288의 반복 실패 확대 지도">
+            <figcaption><strong>D, station 285-288:</strong> 실제 실패 묶음은 285-287입니다.</figcaption>
+          </figure>
+          <figure>
+            <img src="assets/route-band-hotspot-e-400.webp" width="400" height="327" decoding="async" alt="E 구간 station 368부터 370의 반복 실패 확대 지도">
+            <figcaption><strong>E, station 368-370:</strong> 실제 실패 묶음은 368-369이며 끝점 route 실패와 겹칩니다.</figcaption>
+          </figure>
+        </div>
+        <details class="audit-details" open>
+          <summary>정확한 실패 인덱스와 고립 구간 보기</summary>
+          <dl>
+            <div><dt>역전된 usable interval</dt><dd>station [97, 98]</dd></div>
+            <div><dt>거부된 station</dt><dd>[97, 98, 99, 100, 106, 107, 108, 111, 112, 113, 114, 125, 126, 143, 144, 145, 146, 147, 148, 149, 150, 202, 203, 204, 206, 207, 210, 211, 212, 213, 286, 287, 288, 369, 370]</dd></div>
+            <div><dt>실패한 station chord</dt><dd>[96, 97, 98, 99, 105, 106, 107, 108, 110, 111, 112, 113, 114, 124, 125, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 151, 152, 201, 202, 203, 205, 206, 209, 210, 211, 212, 213, 285, 286, 287, 368, 369]</dd></div>
+            <div><dt>거부된 route waypoint</dt><dd>[10, 18, 19, 20, 26, 37, 38, 39, 74]</dd></div>
+            <div><dt>실패한 route chord</dt><dd>[9, 17, 18, 19, 20, 22, 24, 25, 26, 36, 37, 38, 39, 46, 55, 66, 73]</dd></div>
+            <div><dt>고립 표시</dt><dd>I1은 chord 9와 station 약 53, I2는 chord 46과 station 약 250, I3은 chord 66과 station 약 340입니다.</dd></div>
+          </dl>
+        </details>
         <div class="text-alt"><strong>해석 주의:</strong> 이 그림은 저장된 밴드가 자기 자신의 런타임 포함 판정과 충돌하는 위치를 보여 줍니다. 실제 연석 침범이나 충돌을 재현했다는 뜻은 아니며, 현장 주행 전에 경로 번들을 다시 만들어야 한다는 차단 근거입니다.<span class="source-note">입력: <code>routes/20260727_new_route_safety_band.json</code>, <code>routes/20260727_new_route_waypoints.json</code>, 실행 맵 <code>merged_0707_0725_0p20m_xyzi.pcd</code>. 판정: <code>src/static_livox_localization/scripts/safety_band.py</code>.</span></div>
       </section>
 
@@ -170,7 +211,8 @@
           <h2>안전 판단이 강한 경로와 실제 바퀴를 움직이는 경로가 하나로 증명되지 않았습니다</h2>
           <p>코드에 안전 로직이 있어도 최종 모터 명령이 그 로직을 반드시 통과한다는 현장 증거가 필요합니다.</p>
         </header>
-        <figure class="evidence-figure">
+        <figure class="evidence-figure flow-diagram" tabindex="0">
+          <p class="mobile-pan-hint">가로로 움직여 현재 경로와 닫는 상태를 크게 볼 수 있습니다.</p>
           <svg class="diagram" viewBox="0 0 1280 520" role="img" aria-labelledby="authority-title authority-desc">
             <title id="authority-title">현재 분리된 명령 권한과 필요한 단일 경로</title>
             <desc id="authority-desc">강한 안전 증거 경로는 cmd_vel_safe 뒤에서 시뮬레이션 또는 읽기 전용으로 끝나고, 현장 바퀴는 별도 gate와 외부 wheel launch를 거친다. 필요한 상태는 하나의 안전 gate 뒤에서 wheel controller와 motor로 이어지는 경로다.</desc>
@@ -223,9 +265,10 @@
           <p>같은 명령을 검사하고 방출하지 않으면 통과 판정이 실제 바퀴 움직임을 보증하지 못합니다.</p>
         </header>
         <div class="diagram-grid">
-          <article class="diagram-card is-active">
+          <article class="diagram-card is-active" tabindex="0">
             <h3>회전 반경 불일치</h3>
             <p>검사 반경은 방출 반경의 5.5배입니다.</p>
+            <p class="mobile-pan-hint">가로로 움직여 수치와 반경을 크게 볼 수 있습니다.</p>
             <svg class="diagram" viewBox="0 0 560 360" role="img" aria-label="0.25 미터 방출 반경 원과 1.375 미터 검사 반경 원 비교">
               <rect class="surface" x="0" y="0" width="560" height="360"/>
               <circle cx="280" cy="190" r="130" fill="none" stroke="#0B5FFF" stroke-width="5"/>
@@ -236,9 +279,10 @@
               <text class="label" x="305" y="220">방출 0.25 m</text>
             </svg>
           </article>
-          <article class="diagram-card">
-            <h3>yaw 복원 불일치</h3>
-            <p>요청값 0.5가 최종 단계에서 0.2058로 복원됩니다.</p>
+          <article class="diagram-card" tabindex="0">
+            <h3>별도 wheel-count 재현의 yaw 차이</h3>
+            <p>입력 (0.30, 0.50)의 별도 정수 wheel-count 재현에서 yaw가 약 0.2058로 계산됐습니다. 실제 외부 base 배포 여부는 확인되지 않았습니다.</p>
+            <p class="mobile-pan-hint">가로로 움직여 두 막대의 수치를 크게 볼 수 있습니다.</p>
             <svg class="diagram" viewBox="0 0 560 360" role="img" aria-label="요청 yaw 0.5와 복원 yaw 0.2058 막대 비교">
               <rect class="surface" x="0" y="0" width="560" height="360"/>
               <text class="label" x="55" y="100">요청</text>
@@ -252,7 +296,7 @@
             </svg>
           </article>
         </div>
-        <div class="text-alt"><strong>닫는 조건:</strong> planner가 검사한 twist, safety gate가 승인한 twist, wheel controller가 받은 twist를 같은 타임스탬프로 기록하고 HIL에서 기하가 일치해야 합니다.</div>
+        <div class="text-alt"><strong>닫는 조건:</strong> planner가 검사한 twist, safety gate가 승인한 twist, 실제 배포 드라이버와 firmware가 받은 명령을 같은 타임스탬프로 기록하고 HIL에서 기하가 일치해야 합니다. 0.2058은 현장 적용 사실이 아니라 별도 재현값입니다.</div>
       </section>
 
       <section class="report-section" id="perception">
@@ -261,9 +305,10 @@
           <p>탑승자 마스크, 낙차, 자동 정합은 각각 동작하지만 실패 상태를 보수적으로 묶는 현장 증거가 부족합니다.</p>
         </header>
         <div class="diagram-grid">
-          <article class="diagram-card is-active">
+          <article class="diagram-card is-active" tabindex="0">
             <h3>장애물 인식 경계</h3>
             <p>후면 탑승자를 제외하되 실제 장애물과 낙차 신호를 지우지 않아야 합니다.</p>
+            <p class="mobile-pan-hint">가로로 움직여 인식 흐름의 각 단계를 크게 볼 수 있습니다.</p>
             <svg class="diagram" viewBox="0 0 600 430" role="img" aria-label="라이다 포인트에서 자기 몸체 마스크와 전방 관심영역을 거쳐 장애물과 낙차 채널로 나누는 필요한 인식 구조">
               <rect class="surface" x="0" y="0" width="600" height="430"/>
               <rect class="node" x="55" y="45" width="210" height="65"/>
@@ -286,9 +331,10 @@
               <text class="muted" x="408" y="352" font-size="16">음의 장애물</text>
             </svg>
           </article>
-          <article class="diagram-card">
+          <article class="diagram-card" tabindex="0">
             <h3>로컬라이제이션 회복</h3>
             <p>시작점에서 자동 정합되더라도 신뢰가 떨어질 때 더 약한 후보로 조용히 내려가면 안 됩니다.</p>
+            <p class="mobile-pan-hint">가로로 움직여 정합과 안전 정지 분기를 크게 볼 수 있습니다.</p>
             <svg class="diagram" viewBox="0 0 600 430" role="img" aria-label="시작점 시드, Livox IMU와 스캔 정합, 품질 gate, 주행 또는 안전 정지로 나뉘는 로컬라이제이션 구조">
               <rect class="surface" x="0" y="0" width="600" height="430"/>
               <rect class="node" x="45" y="45" width="205" height="70"/>
@@ -340,10 +386,65 @@
           </article>
           <article class="diagram-card is-active">
             <h3>아직 필요한 근거</h3>
-            <p>NUC에서 초기 로드 시간, 메모리, 정합 지연을 측정하고 맵 해시, 버전, 서명, 롤백을 배포 기록에 묶어야 합니다.</p>
+            <p>NUC에서 초기 로드 시간, 메모리, 정합 지연을 측정하고 맵 해시, 버전, 서명, 롤백을 경로와 trajectory identity에 원자적으로 묶어야 합니다.</p>
           </article>
         </div>
+        <div class="text-alt"><strong>추가 확인점:</strong> canonical PLY에서 실행 PCD로 이어지는 derivation receipt를 만들고, 중복 full-map load, 개발 장비에서 관측된 101.23초 fallback proxy, 좌표를 +1000 m 바꾼 맵 mutation이 받아들여지는 경로를 실제 NUC 배포에서 차단해야 합니다.</div>
         <p class="source-note">원본: <code>/Volumes/무제/merged_0707_0725_v1/mergedmap.ply</code>. 실행: <code>merged_0707_0725_0p20m_xyzi.pcd</code>. 92.75%는 점 수 기준 감소율입니다.</p>
+      </section>
+
+      <section class="report-section" id="bringup">
+        <header class="section-header">
+          <h2>현장 기동 명령과 clean checkout 기준선이 하나로 고정되지 않았습니다</h2>
+          <p>개별 기능이 통과해도 팀원이 같은 명령으로 같은 제품 구성을 재현하지 못하면 릴리스 근거가 되지 않습니다.</p>
+        </header>
+        <ol class="process-flow" aria-label="현재 표준 기동의 끊긴 구성">
+          <li><strong>generic bringup</strong><span>표준 진입점으로 보이지만</span></li>
+          <li class="is-active"><strong>safety profile 누락</strong><span>필수 safety.launch 구성이 없음</span></li>
+          <li class="is-active"><strong>미선언 인자 3개</strong><span>hardware_enabled.launch에 전달</span></li>
+          <li class="is-active"><strong>불완전한 현장 구성</strong><span>한 번에 재현되는 product bringup이 아님</span></li>
+        </ol>
+        <div class="comparison">
+          <article class="comparison-panel">
+            <h3>확인된 전체 기준선</h3>
+            <span class="number">7 failed</span>
+            <p>revision <code>9d29c99</code>에서 1422 passed, 1 skipped, 190 subtests와 함께 확인됐습니다.</p>
+            <p>5개는 macOS <code>/var</code> symlink portability, 2개는 실제 clean-checkout 회귀입니다.</p>
+          </article>
+          <article class="comparison-panel is-active">
+            <h3>닫는 모습</h3>
+            <span class="number">1 command</span>
+            <p>센서, 로컬라이제이션, 경로, safety ABI와 실제 서명된 driver를 하나의 canonical field bringup으로 엽니다.</p>
+            <p>clean clone에서 문서화된 검증 명령이 green 또는 근거 있는 BLOCKED 상태여야 합니다.</p>
+          </article>
+        </div>
+        <div class="text-alt"><strong>수명주기 결정:</strong> ROS Noetic EOL 이후의 보안과 장애 대응 책임자를 지정하고, 유지 또는 migration 시점과 clean-clone 지원 환경을 릴리스 계획에 넣어야 합니다.</div>
+      </section>
+
+      <section class="report-section" id="security">
+        <header class="section-header">
+          <h2>ROS 명령에서 실제 UART까지의 신뢰 경계가 제품 수준으로 닫히지 않았습니다</h2>
+          <p>추적된 legacy 경로의 위험은 확인됐지만, 현재 외부 base가 그 경로를 실제 사용하는지는 아직 증명되지 않았습니다.</p>
+        </header>
+        <div class="trust-boundary" aria-label="현재와 필요한 현장 보안 경계 비교">
+          <article>
+            <h3>현재 추적 경로</h3>
+            <ol class="process-flow is-compact">
+              <li><strong>ROS topic</strong><span>인증되지 않은 mode 또는 wheel 명령 가능</span></li>
+              <li class="is-active"><strong>legacy callback</strong><span>caller ID는 암호학적 주체가 아님</span></li>
+              <li class="is-active"><strong>UART write</strong><span>실제 field base 적용 여부는 미확인</span></li>
+            </ol>
+          </article>
+          <article>
+            <h3>닫는 경계</h3>
+            <ol class="process-flow is-compact">
+              <li><strong>인증된 명령</strong><span>replay 방지와 승인된 principal</span></li>
+              <li class="is-active"><strong>단일 최소권한 driver</strong><span>물리 interlock과 안전 gate</span></li>
+              <li><strong>서명된 실제 base</strong><span>attestation, rollback, 감사 로그</span></li>
+            </ol>
+          </article>
+        </div>
+        <div class="text-alt"><strong>제품 완료 조건:</strong> 실제 NUC와 driver hash를 고정하고, 형식만 맞는 임의 64-hex가 아니라 HMAC을 검증하며, diagnostic KeyValue redaction, SBOM, SCA, credential rotation, firewall, update와 incident response 근거를 함께 남겨야 합니다.</div>
       </section>
 
       <section class="report-section" id="qualification">
@@ -355,10 +456,10 @@
           <article class="comparison-panel">
             <h3>소프트웨어 근거</h3>
             <span class="number">강함</span>
-            <p>365개 중 365개 테스트가 분류되었습니다.</p>
+            <p>추적된 저장소 경로 365개가 모두 분류되었습니다.</p>
             <p>핵심 묶음 853개와 추가 104개가 통과했습니다.</p>
             <p>보안 묶음 297개가 통과했습니다.</p>
-            <p>전체 실행은 7 failed, 1422 passed, 1 skipped, 190 subtests였습니다.</p>
+            <p>revision <code>9d29c99</code> 전체 실행은 7 failed, 1422 passed, 1 skipped, 190 subtests였습니다.</p>
           </article>
           <article class="comparison-panel is-active">
             <h3>물리 및 현장 근거</h3>
@@ -368,7 +469,7 @@
             <p>HIL, 비상 정지, 제동, EMC, 인간공학, 무승객 폐쇄코스 근거가 아직 승인 묶음으로 남아 있지 않습니다.</p>
           </article>
         </div>
-        <div class="text-alt"><strong>해석:</strong> “테스트가 없다”가 아니라 “코드 검사는 강하지만 실제 액추에이터와 사람 주변 운행의 안전 자격이 아직 별도 공백”입니다.</div>
+        <div class="text-alt"><strong>세 가지를 구분해야 합니다:</strong> 추적된 완료 자격 결과는 0개지만 개발 중 불리한 관측은 있습니다. <code>defd0d2</code>에는 수동 개입 전 연석 방향 2.68 m 이탈, <code>e12f9b8</code>에는 지연된 yaw 뒤 raised edge 쪽 급회전이 기록됐습니다. 이는 승인된 qualification receipt도 아니고, “물리 관측이 전혀 없음”을 뜻하지도 않습니다.</div>
       </section>
 
       <section class="report-section" id="closure">
@@ -379,25 +480,38 @@
         <div class="gate-list" aria-label="검증 Gate 순서">
           <article class="gate">
             <strong>Gate 0</strong>
-            <span>제어권 단일화</span>
-            <span>실제 바퀴 명령 에코, E-stop, 별도 우회 경로 없음</span>
+            <span>현장 truth 동결</span>
+            <span>hardware, passenger, campus 권한 false. 외부 base와 NUC hash 고정</span>
           </article>
           <article class="gate">
             <strong>Gate 1</strong>
-            <span>정적 결정성</span>
-            <span>0727 밴드 전수 통과, 맵 해시, 같은 입력의 같은 결과</span>
+            <span>단일 software authority</span>
+            <span>canonical bringup, safety ABI, 실제 driver, 경로와 기하 전수 통과</span>
           </article>
           <article class="gate">
             <strong>Gate 2</strong>
-            <span>HIL 및 센서 실패</span>
-            <span>기하 일치, 포인트 부족, stale cloud, 정합 실패 안전 정지</span>
+            <span>목표 NUC와 isolated HIL</span>
+            <span>명령 echo, E-stop, 센서와 localization fault injection</span>
           </article>
           <article class="gate">
             <strong>Gate 3</strong>
             <span>무승객 폐쇄코스</span>
             <span>비상 정지, 제동, 낙차, 사람 접근, 반복 주행 결과</span>
           </article>
+          <article class="gate">
+            <strong>Gate 4</strong>
+            <span>제품, 사람, 규제</span>
+            <span>접근 가능한 HMI, 교육, EMC, 신뢰성, cyber lifecycle, MFDS 전략</span>
+          </article>
+          <article class="gate">
+            <strong>Gate 5</strong>
+            <span>제한된 pilot</span>
+            <span>Gate 0부터 4의 승인 근거와 좁은 ODD, operator, fleet 지원</span>
+          </article>
         </div>
+        <pre class="authority-flags" aria-label="현재 필수 운행 권한 상태"><code>hardware_motion_authorized: false
+passenger_operation_authorized: false
+campus_operation_authorized: false</code></pre>
 
         <div class="issue-ledger" role="table" aria-label="팀 담당 영역별 완료 증거">
           <div class="ledger-row is-header" role="row">
@@ -408,27 +522,39 @@
           </div>
           <div class="ledger-row" role="row">
             <span class="priority is-active" role="cell">G0</span>
-            <strong role="cell">Controls / Safety</strong>
-            <span role="cell">현장 액추에이터 체인과 우회 가능한 cmd 토픽을 한 장으로 확정합니다.</span>
-            <span role="cell">모터 입력 에코와 E-stop 동작 로그</span>
+            <strong role="cell">Release / Field truth</strong>
+            <span role="cell">세 가지 운행 권한을 false로 유지하고 실제 NUC, base, driver hash를 고정합니다.</span>
+            <span role="cell">서명된 field manifest와 권한 상태</span>
           </div>
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">G1</span>
-            <strong role="cell">Autonomy / Mapping</strong>
-            <span role="cell">A부터 E와 고립 실패를 수정하고 같은 검사기를 CI에 넣습니다.</span>
-            <span role="cell">중심과 모든 연결선 100% 통과, 맵 해시</span>
+            <strong role="cell">Controls / Autonomy</strong>
+            <span role="cell">하나의 product bringup과 actuator chain에서 경로, 기하, localization freshness를 묶습니다.</span>
+            <span role="cell">clean clone green, 경로 100% 통과, 실제 명령 echo</span>
           </div>
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">G2</span>
             <strong role="cell">Perception / Localization</strong>
             <span role="cell">탑승자 3D 마스크, 전방 FOV, 낙차, Livox IMU, 자동 정합 실패 상태를 연결합니다.</span>
-            <span role="cell">HIL fault injection과 안전 정지 로그</span>
+            <span role="cell">목표 NUC HIL fault injection과 안전 정지 로그</span>
           </div>
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">G3</span>
-            <strong role="cell">QA / Release</strong>
+            <strong role="cell">Field QA</strong>
             <span role="cell">무승객 폐쇄코스 절차와 중단 기준을 승인 문서로 고정합니다.</span>
             <span role="cell">반복 결과, 영상, 로그, 승인 서명</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">G4</span>
+            <strong role="cell">Product / Human / Regulatory</strong>
+            <span role="cell">rider와 caregiver HMI, help escalation, 교육, MFDS, EMC, QMS, CAPA와 PMS를 닫습니다.</span>
+            <span role="cell">사용성, 규제, 신뢰성, cyber lifecycle 승인 묶음</span>
+          </div>
+          <div class="ledger-row" role="row">
+            <span class="priority" role="cell">G5</span>
+            <strong role="cell">Pilot authority</strong>
+            <span role="cell">Gate 0부터 4가 닫힌 뒤 좁은 intended use와 ODD, alternate route, fleet support를 고정합니다.</span>
+            <span role="cell">제한 pilot 승인, operator 책임, 중단과 rollback 기준</span>
           </div>
         </div>
 
@@ -436,7 +562,7 @@
         <ul class="source-list">
           <li><a href="../../../routes/20260727_new_route_safety_band.json">0727 안전 밴드 JSON</a>과 <a href="../../../routes/20260727_new_route_waypoints.json">0727 기록 경로 JSON</a></li>
           <li><a href="../../../src/static_livox_localization/scripts/safety_band.py">실제 SafetyBand 런타임 판정 코드</a></li>
-          <li><a href="../../../.omo/ulw-research/20260730-115236/SYNTHESIS.md">전수조사 종합 근거</a>와 <a href="../../../.omo/ulw-research/20260730-115236/wave-3-route-bundle.md">경로 번들 상세 감사</a></li>
+          <li><a href="README.md">전수조사 기반 보고서의 입력, 재현 방법과 해석 범위</a></li>
           <li><a href="assets/route-band-audit.json">이 보고서에 사용한 경로 판정 결과 JSON</a></li>
         </ul>
       </section>
