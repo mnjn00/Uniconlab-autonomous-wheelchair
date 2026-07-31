@@ -21,6 +21,15 @@ Per control cycle:
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST or sustained DEGRADED localization, manual
     joystick mode, or geofence violation, and always stops on shutdown.
+
+_safety_policies:=false switches off everything in that list that is a
+judgement about the world, leaving the joystick override and the checks it
+rests on. It exists so a run can measure one thing - whether localization
+stays attached over the whole route - without a band refusal or an obstacle
+stop ending the measurement first and looking the same from outside. The
+suppressed policies are still evaluated and published as WOULD_HOLD, since
+that run is also the only place their thresholds can be calibrated. See
+drive_policy.py.
 """
 
 import json
@@ -49,6 +58,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, REFERENCE_BODY,
                         body_to_lidar, lidar_extrinsics, pose_correction,
                         reference_correction)
+from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import localization_hold_reason
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            motion_hold_reason, stopping_envelope)
@@ -275,6 +285,18 @@ class WaypointFollower:
         self.chord_safe = True
         self.last_yaw_rate = 0.0
         self.status = "PAUSED"
+        # Absent means guarded, and anything that arrives as a string rather
+        # than a bool is truthy and therefore also guarded. Both failure
+        # directions leave the guards on; the startup line below is how the
+        # operator finds out which way it went.
+        self.policies = bool(rospy.get_param("~safety_policies", True))
+        if self.policies:
+            rospy.loginfo(announce(True, "waypoint_follower", []))
+        else:
+            rospy.logwarn(announce(False, "waypoint_follower", [
+                "band containment", "hazard-clearance speed", "obstacles",
+                "localization health", "the motion-estimate gate",
+                "the geofence", "the slope limit"]))
 
         cmd_topic = rospy.get_param("~cmd_topic", "/cmd_vel_raw")
         self.cmd_pub = rospy.Publisher(cmd_topic, Twist, queue_size=1)
@@ -517,10 +539,17 @@ class WaypointFollower:
             if norm > 1e-3:
                 normal = np.array([-direction[1], direction[0]]) / norm
                 target = target + normal * self.lateral_offset
-        return self.band.clamp(target)
+        return self.band.clamp(target) if self.policies else target
 
     def safe_target(self, wanted):
         """Return the longest target whose complete drive chord is in band."""
+        # With containment off the target is the recorded line itself, which
+        # is where a person drove this route on 0727 - the band is what
+        # constrains a departure from it, and there is nothing left here to
+        # depart from it.
+        if not self.policies:
+            return self.target_at_lookahead(
+                max(MIN_LOOKAHEAD_M, wanted)), MAX_SPEED, True
         candidate = max(MIN_LOOKAHEAD_M, wanted)
         while True:
             target = self.target_at_lookahead(candidate)
@@ -541,6 +570,48 @@ class WaypointFollower:
             5.0, "waypoint_follower: no band-safe chord - holding")
         return target, 0.0, False
 
+    def hold_candidates(self, now):
+        """Every reason to hold, highest priority first, each tagged with
+        whether it is a safety policy or an override.
+
+        A generator, because the order is both the priority order and the
+        order in which the tests are safe to run at all: NO_POSE is what
+        guarantees the position tests below it have a position to read, so
+        nothing after it may be evaluated once it fires. See drive_policy
+        for which tags mean what and why the line is drawn there.
+        """
+        if not self.enabled or self.done:
+            yield ("DONE" if self.done else "PAUSED"), OVERRIDE
+            return
+        if self.pose_xy is None or \
+                (now - self.pose_stamp).to_sec() > POSE_STALE_S:
+            yield "NO_POSE", OVERRIDE
+            return
+        if (now - self.cloud_stamp).to_sec() > 1.0:
+            yield "NO_CLOUD", POLICY
+        motion_reason = motion_hold_reason(
+            self.motion, now.to_sec(), ODOM_STALE_S)
+        if motion_reason:
+            yield motion_reason, POLICY
+        degraded_age_s = None if self.degraded_since is None else \
+            (now - self.degraded_since).to_sec()
+        localization_reason = localization_hold_reason(
+            self.tracking_state, degraded_age_s, DEGRADED_STOP_S)
+        if localization_reason:
+            yield localization_reason, POLICY
+        if (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
+            yield "BASE_STALE", OVERRIDE
+            return
+        if self.drive_mode is not None and self.drive_mode != AUTO_MODE:
+            yield "MANUAL_MODE", OVERRIDE
+            return
+        if self.route_locked and np.min(np.linalg.norm(
+                self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
+            yield "OFF_ROUTE", POLICY
+        if self.route_locked and not self.band.contains(
+                self.pose_xy, grace=BAND_RECOVER_MAX):
+            yield "OFF_BAND", POLICY
+
     def step(self):
         now = rospy.Time.now()
         if self.tracking_state == "DEGRADED":
@@ -548,34 +619,15 @@ class WaypointFollower:
                 self.degraded_since = now
         else:
             self.degraded_since = None
-        reason = None
-        if not self.enabled or self.done:
-            reason = "DONE" if self.done else "PAUSED"
-        elif self.pose_xy is None or \
-                (now - self.pose_stamp).to_sec() > POSE_STALE_S:
-            reason = "NO_POSE"
-        elif (now - self.cloud_stamp).to_sec() > 1.0:
-            reason = "NO_CLOUD"
-        else:
-            reason = motion_hold_reason(
-                self.motion, now.to_sec(), ODOM_STALE_S)
-            if not reason:
-                degraded_age_s = None if self.degraded_since is None else \
-                    (now - self.degraded_since).to_sec()
-                reason = localization_hold_reason(
-                    self.tracking_state, degraded_age_s, DEGRADED_STOP_S)
-        if reason is None and \
-                (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
-            reason = "BASE_STALE"
-        elif reason is None and self.drive_mode is not None and \
-                self.drive_mode != AUTO_MODE:
-            reason = "MANUAL_MODE"
-        elif reason is None and self.route_locked and np.min(np.linalg.norm(
-                self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
-            reason = "OFF_ROUTE"
-        elif reason is None and self.route_locked and not self.band.contains(
-                self.pose_xy, grace=BAND_RECOVER_MAX):
-            reason = "OFF_BAND"
+        reason, suppressed = evaluate_holds(
+            self.hold_candidates(now), self.policies)
+        if suppressed:
+            # Not a hold, but the whole reason to drive with the policies
+            # off is to learn where they would have bitten. It goes on the
+            # topic the black box records, not just into a log.
+            self.status_pub.publish(String(data="WOULD_HOLD:" + suppressed))
+            rospy.logwarn_throttle(
+                5.0, "policies off: would have held on %s", suppressed)
         if reason:
             if reason != self.status:
                 rospy.loginfo("hold: %s", reason)
@@ -590,19 +642,25 @@ class WaypointFollower:
             rospy.loginfo("GOAL REACHED")
             return
 
-        recovering = self.route_locked and not self.band.contains(
-            self.pose_xy, grace=OFF_BAND_GRACE)
+        recovering = self.policies and self.route_locked and \
+            not self.band.contains(self.pose_xy, grace=OFF_BAND_GRACE)
 
-        obstacle_dist = self.obstacle_distance(self.lateral_offset)
+        # None reads downstream as "nothing in the corridor", which is what
+        # the guard being switched off has to mean here - obstacle_distance
+        # returns 0.0 for missing data, so calling it and discarding the
+        # answer would fail closed on exactly the run that must not.
+        obstacle_dist = self.obstacle_distance(self.lateral_offset) \
+            if self.policies else None
 
         allowed = MAX_SPEED
         if recovering:
             allowed = min(allowed, CREEP_SPEED)
-        allowed = min(allowed, self.slack_speed())
-        if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
-            allowed = min(allowed, SLOPE_SPEED)
-        if self.tracking_state == "DEGRADED":
-            allowed = min(allowed, SLOPE_SPEED)
+        if self.policies:
+            allowed = min(allowed, self.slack_speed())
+            if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
+                allowed = min(allowed, SLOPE_SPEED)
+            if self.tracking_state == "DEGRADED":
+                allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
         guard_stop = self.guard_stop()
@@ -687,9 +745,10 @@ class WaypointFollower:
         state = blocking or (
             "RECOVER" if recovering else
             ("BYPASS" if abs(self.lateral_offset) > 0.01 else "DRIVING"))
-        self.status_pub.publish(String(data="%s wp=%d/%d v=%.2f" % (
+        self.status_pub.publish(String(data="%s wp=%d/%d v=%.2f%s" % (
             state, self.nearest_index, len(self.waypoints),
-            self.current_speed)))
+            self.current_speed,
+            "" if self.policies else " POLICIES_OFF")))
         if state != self.status:
             rospy.loginfo("state: %s (wp %d/%d, v=%.2f)",
                           state, self.nearest_index, len(self.waypoints),

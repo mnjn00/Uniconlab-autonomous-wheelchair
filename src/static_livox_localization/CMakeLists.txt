@@ -56,6 +56,7 @@ install(
     scripts/body_frame.py
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py
+    scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
     scripts/safety_band.py

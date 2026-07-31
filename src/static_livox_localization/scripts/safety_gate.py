@@ -11,6 +11,12 @@ own staleness fail-safe); wheel_cmd_tmp.py/uart.py consume its output on
 /cmd_vel. If the planner misbehaves or dies, this gate stops the chair;
 if this gate dies, tip_guard's own staleness check stops the chair; if
 that dies too, the uart-level watchdog stops the chair.
+
+_safety_policies:=false keeps the chain-integrity checks - stale input,
+non-finite input, reverse, the speed ceilings - and switches off the
+judgements about the world: the stopping envelope, the swept footprint,
+and scan staleness, which only matters because those two read the scan.
+Suppressed blocks are still computed and logged. See drive_policy.py.
 """
 import math
 import os
@@ -33,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
                         lidar_extrinsics)
+from drive_policy import announce
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            filter_obstacle_points, motion_hold_reason,
                            stopping_envelope, swept_footprint_collision)
@@ -162,6 +169,13 @@ class SafetyGate:
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""
+        self.policies = bool(rospy.get_param("~safety_policies", True))
+        if self.policies:
+            rospy.loginfo(announce(True, "safety_gate", []))
+        else:
+            rospy.logwarn(announce(False, "safety_gate", [
+                "the stopping envelope", "the swept footprint",
+                "scan staleness", "the motion-estimate gate"]))
         self.pub = rospy.Publisher("/cmd_vel_gated", Twist, queue_size=1)
         rospy.Subscriber("/cmd_vel_raw", Twist, self.on_raw, queue_size=1)
         rospy.Subscriber("/cloud_registered_body", PointCloud2,
@@ -266,7 +280,8 @@ class SafetyGate:
             reason = ""
             if (now - self.raw_stamp).to_sec() > INPUT_STALE_S:
                 reason = "INPUT_STALE"
-            elif (now - self.cloud_stamp).to_sec() > CLOUD_STALE_S:
+            elif self.policies and \
+                    (now - self.cloud_stamp).to_sec() > CLOUD_STALE_S:
                 reason = "CLOUD_STALE"
             elif not math.isfinite(self.raw.linear.x) or \
                     not math.isfinite(self.raw.angular.z):
@@ -278,7 +293,16 @@ class SafetyGate:
                     abs(self.raw.linear.x) > MOTION_EPSILON or \
                     abs(self.raw.angular.z) > MOTION_EPSILON
                 if wants_motion:
-                    reason = self.motion_blocked(now)
+                    blocked = self.motion_blocked(now)
+                    if self.policies:
+                        reason = blocked
+                    elif blocked:
+                        # Still measured, still logged, just not acted on:
+                        # this log is where the run finds out how often the
+                        # envelope fires on the real thing.
+                        rospy.logwarn_throttle(
+                            5.0, "policies off: would have stopped on %s",
+                            blocked)
                 if not reason:
                     out.linear.x = max(0.0, min(HARD_V_LIMIT,
                                                 self.raw.linear.x))

@@ -23,6 +23,16 @@ TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.
 ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260727_chair_centred_waypoints.json}"
 BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260727_chair_centred_safety_band.json}"
 RVIZ="${RVIZ:-true}"
+# SAFETY_POLICIES=false drives with every discretionary guard switched off,
+# leaving the joystick override as the failsafe. It exists to measure one
+# thing per run without another guard ending the measurement first. Only the
+# two literals are accepted: a typo here must not silently be truthy, and a
+# rosparam bool will not take "0" or "no" anyway.
+SAFETY_POLICIES="${SAFETY_POLICIES:-true}"
+if [ "$SAFETY_POLICIES" != "true" ] && [ "$SAFETY_POLICIES" != "false" ]; then
+  echo "ERROR: SAFETY_POLICIES must be true or false, got '$SAFETY_POLICIES'" >&2
+  exit 65
+fi
 LOG=$HOME
 
 source /opt/ros/noetic/setup.bash
@@ -252,6 +262,7 @@ fi
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
 setsid nohup rosrun static_livox_localization safety_gate.py \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
+  _safety_policies:="$SAFETY_POLICIES" \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
 setsid nohup rosrun static_livox_localization tip_guard.py \
   > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
@@ -263,6 +274,7 @@ echo "  final-stage relay up - watch /tip_guard/status"
 setsid nohup rosrun static_livox_localization waypoint_follower.py \
   _route:="$ROUTE" _safety_band:="$BAND" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
+  _safety_policies:="$SAFETY_POLICIES" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &
 
 echo "[7/7] black-box recorder"
@@ -275,6 +287,16 @@ setsid nohup rosbag record --lz4 \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""
+if [ "$SAFETY_POLICIES" = "false" ]; then
+  echo "*********************************************************************"
+  echo "SAFETY POLICIES ARE OFF. No band containment, no obstacle stop, no"
+  echo "localization hold, no geofence. The joystick is the ONLY thing that"
+  echo "will stop this chair. Keep a hand on it for the whole run."
+  echo "Suppressed guards are published as WOULD_HOLD: on"
+  echo "/waypoint_follower/status and recorded in the black box."
+  echo "*********************************************************************"
+  echo ""
+fi
 echo "READY. To drive the route:"
 echo "  1) rostopic pub -1 /mode_cmd std_msgs/Int16 65     # auto mode"
 echo "  2) rosservice call /waypoint_follower/start \"data: true\""

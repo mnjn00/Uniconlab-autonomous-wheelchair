@@ -87,6 +87,9 @@ def follower_for(module, safe_distance):
     follower.nearest_index = 0
     follower.lateral_offset = 0.0
     follower.band = DistanceBand(safe_distance)
+    # The guarded configuration: these are the band's own geometry tests, and
+    # with the policies off there is no band to test.
+    follower.policies = True
     return follower
 
 
