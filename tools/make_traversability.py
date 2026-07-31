@@ -73,6 +73,17 @@ MIN_OBJECT_CELLS = 2
 # the line and drops the noise; the previous opening did the exact opposite,
 # deleting clean kerbs and keeping thick patches of rough ground.
 MIN_STEP_CELLS = 3
+# The runtime map is a 0.20 m voxel downsample, so a 0.15 m cell often catches
+# no point at all through pure aliasing: 40 percent of the cells beside the
+# driven line hold fewer than two returns even where the pavement is plainly
+# there. Requiring returns per cell therefore punches holes in the free-ground
+# mask, and eroding that by the chair's half width amplifies every hole into a
+# gap - measured, it left 2 m2 of reachable ground beyond the driven ribbon out
+# of 262, which reads as "the chair can only go where it already went" and is
+# an artifact of the raster, not of the site. Small enclosed holes are sealed
+# before the erosion; the obstruction and step masks are then re-applied, so a
+# hole that actually contains something stays blocked.
+HOLE_FILL_CELLS = 2
 
 
 def keep_out(mask):
@@ -181,10 +192,12 @@ def classify(grid):
         stepped = np.logical_and(stepped, keep_out(specks))
 
     free = np.logical_and(inside, grid["known"])
-    free = np.logical_and(free, grid["count"] >= 2)
     free = np.logical_and(free, keep_out(obstruction))
     free = np.logical_and(free, keep_out(stepped))
     free = np.logical_or(free, driven)
+    free = ndimage.binary_closing(free, structure=disk(HOLE_FILL_CELLS))
+    free = np.logical_and(free, keep_out(obstruction))
+    free = np.logical_and(free, keep_out(stepped))
 
     radius = int(round((CHAIR_HALF_WIDTH_M + BAND_MARGIN_M) / CELL))
     centre_free = ndimage.binary_erosion(free, structure=disk(radius)) | driven
@@ -228,7 +241,11 @@ def main(map_path, route_path, out_prefix):
              int(((sizes > 0.05) & (sizes < 1.5)).sum()), int((sizes > 10).sum())))
     print("ground steps: %.0f m2" % (masks["stepped"].sum() * area))
     print("free ground: %.0f m2" % (masks["free"].sum() * area))
-    print("reachable by the chair centre: %.0f m2" % (masks["reachable"].sum() * area))
+    earned = np.logical_and(masks["reachable"], keep_out(masks["driven"]))
+    print("reachable by the chair centre: %.0f m2, of which %.0f m2 beyond the "
+          "driven ribbon (%.2f m of mean width)"
+          % (masks["reachable"].sum() * area, earned.sum() * area,
+             earned.sum() * area / 383.0))
     covered = (masks["reachable"] & masks["driven"]).sum() / max(
         masks["driven"].sum(), 1)
     print("the drive lies %.1f%% inside the reachable region" % (100 * covered))
