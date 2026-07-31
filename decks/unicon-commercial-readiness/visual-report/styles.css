@@ -83,6 +83,10 @@ a {
   letter-spacing: -0.015em;
 }
 
+.ledger-title {
+  margin-block-start: var(--space-4);
+}
+
 .report-header h1 {
   max-width: 20ch;
   font-size: clamp(2rem, 5vw, 4rem);
@@ -215,10 +219,15 @@ a {
 }
 
 .evidence-figure > img,
+.evidence-figure > picture > img,
 .evidence-figure > svg {
   width: 100%;
   border: 1px solid var(--border);
   background: var(--surface);
+}
+
+.evidence-figure > picture {
+  display: block;
 }
 
 .evidence-figure.route-overview > img {
@@ -226,7 +235,7 @@ a {
   object-fit: contain;
 }
 
-.evidence-figure.hotspot-sheet > img {
+.evidence-figure.hotspot-sheet > picture > img {
   aspect-ratio: 45 / 28;
   object-fit: contain;
 }
@@ -420,7 +429,15 @@ figcaption,
   color: var(--muted);
 }
 
+.qualification-matrix {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-block-start: var(--space-3);
+}
+
 .mobile-pan-hint,
+.mobile-diagram-summary,
 .mobile-hotspots {
   display: none;
 }
@@ -834,6 +851,7 @@ code {
   .metric-strip,
   .comparison,
   .diagram-grid,
+  .qualification-matrix,
   .gate-list,
   .trust-boundary,
   .process-flow {
@@ -880,6 +898,18 @@ code {
     font-weight: 400;
   }
 
+  .gate-ledger .ledger-row > :nth-child(2)::before {
+    content: "담당 영역: ";
+  }
+
+  .gate-ledger .ledger-row > :nth-child(3)::before {
+    content: "지금 공유할 작업: ";
+  }
+
+  .gate-ledger .ledger-row > :nth-child(4)::before {
+    content: "완료로 인정할 근거: ";
+  }
+
   .audit-details dl > div {
     display: block;
   }
@@ -914,6 +944,17 @@ code {
     color: #5B6472;
     font-size: 0.8rem;
     font-weight: 700;
+  }
+
+  .mobile-diagram-summary {
+    display: block;
+    width: 100%;
+    margin: var(--space-1) 0 var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border-left: 4px solid var(--accent);
+    background: var(--canvas);
+    color: var(--ink);
+    font-size: 0.875rem;
   }
 
   .evidence-figure.hotspot-sheet {
@@ -1034,6 +1075,7 @@ code {
   .metric-strip,
   .comparison,
   .diagram-grid,
+  .qualification-matrix,
   .gate-list,
   .audit-details,
   .text-alt {
@@ -1068,7 +1110,7 @@ code {
     min-height: 0;
   }
 
-  .evidence-figure.hotspot-sheet > img {
+  .evidence-figure.hotspot-sheet > picture > img {
     width: auto;
     max-height: 112mm;
     margin-inline: auto;

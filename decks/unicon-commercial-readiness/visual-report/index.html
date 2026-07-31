@@ -6,7 +6,7 @@
   <meta name="description" content="UNICON 자율주행 휠체어의 경로 밴드, 제어권, 인식, 로컬라이제이션, 맵, 검증 문제를 실제 근거로 시각화한 팀 공유 보고서">
   <title>UNICON 상용화 차단 문제 시각 보고서</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
   <a class="skip-link" href="#main">본문으로 이동</a>
@@ -106,7 +106,7 @@
           <div class="ledger-row" role="row">
             <span class="priority" role="cell">P0-6</span>
             <strong role="cell">표준 기동과 검증 기준선 파손</strong>
-            <span role="cell">generic bringup은 필수 safety profile을 빠뜨리고, 선언되지 않은 인자 3개를 전달하며, clean checkout 전체 검사는 7개 실패가 남습니다.</span>
+            <span role="cell">generic bringup은 필수 safety profile과 mission/perception 구성을 빠뜨리고, 선언되지 않은 인자 3개를 전달하며, clean checkout 전체 검사는 7개 실패가 남습니다.</span>
             <span role="cell">하나의 현장 product bringup과 clean clone 검증 명령을 고정하고 실제 회귀 2개를 닫습니다.</span>
           </div>
           <div class="ledger-row" role="row">
@@ -167,7 +167,10 @@
         </figure>
 
         <figure class="evidence-figure hotspot-sheet">
-          <img src="assets/route-band-hotspots.webp" width="1800" height="1120" loading="lazy" decoding="async" fetchpriority="low" alt="실패가 반복되는 다섯 구간 확대 지도. A는 station 96부터 114, B는 124부터 152, C는 201부터 213, D는 285부터 288, E는 368부터 370이다.">
+          <picture>
+            <source media="(min-width: 48.01rem)" srcset="assets/route-band-hotspots.webp">
+            <img src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221800%22 height=%221120%22/%3E" width="1800" height="1120" decoding="sync" alt="실패가 반복되는 다섯 구간 확대 지도. A는 station 96부터 114, B는 124부터 152, C는 201부터 213, D는 285부터 288, E는 368부터 370이다.">
+          </picture>
           <figcaption>반복 실패 확대. 확대 창은 A부터 E이고, 각 창 안의 정확한 실패 묶음과 전체 인덱스는 아래 목록에서 확인할 수 있습니다.</figcaption>
         </figure>
         <div class="mobile-hotspots" aria-label="0727 반복 실패 구간 모바일 확대">
@@ -269,6 +272,7 @@
             <h3>회전 반경 불일치</h3>
             <p>검사 반경은 방출 반경의 5.5배입니다.</p>
             <p class="mobile-pan-hint">가로로 움직여 수치와 반경을 크게 볼 수 있습니다.</p>
+            <p class="mobile-diagram-summary"><strong>전체 수치:</strong> 검사 1.375 m, 방출 0.25 m.</p>
             <svg class="diagram" viewBox="0 0 560 360" role="img" aria-label="0.25 미터 방출 반경 원과 1.375 미터 검사 반경 원 비교">
               <rect class="surface" x="0" y="0" width="560" height="360"/>
               <circle cx="280" cy="190" r="130" fill="none" stroke="#0B5FFF" stroke-width="5"/>
@@ -283,6 +287,7 @@
             <h3>별도 wheel-count 재현의 yaw 차이</h3>
             <p>입력 (0.30, 0.50)의 별도 정수 wheel-count 재현에서 yaw가 약 0.2058로 계산됐습니다. 실제 외부 base 배포 여부는 확인되지 않았습니다.</p>
             <p class="mobile-pan-hint">가로로 움직여 두 막대의 수치를 크게 볼 수 있습니다.</p>
+            <p class="mobile-diagram-summary"><strong>전체 수치:</strong> 요청 0.5, 별도 재현 0.2058. 현장 적용은 미확인입니다.</p>
             <svg class="diagram" viewBox="0 0 560 360" role="img" aria-label="요청 yaw 0.5와 복원 yaw 0.2058 막대 비교">
               <rect class="surface" x="0" y="0" width="560" height="360"/>
               <text class="label" x="55" y="100">요청</text>
@@ -309,6 +314,7 @@
             <h3>장애물 인식 경계</h3>
             <p>후면 탑승자를 제외하되 실제 장애물과 낙차 신호를 지우지 않아야 합니다.</p>
             <p class="mobile-pan-hint">가로로 움직여 인식 흐름의 각 단계를 크게 볼 수 있습니다.</p>
+            <p class="mobile-diagram-summary"><strong>전체 흐름:</strong> Livox 포인트 → 3D 자기 몸체 마스크 → 전방 FOV와 유효성 → 장애물과 낙차 채널.</p>
             <svg class="diagram" viewBox="0 0 600 430" role="img" aria-label="라이다 포인트에서 자기 몸체 마스크와 전방 관심영역을 거쳐 장애물과 낙차 채널로 나누는 필요한 인식 구조">
               <rect class="surface" x="0" y="0" width="600" height="430"/>
               <rect class="node" x="55" y="45" width="210" height="65"/>
@@ -335,6 +341,7 @@
             <h3>로컬라이제이션 회복</h3>
             <p>시작점에서 자동 정합되더라도 신뢰가 떨어질 때 더 약한 후보로 조용히 내려가면 안 됩니다.</p>
             <p class="mobile-pan-hint">가로로 움직여 정합과 안전 정지 분기를 크게 볼 수 있습니다.</p>
+            <p class="mobile-diagram-summary"><strong>전체 흐름:</strong> 시작점 시드와 Livox IMU → 스캔 대 맵 정합 → 품질 gate → 제한 주행 또는 안전 정지.</p>
             <svg class="diagram" viewBox="0 0 600 430" role="img" aria-label="시작점 시드, Livox IMU와 스캔 정합, 품질 gate, 주행 또는 안전 정지로 나뉘는 로컬라이제이션 구조">
               <rect class="surface" x="0" y="0" width="600" height="430"/>
               <rect class="node" x="45" y="45" width="205" height="70"/>
@@ -389,7 +396,7 @@
             <p>NUC에서 초기 로드 시간, 메모리, 정합 지연을 측정하고 맵 해시, 버전, 서명, 롤백을 경로와 trajectory identity에 원자적으로 묶어야 합니다.</p>
           </article>
         </div>
-        <div class="text-alt"><strong>추가 확인점:</strong> canonical PLY에서 실행 PCD로 이어지는 derivation receipt를 만들고, 중복 full-map load, 개발 장비에서 관측된 101.23초 fallback proxy, 좌표를 +1000 m 바꾼 맵 mutation이 받아들여지는 경로를 실제 NUC 배포에서 차단해야 합니다.</div>
+        <div class="text-alt"><strong>추가 확인점:</strong> canonical PLY에서 실행 PCD로 이어지는 derivation receipt를 만들고, 중복 full-map load와 개발 장비에서 관측된 101.23초 fallback proxy를 닫아야 합니다. route와 safety-band 좌표를 +1000 m 바꾼 mutation이 받아들여진 문제도 원자적 bundle identity로 차단해야 합니다.</div>
         <p class="source-note">원본: <code>/Volumes/무제/merged_0707_0725_v1/mergedmap.ply</code>. 실행: <code>merged_0707_0725_0p20m_xyzi.pcd</code>. 92.75%는 점 수 기준 감소율입니다.</p>
       </section>
 
@@ -402,7 +409,7 @@
           <li><strong>generic bringup</strong><span>표준 진입점으로 보이지만</span></li>
           <li class="is-active"><strong>safety profile 누락</strong><span>필수 safety.launch 구성이 없음</span></li>
           <li class="is-active"><strong>미선언 인자 3개</strong><span>hardware_enabled.launch에 전달</span></li>
-          <li class="is-active"><strong>불완전한 현장 구성</strong><span>한 번에 재현되는 product bringup이 아님</span></li>
+          <li class="is-active"><strong>불완전한 현장 구성</strong><span>mission/perception까지 한 번에 재현되지 않음</span></li>
         </ol>
         <div class="comparison">
           <article class="comparison-panel">
@@ -410,6 +417,7 @@
             <span class="number">7 failed</span>
             <p>revision <code>9d29c99</code>에서 1422 passed, 1 skipped, 190 subtests와 함께 확인됐습니다.</p>
             <p>5개는 macOS <code>/var</code> symlink portability, 2개는 실제 clean-checkout 회귀입니다.</p>
+            <p>README의 <code>1,179 passed</code> 기준선도 현재 분류와 맞지 않습니다.</p>
           </article>
           <article class="comparison-panel is-active">
             <h3>닫는 모습</h3>
@@ -445,6 +453,16 @@
           </article>
         </div>
         <div class="text-alt"><strong>제품 완료 조건:</strong> 실제 NUC와 driver hash를 고정하고, 형식만 맞는 임의 64-hex가 아니라 HMAC을 검증하며, diagnostic KeyValue redaction, SBOM, SCA, credential rotation, firewall, update와 incident response 근거를 함께 남겨야 합니다.</div>
+        <div class="diagram-grid security-controls">
+          <article class="diagram-card">
+            <h3>Host와 장치 권한</h3>
+            <p>disk encryption, systemd service와 실행 user/group, <code>/dev/uart</code> ownership, 최소권한과 실제 NUC firewall 근거가 필요합니다.</p>
+          </article>
+          <article class="diagram-card is-active">
+            <h3>Telemetry와 운영 수명주기</h3>
+            <p>로그 retention, encryption, quota, redaction, secure update, rollback, incident response와 현장 감사 receipt가 필요합니다.</p>
+          </article>
+        </div>
       </section>
 
       <section class="report-section" id="qualification">
@@ -456,7 +474,7 @@
           <article class="comparison-panel">
             <h3>소프트웨어 근거</h3>
             <span class="number">강함</span>
-            <p>추적된 저장소 경로 365개가 모두 분류되었습니다.</p>
+            <p>revision <code>9d29c99</code>에서 추적된 저장소 경로 365개가 모두 분류되었습니다.</p>
             <p>핵심 묶음 853개와 추가 104개가 통과했습니다.</p>
             <p>보안 묶음 297개가 통과했습니다.</p>
             <p>revision <code>9d29c99</code> 전체 실행은 7 failed, 1422 passed, 1 skipped, 190 subtests였습니다.</p>
@@ -470,6 +488,22 @@
           </article>
         </div>
         <div class="text-alt"><strong>세 가지를 구분해야 합니다:</strong> 추적된 완료 자격 결과는 0개지만 개발 중 불리한 관측은 있습니다. <code>defd0d2</code>에는 수동 개입 전 연석 방향 2.68 m 이탈, <code>e12f9b8</code>에는 지연된 yaw 뒤 raised edge 쪽 급회전이 기록됐습니다. 이는 승인된 qualification receipt도 아니고, “물리 관측이 전혀 없음”을 뜻하지도 않습니다.</div>
+        <h3 class="ledger-title">남은 물리 자격 매트릭스</h3>
+        <div class="qualification-matrix">
+          <article class="diagram-card">
+            <h3>NUC와 위치</h3>
+            <p>cold start, 60분과 8시간 자원·열 안정성, localization ground truth, 재정합·false lock 반복 결과가 필요합니다.</p>
+          </article>
+          <article class="diagram-card is-active">
+            <h3>차체와 제동</h3>
+            <p>payload, 노면, 경사, 배터리 상태별 제동거리와 E-stop, 수동 takeover, 반복 내구 결과가 필요합니다.</p>
+          </article>
+          <article class="diagram-card">
+            <h3>인식과 환경</h3>
+            <p>사람·작은 물체·낙차 calibration matrix, 비·먼지·온도·ingress와 장시간 endurance 결과가 필요합니다.</p>
+          </article>
+        </div>
+        <div class="text-alt"><strong>현재 HMI 코드 차단:</strong> invalid resume 처리가 비대칭이고, <code>PAUSED_SAFETY</code> 상태는 도달할 수 없으며, <code>decision.yaml</code>은 실제 흐름에서 사용되지 않습니다. rider/caregiver 상태 설명, acknowledgement와 help escalation을 이 상태 기계에 연결해야 합니다.</div>
       </section>
 
       <section class="report-section" id="closure">
@@ -513,7 +547,7 @@
 passenger_operation_authorized: false
 campus_operation_authorized: false</code></pre>
 
-        <div class="issue-ledger" role="table" aria-label="팀 담당 영역별 완료 증거">
+        <div class="issue-ledger gate-ledger" role="table" aria-label="팀 담당 영역별 완료 증거">
           <div class="ledger-row is-header" role="row">
             <span role="columnheader">Gate</span>
             <span role="columnheader">담당 영역</span>

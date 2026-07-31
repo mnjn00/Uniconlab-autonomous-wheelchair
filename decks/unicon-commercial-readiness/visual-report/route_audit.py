@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src/static_livox_localization/scripts"))
-from safety_band import SafetyBand
+from safety_band import SafetyBand  # noqa: E402
 
 GRACE_M: Final = 0.10
 
