@@ -271,11 +271,25 @@ cd "$WS"
 # ROS's setup.bash reads variables it has not set yet, so it trips the `set -u`
 # this script runs under and aborts before catkin is ever invoked. Relax it for
 # the source only.
+# ROS's setup.bash reads variables it has not set yet, so it trips the `set -u`
+# this script runs under and aborts before catkin is ever invoked. Relax it for
+# the source only.
 set +u
 source /opt/ros/noetic/setup.bash
 set -u
-catkin_make >/tmp/nuc_build.log 2>&1 || {
-  echo "ERROR: catkin_make failed; tail of /tmp/nuc_build.log:" >&2
+# Use whichever tool owns the build space. catkin_make refuses a space built by
+# catkin_tools and vice versa, and this workspace has been a catkin_tools one
+# since 2026-07-15 - so the catkin_make here had never actually run on the
+# vehicle, and every deployment had been finished by hand without anyone
+# noticing the script stopped short.
+if [ -d "$WS/.catkin_tools" ]; then
+  BUILD_CMD="catkin build"
+else
+  BUILD_CMD="catkin_make"
+fi
+echo "  using $BUILD_CMD (build space owned by ${BUILD_CMD%% *})"
+$BUILD_CMD >/tmp/nuc_build.log 2>&1 || {
+  echo "ERROR: $BUILD_CMD failed; tail of /tmp/nuc_build.log:" >&2
   tail -25 /tmp/nuc_build.log >&2
   exit 1; }
 echo "  build OK"
