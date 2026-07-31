@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-# ruff: noqa: I001
-
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,10 +7,8 @@ from typing import Final
 
 from pydantic import BaseModel
 
-
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src/static_livox_localization/scripts"))
-from safety_band import SafetyBand  # noqa: E402
 
 GRACE_M: Final = 0.10
 
@@ -72,6 +68,9 @@ def audit_route_bundle(
         raise RuntimeSourceMismatchError(
             f"Expected runtime source {imported_source}, got {safety_band_path}"
         )
+    # Load the runtime predicate only after its requested source path is verified.
+    from safety_band import SafetyBand
+
     band_doc, route_doc = load_documents(band_path, route_path)
     runtime = SafetyBand(str(band_path))
     station_xy = tuple((item.x, item.y) for item in band_doc.stations)
