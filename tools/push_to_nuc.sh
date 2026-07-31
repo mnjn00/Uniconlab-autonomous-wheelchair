@@ -268,7 +268,12 @@ else
 fi
 echo "  building"
 cd "$WS"
+# ROS's setup.bash reads variables it has not set yet, so it trips the `set -u`
+# this script runs under and aborts before catkin is ever invoked. Relax it for
+# the source only.
+set +u
 source /opt/ros/noetic/setup.bash
+set -u
 catkin_make >/tmp/nuc_build.log 2>&1 || {
   echo "ERROR: catkin_make failed; tail of /tmp/nuc_build.log:" >&2
   tail -25 /tmp/nuc_build.log >&2
