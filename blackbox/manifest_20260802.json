@@ -71,6 +71,12 @@
     "/wheel_cmd",
     "/wheel_status"
   ],
+  "analysis": {
+    "report": "docs/2026-08-02-field-report.md",
+    "summary_json": "blackbox/analysis_20260802/recorded_stop_warning_analysis.json",
+    "events_csv": "blackbox/analysis_20260802/recorded_stop_warning_events.csv",
+    "scope": "Only the three complete blackbox_20260802_*.bag files listed in this manifest."
+  },
   "not_archived": [
     {
       "file": "/home/mprp3/localization_trials/blackbox_20260802_190040.bag.active",
