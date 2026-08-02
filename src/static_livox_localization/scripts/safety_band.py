@@ -218,6 +218,42 @@ class SafetyBand:
         lateral, lo, hi = self.lateral_limits(point)
         return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
 
+    def contains_many(self, points, grace=0.0):
+        """Vectorised containment for map-frame ``(x, y)`` points.
+
+        Object perception has dozens of clusters and each cluster has many
+        returns. Calling contains() once per return would repeat the same
+        381-station nearest-neighbour search thousands of times at 5 Hz. This
+        is exactly the scalar geometry above, evaluated in one NumPy batch so
+        the perception node can ask which returns lie in the driven corridor
+        without maintaining a second, drifting copy of the band rules.
+        """
+        array = np.asarray(points, dtype=float)
+        if array.ndim != 2 or array.shape[1] != 2:
+            raise ValueError("points must have shape (N, 2)")
+        if not len(array):
+            return np.zeros(0, dtype=bool)
+
+        delta = array[:, None, :] - self.xy[None, :, :]
+        distance_sq = np.einsum("nsi,nsi->ns", delta, delta)
+        if len(self.xy) == 1:
+            order = np.zeros((len(array), 1), dtype=int)
+        else:
+            # Only the two nearest stations matter. A full 381-element sort
+            # here consumed almost half of the perception node's 200 ms
+            # cycle when forty 96-point clusters were present.
+            order = np.argpartition(distance_sq, 1, axis=1)[:, :2]
+            pair_distance = np.take_along_axis(distance_sq, order, axis=1)
+            swap = pair_distance[:, 0] > pair_distance[:, 1]
+            order[swap] = order[swap, ::-1]
+        nearest = order[:, 0]
+        lateral = np.einsum(
+            "ni,ni->n", array - self.xy[nearest], self.normals[nearest])
+        lo = -np.min(self.right[order], axis=1)
+        hi = np.min(self.left[order], axis=1)
+        return ((lateral >= lo - grace - 1e-6) &
+                (lateral <= hi + grace + 1e-6))
+
     def hazard_clearance(self, point):
         """Distance from the nearest WHEEL to the nearest fall hazard.
 

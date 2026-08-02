@@ -100,7 +100,7 @@ def load_producer(now_s):
 
     modules = {"rospy": rospy}
     for package, names in {
-        "geometry_msgs.msg": ["Point"],
+        "geometry_msgs.msg": ["Point", "PoseWithCovarianceStamped"],
         "nav_msgs.msg": ["Odometry"],
         "sensor_msgs.msg": ["PointCloud2"],
         "std_msgs.msg": ["String"],
@@ -156,6 +156,23 @@ def box_of_points(centre_x, centre_y, half=0.25, height=1.2):
     return grid.astype(np.float32)
 
 
+def wall_of_points(start_x=3.0, end_x=5.0, centre_y=0.0, height=1.2):
+    """A thin connected wall segment that the old heuristic calls vehicle."""
+    xs = np.arange(start_x, end_x, 0.05)
+    ys = np.arange(centre_y - 0.08, centre_y + 0.08, 0.05)
+    zs = np.arange(0.2, height, 0.1) - 0.30
+    return np.array([(x, y, z) for x in xs for y in ys for z in zs],
+                    dtype=np.float32)
+
+
+class ConstantBand(object):
+    def __init__(self, contained):
+        self.contained = contained
+
+    def contains_many(self, points, grace=0.0):
+        return np.full(len(points), self.contained, dtype=bool)
+
+
 def producer_at(now_s):
     module = load_producer(now_s)
     node = module.ObstacleClusters.__new__(module.ObstacleClusters)
@@ -164,6 +181,9 @@ def producer_at(now_s):
     node.lidar_in_body = lidar_in_body
     node.lidar_to_body_rotation = rotation
     node.tracker = ct.Tracker()
+    node.band = None
+    node.band_grace_m = module.OBJECT_BAND_GRACE_M
+    node.map_poses = module.MapPoseBuffer()
     node.marker_pub = Capture()
     node.summary_pub = Capture()
     return module, node
@@ -263,3 +283,55 @@ def test_the_summary_says_which_frame_its_numbers_are_in():
     run(node, module, box_of_points(4.0, 0.0), now_s, 0.0, 100.0)
 
     assert json.loads(node.summary_pub.last.data)["frame"] == "lidar"
+
+
+def test_a_wall_outside_the_band_is_not_published_as_a_vehicle():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    node.band = ConstantBand(False)
+    node.map_poses.add(100.0, np.eye(4))
+
+    summary = run(node, module, wall_of_points(), now_s, 0.0, 100.0)
+    wall = max(summary.objects, key=lambda item: item["points"])
+
+    assert wall["raw_class"] == "vehicle", \
+        "the fixture no longer reproduces the wall-as-vehicle defect"
+    assert wall["class"] == module.OUTSIDE_BAND
+    assert wall["band_relation"] == "outside"
+    assert wall["band_inside_fraction"] == 0.0
+
+
+def test_an_object_inside_the_band_keeps_its_semantic_class():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    node.band = ConstantBand(True)
+    node.map_poses.add(100.0, np.eye(4))
+
+    summary = run(node, module, wall_of_points(), now_s, 0.0, 100.0)
+    item = max(summary.objects, key=lambda value: value["points"])
+
+    assert item["raw_class"] == "vehicle"
+    assert item["class"] == "vehicle"
+    assert item["band_relation"] == "inside"
+
+
+def test_missing_map_pose_never_hides_the_original_detection():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    node.band = ConstantBand(False)
+
+    summary = run(node, module, wall_of_points(), now_s, 0.0, 100.0)
+    item = max(summary.objects, key=lambda value: value["points"])
+
+    assert item["class"] == "vehicle"
+    assert item["band_relation"] == "unavailable"
+    assert json.loads(node.summary_pub.last.data)["band_status"] == \
+        "NO_MAP_POSE"
+
+
+def test_field_startup_passes_the_same_band_as_the_follower():
+    startup = (SCRIPTS.parents[2] / "tools" /
+               "start_wheelchair_localization.sh").read_text(encoding="utf-8")
+    command = startup.split("obstacle_clusters.py", 1)[1].split(
+        "> \"$LOG/live_clusters.log\"", 1)[0]
+    assert '_safety_band:="$BAND"' in command

@@ -272,6 +272,7 @@ setsid nohup rosrun static_livox_localization tip_guard.py \
 # not read as an empty road.
 setsid nohup rosrun static_livox_localization obstacle_clusters.py \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
+  _safety_band:="$BAND" \
   > "$LOG/live_clusters.log" 2>&1 < /dev/null &
 for i in $(seq 1 15); do
   timeout 2 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1 && break

@@ -135,6 +135,17 @@ def test_the_driven_line_survives_the_clamp(band):
     assert contained / len(xy) > 0.91
 
 
+def test_batch_containment_is_identical_to_scalar_containment(band):
+    """Perception must read the follower's exact band, not an approximation."""
+    route = json.load(open(ROUTE_JSON))
+    xy = np.array([[w["x"], w["y"]] for w in route["waypoints"]])
+    probes = np.vstack((xy[::17], xy[::17] + np.array([0.8, -0.6])))
+    for grace in (0.0, GRACE):
+        scalar = np.array([band.contains(point, grace=grace)
+                           for point in probes])
+        assert np.array_equal(band.contains_many(probes, grace=grace), scalar)
+
+
 def test_the_audit_is_present_and_agrees_with_the_band(stations):
     """The uncovered stations and the route excursions are the part a person
     has to look at. An audit that has drifted from the band is worse than
