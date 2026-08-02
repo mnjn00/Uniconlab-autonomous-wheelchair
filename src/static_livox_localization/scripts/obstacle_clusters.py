@@ -97,6 +97,21 @@ OUTSIDE_MAX_INSIDE_FRACTION = 0.05
 INSIDE_MIN_INSIDE_FRACTION = 0.95
 OUTSIDE_BAND = "outside_band"
 
+# Lateral slices of a cluster's OWN returns, so a consumer can ask how far
+# this object actually is inside a corridor of its choosing. A box cannot
+# answer that. An axis-aligned box around a wall running diagonally across
+# the scan reports a near face at a corner where the wall has no returns at
+# all: on 2026-07-31 run 1 the box put a wall 0.69 m dead ahead when its
+# nearest return inside the corridor was 2.13 m, and the follower held for
+# 16 minutes because every candidate bypass lane was inside the same box.
+# 0.2 m matches the clustering cell, so a slice is never finer than the
+# evidence that built it.
+PROFILE_BIN_M = 0.2
+# A cluster spanning the whole ROI would otherwise publish hundreds of
+# numbers five times a second. Past this the slices are widened instead,
+# which costs resolution and stays conservative.
+MAX_PROFILE_BINS = 64
+
 PERSON_MAX_FOOTPRINT_M = 0.9
 PERSON_HEIGHT_M = (1.1, 2.0)
 VEHICLE_MIN_FOOTPRINT_M = 1.5
@@ -163,6 +178,43 @@ def cluster_band_relation(cluster, map_T_body, band, lidar_in_body,
     if fraction >= INSIDE_MIN_INSIDE_FRACTION:
         return "inside", fraction
     return "crossing", fraction
+
+
+def lateral_profile(cluster, bin_m=PROFILE_BIN_M, max_bins=MAX_PROFILE_BINS):
+    """Nearest forward return in each lateral slice of one cluster.
+
+    ``{"bin_m", "y0", "min_x"}`` where ``min_x[k]`` is the closest return
+    whose y falls in ``[y0 + k*bin_m, y0 + (k+1)*bin_m)``, or None where
+    this cluster has no return in that slice.
+
+    An empty slice is not a claim that the ground there is free - only that
+    THIS object is not in it. Every other cluster is profiled separately and
+    the consumer takes the nearest across all of them, so the guard still
+    sees anything that is really there.
+
+    Chair-aligned lidar frame, the same frame as x/y/size beside it.
+    """
+    points = np.asarray(cluster, dtype=np.float64)
+    if points.ndim != 2 or points.shape[0] == 0 or points.shape[1] < 2:
+        return None
+    finite = np.isfinite(points[:, 0]) & np.isfinite(points[:, 1])
+    if not finite.any():
+        return None
+    x, y = points[finite, 0], points[finite, 1]
+    span = float(y.max()) - float(y.min())
+    while bin_m > 0.0 and (span / bin_m) + 1.0 > max_bins:
+        bin_m *= 2.0
+    first = int(math.floor(float(y.min()) / bin_m))
+    count = int(math.floor(float(y.max()) / bin_m)) - first + 1
+    index = np.clip(np.floor(y / bin_m).astype(int) - first, 0, count - 1)
+    nearest = np.full(count, np.inf)
+    np.minimum.at(nearest, index, x)
+    return {
+        "bin_m": round(float(bin_m), 3),
+        "y0": round(float(first * bin_m), 3),
+        "min_x": [None if not math.isfinite(v) else round(float(v), 2)
+                  for v in nearest],
+    }
 
 
 class Accumulator:
@@ -391,7 +443,8 @@ class ObstacleClusters:
             label = OUTSIDE_BAND if relation == "outside" else raw_label
             boxes.append((label, (lo + hi) / 2.0,
                           np.maximum(hi - lo, 0.1), len(cluster)))
-            band_context.append((raw_label, relation, inside_fraction))
+            band_context.append((raw_label, relation, inside_fraction,
+                                 lateral_profile(cluster)))
         tracks = self.track(boxes)
 
         markers, objects = MarkerArray(), []
@@ -400,7 +453,7 @@ class ObstacleClusters:
         markers.markers.append(wipe)
         for i, ((label, center, size, points), context) in enumerate(
                 zip(boxes, band_context)):
-            raw_label, band_relation, inside_fraction = context
+            raw_label, band_relation, inside_fraction, profile = context
             track = tracks[i] if tracks else None
             objects.append({
                 "class": label,
@@ -411,6 +464,11 @@ class ObstacleClusters:
                 "x": round(float(center[0]), 2),
                 "y": round(float(center[1]), 2),
                 "size": [round(float(v), 2) for v in size],
+                # Where this object's returns ACTUALLY are, slice by slice.
+                # The box above is kept for the markers and for a consumer
+                # that predates this, but the guard measures distance from
+                # here - see cluster_guard.corridor_reach.
+                "profile": profile,
                 "points": int(points),
                 # A consumer that steers around what this says is parked
                 # needs to know when nothing said it. Without a reference
