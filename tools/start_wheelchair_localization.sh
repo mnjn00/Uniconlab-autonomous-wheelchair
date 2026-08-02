@@ -20,8 +20,8 @@ MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
 MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
 TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260727_chair_centred_waypoints.json}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260727_chair_centred_safety_band.json}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260802_route_v4_waypoints.json}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260802_route_v4_safety_band.json}"
 RVIZ="${RVIZ:-true}"
 # SAFETY_POLICIES=false drives with every discretionary guard switched off,
 # leaving the joystick override as the failsafe. It exists to measure one
