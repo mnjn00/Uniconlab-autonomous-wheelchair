@@ -1,0 +1,373 @@
+{
+ "band": "20260727_chair_centred_safety_band.json",
+ "route": "20260727_chair_centred_waypoints.json",
+ "corridor": "route_corridor_v3.yaml",
+ "stations_total": 381,
+ "stations_covered": 309,
+ "stations_uncovered": [
+  70,
+  71,
+  72,
+  73,
+  74,
+  75,
+  76,
+  77,
+  78,
+  79,
+  80,
+  81,
+  82,
+  83,
+  206,
+  207,
+  208,
+  209,
+  210,
+  211,
+  212,
+  213,
+  214,
+  215,
+  216,
+  217,
+  218,
+  219,
+  220,
+  221,
+  222,
+  223,
+  224,
+  225,
+  226,
+  227,
+  232,
+  233,
+  276,
+  277,
+  283,
+  286,
+  287,
+  288,
+  289,
+  291,
+  292,
+  293,
+  294,
+  295,
+  296,
+  297,
+  298,
+  299,
+  300,
+  301,
+  329,
+  330,
+  331,
+  366,
+  367,
+  368,
+  369,
+  370,
+  373,
+  374,
+  375,
+  376,
+  377,
+  378,
+  379,
+  380
+ ],
+ "stations_narrowed": 241,
+ "stations_corridor_yielded": [
+  181,
+  344,
+  345
+ ],
+ "usable_limit_m": {
+  "median_before": 0.8,
+  "median_after": 0.4,
+  "total_before": 1553.4,
+  "total_after": 617.5,
+  "never_widened": true
+ },
+ "admissible_width_m": {
+  "median_before": 3.825,
+  "median_after": 0.9,
+  "empty_before": 1,
+  "empty_after": 1,
+  "no_new_empty_stations": true
+ },
+ "route_outside_corridor": {
+  "waypoints": 264,
+  "of": 1446,
+  "excursions": [
+   {
+    "start_m": 206.6,
+    "end_m": 228.2,
+    "length_m": 21.6,
+    "waypoints": 82,
+    "start_xy": [
+     155.5,
+     -84.0
+    ],
+    "end_xy": [
+     153.1,
+     -63.5
+    ]
+   },
+   {
+    "start_m": 71.5,
+    "end_m": 83.9,
+    "length_m": 12.4,
+    "waypoints": 46,
+    "start_xy": [
+     69.2,
+     1.7
+    ],
+    "end_xy": [
+     79.4,
+     -5.3
+    ]
+   },
+   {
+    "start_m": 374.4,
+    "end_m": 383.4,
+    "length_m": 8.9,
+    "waypoints": 37,
+    "start_xy": [
+     227.0,
+     25.0
+    ],
+    "end_xy": [
+     226.8,
+     25.5
+    ]
+   },
+   {
+    "start_m": 367.9,
+    "end_m": 371.8,
+    "length_m": 3.8,
+    "waypoints": 15,
+    "start_xy": [
+     225.1,
+     19.0
+    ],
+    "end_xy": [
+     227.0,
+     22.4
+    ]
+   },
+   {
+    "start_m": 298.7,
+    "end_m": 302.1,
+    "length_m": 3.4,
+    "waypoints": 13,
+    "start_xy": [
+     196.0,
+     -19.4
+    ],
+    "end_xy": [
+     199.1,
+     -17.9
+    ]
+   },
+   {
+    "start_m": 329.9,
+    "end_m": 332.9,
+    "length_m": 3.0,
+    "waypoints": 13,
+    "start_xy": [
+     224.2,
+     -6.4
+    ],
+    "end_xy": [
+     227.0,
+     -7.1
+    ]
+   },
+   {
+    "start_m": 289.7,
+    "end_m": 292.1,
+    "length_m": 2.4,
+    "waypoints": 10,
+    "start_xy": [
+     187.9,
+     -23.2
+    ],
+    "end_xy": [
+     190.1,
+     -22.2
+    ]
+   },
+   {
+    "start_m": 296.5,
+    "end_m": 298.3,
+    "length_m": 1.8,
+    "waypoints": 8,
+    "start_xy": [
+     194.0,
+     -20.3
+    ],
+    "end_xy": [
+     195.7,
+     -19.5
+    ]
+   },
+   {
+    "start_m": 284.6,
+    "end_m": 286.2,
+    "length_m": 1.7,
+    "waypoints": 7,
+    "start_xy": [
+     183.3,
+     -25.5
+    ],
+    "end_xy": [
+     184.8,
+     -24.8
+    ]
+   },
+   {
+    "start_m": 292.8,
+    "end_m": 294.1,
+    "length_m": 1.3,
+    "waypoints": 7,
+    "start_xy": [
+     190.7,
+     -21.9
+    ],
+    "end_xy": [
+     191.9,
+     -21.3
+    ]
+   },
+   {
+    "start_m": 294.6,
+    "end_m": 295.9,
+    "length_m": 1.3,
+    "waypoints": 6,
+    "start_xy": [
+     192.3,
+     -21.1
+    ],
+    "end_xy": [
+     193.5,
+     -20.6
+    ]
+   },
+   {
+    "start_m": 233.3,
+    "end_m": 234.4,
+    "length_m": 1.1,
+    "waypoints": 5,
+    "start_xy": [
+     153.1,
+     -58.4
+    ],
+    "end_xy": [
+     153.1,
+     -57.3
+    ]
+   },
+   {
+    "start_m": 277.5,
+    "end_m": 278.5,
+    "length_m": 1.1,
+    "waypoints": 5,
+    "start_xy": [
+     176.9,
+     -28.5
+    ],
+    "end_xy": [
+     177.8,
+     -28.1
+    ]
+   },
+   {
+    "start_m": 287.8,
+    "end_m": 288.3,
+    "length_m": 0.5,
+    "waypoints": 3,
+    "start_xy": [
+     186.2,
+     -24.1
+    ],
+    "end_xy": [
+     186.7,
+     -23.8
+    ]
+   },
+   {
+    "start_m": 84.4,
+    "end_m": 84.7,
+    "length_m": 0.3,
+    "waypoints": 2,
+    "start_xy": [
+     79.9,
+     -5.6
+    ],
+    "end_xy": [
+     80.1,
+     -5.8
+    ]
+   },
+   {
+    "start_m": 288.8,
+    "end_m": 289.1,
+    "length_m": 0.3,
+    "waypoints": 2,
+    "start_xy": [
+     187.1,
+     -23.6
+    ],
+    "end_xy": [
+     187.4,
+     -23.5
+    ]
+   },
+   {
+    "start_m": 287.3,
+    "end_m": 287.3,
+    "length_m": 0.0,
+    "waypoints": 1,
+    "start_xy": [
+     185.8,
+     -24.3
+    ],
+    "end_xy": [
+     185.8,
+     -24.3
+    ]
+   },
+   {
+    "start_m": 302.6,
+    "end_m": 302.6,
+    "length_m": 0.0,
+    "waypoints": 1,
+    "start_xy": [
+     199.5,
+     -17.7
+    ],
+    "end_xy": [
+     199.5,
+     -17.7
+    ]
+   },
+   {
+    "start_m": 303.1,
+    "end_m": 303.1,
+    "length_m": 0.0,
+    "waypoints": 1,
+    "start_xy": [
+     200.0,
+     -17.5
+    ],
+    "end_xy": [
+     200.0,
+     -17.5
+    ]
+   }
+  ]
+ }
+}
