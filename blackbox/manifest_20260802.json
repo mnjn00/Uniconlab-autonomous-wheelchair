@@ -1,0 +1,86 @@
+{
+  "session": {
+    "date": "2026-08-02",
+    "timezone": "Asia/Seoul",
+    "source_host": "mprp3@10.26.116.199",
+    "source_directory": "/home/mprp3/localization_trials",
+    "vehicle_commit": "9092d10f0f0b152776b131dd6d9186a7c3b1415a",
+    "vehicle_branch": "feat/hand-drawn-route-corridor",
+    "vehicle_worktree_clean": false,
+    "vehicle_modified_files": [
+      "src/static_livox_localization/launch/moving_localization.launch",
+      "src/static_livox_localization/scripts/auto_initial_pose.py",
+      "src/static_livox_localization/test/test_auto_initial_pose_surface.py",
+      "tools/start_wheelchair_localization.sh"
+    ],
+    "repository_default_route": {
+      "waypoints": "routes/20260802_route_v4_waypoints.json",
+      "waypoints_sha256": "f3064782b2c5dfcc2b21306dd788e8a2cbbd3d8e684fc80c58bbbf3610bce0c6",
+      "safety_band": "routes/20260802_route_v4_safety_band.json",
+      "safety_band_sha256": "7252a3deb3de22b3831890e5c6028a7812b642e604c2f048735c83901a42a3e5"
+    },
+    "note": "The bag does not carry a route identity topic. The route fields record the repository defaults present on the vehicle, not a claim reconstructed from bag contents."
+  },
+  "bags": [
+    {
+      "file": "blackbox_20260802_211746.bag",
+      "sha256": "b482fda5628f78221a0d1195ef3010485e028ce27b3a28eda6b497aa1268945b",
+      "bytes": 6635839,
+      "start": "2026-08-02T21:17:46.961+09:00",
+      "end": "2026-08-02T21:22:18.849+09:00",
+      "duration_s": 271.888413,
+      "messages": 138890,
+      "indexed": true,
+      "compression": "lz4"
+    },
+    {
+      "file": "blackbox_20260802_212436.bag",
+      "sha256": "c4cac89c5a7c279f7018651aa8008f57fd4edf0177b25e95b6aef8c5ce3f5c6c",
+      "bytes": 15473339,
+      "start": "2026-08-02T21:24:37.161+09:00",
+      "end": "2026-08-02T21:35:21.933+09:00",
+      "duration_s": 644.772305,
+      "messages": 329378,
+      "indexed": true,
+      "compression": "lz4"
+    },
+    {
+      "file": "blackbox_20260802_213633.bag",
+      "sha256": "18ff6a07bb4ecc947907a3b9b4bfa6a6ba06ae960fac2448055feab2dfff36c9",
+      "bytes": 33422416,
+      "start": "2026-08-02T21:36:34.275+09:00",
+      "end": "2026-08-02T21:58:02.674+09:00",
+      "duration_s": 1288.399157,
+      "messages": 658247,
+      "indexed": true,
+      "compression": "lz4"
+    }
+  ],
+  "common_topics": [
+    "/Odometry",
+    "/cmd_vel",
+    "/cmd_vel_gated",
+    "/cmd_vel_raw",
+    "/fast_lio_icp/localization_diagnostics",
+    "/fast_lio_icp/pose",
+    "/livox/imu",
+    "/mode_cmd",
+    "/perception/objects_summary",
+    "/tip_guard/status",
+    "/waypoint_follower/status",
+    "/wheel_cmd",
+    "/wheel_status"
+  ],
+  "not_archived": [
+    {
+      "file": "/home/mprp3/localization_trials/blackbox_20260802_190040.bag.active",
+      "bytes": 126210048,
+      "reason": "Unindexed active file; preserved unchanged on the NUC."
+    },
+    {
+      "file": "/home/mprp3/localization_trials/debug_20260802_190304.bag.active",
+      "bytes": 31388131328,
+      "reason": "Unindexed 31 GB debug capture; too large for this Git LFS archive and preserved unchanged on the NUC."
+    }
+  ]
+}
