@@ -31,8 +31,16 @@ MANIFEST = BLACKBOX / "manifest.json"
 LFS_POINTER_MAGIC = b"version https://git-lfs"
 
 
-def manifest():
-    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+def manifests():
+    """Every manifest in the folder, not just the first one written.
+
+    Sessions arrived with their own file - manifest.json for 2026-07-31,
+    manifest_20260802.json for the next one - and reading only the original
+    made three archived bags look unrecorded. Which file a session lands in
+    is a filing decision; that every bag is accounted for somewhere is the
+    property, so this collects them all.
+    """
+    return sorted(BLACKBOX.glob("manifest*.json"))
 
 
 def is_lfs_pointer(path):
@@ -41,21 +49,24 @@ def is_lfs_pointer(path):
 
 
 def bag_entries():
-    if not MANIFEST.exists():
-        return []
-    return manifest()["bags"]
+    entries = []
+    for path in manifests():
+        for entry in json.loads(path.read_text(encoding="utf-8"))["bags"]:
+            entries.append(dict(entry, _manifest=path.name))
+    return entries
 
 
-def test_the_manifest_exists_and_parses():
-    assert MANIFEST.exists(), "blackbox/ has no manifest"
-    assert bag_entries(), "the manifest lists no bags"
+def test_at_least_one_manifest_exists_and_parses():
+    assert manifests(), "blackbox/ has no manifest"
+    assert bag_entries(), "no manifest lists any bag"
 
 
 @pytest.mark.parametrize("entry", bag_entries(),
                          ids=[e["file"] for e in bag_entries()])
 def test_each_bag_matches_its_recorded_checksum(entry):
     path = BLACKBOX / entry["file"]
-    assert path.exists(), "%s is in the manifest but not in the folder" % entry["file"]
+    assert path.exists(), "%s is in %s but not in the folder" % (
+        entry["file"], entry["_manifest"])
     if is_lfs_pointer(path):
         pytest.skip("LFS pointer - run `git lfs pull` to verify the content")
     assert path.stat().st_size == entry["bytes"], (
@@ -71,6 +82,16 @@ def test_no_bag_sits_in_the_folder_unrecorded():
     listed = {e["file"] for e in bag_entries()}
     found = {p.name for p in BLACKBOX.glob("*.bag")}
     assert found <= listed, "unlisted bags in blackbox/: %s" % sorted(found - listed)
+
+
+def test_no_bag_is_claimed_by_two_manifests():
+    """Two entries for one file is two sets of provenance for it, and
+    nothing says which one an argument was made from."""
+    seen = {}
+    for entry in bag_entries():
+        seen.setdefault(entry["file"], []).append(entry["_manifest"])
+    duplicated = {f: m for f, m in seen.items() if len(m) > 1}
+    assert not duplicated, "claimed twice: %s" % duplicated
 
 
 def test_the_bags_are_stored_through_lfs():

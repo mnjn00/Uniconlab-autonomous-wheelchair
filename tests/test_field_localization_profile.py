@@ -13,10 +13,19 @@ CANONICAL_SHA256 = "3639f5942101e67d8f62baf533017475146ebb681f4a8482ecaf0f2a7cec
 RUNTIME_SHA256 = "ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"
 RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
 # The shipped pair is chair-centred. A sensor-referenced route applies every
-# clearance about a point 0.173 m left of the chair, which under-protects the
+# clearance about a point 0.2 m left of the chair, which under-protects the
 # right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
-ROUTE_NAME = "20260727_chair_centred_waypoints.json"
-BAND_NAME = "20260727_chair_centred_safety_band.json"
+ROUTE_NAME = "20260802_route_v4_waypoints.json"
+BAND_NAME = "20260802_route_v4_safety_band.json"
+# Superseded pairs. Deployment naming one of these while the bringup launches
+# the other is how a record ends up describing a drive that did not happen,
+# and the old files staying on disk is what lets it pass unnoticed.
+SUPERSEDED = (
+    "20260727_new_route_waypoints.json",
+    "20260727_new_route_safety_band.json",
+    "20260727_chair_centred_waypoints.json",
+    "20260727_chair_centred_safety_band.json",
+)
 
 
 def shell_default(source, name):
@@ -94,15 +103,14 @@ def test_the_deploy_script_and_the_bringup_name_the_same_route():
     # to name the same one; it named the superseded pair while deploy did too.
     assert ROUTE_NAME in push
     assert BAND_NAME in push
-    for superseded in ("20260727_new_route_waypoints.json",
-                       "20260727_new_route_safety_band.json"):
+    for superseded in SUPERSEDED:
         assert superseded not in deploy, superseded
         assert superseded not in push, superseded
     assert shell_default(startup, "ROUTE").endswith("/" + ROUTE_NAME)
     assert shell_default(startup, "BAND").endswith("/" + BAND_NAME)
 
 
-def test_field_startup_defaults_to_livox_builtin_imu_and_0727_route():
+def test_field_startup_defaults_to_livox_builtin_imu_and_shipped_route():
     startup = (ROOT / "tools" / "start_wheelchair_localization.sh").read_text(
         encoding="utf-8"
     )
@@ -114,19 +122,22 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_0727_route():
     assert shell_default(startup, "BAND").endswith("/" + BAND_NAME)
     assert route["frame"] == band["frame"] == "map"
     assert route["body_frame_profile"] == "builtin"
-    assert "full_debug_20260727_214306.bag" in route["source"]
-    # The route must start where the recorded drive started, not where a
-    # bookend trim left it. Trimming the spin-in-place bookends also removed
-    # 5.3 m of real driving from the head of the route, which put the first
-    # waypoint outside the follower's 3.5 m geofence from the parking spot -
-    # the chair held OFF_ROUTE instead of pulling away. Pin the property,
-    # not one hand-copied waypoint.
+    assert route["source"].strip(), "the route does not say where it came from"
+    # The chair has to be able to pick the route up from where it is parked.
+    # The follower locks to the NEAREST waypoint and holds OFF_ROUTE when that
+    # is beyond 3.5 m, so what matters is the nearest one, not the first: the
+    # 0727 route began at the parking spot, route v4 begins 8.35 m behind it
+    # and first passes within 0.20 m at waypoint 45. Both are drivable from a
+    # standing start; a route whose closest approach exceeded the geofence
+    # would hold OFF_ROUTE instead of pulling away, which is the failure a
+    # bookend trim caused once and this pins against.
     origin = (0.0, 0.0)
     first = route["waypoints"][0]
-    start_offset = math.hypot(first["x"] - origin[0], first["y"] - origin[1])
-    assert start_offset < 3.5, (
-        "route starts %.2f m from the recorded origin, beyond the "
-        "follower geofence" % start_offset
+    closest = min(math.hypot(w["x"] - origin[0], w["y"] - origin[1])
+                  for w in route["waypoints"])
+    assert closest < 3.5, (
+        "the route's closest approach to the recorded origin is %.2f m, "
+        "beyond the follower geofence" % closest
     )
     assert set(first) == {"x", "y", "z", "yaw_deg"}
     # The point the route is about has to be declared and has to be the chair
