@@ -1,0 +1,3626 @@
+[
+  {
+    "metadata": {
+      "file": "blackbox_20260802_211746.bag",
+      "start_ns": 1785673066960804428,
+      "end_ns": 1785673338849217561,
+      "duration_s": 271.888413133,
+      "message_count": 138890,
+      "topic_counts": {
+        "/fast_lio_icp/localization_diagnostics": 231,
+        "/livox/imu": 54379,
+        "/wheel_status": 27185,
+        "/tip_guard/status": 13595,
+        "/wheel_cmd": 13595,
+        "/cmd_vel": 13595,
+        "/cmd_vel_gated": 4078,
+        "/Odometry": 2719,
+        "/fast_lio_icp/pose": 2719,
+        "/perception/objects_summary": 1359,
+        "/cmd_vel_raw": 2717,
+        "/waypoint_follower/status": 2714,
+        "/mode_cmd": 1
+      }
+    },
+    "follower_message_counts": {
+      "HOLD:PAUSED": 2525,
+      "STATE:DRIVING": 189
+    },
+    "status_events": [
+      {
+        "kind": "HOLD",
+        "reason": "PAUSED",
+        "start_ns": 1785673067535014124,
+        "end_ns": 1785673163830335161,
+        "start_kst": "2026-08-02 21:17:47.535",
+        "end_kst": "2026-08-02 21:19:23.830",
+        "duration_s": 96.39532103699999,
+        "message_count": 964,
+        "wp_min": 2,
+        "wp_max": 2,
+        "pose_x": -6.8856128579031735,
+        "pose_y": -2.5165528920760085,
+        "raw": {
+          "samples": 964,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 1447,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 4825,
+          "min_v": 0.0,
+          "max_v": 0.0119989158,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": null,
+        "cluster_threat_summary": null
+      },
+      {
+        "kind": "HOLD",
+        "reason": "PAUSED",
+        "start_ns": 1785673182832371868,
+        "end_ns": 1785673338830400475,
+        "start_kst": "2026-08-02 21:19:42.832",
+        "end_kst": "2026-08-02 21:22:18.830",
+        "duration_s": 156.098028607,
+        "message_count": 1561,
+        "wp_min": 47,
+        "wp_max": 48,
+        "pose_x": 0.9712844942168619,
+        "pose_y": 0.318921143676806,
+        "raw": {
+          "samples": 1563,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 2340,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 7801,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.56,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 232,
+          "x": 1.04,
+          "y": -0.78,
+          "size": [
+            0.96,
+            0.74,
+            1.13
+          ],
+          "points": 1218,
+          "speed_mps": 1.33,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 67,
+          "dominant_id": 232,
+          "dominant_class": "obstacle",
+          "dominant_sample_count": 31,
+          "dominant_share": 0.4626865671641791,
+          "distance_min_m": 1.7149999999999999,
+          "distance_median_m": 5.744999999999999,
+          "distance_max_m": 9.735,
+          "motion_counts": {
+            "unknown": 1,
+            "moving": 30
+          },
+          "representative": {
+            "distance_m": 5.744999999999999,
+            "motion": "moving",
+            "class": "obstacle",
+            "id": 232,
+            "x": 6.27,
+            "y": -0.16,
+            "size": [
+              1.05,
+              0.73,
+              1.32
+            ],
+            "points": 146,
+            "speed_mps": 1.32,
+            "age_s": 2.9
+          }
+        }
+      }
+    ],
+    "actual_stop_periods": [
+      {
+        "start_ns": 1785673182766585612,
+        "end_ns": 1785673338846397242,
+        "start_kst": "2026-08-02 21:19:42.766",
+        "end_kst": "2026-08-02 21:22:18.846",
+        "duration_s": 156.07981163,
+        "resumed": false,
+        "wp_min": 45,
+        "wp_max": 48,
+        "status_counts": {
+          "HOLD:PAUSED": 1561,
+          "STATE:DRIVING": 10
+        },
+        "dominant_status": "HOLD:PAUSED"
+      }
+    ],
+    "diagnostic_events": [],
+    "tip_guard_non_ok": {},
+    "object_summary_status": {
+      "OK": 1359
+    },
+    "mode_commands": [
+      {
+        "time_kst": "2026-08-02 21:19:19.921",
+        "value": 65
+      },
+      {
+        "time_kst": "2026-08-02 21:19:44.202",
+        "value": 77
+      },
+      {
+        "time_kst": "2026-08-02 21:21:45.960",
+        "value": 77
+      },
+      {
+        "time_kst": "2026-08-02 21:21:51.772",
+        "value": 77
+      }
+    ]
+  },
+  {
+    "metadata": {
+      "file": "blackbox_20260802_212436.bag",
+      "start_ns": 1785673477160943280,
+      "end_ns": 1785674121933248000,
+      "duration_s": 644.77230472,
+      "message_count": 329378,
+      "topic_counts": {
+        "/fast_lio_icp/localization_diagnostics": 564,
+        "/livox/imu": 128955,
+        "/cmd_vel": 32238,
+        "/wheel_status": 64470,
+        "/tip_guard/status": 32237,
+        "/wheel_cmd": 32237,
+        "/cmd_vel_gated": 9671,
+        "/fast_lio_icp/pose": 6447,
+        "/Odometry": 6447,
+        "/perception/objects_summary": 3224,
+        "/waypoint_follower/status": 6442,
+        "/cmd_vel_raw": 6444,
+        "/mode_cmd": 1
+      }
+    },
+    "follower_message_counts": {
+      "HOLD:PAUSED": 6442
+    },
+    "status_events": [
+      {
+        "kind": "HOLD",
+        "reason": "PAUSED",
+        "start_ns": 1785673477793930563,
+        "end_ns": 1785674121890782746,
+        "start_kst": "2026-08-02 21:24:37.793",
+        "end_kst": "2026-08-02 21:35:21.890",
+        "duration_s": 644.196852183,
+        "message_count": 6442,
+        "wp_min": null,
+        "wp_max": null,
+        "pose_x": -7.1820091893167,
+        "pose_y": -2.476312358534361,
+        "raw": {
+          "samples": 6444,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 9662,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 32207,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.46,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 474,
+          "x": 0.51,
+          "y": 0.26,
+          "size": [
+            0.1,
+            0.1,
+            0.52
+          ],
+          "points": 19,
+          "speed_mps": 0.02,
+          "age_s": 1.6
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 432,
+          "dominant_id": 203,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 193,
+          "dominant_share": 0.44675925925925924,
+          "distance_min_m": 0.65,
+          "distance_median_m": 1.045,
+          "distance_max_m": 1.22,
+          "motion_counts": {
+            "static": 193
+          },
+          "representative": {
+            "distance_m": 1.065,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 203,
+            "x": 1.24,
+            "y": -0.49,
+            "size": [
+              0.35,
+              0.51,
+              1.16
+            ],
+            "points": 1227,
+            "speed_mps": 0.01,
+            "age_s": 2.8
+          }
+        }
+      }
+    ],
+    "actual_stop_periods": [],
+    "diagnostic_events": [],
+    "tip_guard_non_ok": {},
+    "object_summary_status": {
+      "OK": 3224
+    },
+    "mode_commands": [
+      {
+        "time_kst": "2026-08-02 21:27:41.628",
+        "value": 77
+      },
+      {
+        "time_kst": "2026-08-02 21:35:18.506",
+        "value": 77
+      }
+    ]
+  },
+  {
+    "metadata": {
+      "file": "blackbox_20260802_213633.bag",
+      "start_ns": 1785674194274703748,
+      "end_ns": 1785675482673861057,
+      "duration_s": 1288.399157309,
+      "message_count": 658247,
+      "topic_counts": {
+        "/fast_lio_icp/localization_diagnostics": 1220,
+        "/livox/imu": 257666,
+        "/wheel_status": 128810,
+        "/tip_guard/status": 64420,
+        "/wheel_cmd": 64420,
+        "/cmd_vel": 64420,
+        "/cmd_vel_gated": 19310,
+        "/fast_lio_icp/pose": 12884,
+        "/Odometry": 12884,
+        "/perception/objects_summary": 6442,
+        "/waypoint_follower/status": 12880,
+        "/cmd_vel_raw": 12884,
+        "/mode_cmd": 1
+      }
+    },
+    "follower_message_counts": {
+      "STATE:DRIVING": 5246,
+      "HOLD:MANUAL_MODE": 4024,
+      "HOLD:PAUSED": 3372,
+      "STATE:OBSTACLE": 238
+    },
+    "status_events": [
+      {
+        "kind": "HOLD",
+        "reason": "PAUSED",
+        "start_ns": 1785674194695127882,
+        "end_ns": 1785674270296434311,
+        "start_kst": "2026-08-02 21:36:34.695",
+        "end_kst": "2026-08-02 21:37:50.296",
+        "duration_s": 75.701306429,
+        "message_count": 757,
+        "wp_min": 0,
+        "wp_max": 0,
+        "pose_x": -7.223854115334655,
+        "pose_y": -2.7507697197531904,
+        "raw": {
+          "samples": 758,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 1137,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 3790,
+          "min_v": 0.0,
+          "max_v": 0.012001919699999999,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 7.45,
+          "motion": "moving",
+          "class": "obstacle",
+          "id": 9,
+          "x": 7.88,
+          "y": -0.9,
+          "size": [
+            0.86,
+            0.94,
+            1.24
+          ],
+          "points": 66,
+          "speed_mps": 1.36,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 12,
+          "dominant_id": 9,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 8,
+          "dominant_share": 0.6666666666666666,
+          "distance_min_m": 7.8999999999999995,
+          "distance_median_m": 8.719999999999999,
+          "distance_max_m": 9.295,
+          "motion_counts": {
+            "moving": 8
+          },
+          "representative": {
+            "distance_m": 8.719999999999999,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 9,
+            "x": 9.04,
+            "y": 0.19,
+            "size": [
+              0.64,
+              0.69,
+              1.29
+            ],
+            "points": 35,
+            "speed_mps": 1.35,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674525897440961,
+        "end_ns": 1785674525897440961,
+        "start_kst": "2026-08-02 21:42:05.897",
+        "end_kst": "2026-08-02 21:42:05.897",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "wp_min": 536,
+        "wp_max": 537,
+        "pose_x": 88.35571464031426,
+        "pose_y": -14.328226341085205,
+        "raw": {
+          "samples": 2,
+          "min_v": 0.20969906229633195,
+          "max_v": 0.2149046343806071,
+          "moving_fraction": 1.0
+        },
+        "gated": {
+          "samples": 4,
+          "min_v": 0.2149046343806071,
+          "max_v": 0.3,
+          "moving_fraction": 1.0
+        },
+        "final": {
+          "samples": 10,
+          "min_v": 0.2149046343806071,
+          "max_v": 0.3,
+          "moving_fraction": 1.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 1.085,
+          "motion": "unknown",
+          "class": "vehicle",
+          "id": 515,
+          "x": 3.37,
+          "y": -0.85,
+          "size": [
+            4.57,
+            1.49,
+            2.23
+          ],
+          "points": 1856,
+          "speed_mps": 0.46,
+          "age_s": 0.7
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 2,
+          "dominant_id": 515,
+          "dominant_class": "vehicle",
+          "dominant_sample_count": 2,
+          "dominant_share": 1.0,
+          "distance_min_m": 1.085,
+          "distance_median_m": 1.12,
+          "distance_max_m": 1.12,
+          "motion_counts": {
+            "unknown": 2
+          },
+          "representative": {
+            "distance_m": 1.085,
+            "motion": "unknown",
+            "class": "vehicle",
+            "id": 515,
+            "x": 3.37,
+            "y": -0.85,
+            "size": [
+              4.57,
+              1.49,
+              2.23
+            ],
+            "points": 1856,
+            "speed_mps": 0.46,
+            "age_s": 0.7
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674526797844035,
+        "end_ns": 1785674527299587071,
+        "start_kst": "2026-08-02 21:42:06.797",
+        "end_kst": "2026-08-02 21:42:07.299",
+        "duration_s": 0.601743036,
+        "message_count": 6,
+        "wp_min": 538,
+        "wp_max": 539,
+        "pose_x": 88.39890075964622,
+        "pose_y": -14.622589680900624,
+        "raw": {
+          "samples": 8,
+          "min_v": 0.0,
+          "max_v": 0.11481424071224985,
+          "moving_fraction": 0.375
+        },
+        "gated": {
+          "samples": 10,
+          "min_v": 0.0,
+          "max_v": 0.11481424071224985,
+          "moving_fraction": 0.3
+        },
+        "final": {
+          "samples": 35,
+          "min_v": 0.0,
+          "max_v": 0.17481424071224985,
+          "moving_fraction": 0.37142857142857144
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.96,
+          "motion": "unknown",
+          "class": "vehicle",
+          "id": 515,
+          "x": 3.43,
+          "y": -1.06,
+          "size": [
+            4.94,
+            2.19,
+            2.21
+          ],
+          "points": 2234,
+          "speed_mps": 0.18,
+          "age_s": 1.5
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 6,
+          "dominant_id": 515,
+          "dominant_class": "vehicle",
+          "dominant_sample_count": 6,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.96,
+          "distance_median_m": 1.0100000000000002,
+          "distance_max_m": 1.1949999999999998,
+          "motion_counts": {
+            "unknown": 4,
+            "static": 1,
+            "moving": 1
+          },
+          "representative": {
+            "distance_m": 0.96,
+            "motion": "unknown",
+            "class": "vehicle",
+            "id": 515,
+            "x": 3.43,
+            "y": -1.06,
+            "size": [
+              4.94,
+              2.19,
+              2.21
+            ],
+            "points": 2234,
+            "speed_mps": 0.18,
+            "age_s": 1.5
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674529315333878,
+        "end_ns": 1785674529799431633,
+        "start_kst": "2026-08-02 21:42:09.315",
+        "end_kst": "2026-08-02 21:42:09.799",
+        "duration_s": 0.584097755,
+        "message_count": 6,
+        "wp_min": 541,
+        "wp_max": 542,
+        "pose_x": 88.82576432921346,
+        "pose_y": -15.042295690104618,
+        "raw": {
+          "samples": 7,
+          "min_v": 0.0,
+          "max_v": 0.18,
+          "moving_fraction": 0.5714285714285714
+        },
+        "gated": {
+          "samples": 11,
+          "min_v": 0.0,
+          "max_v": 0.06,
+          "moving_fraction": 0.09090909090909091
+        },
+        "final": {
+          "samples": 34,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.8700000000000001,
+          "motion": "unknown",
+          "class": "outside_band",
+          "id": 529,
+          "x": 3.75,
+          "y": -0.93,
+          "size": [
+            5.76,
+            2.0,
+            2.25
+          ],
+          "points": 3179,
+          "speed_mps": 1.38,
+          "age_s": 0.5
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 5,
+          "dominant_id": 529,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 3,
+          "dominant_share": 0.6,
+          "distance_min_m": 0.8700000000000001,
+          "distance_median_m": 0.8899999999999997,
+          "distance_max_m": 0.9100000000000001,
+          "motion_counts": {
+            "unknown": 3
+          },
+          "representative": {
+            "distance_m": 0.8700000000000001,
+            "motion": "unknown",
+            "class": "outside_band",
+            "id": 529,
+            "x": 3.75,
+            "y": -0.93,
+            "size": [
+              5.76,
+              2.0,
+              2.25
+            ],
+            "points": 3179,
+            "speed_mps": 1.38,
+            "age_s": 0.5
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674530600515525,
+        "end_ns": 1785674531397222104,
+        "start_kst": "2026-08-02 21:42:10.600",
+        "end_kst": "2026-08-02 21:42:11.397",
+        "duration_s": 0.896706579,
+        "message_count": 9,
+        "wp_min": 542,
+        "wp_max": 543,
+        "pose_x": 88.80476380969827,
+        "pose_y": -15.243661351648827,
+        "raw": {
+          "samples": 10,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.1
+        },
+        "gated": {
+          "samples": 15,
+          "min_v": 0.0,
+          "max_v": 0.066,
+          "moving_fraction": 0.06666666666666667
+        },
+        "final": {
+          "samples": 50,
+          "min_v": 0.0,
+          "max_v": 0.126,
+          "moving_fraction": 0.14
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.8900000000000001,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 529,
+          "x": 3.87,
+          "y": -1.14,
+          "size": [
+            5.96,
+            2.03,
+            2.23
+          ],
+          "points": 2530,
+          "speed_mps": 0.38,
+          "age_s": 1.7
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 9,
+          "dominant_id": 529,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 7,
+          "dominant_share": 0.7777777777777778,
+          "distance_min_m": 0.8900000000000001,
+          "distance_median_m": 0.9100000000000001,
+          "distance_max_m": 0.98,
+          "motion_counts": {
+            "unknown": 4,
+            "moving": 3
+          },
+          "representative": {
+            "distance_m": 0.915,
+            "motion": "unknown",
+            "class": "outside_band",
+            "id": 529,
+            "x": 3.04,
+            "y": -1.05,
+            "size": [
+              4.25,
+              1.99,
+              2.21
+            ],
+            "points": 2623,
+            "speed_mps": 0.68,
+            "age_s": 1.5
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674532100237155,
+        "end_ns": 1785674532497312775,
+        "start_kst": "2026-08-02 21:42:12.100",
+        "end_kst": "2026-08-02 21:42:12.497",
+        "duration_s": 0.49707562000000005,
+        "message_count": 5,
+        "wp_min": 543,
+        "wp_max": 544,
+        "pose_x": 88.97829539839637,
+        "pose_y": -15.403004108819655,
+        "raw": {
+          "samples": 6,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.16666666666666666
+        },
+        "gated": {
+          "samples": 9,
+          "min_v": 0.0,
+          "max_v": 0.048,
+          "moving_fraction": 0.1111111111111111
+        },
+        "final": {
+          "samples": 30,
+          "min_v": 0.0,
+          "max_v": 0.1020030639,
+          "moving_fraction": 0.2
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.9699999999999998,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 529,
+          "x": 3.28,
+          "y": -1.08,
+          "size": [
+            4.62,
+            1.81,
+            2.25
+          ],
+          "points": 2629,
+          "speed_mps": 0.39,
+          "age_s": 2.2
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 4,
+          "dominant_id": 529,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 4,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.9699999999999998,
+          "distance_median_m": 1.02,
+          "distance_max_m": 1.0349999999999997,
+          "motion_counts": {
+            "moving": 4
+          },
+          "representative": {
+            "distance_m": 1.02,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 529,
+            "x": 3.29,
+            "y": -1.31,
+            "size": [
+              4.54,
+              2.11,
+              2.21
+            ],
+            "points": 2431,
+            "speed_mps": 0.31,
+            "age_s": 2.5
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674534515239055,
+        "end_ns": 1785674535097551625,
+        "start_kst": "2026-08-02 21:42:14.515",
+        "end_kst": "2026-08-02 21:42:15.097",
+        "duration_s": 0.68231257,
+        "message_count": 6,
+        "wp_min": 546,
+        "wp_max": 547,
+        "pose_x": 89.31214011048459,
+        "pose_y": -15.914953172554604,
+        "raw": {
+          "samples": 7,
+          "min_v": 0.0,
+          "max_v": 0.18,
+          "moving_fraction": 0.42857142857142855
+        },
+        "gated": {
+          "samples": 12,
+          "min_v": 0.0,
+          "max_v": 0.06,
+          "moving_fraction": 0.16666666666666666
+        },
+        "final": {
+          "samples": 39,
+          "min_v": 0.0,
+          "max_v": 0.017994046200000002,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.8649999999999998,
+          "motion": "unknown",
+          "class": "outside_band",
+          "id": 547,
+          "x": 4.77,
+          "y": -0.99,
+          "size": [
+            7.81,
+            2.16,
+            2.24
+          ],
+          "points": 3194,
+          "speed_mps": 1.32,
+          "age_s": 0.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 5,
+          "dominant_id": 547,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 3,
+          "dominant_share": 0.6,
+          "distance_min_m": 0.8649999999999998,
+          "distance_median_m": 0.8800000000000003,
+          "distance_max_m": 0.8849999999999998,
+          "motion_counts": {
+            "unknown": 3
+          },
+          "representative": {
+            "distance_m": 0.8649999999999998,
+            "motion": "unknown",
+            "class": "outside_band",
+            "id": 547,
+            "x": 4.77,
+            "y": -0.99,
+            "size": [
+              7.81,
+              2.16,
+              2.24
+            ],
+            "points": 3194,
+            "speed_mps": 1.32,
+            "age_s": 0.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674535899670574,
+        "end_ns": 1785674536803815989,
+        "start_kst": "2026-08-02 21:42:15.899",
+        "end_kst": "2026-08-02 21:42:16.803",
+        "duration_s": 1.004145415,
+        "message_count": 10,
+        "wp_min": 547,
+        "wp_max": 548,
+        "pose_x": 89.31664034382977,
+        "pose_y": -16.114494004559408,
+        "raw": {
+          "samples": 11,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.09090909090909091
+        },
+        "gated": {
+          "samples": 17,
+          "min_v": 0.0,
+          "max_v": 0.066,
+          "moving_fraction": 0.058823529411764705
+        },
+        "final": {
+          "samples": 55,
+          "min_v": 0.0,
+          "max_v": 0.126,
+          "moving_fraction": 0.14545454545454545
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.8599999999999999,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 541,
+          "x": 3.52,
+          "y": -0.98,
+          "size": [
+            5.32,
+            1.94,
+            2.25
+          ],
+          "points": 2622,
+          "speed_mps": 0.71,
+          "age_s": 2.4
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 7,
+          "dominant_id": 541,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 6,
+          "dominant_share": 0.8571428571428571,
+          "distance_min_m": 0.8599999999999999,
+          "distance_median_m": 0.8700000000000001,
+          "distance_max_m": 0.9050000000000002,
+          "motion_counts": {
+            "moving": 6
+          },
+          "representative": {
+            "distance_m": 0.8700000000000001,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 541,
+            "x": 3.49,
+            "y": -1.0,
+            "size": [
+              5.24,
+              1.95,
+              2.24
+            ],
+            "points": 2592,
+            "speed_mps": 0.58,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785674539597902948,
+        "end_ns": 1785674540199475438,
+        "start_kst": "2026-08-02 21:42:19.597",
+        "end_kst": "2026-08-02 21:42:20.199",
+        "duration_s": 0.70157249,
+        "message_count": 7,
+        "wp_min": 552,
+        "wp_max": 553,
+        "pose_x": 89.7197911962797,
+        "pose_y": -16.793276306273597,
+        "raw": {
+          "samples": 8,
+          "min_v": 0.0,
+          "max_v": 0.18,
+          "moving_fraction": 0.5
+        },
+        "gated": {
+          "samples": 13,
+          "min_v": 0.0,
+          "max_v": 0.24,
+          "moving_fraction": 0.46153846153846156
+        },
+        "final": {
+          "samples": 40,
+          "min_v": 0.0,
+          "max_v": 0.18,
+          "moving_fraction": 0.525
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.7049999999999996,
+          "motion": "unknown",
+          "class": "outside_band",
+          "id": 558,
+          "x": 4.52,
+          "y": -1.33,
+          "size": [
+            7.63,
+            2.6,
+            2.24
+          ],
+          "points": 2696,
+          "speed_mps": 0.58,
+          "age_s": 0.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 5,
+          "dominant_id": 558,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 3,
+          "dominant_share": 0.6,
+          "distance_min_m": 0.7049999999999996,
+          "distance_median_m": 0.71,
+          "distance_max_m": 0.7349999999999999,
+          "motion_counts": {
+            "unknown": 3
+          },
+          "representative": {
+            "distance_m": 0.7049999999999996,
+            "motion": "unknown",
+            "class": "outside_band",
+            "id": 558,
+            "x": 4.52,
+            "y": -1.33,
+            "size": [
+              7.63,
+              2.6,
+              2.24
+            ],
+            "points": 2696,
+            "speed_mps": 0.58,
+            "age_s": 0.9
+          }
+        }
+      },
+      {
+        "kind": "HOLD",
+        "reason": "MANUAL_MODE",
+        "start_ns": 1785674729696674018,
+        "end_ns": 1785674856995198566,
+        "start_kst": "2026-08-02 21:45:29.696",
+        "end_kst": "2026-08-02 21:47:36.995",
+        "duration_s": 127.398524548,
+        "message_count": 1274,
+        "wp_min": 900,
+        "wp_max": 900,
+        "pose_x": 125.21113626753603,
+        "pose_y": -70.3249478904674,
+        "raw": {
+          "samples": 1276,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 1913,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 6375,
+          "min_v": 0.0,
+          "max_v": 0.036012768599999995,
+          "moving_fraction": 0.00015686274509803922
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.75,
+          "motion": "moving",
+          "class": "vehicle",
+          "id": 1142,
+          "x": 3.66,
+          "y": -1.55,
+          "size": [
+            5.82,
+            2.27,
+            2.24
+          ],
+          "points": 3633,
+          "speed_mps": 0.48,
+          "age_s": 3.0
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 30,
+          "dominant_id": 1123,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 10,
+          "dominant_share": 0.3333333333333333,
+          "distance_min_m": 3.8600000000000003,
+          "distance_median_m": 3.9699999999999998,
+          "distance_max_m": 4.055000000000001,
+          "motion_counts": {
+            "unknown": 1,
+            "static": 5,
+            "moving": 4
+          },
+          "representative": {
+            "distance_m": 4.01,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 1123,
+            "x": 7.38,
+            "y": 2.95,
+            "size": [
+              6.74,
+              6.08,
+              2.25
+            ],
+            "points": 958,
+            "speed_mps": 0.23,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "HOLD",
+        "reason": "PAUSED",
+        "start_ns": 1785674857099744707,
+        "end_ns": 1785675050595153558,
+        "start_kst": "2026-08-02 21:47:37.099",
+        "end_kst": "2026-08-02 21:50:50.595",
+        "duration_s": 193.595408851,
+        "message_count": 1936,
+        "wp_min": 917,
+        "wp_max": 917,
+        "pose_x": 126.2074026178434,
+        "pose_y": -70.93834221704577,
+        "raw": {
+          "samples": 1937,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 2905,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 9685,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5049999999999999,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 1821,
+          "x": 2.88,
+          "y": -0.86,
+          "size": [
+            4.75,
+            2.1,
+            2.21
+          ],
+          "points": 2931,
+          "speed_mps": 0.27,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 351,
+          "dominant_id": 1876,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 144,
+          "dominant_share": 0.41025641025641024,
+          "distance_min_m": 0.6500000000000004,
+          "distance_median_m": 0.665,
+          "distance_max_m": 0.6850000000000005,
+          "motion_counts": {
+            "unknown": 8,
+            "static": 127,
+            "moving": 9
+          },
+          "representative": {
+            "distance_m": 0.6650000000000005,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1876,
+            "x": 4.44,
+            "y": -1.41,
+            "size": [
+              7.55,
+              2.19,
+              2.25
+            ],
+            "points": 2538,
+            "speed_mps": 0.16,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675053309223246,
+        "end_ns": 1785675053608375919,
+        "start_kst": "2026-08-02 21:50:53.309",
+        "end_kst": "2026-08-02 21:50:53.608",
+        "duration_s": 0.399152673,
+        "message_count": 2,
+        "wp_min": 919,
+        "wp_max": 920,
+        "pose_x": 127.21709771436399,
+        "pose_y": -73.48666139172175,
+        "raw": {
+          "samples": 4,
+          "min_v": 0.0937094707733977,
+          "max_v": 0.1537094707733977,
+          "moving_fraction": 1.0
+        },
+        "gated": {
+          "samples": 6,
+          "min_v": 0.0937094707733977,
+          "max_v": 0.1537094707733977,
+          "moving_fraction": 1.0
+        },
+        "final": {
+          "samples": 25,
+          "min_v": 0.0180012705,
+          "max_v": 0.1117094707733977,
+          "moving_fraction": 0.96
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5099999999999998,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.42,
+          "y": -0.61,
+          "size": [
+            7.82,
+            1.85,
+            2.25
+          ],
+          "points": 4093,
+          "speed_mps": 0.18,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 7,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 7,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.5099999999999998,
+          "distance_median_m": 0.5449999999999999,
+          "distance_max_m": 0.605,
+          "motion_counts": {
+            "static": 7
+          },
+          "representative": {
+            "distance_m": 0.54,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 3.96,
+            "y": -0.76,
+            "size": [
+              6.84,
+              1.84,
+              2.19
+            ],
+            "points": 3086,
+            "speed_mps": 0.08,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675054305157508,
+        "end_ns": 1785675054305157508,
+        "start_kst": "2026-08-02 21:50:54.305",
+        "end_kst": "2026-08-02 21:50:54.305",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "wp_min": 921,
+        "wp_max": 921,
+        "pose_x": 127.37614048360219,
+        "pose_y": -73.66274052252639,
+        "raw": {
+          "samples": 2,
+          "min_v": 0.1591043512906425,
+          "max_v": 0.17710435129064248,
+          "moving_fraction": 1.0
+        },
+        "gated": {
+          "samples": 4,
+          "min_v": 0.1411043512906425,
+          "max_v": 0.2011043512906425,
+          "moving_fraction": 1.0
+        },
+        "final": {
+          "samples": 10,
+          "min_v": 0.1411043512906425,
+          "max_v": 0.2011043512906425,
+          "moving_fraction": 1.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5549999999999997,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.06,
+          "y": -0.96,
+          "size": [
+            7.01,
+            2.03,
+            2.23
+          ],
+          "points": 2980,
+          "speed_mps": 0.15,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 5,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 5,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.5549999999999997,
+          "distance_median_m": 0.6200000000000001,
+          "distance_max_m": 0.6600000000000001,
+          "motion_counts": {
+            "static": 4,
+            "moving": 1
+          },
+          "representative": {
+            "distance_m": 0.6200000000000001,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.5,
+            "y": -1.19,
+            "size": [
+              7.76,
+              2.15,
+              2.25
+            ],
+            "points": 3159,
+            "speed_mps": 0.2,
+            "age_s": 3.0
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675055400903979,
+        "end_ns": 1785675056108881725,
+        "start_kst": "2026-08-02 21:50:55.400",
+        "end_kst": "2026-08-02 21:50:56.108",
+        "duration_s": 0.8079777459999999,
+        "message_count": 7,
+        "wp_min": 922,
+        "wp_max": 923,
+        "pose_x": 127.51888510383932,
+        "pose_y": -73.86905025515159,
+        "raw": {
+          "samples": 8,
+          "min_v": 0.0,
+          "max_v": 0.13432027060278123,
+          "moving_fraction": 0.25
+        },
+        "gated": {
+          "samples": 14,
+          "min_v": 0.0,
+          "max_v": 0.13432027060278123,
+          "moving_fraction": 0.2857142857142857
+        },
+        "final": {
+          "samples": 46,
+          "min_v": 0.0,
+          "max_v": 0.17632027060278124,
+          "moving_fraction": 0.3695652173913043
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6099999999999999,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 3.69,
+          "y": -1.02,
+          "size": [
+            6.16,
+            1.97,
+            2.23
+          ],
+          "points": 3749,
+          "speed_mps": 0.16,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 8,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 8,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6099999999999999,
+          "distance_median_m": 0.6549999999999998,
+          "distance_max_m": 0.6949999999999994,
+          "motion_counts": {
+            "moving": 5,
+            "static": 3
+          },
+          "representative": {
+            "distance_m": 0.6349999999999998,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.21,
+            "y": -1.15,
+            "size": [
+              7.15,
+              2.11,
+              2.25
+            ],
+            "points": 3157,
+            "speed_mps": 0.19,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675056598607287,
+        "end_ns": 1785675057198126472,
+        "start_kst": "2026-08-02 21:50:56.598",
+        "end_kst": "2026-08-02 21:50:57.198",
+        "duration_s": 0.699519185,
+        "message_count": 6,
+        "wp_min": 923,
+        "wp_max": 924,
+        "pose_x": 127.56945374650942,
+        "pose_y": -74.0049862841693,
+        "raw": {
+          "samples": 7,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 13,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 40,
+          "min_v": 0.0,
+          "max_v": 0.032077284,
+          "moving_fraction": 0.025
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5550000000000002,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.37,
+          "y": -0.81,
+          "size": [
+            7.63,
+            1.82,
+            2.24
+          ],
+          "points": 4180,
+          "speed_mps": 0.18,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 8,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 8,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.5550000000000002,
+          "distance_median_m": 0.5700000000000003,
+          "distance_max_m": 0.6149999999999998,
+          "motion_counts": {
+            "static": 4,
+            "moving": 4
+          },
+          "representative": {
+            "distance_m": 0.5599999999999996,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.26,
+            "y": -0.82,
+            "size": [
+              7.4,
+              1.83,
+              2.24
+            ],
+            "points": 3970,
+            "speed_mps": 0.21,
+            "age_s": 3.1
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675057700644403,
+        "end_ns": 1785675058400154580,
+        "start_kst": "2026-08-02 21:50:57.700",
+        "end_kst": "2026-08-02 21:50:58.400",
+        "duration_s": 0.7995101769999999,
+        "message_count": 8,
+        "wp_min": 924,
+        "wp_max": 924,
+        "pose_x": 127.60650465609424,
+        "pose_y": -74.13928038245366,
+        "raw": {
+          "samples": 8,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 14,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 45,
+          "min_v": 0.0,
+          "max_v": 0.0659974137,
+          "moving_fraction": 0.044444444444444446
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5249999999999995,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.31,
+          "y": -0.74,
+          "size": [
+            7.57,
+            1.76,
+            2.24
+          ],
+          "points": 3815,
+          "speed_mps": 0.1,
+          "age_s": 3.0
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 9,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 8,
+          "dominant_share": 0.8888888888888888,
+          "distance_min_m": 0.5249999999999995,
+          "distance_median_m": 0.54,
+          "distance_max_m": 0.5700000000000003,
+          "motion_counts": {
+            "static": 8
+          },
+          "representative": {
+            "distance_m": 0.5349999999999997,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 3.86,
+            "y": -0.82,
+            "size": [
+              6.65,
+              1.94,
+              2.21
+            ],
+            "points": 3661,
+            "speed_mps": 0.04,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675058904347798,
+        "end_ns": 1785675059808373643,
+        "start_kst": "2026-08-02 21:50:58.904",
+        "end_kst": "2026-08-02 21:50:59.808",
+        "duration_s": 1.0040258450000001,
+        "message_count": 9,
+        "wp_min": 924,
+        "wp_max": 925,
+        "pose_x": 127.65205778399701,
+        "pose_y": -74.22569144712494,
+        "raw": {
+          "samples": 11,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.09090909090909091
+        },
+        "gated": {
+          "samples": 16,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 56,
+          "min_v": 0.0,
+          "max_v": 0.072,
+          "moving_fraction": 0.07142857142857142
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.52,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 3.85,
+          "y": -0.85,
+          "size": [
+            6.66,
+            1.98,
+            2.24
+          ],
+          "points": 4207,
+          "speed_mps": 0.1,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 10,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 9,
+          "dominant_share": 0.9,
+          "distance_min_m": 0.52,
+          "distance_median_m": 0.5250000000000004,
+          "distance_max_m": 0.54,
+          "motion_counts": {
+            "static": 9
+          },
+          "representative": {
+            "distance_m": 0.5249999999999999,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.04,
+            "y": -0.74,
+            "size": [
+              7.03,
+              1.76,
+              2.25
+            ],
+            "points": 4097,
+            "speed_mps": 0.12,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675060502138302,
+        "end_ns": 1785675061399091748,
+        "start_kst": "2026-08-02 21:51:00.502",
+        "end_kst": "2026-08-02 21:51:01.399",
+        "duration_s": 0.996953446,
+        "message_count": 10,
+        "wp_min": 925,
+        "wp_max": 926,
+        "pose_x": 127.71959433868045,
+        "pose_y": -74.35878221512017,
+        "raw": {
+          "samples": 10,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 17,
+          "min_v": 0.0,
+          "max_v": 0.048,
+          "moving_fraction": 0.11764705882352941
+        },
+        "final": {
+          "samples": 55,
+          "min_v": 0.0,
+          "max_v": 0.10799696429999998,
+          "moving_fraction": 0.10909090909090909
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.52,
+          "motion": "static",
+          "class": "vehicle",
+          "id": 1980,
+          "x": 4.3,
+          "y": -0.85,
+          "size": [
+            7.56,
+            1.99,
+            2.23
+          ],
+          "points": 3776,
+          "speed_mps": 0.08,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 10,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 5,
+          "dominant_share": 0.5,
+          "distance_min_m": 0.5249999999999999,
+          "distance_median_m": 0.6149999999999998,
+          "distance_max_m": 0.6399999999999997,
+          "motion_counts": {
+            "static": 3,
+            "moving": 2
+          },
+          "representative": {
+            "distance_m": 0.6399999999999997,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.71,
+            "y": -1.05,
+            "size": [
+              8.14,
+              1.89,
+              2.24
+            ],
+            "points": 3016,
+            "speed_mps": 0.44,
+            "age_s": 3.1
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675062101153806,
+        "end_ns": 1785675062799220757,
+        "start_kst": "2026-08-02 21:51:02.101",
+        "end_kst": "2026-08-02 21:51:02.799",
+        "duration_s": 0.798066951,
+        "message_count": 7,
+        "wp_min": 926,
+        "wp_max": 927,
+        "pose_x": 127.88283942402967,
+        "pose_y": -74.46598528999522,
+        "raw": {
+          "samples": 8,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 14,
+          "min_v": 0.0,
+          "max_v": 0.048,
+          "moving_fraction": 0.14285714285714285
+        },
+        "final": {
+          "samples": 45,
+          "min_v": 0.0,
+          "max_v": 0.0620113276,
+          "moving_fraction": 0.13333333333333333
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6149999999999998,
+          "motion": "static",
+          "class": "vehicle",
+          "id": 1980,
+          "x": 4.6,
+          "y": -1.21,
+          "size": [
+            7.97,
+            2.24,
+            2.22
+          ],
+          "points": 3398,
+          "speed_mps": 0.19,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 9,
+          "dominant_id": 1980,
+          "dominant_class": "vehicle",
+          "dominant_sample_count": 5,
+          "dominant_share": 0.5555555555555556,
+          "distance_min_m": 0.6149999999999998,
+          "distance_median_m": 0.7299999999999995,
+          "distance_max_m": 0.815,
+          "motion_counts": {
+            "static": 3,
+            "moving": 2
+          },
+          "representative": {
+            "distance_m": 0.7799999999999998,
+            "motion": "moving",
+            "class": "vehicle",
+            "id": 1980,
+            "x": 3.78,
+            "y": -1.72,
+            "size": [
+              6.0,
+              2.84,
+              2.24
+            ],
+            "points": 2074,
+            "speed_mps": 0.2,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675063502035943,
+        "end_ns": 1785675063997136914,
+        "start_kst": "2026-08-02 21:51:03.502",
+        "end_kst": "2026-08-02 21:51:03.997",
+        "duration_s": 0.595100971,
+        "message_count": 6,
+        "wp_min": 927,
+        "wp_max": 928,
+        "pose_x": 128.0187584728985,
+        "pose_y": -74.58051839302944,
+        "raw": {
+          "samples": 6,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 10,
+          "min_v": 0.0,
+          "max_v": 0.048,
+          "moving_fraction": 0.1
+        },
+        "final": {
+          "samples": 35,
+          "min_v": 0.0,
+          "max_v": 0.1079966211,
+          "moving_fraction": 0.2
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.7450000000000001,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 3.85,
+          "y": -1.59,
+          "size": [
+            6.21,
+            2.65,
+            2.23
+          ],
+          "points": 1822,
+          "speed_mps": 0.13,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 8,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 6,
+          "dominant_share": 0.75,
+          "distance_min_m": 0.7450000000000001,
+          "distance_median_m": 0.8049999999999997,
+          "distance_max_m": 0.8200000000000003,
+          "motion_counts": {
+            "static": 5,
+            "moving": 1
+          },
+          "representative": {
+            "distance_m": 0.7450000000000001,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 3.85,
+            "y": -1.59,
+            "size": [
+              6.21,
+              2.65,
+              2.23
+            ],
+            "points": 1822,
+            "speed_mps": 0.13,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675064801368864,
+        "end_ns": 1785675065297133983,
+        "start_kst": "2026-08-02 21:51:04.801",
+        "end_kst": "2026-08-02 21:51:05.297",
+        "duration_s": 0.595765119,
+        "message_count": 6,
+        "wp_min": 928,
+        "wp_max": 929,
+        "pose_x": 128.12442482838375,
+        "pose_y": -74.76728835943544,
+        "raw": {
+          "samples": 6,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 11,
+          "min_v": 0.0,
+          "max_v": 0.066,
+          "moving_fraction": 0.09090909090909091
+        },
+        "final": {
+          "samples": 35,
+          "min_v": 0.0,
+          "max_v": 0.126,
+          "moving_fraction": 0.2
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6950000000000003,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.37,
+          "y": -1.33,
+          "size": [
+            7.35,
+            2.23,
+            2.25
+          ],
+          "points": 2746,
+          "speed_mps": 0.16,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 8,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 8,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6950000000000003,
+          "distance_median_m": 0.7349999999999999,
+          "distance_max_m": 0.79,
+          "motion_counts": {
+            "static": 5,
+            "moving": 3
+          },
+          "representative": {
+            "distance_m": 0.73,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.46,
+            "y": -1.34,
+            "size": [
+              7.46,
+              2.35,
+              2.21
+            ],
+            "points": 2165,
+            "speed_mps": 0.35,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675065900206998,
+        "end_ns": 1785675066209912589,
+        "start_kst": "2026-08-02 21:51:05.900",
+        "end_kst": "2026-08-02 21:51:06.209",
+        "duration_s": 0.40970559100000004,
+        "message_count": 4,
+        "wp_min": 929,
+        "wp_max": 929,
+        "pose_x": 128.20010914555533,
+        "pose_y": -74.92361379522198,
+        "raw": {
+          "samples": 4,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 8,
+          "min_v": 0.0,
+          "max_v": 0.03,
+          "moving_fraction": 0.25
+        },
+        "final": {
+          "samples": 26,
+          "min_v": 0.0,
+          "max_v": 0.09,
+          "moving_fraction": 0.23076923076923078
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6650000000000005,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.11,
+          "y": -1.28,
+          "size": [
+            6.89,
+            2.03,
+            2.24
+          ],
+          "points": 2816,
+          "speed_mps": 0.16,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 6,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 6,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6650000000000005,
+          "distance_median_m": 0.6950000000000003,
+          "distance_max_m": 0.71,
+          "motion_counts": {
+            "moving": 2,
+            "static": 4
+          },
+          "representative": {
+            "distance_m": 0.6749999999999998,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.39,
+            "y": -1.29,
+            "size": [
+              7.43,
+              2.11,
+              2.24
+            ],
+            "points": 2764,
+            "speed_mps": 0.28,
+            "age_s": 3.1
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675067097594827,
+        "end_ns": 1785675067615055342,
+        "start_kst": "2026-08-02 21:51:07.097",
+        "end_kst": "2026-08-02 21:51:07.615",
+        "duration_s": 0.617460515,
+        "message_count": 6,
+        "wp_min": 929,
+        "wp_max": 930,
+        "pose_x": 128.2354255191238,
+        "pose_y": -75.044034901286,
+        "raw": {
+          "samples": 7,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.2857142857142857
+        },
+        "gated": {
+          "samples": 12,
+          "min_v": 0.0,
+          "max_v": 0.08399999999999999,
+          "moving_fraction": 0.25
+        },
+        "final": {
+          "samples": 36,
+          "min_v": 0.0,
+          "max_v": 0.13799812890000002,
+          "moving_fraction": 0.3611111111111111
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6199999999999997,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.51,
+          "y": -1.29,
+          "size": [
+            7.78,
+            1.72,
+            2.22
+          ],
+          "points": 2930,
+          "speed_mps": 0.3,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 1,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 1,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6199999999999997,
+          "distance_median_m": 0.6199999999999997,
+          "distance_max_m": 0.6199999999999997,
+          "motion_counts": {
+            "moving": 1
+          },
+          "representative": {
+            "distance_m": 0.6199999999999997,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.51,
+            "y": -1.29,
+            "size": [
+              7.78,
+              1.72,
+              2.22
+            ],
+            "points": 2930,
+            "speed_mps": 0.3,
+            "age_s": 3.1
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675070697941849,
+        "end_ns": 1785675076402621068,
+        "start_kst": "2026-08-02 21:51:10.697",
+        "end_kst": "2026-08-02 21:51:16.402",
+        "duration_s": 5.804679219,
+        "message_count": 48,
+        "wp_min": 934,
+        "wp_max": 934,
+        "pose_x": 128.62678168802543,
+        "pose_y": -75.72088563670455,
+        "raw": {
+          "samples": 59,
+          "min_v": 0.0,
+          "max_v": 0.24,
+          "moving_fraction": 0.11864406779661017
+        },
+        "gated": {
+          "samples": 89,
+          "min_v": 0.0,
+          "max_v": 0.24,
+          "moving_fraction": 0.06741573033707865
+        },
+        "final": {
+          "samples": 295,
+          "min_v": 0.0,
+          "max_v": 0.12,
+          "moving_fraction": 0.0711864406779661
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6549999999999998,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.01,
+          "y": -0.39,
+          "size": [
+            6.71,
+            2.64,
+            2.21
+          ],
+          "points": 4165,
+          "speed_mps": 0.01,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 33,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 33,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6549999999999998,
+          "distance_median_m": 0.7150000000000003,
+          "distance_max_m": 0.75,
+          "motion_counts": {
+            "static": 30,
+            "moving": 3
+          },
+          "representative": {
+            "distance_m": 0.7149999999999999,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 3.98,
+            "y": -0.59,
+            "size": [
+              6.53,
+              2.35,
+              2.24
+            ],
+            "points": 3244,
+            "speed_mps": 0.04,
+            "age_s": 2.8
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675076814716356,
+        "end_ns": 1785675077210429976,
+        "start_kst": "2026-08-02 21:51:16.814",
+        "end_kst": "2026-08-02 21:51:17.210",
+        "duration_s": 0.49571361999999997,
+        "message_count": 3,
+        "wp_min": 934,
+        "wp_max": 934,
+        "pose_x": 128.61517434907358,
+        "pose_y": -75.8717206592276,
+        "raw": {
+          "samples": 7,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.2857142857142857
+        },
+        "gated": {
+          "samples": 9,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 30,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6549999999999998,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.01,
+          "y": -0.39,
+          "size": [
+            6.71,
+            2.64,
+            2.21
+          ],
+          "points": 4165,
+          "speed_mps": 0.01,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 7,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 7,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6549999999999998,
+          "distance_median_m": 0.665,
+          "distance_max_m": 0.6800000000000002,
+          "motion_counts": {
+            "static": 5,
+            "moving": 2
+          },
+          "representative": {
+            "distance_m": 0.6600000000000001,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 3.91,
+            "y": -0.37,
+            "size": [
+              6.5,
+              2.66,
+              2.22
+            ],
+            "points": 3525,
+            "speed_mps": 0.04,
+            "age_s": 3.1
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675077598394445,
+        "end_ns": 1785675077812784529,
+        "start_kst": "2026-08-02 21:51:17.598",
+        "end_kst": "2026-08-02 21:51:17.812",
+        "duration_s": 0.314390084,
+        "message_count": 3,
+        "wp_min": 934,
+        "wp_max": 935,
+        "pose_x": 128.61680359398275,
+        "pose_y": -75.88550301562321,
+        "raw": {
+          "samples": 4,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.25
+        },
+        "gated": {
+          "samples": 6,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 21,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6499999999999999,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 3.42,
+          "y": -0.43,
+          "size": [
+            5.54,
+            2.51,
+            2.22
+          ],
+          "points": 3517,
+          "speed_mps": 0.13,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 6,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 6,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6499999999999999,
+          "distance_median_m": 0.6600000000000001,
+          "distance_max_m": 0.6699999999999999,
+          "motion_counts": {
+            "moving": 2,
+            "static": 4
+          },
+          "representative": {
+            "distance_m": 0.6600000000000001,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 3.98,
+            "y": -0.29,
+            "size": [
+              6.64,
+              2.78,
+              2.21
+            ],
+            "points": 3529,
+            "speed_mps": 0.02,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675078407059353,
+        "end_ns": 1785675078407059353,
+        "start_kst": "2026-08-02 21:51:18.407",
+        "end_kst": "2026-08-02 21:51:18.407",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "wp_min": 935,
+        "wp_max": 935,
+        "pose_x": 128.61892180702839,
+        "pose_y": -75.89329247294218,
+        "raw": {
+          "samples": 2,
+          "min_v": 0.048,
+          "max_v": 0.066,
+          "moving_fraction": 1.0
+        },
+        "gated": {
+          "samples": 3,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 10,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6349999999999998,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.0,
+          "y": -0.28,
+          "size": [
+            6.73,
+            2.79,
+            2.24
+          ],
+          "points": 3536,
+          "speed_mps": 0.07,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 5,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 5,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6349999999999998,
+          "distance_median_m": 0.6499999999999999,
+          "distance_max_m": 0.665,
+          "motion_counts": {
+            "static": 5
+          },
+          "representative": {
+            "distance_m": 0.6400000000000001,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.0,
+            "y": -0.27,
+            "size": [
+              6.72,
+              2.78,
+              2.25
+            ],
+            "points": 3595,
+            "speed_mps": 0.07,
+            "age_s": 2.8
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675078902307212,
+        "end_ns": 1785675078902307212,
+        "start_kst": "2026-08-02 21:51:18.902",
+        "end_kst": "2026-08-02 21:51:18.902",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "wp_min": 935,
+        "wp_max": 935,
+        "pose_x": 128.62150545623842,
+        "pose_y": -75.88685312204522,
+        "raw": {
+          "samples": 2,
+          "min_v": 0.04200000000000001,
+          "max_v": 0.06000000000000001,
+          "moving_fraction": 1.0
+        },
+        "gated": {
+          "samples": 3,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 10,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.6349999999999998,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 4.0,
+          "y": -0.28,
+          "size": [
+            6.73,
+            2.79,
+            2.24
+          ],
+          "points": 3536,
+          "speed_mps": 0.07,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 5,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 5,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.6349999999999998,
+          "distance_median_m": 0.6699999999999999,
+          "distance_max_m": 0.7199999999999998,
+          "motion_counts": {
+            "static": 5
+          },
+          "representative": {
+            "distance_m": 0.6699999999999999,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 3.88,
+            "y": -0.39,
+            "size": [
+              6.42,
+              2.65,
+              2.21
+            ],
+            "points": 3436,
+            "speed_mps": 0.02,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675079300539704,
+        "end_ns": 1785675079900565317,
+        "start_kst": "2026-08-02 21:51:19.300",
+        "end_kst": "2026-08-02 21:51:19.900",
+        "duration_s": 0.700025613,
+        "message_count": 5,
+        "wp_min": 935,
+        "wp_max": 935,
+        "pose_x": 128.65600785898334,
+        "pose_y": -75.8901236151722,
+        "raw": {
+          "samples": 8,
+          "min_v": 0.0,
+          "max_v": 0.03600000000000002,
+          "moving_fraction": 0.25
+        },
+        "gated": {
+          "samples": 12,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.08333333333333333
+        },
+        "final": {
+          "samples": 40,
+          "min_v": 0.0,
+          "max_v": 0.0359994105,
+          "moving_fraction": 0.075
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.665,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 1980,
+          "x": 3.96,
+          "y": -0.36,
+          "size": [
+            6.59,
+            2.66,
+            2.19
+          ],
+          "points": 4102,
+          "speed_mps": 0.06,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 8,
+          "dominant_id": 1980,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 8,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.665,
+          "distance_median_m": 0.7250000000000001,
+          "distance_max_m": 0.81,
+          "motion_counts": {
+            "static": 7,
+            "moving": 1
+          },
+          "representative": {
+            "distance_m": 0.7250000000000001,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 1980,
+            "x": 4.63,
+            "y": -0.67,
+            "size": [
+              7.81,
+              2.28,
+              2.22
+            ],
+            "points": 3533,
+            "speed_mps": 0.29,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675085104841087,
+        "end_ns": 1785675085197333394,
+        "start_kst": "2026-08-02 21:51:25.104",
+        "end_kst": "2026-08-02 21:51:25.197",
+        "duration_s": 0.192492307,
+        "message_count": 2,
+        "wp_min": 941,
+        "wp_max": 942,
+        "pose_x": 129.38881600666602,
+        "pose_y": -76.9612546452874,
+        "raw": {
+          "samples": 4,
+          "min_v": 0.18,
+          "max_v": 0.24,
+          "moving_fraction": 1.0
+        },
+        "gated": {
+          "samples": 4,
+          "min_v": 0.18,
+          "max_v": 0.24,
+          "moving_fraction": 1.0
+        },
+        "final": {
+          "samples": 15,
+          "min_v": 0.0239959716,
+          "max_v": 0.1080157041,
+          "moving_fraction": 1.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5299999999999998,
+          "motion": "unknown",
+          "class": "outside_band",
+          "id": 2054,
+          "x": 3.15,
+          "y": -1.12,
+          "size": [
+            5.24,
+            1.66,
+            2.21
+          ],
+          "points": 2921,
+          "speed_mps": 0.36,
+          "age_s": 0.5
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 4,
+          "dominant_id": 2054,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 4,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.5299999999999998,
+          "distance_median_m": 0.5449999999999999,
+          "distance_max_m": 0.5699999999999998,
+          "motion_counts": {
+            "unknown": 4
+          },
+          "representative": {
+            "distance_m": 0.5299999999999998,
+            "motion": "unknown",
+            "class": "outside_band",
+            "id": 2054,
+            "x": 3.15,
+            "y": -1.12,
+            "size": [
+              5.24,
+              1.66,
+              2.21
+            ],
+            "points": 2921,
+            "speed_mps": 0.36,
+            "age_s": 0.5
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675087006169585,
+        "end_ns": 1785675087297397125,
+        "start_kst": "2026-08-02 21:51:27.006",
+        "end_kst": "2026-08-02 21:51:27.297",
+        "duration_s": 0.39122754000000004,
+        "message_count": 4,
+        "wp_min": 944,
+        "wp_max": 945,
+        "pose_x": 129.6838034714299,
+        "pose_y": -77.40495672844787,
+        "raw": {
+          "samples": 5,
+          "min_v": 0.06,
+          "max_v": 0.18,
+          "moving_fraction": 1.0
+        },
+        "gated": {
+          "samples": 7,
+          "min_v": 0.0,
+          "max_v": 0.078,
+          "moving_fraction": 0.42857142857142855
+        },
+        "final": {
+          "samples": 25,
+          "min_v": 0.0,
+          "max_v": 0.053995299299999994,
+          "moving_fraction": 0.24
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5249999999999995,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 2054,
+          "x": 4.55,
+          "y": -0.88,
+          "size": [
+            8.05,
+            1.72,
+            2.25
+          ],
+          "points": 3796,
+          "speed_mps": 0.72,
+          "age_s": 2.7
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 3,
+          "dominant_id": 2054,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 3,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.5249999999999995,
+          "distance_median_m": 0.5349999999999997,
+          "distance_max_m": 0.5350000000000006,
+          "motion_counts": {
+            "moving": 3
+          },
+          "representative": {
+            "distance_m": 0.5350000000000006,
+            "motion": "moving",
+            "class": "outside_band",
+            "id": 2054,
+            "x": 4.19,
+            "y": -0.96,
+            "size": [
+              7.31,
+              1.6,
+              2.25
+            ],
+            "points": 4082,
+            "speed_mps": 0.54,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675087704916572,
+        "end_ns": 1785675092200463000,
+        "start_kst": "2026-08-02 21:51:27.704",
+        "end_kst": "2026-08-02 21:51:32.200",
+        "duration_s": 4.595546428,
+        "message_count": 46,
+        "wp_min": 945,
+        "wp_max": 945,
+        "pose_x": 129.66712715171317,
+        "pose_y": -77.46042814269167,
+        "raw": {
+          "samples": 46,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 71,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 235,
+          "min_v": 0.0,
+          "max_v": 0.011886620399999999,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5,
+          "motion": "moving",
+          "class": "outside_band",
+          "id": 2054,
+          "x": 3.93,
+          "y": -0.74,
+          "size": [
+            6.86,
+            1.87,
+            2.24
+          ],
+          "points": 3891,
+          "speed_mps": 0.3,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 27,
+          "dominant_id": 2054,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 25,
+          "dominant_share": 0.9259259259259259,
+          "distance_min_m": 0.5,
+          "distance_median_m": 0.5100000000000002,
+          "distance_max_m": 0.5949999999999998,
+          "motion_counts": {
+            "moving": 16,
+            "static": 9
+          },
+          "representative": {
+            "distance_m": 0.5099999999999998,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 2054,
+            "x": 4.01,
+            "y": -0.75,
+            "size": [
+              7.0,
+              1.89,
+              2.25
+            ],
+            "points": 4583,
+            "speed_mps": 0.17,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "STATE",
+        "reason": "OBSTACLE",
+        "start_ns": 1785675092813610436,
+        "end_ns": 1785675093002951700,
+        "start_kst": "2026-08-02 21:51:32.813",
+        "end_kst": "2026-08-02 21:51:33.002",
+        "duration_s": 0.28934126400000004,
+        "message_count": 3,
+        "wp_min": 945,
+        "wp_max": 946,
+        "pose_x": 129.77742365112698,
+        "pose_y": -77.43627836090457,
+        "raw": {
+          "samples": 4,
+          "min_v": 0.0,
+          "max_v": 0.036,
+          "moving_fraction": 0.25
+        },
+        "gated": {
+          "samples": 6,
+          "min_v": 0.0,
+          "max_v": 0.03,
+          "moving_fraction": 0.16666666666666666
+        },
+        "final": {
+          "samples": 19,
+          "min_v": 0.0,
+          "max_v": 0.0899999829,
+          "moving_fraction": 0.2631578947368421
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5949999999999998,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 2054,
+          "x": 4.39,
+          "y": -1.17,
+          "size": [
+            7.59,
+            1.52,
+            2.23
+          ],
+          "points": 3302,
+          "speed_mps": 0.03,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 1,
+          "dominant_id": 2054,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 1,
+          "dominant_share": 1.0,
+          "distance_min_m": 0.5949999999999998,
+          "distance_median_m": 0.5949999999999998,
+          "distance_max_m": 0.5949999999999998,
+          "motion_counts": {
+            "static": 1
+          },
+          "representative": {
+            "distance_m": 0.5949999999999998,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 2054,
+            "x": 4.39,
+            "y": -1.17,
+            "size": [
+              7.59,
+              1.52,
+              2.23
+            ],
+            "points": 3302,
+            "speed_mps": 0.03,
+            "age_s": 3.1
+          }
+        }
+      },
+      {
+        "kind": "HOLD",
+        "reason": "MANUAL_MODE",
+        "start_ns": 1785675094896779803,
+        "end_ns": 1785675202295172511,
+        "start_kst": "2026-08-02 21:51:34.896",
+        "end_kst": "2026-08-02 21:53:22.295",
+        "duration_s": 107.498392708,
+        "message_count": 1075,
+        "wp_min": 947,
+        "wp_max": 948,
+        "pose_x": 130.02235801503969,
+        "pose_y": -77.90900325494476,
+        "raw": {
+          "samples": 1077,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 1615,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 5380,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.5400000000000005,
+          "motion": "static",
+          "class": "outside_band",
+          "id": 2054,
+          "x": 4.11,
+          "y": -0.78,
+          "size": [
+            7.14,
+            1.87,
+            2.21
+          ],
+          "points": 3944,
+          "speed_mps": 0.08,
+          "age_s": 2.9
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 282,
+          "dominant_id": 2145,
+          "dominant_class": "outside_band",
+          "dominant_sample_count": 67,
+          "dominant_share": 0.2375886524822695,
+          "distance_min_m": 4.445,
+          "distance_median_m": 5.62,
+          "distance_max_m": 7.055,
+          "motion_counts": {
+            "unknown": 8,
+            "moving": 18,
+            "static": 41
+          },
+          "representative": {
+            "distance_m": 6.055,
+            "motion": "static",
+            "class": "outside_band",
+            "id": 2145,
+            "x": 7.55,
+            "y": -1.23,
+            "size": [
+              2.99,
+              6.01,
+              2.24
+            ],
+            "points": 875,
+            "speed_mps": 0.13,
+            "age_s": 2.9
+          }
+        }
+      },
+      {
+        "kind": "HOLD",
+        "reason": "PAUSED",
+        "start_ns": 1785675202409078330,
+        "end_ns": 1785675261895170684,
+        "start_kst": "2026-08-02 21:53:22.409",
+        "end_kst": "2026-08-02 21:54:21.895",
+        "duration_s": 59.586092354,
+        "message_count": 596,
+        "wp_min": 1048,
+        "wp_max": 1049,
+        "pose_x": 142.91525075185896,
+        "pose_y": -89.18687288605473,
+        "raw": {
+          "samples": 597,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 896,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 2984,
+          "min_v": 0.0,
+          "max_v": 0.018,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 6.34,
+          "motion": "unknown",
+          "class": "obstacle",
+          "id": 2435,
+          "x": 7.16,
+          "y": -1.48,
+          "size": [
+            1.64,
+            2.15,
+            0.1
+          ],
+          "points": 45,
+          "speed_mps": 0.06,
+          "age_s": 1.3
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 26,
+          "dominant_id": 2366,
+          "dominant_class": "obstacle",
+          "dominant_sample_count": 9,
+          "dominant_share": 0.34615384615384615,
+          "distance_min_m": 7.2250000000000005,
+          "distance_median_m": 7.31,
+          "distance_max_m": 7.409999999999999,
+          "motion_counts": {
+            "unknown": 5,
+            "static": 4
+          },
+          "representative": {
+            "distance_m": 7.409999999999999,
+            "motion": "unknown",
+            "class": "obstacle",
+            "id": 2366,
+            "x": 7.6,
+            "y": -0.51,
+            "size": [
+              0.38,
+              0.54,
+              0.1
+            ],
+            "points": 9,
+            "speed_mps": 0.22,
+            "age_s": 1.3
+          }
+        }
+      },
+      {
+        "kind": "HOLD",
+        "reason": "MANUAL_MODE",
+        "start_ns": 1785675306896593404,
+        "end_ns": 1785675474295226082,
+        "start_kst": "2026-08-02 21:55:06.896",
+        "end_kst": "2026-08-02 21:57:54.295",
+        "duration_s": 167.498632678,
+        "message_count": 1675,
+        "wp_min": 1126,
+        "wp_max": 1126,
+        "pose_x": 154.32115223989007,
+        "pose_y": -82.31886028546619,
+        "raw": {
+          "samples": 1677,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 2514,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 8380,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.46,
+          "motion": "static",
+          "class": "obstacle",
+          "id": 2900,
+          "x": 0.51,
+          "y": 0.36,
+          "size": [
+            0.1,
+            0.1,
+            0.1
+          ],
+          "points": 12,
+          "speed_mps": 0.06,
+          "age_s": 3.1
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 827,
+          "dominant_id": 2980,
+          "dominant_class": "person",
+          "dominant_sample_count": 140,
+          "dominant_share": 0.16928657799274485,
+          "distance_min_m": 0.5,
+          "distance_median_m": 1.025,
+          "distance_max_m": 1.135,
+          "motion_counts": {
+            "unknown": 7,
+            "moving": 6,
+            "static": 127
+          },
+          "representative": {
+            "distance_m": 1.02,
+            "motion": "static",
+            "class": "person",
+            "id": 2980,
+            "x": 1.21,
+            "y": 0.68,
+            "size": [
+              0.38,
+              0.56,
+              1.16
+            ],
+            "points": 1506,
+            "speed_mps": 0.01,
+            "age_s": 3.0
+          }
+        }
+      },
+      {
+        "kind": "HOLD",
+        "reason": "PAUSED",
+        "start_ns": 1785675474405379021,
+        "end_ns": 1785675482611871895,
+        "start_kst": "2026-08-02 21:57:54.405",
+        "end_kst": "2026-08-02 21:58:02.611",
+        "duration_s": 8.306492874,
+        "message_count": 83,
+        "wp_min": null,
+        "wp_max": null,
+        "pose_x": 155.2081751179625,
+        "pose_y": -83.61148485673644,
+        "raw": {
+          "samples": 82,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "gated": {
+          "samples": 124,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "final": {
+          "samples": 414,
+          "min_v": 0.0,
+          "max_v": 0.0,
+          "moving_fraction": 0.0
+        },
+        "nearest_cluster_threat": {
+          "distance_m": 0.695,
+          "motion": "static",
+          "class": "obstacle",
+          "id": 3277,
+          "x": 1.22,
+          "y": 0.51,
+          "size": [
+            1.05,
+            1.01,
+            1.02
+          ],
+          "points": 1612,
+          "speed_mps": 0.02,
+          "age_s": 2.8
+        },
+        "cluster_threat_summary": {
+          "samples_with_threat": 22,
+          "dominant_id": 3277,
+          "dominant_class": "obstacle",
+          "dominant_sample_count": 19,
+          "dominant_share": 0.8636363636363636,
+          "distance_min_m": 0.695,
+          "distance_median_m": 0.88,
+          "distance_max_m": 1.0,
+          "motion_counts": {
+            "static": 19
+          },
+          "representative": {
+            "distance_m": 0.81,
+            "motion": "static",
+            "class": "obstacle",
+            "id": 3277,
+            "x": 1.25,
+            "y": 0.13,
+            "size": [
+              0.88,
+              1.11,
+              1.01
+            ],
+            "points": 1504,
+            "speed_mps": 0.02,
+            "age_s": 3.1
+          }
+        }
+      }
+    ],
+    "actual_stop_periods": [
+      {
+        "start_ns": 1785674434406796046,
+        "end_ns": 1785674436706668043,
+        "start_kst": "2026-08-02 21:40:34.406",
+        "end_kst": "2026-08-02 21:40:36.706",
+        "duration_s": 2.299871997,
+        "resumed": true,
+        "wp_min": 337,
+        "wp_max": 339,
+        "status_counts": {
+          "STATE:DRIVING": 38
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785674530746512384,
+        "end_ns": 1785674531646894027,
+        "start_kst": "2026-08-02 21:42:10.746",
+        "end_kst": "2026-08-02 21:42:11.646",
+        "duration_s": 0.900381643,
+        "resumed": true,
+        "wp_min": 542,
+        "wp_max": 543,
+        "status_counts": {
+          "STATE:DRIVING": 13,
+          "STATE:OBSTACLE": 11
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785674534330314019,
+        "end_ns": 1785674534846441955,
+        "start_kst": "2026-08-02 21:42:14.330",
+        "end_kst": "2026-08-02 21:42:14.846",
+        "duration_s": 0.516127936,
+        "resumed": true,
+        "wp_min": 545,
+        "wp_max": 547,
+        "status_counts": {
+          "STATE:DRIVING": 14,
+          "STATE:OBSTACLE": 6
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785674536066437812,
+        "end_ns": 1785674537046469435,
+        "start_kst": "2026-08-02 21:42:16.066",
+        "end_kst": "2026-08-02 21:42:17.046",
+        "duration_s": 0.980031623,
+        "resumed": true,
+        "wp_min": 547,
+        "wp_max": 548,
+        "status_counts": {
+          "STATE:DRIVING": 14,
+          "STATE:OBSTACLE": 11
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785674729726524012,
+        "end_ns": 1785675050826552252,
+        "start_kst": "2026-08-02 21:45:29.726",
+        "end_kst": "2026-08-02 21:50:50.826",
+        "duration_s": 321.10002824,
+        "resumed": true,
+        "wp_min": 899,
+        "wp_max": 917,
+        "status_counts": {
+          "HOLD:PAUSED": 1936,
+          "HOLD:MANUAL_MODE": 1274,
+          "STATE:DRIVING": 16
+        },
+        "dominant_status": "HOLD:PAUSED"
+      },
+      {
+        "start_ns": 1785675052086654732,
+        "end_ns": 1785675052670245282,
+        "start_kst": "2026-08-02 21:50:52.086",
+        "end_kst": "2026-08-02 21:50:52.670",
+        "duration_s": 0.58359055,
+        "resumed": true,
+        "wp_min": 917,
+        "wp_max": 919,
+        "status_counts": {
+          "STATE:DRIVING": 21
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785675055746760243,
+        "end_ns": 1785675056346526310,
+        "start_kst": "2026-08-02 21:50:55.746",
+        "end_kst": "2026-08-02 21:50:56.346",
+        "duration_s": 0.599766067,
+        "resumed": true,
+        "wp_min": 922,
+        "wp_max": 923,
+        "status_counts": {
+          "STATE:DRIVING": 11,
+          "STATE:OBSTACLE": 10
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785675056626585758,
+        "end_ns": 1785675057467057061,
+        "start_kst": "2026-08-02 21:50:56.626",
+        "end_kst": "2026-08-02 21:50:57.467",
+        "duration_s": 0.840471303,
+        "resumed": true,
+        "wp_min": 923,
+        "wp_max": 924,
+        "status_counts": {
+          "STATE:OBSTACLE": 14,
+          "STATE:DRIVING": 9
+        },
+        "dominant_status": "STATE:OBSTACLE"
+      },
+      {
+        "start_ns": 1785675057746853587,
+        "end_ns": 1785675058686513771,
+        "start_kst": "2026-08-02 21:50:57.746",
+        "end_kst": "2026-08-02 21:50:58.686",
+        "duration_s": 0.939660184,
+        "resumed": true,
+        "wp_min": 923,
+        "wp_max": 924,
+        "status_counts": {
+          "STATE:OBSTACLE": 15,
+          "STATE:DRIVING": 9
+        },
+        "dominant_status": "STATE:OBSTACLE"
+      },
+      {
+        "start_ns": 1785675058986696062,
+        "end_ns": 1785675060046705217,
+        "start_kst": "2026-08-02 21:50:58.986",
+        "end_kst": "2026-08-02 21:51:00.046",
+        "duration_s": 1.060009155,
+        "resumed": true,
+        "wp_min": 924,
+        "wp_max": 925,
+        "status_counts": {
+          "STATE:OBSTACLE": 15,
+          "STATE:DRIVING": 11
+        },
+        "dominant_status": "STATE:OBSTACLE"
+      },
+      {
+        "start_ns": 1785675060633749222,
+        "end_ns": 1785675061626647025,
+        "start_kst": "2026-08-02 21:51:00.633",
+        "end_kst": "2026-08-02 21:51:01.626",
+        "duration_s": 0.992897803,
+        "resumed": true,
+        "wp_min": 925,
+        "wp_max": 926,
+        "status_counts": {
+          "STATE:OBSTACLE": 13,
+          "STATE:DRIVING": 12
+        },
+        "dominant_status": "STATE:OBSTACLE"
+      },
+      {
+        "start_ns": 1785675062230980942,
+        "end_ns": 1785675063046621254,
+        "start_kst": "2026-08-02 21:51:02.230",
+        "end_kst": "2026-08-02 21:51:03.046",
+        "duration_s": 0.815640312,
+        "resumed": true,
+        "wp_min": 926,
+        "wp_max": 927,
+        "status_counts": {
+          "STATE:DRIVING": 13,
+          "STATE:OBSTACLE": 10
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785675063646430993,
+        "end_ns": 1785675064226550521,
+        "start_kst": "2026-08-02 21:51:03.646",
+        "end_kst": "2026-08-02 21:51:04.226",
+        "duration_s": 0.580119528,
+        "resumed": true,
+        "wp_min": 927,
+        "wp_max": 928,
+        "status_counts": {
+          "STATE:DRIVING": 14,
+          "STATE:OBSTACLE": 7
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785675064946678410,
+        "end_ns": 1785675065546554318,
+        "start_kst": "2026-08-02 21:51:04.946",
+        "end_kst": "2026-08-02 21:51:05.546",
+        "duration_s": 0.599875908,
+        "resumed": true,
+        "wp_min": 928,
+        "wp_max": 929,
+        "status_counts": {
+          "STATE:DRIVING": 12,
+          "STATE:OBSTACLE": 9
+        },
+        "dominant_status": "STATE:DRIVING"
+      },
+      {
+        "start_ns": 1785675071126461812,
+        "end_ns": 1785675079767319932,
+        "start_kst": "2026-08-02 21:51:11.126",
+        "end_kst": "2026-08-02 21:51:19.767",
+        "duration_s": 8.64085812,
+        "resumed": true,
+        "wp_min": 933,
+        "wp_max": 935,
+        "status_counts": {
+          "STATE:OBSTACLE": 61,
+          "STATE:DRIVING": 40
+        },
+        "dominant_status": "STATE:OBSTACLE"
+      },
+      {
+        "start_ns": 1785675087706598945,
+        "end_ns": 1785675092430545471,
+        "start_kst": "2026-08-02 21:51:27.706",
+        "end_kst": "2026-08-02 21:51:32.430",
+        "duration_s": 4.723946526,
+        "resumed": true,
+        "wp_min": 944,
+        "wp_max": 945,
+        "status_counts": {
+          "STATE:OBSTACLE": 52,
+          "STATE:DRIVING": 10
+        },
+        "dominant_status": "STATE:OBSTACLE"
+      },
+      {
+        "start_ns": 1785675094386636325,
+        "end_ns": 1785675262146459358,
+        "start_kst": "2026-08-02 21:51:34.386",
+        "end_kst": "2026-08-02 21:54:22.146",
+        "duration_s": 167.759823033,
+        "resumed": true,
+        "wp_min": 946,
+        "wp_max": 1049,
+        "status_counts": {
+          "HOLD:MANUAL_MODE": 1075,
+          "HOLD:PAUSED": 596,
+          "STATE:DRIVING": 22
+        },
+        "dominant_status": "HOLD:MANUAL_MODE"
+      },
+      {
+        "start_ns": 1785675289926496072,
+        "end_ns": 1785675482666500545,
+        "start_kst": "2026-08-02 21:54:49.926",
+        "end_kst": "2026-08-02 21:58:02.666",
+        "duration_s": 192.740004473,
+        "resumed": false,
+        "wp_min": 1125,
+        "wp_max": 1126,
+        "status_counts": {
+          "HOLD:MANUAL_MODE": 1675,
+          "STATE:DRIVING": 179,
+          "HOLD:PAUSED": 83
+        },
+        "dominant_status": "HOLD:MANUAL_MODE"
+      }
+    ],
+    "diagnostic_events": [
+      {
+        "state": "TRACKING",
+        "reason": "CLOUD_ODOMETRY_TIME_MISMATCH",
+        "level": 0,
+        "start_ns": 1785674362977067211,
+        "end_ns": 1785674362977067211,
+        "start_kst": "2026-08-02 21:39:22.977",
+        "end_kst": "2026-08-02 21:39:22.977",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "inlier_min": null,
+        "inlier_max": null,
+        "fitness_min": null,
+        "fitness_max": null
+      },
+      {
+        "state": "TRACKING",
+        "reason": "CLOUD_ODOMETRY_TIME_MISMATCH",
+        "level": 0,
+        "start_ns": 1785674621944604134,
+        "end_ns": 1785674621944604134,
+        "start_kst": "2026-08-02 21:43:41.944",
+        "end_kst": "2026-08-02 21:43:41.944",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "inlier_min": null,
+        "inlier_max": null,
+        "fitness_min": null,
+        "fitness_max": null
+      },
+      {
+        "state": "TRACKING",
+        "reason": "CLOUD_ODOMETRY_TIME_MISMATCH",
+        "level": 0,
+        "start_ns": 1785674664658333302,
+        "end_ns": 1785674664658333302,
+        "start_kst": "2026-08-02 21:44:24.658",
+        "end_kst": "2026-08-02 21:44:24.658",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "inlier_min": null,
+        "inlier_max": null,
+        "fitness_min": null,
+        "fitness_max": null
+      },
+      {
+        "state": "TRACKING",
+        "reason": "CLOUD_ODOMETRY_TIME_MISMATCH",
+        "level": 0,
+        "start_ns": 1785675130573563646,
+        "end_ns": 1785675130573563646,
+        "start_kst": "2026-08-02 21:52:10.573",
+        "end_kst": "2026-08-02 21:52:10.573",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "inlier_min": null,
+        "inlier_max": null,
+        "fitness_min": null,
+        "fitness_max": null
+      },
+      {
+        "state": "TRACKING",
+        "reason": "CLOUD_ODOMETRY_TIME_MISMATCH",
+        "level": 0,
+        "start_ns": 1785675261215159106,
+        "end_ns": 1785675261215159106,
+        "start_kst": "2026-08-02 21:54:21.215",
+        "end_kst": "2026-08-02 21:54:21.215",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "inlier_min": null,
+        "inlier_max": null,
+        "fitness_min": null,
+        "fitness_max": null
+      },
+      {
+        "state": "TRACKING",
+        "reason": "CLOUD_ODOMETRY_TIME_MISMATCH",
+        "level": 0,
+        "start_ns": 1785675353056352881,
+        "end_ns": 1785675353056352881,
+        "start_kst": "2026-08-02 21:55:53.056",
+        "end_kst": "2026-08-02 21:55:53.056",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "inlier_min": null,
+        "inlier_max": null,
+        "fitness_min": null,
+        "fitness_max": null
+      },
+      {
+        "state": "TRACKING",
+        "reason": "CLOUD_ODOMETRY_TIME_MISMATCH",
+        "level": 0,
+        "start_ns": 1785675402746940324,
+        "end_ns": 1785675402746940324,
+        "start_kst": "2026-08-02 21:56:42.746",
+        "end_kst": "2026-08-02 21:56:42.746",
+        "duration_s": 0.0,
+        "message_count": 1,
+        "inlier_min": null,
+        "inlier_max": null,
+        "fitness_min": null,
+        "fitness_max": null
+      }
+    ],
+    "tip_guard_non_ok": {},
+    "object_summary_status": {
+      "OK": 6442
+    },
+    "mode_commands": [
+      {
+        "time_kst": "2026-08-02 21:37:46.416",
+        "value": 65
+      },
+      {
+        "time_kst": "2026-08-02 21:47:38.561",
+        "value": 77
+      },
+      {
+        "time_kst": "2026-08-02 21:50:20.049",
+        "value": 77
+      },
+      {
+        "time_kst": "2026-08-02 21:50:46.619",
+        "value": 65
+      },
+      {
+        "time_kst": "2026-08-02 21:53:23.722",
+        "value": 77
+      },
+      {
+        "time_kst": "2026-08-02 21:54:18.040",
+        "value": 65
+      },
+      {
+        "time_kst": "2026-08-02 21:57:55.775",
+        "value": 77
+      }
+    ]
+  }
+]
