@@ -13,7 +13,14 @@ class TimedPlan(Protocol):
     x: Optional[np.ndarray]
     y: Optional[np.ndarray]
     times: Optional[np.ndarray]
+    velocity_xy_mps: Optional[np.ndarray]
+    yaw_rad: Optional[np.ndarray]
+    yaw_rate_rps: Optional[np.ndarray]
     reason: str
+
+    @property
+    def usable(self) -> bool:
+        ...
 
 
 @dataclass(frozen=True)
@@ -88,21 +95,42 @@ def _wrap(angle: float) -> float:
 
 
 def _reference(
+        plan: TimedPlan,
         x: np.ndarray,
         y: np.ndarray,
         times: np.ndarray,
         elapsed_s: float,
 ) -> Optional[tuple[float, float, float, float, float]]:
-    velocity_x = np.gradient(x, times)
-    velocity_y = np.gradient(y, times)
+    raw = (
+        getattr(plan, "velocity_xy_mps", None),
+        getattr(plan, "yaw_rad", None),
+        getattr(plan, "yaw_rate_rps", None))
+    if any(value is not None for value in raw):
+        if any(value is None for value in raw):
+            return None
+        velocity = np.asarray(raw[0], dtype=np.float64)
+        yaw = np.asarray(raw[1], dtype=np.float64)
+        yaw_rate = np.asarray(raw[2], dtype=np.float64)
+        if (velocity.shape != (len(times), 2) or yaw.shape != times.shape
+                or yaw_rate.shape != times.shape
+                or not np.isfinite(velocity).all()
+                or not np.isfinite(yaw).all()
+                or not np.isfinite(yaw_rate).all()):
+            return None
+        velocity_x, velocity_y = velocity[:, 0], velocity[:, 1]
+    else:
+        velocity_x = np.gradient(x, times)
+        velocity_y = np.gradient(y, times)
+        moving = np.hypot(velocity_x, velocity_y) > 1e-6
+        if not np.any(moving):
+            return None
+        moving_yaw = np.unwrap(np.arctan2(
+            velocity_y[moving], velocity_x[moving]))
+        yaw = np.interp(times, times[moving], moving_yaw)
+        yaw_rate = np.gradient(yaw, times)
     speed = np.hypot(velocity_x, velocity_y)
-    moving = speed > 1e-6
-    if not np.any(moving):
+    if not np.any(speed > 1e-6):
         return None
-    moving_yaw = np.unwrap(np.arctan2(
-        velocity_y[moving], velocity_x[moving]))
-    yaw = np.interp(times, times[moving], moving_yaw)
-    yaw_rate = np.gradient(yaw, times)
     return (
         float(np.interp(elapsed_s, times, x)),
         float(np.interp(elapsed_s, times, y)),
@@ -159,6 +187,8 @@ def command_for(
     """Track the reference at ``elapsed_s`` without a lateral command."""
     if plan.reason:
         return _stop(plan.reason, done=plan.reason == "AT_GOAL")
+    if not bool(getattr(plan, "usable", False)):
+        return _stop("UNCERTIFIED_PLAN")
     arrays = _plan_arrays(plan)
     if arrays is None:
         return _stop("INVALID_PLAN")
@@ -172,7 +202,7 @@ def command_for(
             <= limits.goal_tolerance_m:
         return _stop("AT_GOAL", done=True)
 
-    reference = _reference(x, y, times, elapsed_s)
+    reference = _reference(plan, x, y, times, elapsed_s)
     if reference is None:
         return _stop("INVALID_PLAN")
     ref_x, ref_y, ref_yaw, ref_speed, ref_yaw_rate = reference

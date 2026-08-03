@@ -50,6 +50,13 @@ class InvalidBatchBasis:
     times = np.linspace(0.0, 2.0, 3)
 
 
+class OpenBand:
+    def contains_many(
+            self, points: np.ndarray, grace: float = 0.0) -> np.ndarray:
+        del grace
+        return np.ones(len(points), dtype=bool)
+
+
 class InvalidBatchProjection:
     def set_corridor(
             self,
@@ -72,7 +79,7 @@ class InvalidBatchProjection:
 
 class InvalidBatchPlanner(pl.PriestPlanner):
     def __init__(self) -> None:
-        super().__init__(batch=2, iterations=1)
+        super().__init__(batch=2, iterations=1, runtime_band=OpenBand())
         self.invalid_basis = InvalidBatchBasis()
         self.invalid_projection = InvalidBatchProjection()
 
@@ -89,7 +96,9 @@ class InvalidBatchPlanner(pl.PriestPlanner):
             self,
             basis: InvalidBatchBasis,
             xi: np.ndarray,
-            local_goal: np.ndarray) -> np.ndarray:
+            local_goal: np.ndarray,
+            local_tangent: np.ndarray | None = None) -> np.ndarray:
+        del local_tangent
         return np.full(len(xi), np.inf)
 
 
@@ -154,6 +163,26 @@ def test_alignment_cost_prefers_velocity_toward_the_goal() -> None:
         basis, np.zeros((2, 1)), np.array([2.0, 0.0]))
 
     assert cost[0] < cost[1], "equal speed was mistaken for equal alignment"
+
+
+def test_alignment_uses_local_corridor_tangent_not_goal_chord() -> None:
+    x = np.tile(np.array([0.0, 1.0, 2.0]), (2, 1))
+    y = np.tile(np.array([0.0, 0.5, 1.0]), (2, 1))
+    zeros = np.zeros((2, 3))
+    basis = CostBasis(
+        x=x,
+        y=y,
+        vx=np.array([[1.0, 1.0, 1.0], [0.0, 0.0, 0.0]]),
+        vy=np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]),
+        ax=zeros,
+        ay=zeros,
+    )
+
+    cost = pl.PriestPlanner().costs(
+        basis, np.zeros((2, 1)), np.array([2.0, 1.0]),
+        local_tangent=np.array([1.0, 0.0]))
+
+    assert cost[0] < cost[1]
 
 
 def test_curvature_cost_penalizes_lateral_not_tangential_acceleration() -> None:

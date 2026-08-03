@@ -30,11 +30,20 @@ from priest_constraints import (
     DEFAULT_CONSTRAINT_TOLERANCES,
     ConstraintTolerances,
     ConstraintViolations,
-    PROJECTION_CONSTRAINT_TOLERANCES,
 )
-from priest_feasibility import certify_trajectory
+from priest_feasibility import (
+    certify_coefficients,
+    certify_trajectory,
+    lowest_certified_index,
+    require_physical_limits,
+    validated_certificate_settings,
+)
 from priest_projection import Projection, TrajectoryBasis
-from priest_sampling import NoFiniteCandidateError, select_priest_elite
+from priest_sampling import (
+    NoFiniteCandidateError,
+    select_priest_elite,
+    trajectory_costs,
+)
 from priest_types import Corridor, Plan
 
 
@@ -65,16 +74,18 @@ class PriestPlanner(object):
     # was most of the planning time.
     HORIZON_QUANTUM_S = 2.0
 
-    def __init__(self, degree=10, steps=40, v_max=0.6, a_max=0.5,
-                 yaw_rate_max=0.6,
+    def __init__(self, degree=10, steps=40, v_max=0.6, a_max=0.18,
+                 yaw_rate_max=0.5,
                  max_obstacles=24, batch=200, elite=20, constraint_elite=60,
                  iterations=12, projection_iterations=15, rho=1.0,
-                 learning_rate=0.6, temperature=0.5, margin=1.6, seed=0):
+                 learning_rate=0.6, temperature=0.5, margin=1.6, seed=0,
+                 runtime_band=None, control_hz=10.0, band_grace_m=0.10):
         self.degree = degree
         self.steps = steps
         self.v_max = float(v_max)
         self.a_max = float(a_max)
         self.yaw_rate_max = float(yaw_rate_max)
+        require_physical_limits(self)
         self.max_obstacles = int(max_obstacles)
         self.batch = int(batch)
         self.elite = int(elite)
@@ -97,6 +108,9 @@ class PriestPlanner(object):
         self.learning_rate = float(learning_rate)
         self.temperature = float(temperature)
         self.rng = np.random.default_rng(seed)
+        self.runtime_band = runtime_band
+        self.control_hz, self.band_grace_m = validated_certificate_settings(
+            control_hz, band_grace_m)
         self._basis = {}
 
     def basis_for(self, horizon_s, n_obstacles):
@@ -153,33 +167,8 @@ class PriestPlanner(object):
                            basis.n_c)
         return np.hstack([line[:, 0], line[:, 1]])
 
-    def costs(self, basis, xi, local_goal):
-        """c1: smoothness and progress. Non-smooth terms are allowed here.
-
-        No centreline-following term. The band already says where the chair
-        may be; adding a pull toward its middle would re-impose the recorded
-        line as a preference and quietly turn this back into route tracking
-        with extra steps.
-        """
-        x, y = basis.positions(xi)
-        (vx, vy), (ax, ay) = basis.derivatives(xi)
-        smooth = (ax ** 2 + ay ** 2).mean(axis=1)
-        speed_sq = vx ** 2 + vy ** 2
-        cross = np.abs(vx * ay - vy * ax)
-        curvature = np.where(
-            speed_sq > 0.05 ** 2,
-            cross / np.maximum(speed_sq, 0.05 ** 2) ** 1.5,
-            0.0).mean(axis=1)
-        goal_vector = local_goal[None, :] - np.stack([x[:, 0], y[:, 0]], axis=1)
-        terminal_velocity = np.stack([vx[:, -1], vy[:, -1]], axis=1)
-        alignment_denom = np.maximum(
-            np.linalg.norm(goal_vector, axis=1)
-            * np.linalg.norm(terminal_velocity, axis=1), 1e-6)
-        alignment = 1.0 - np.clip(
-            np.einsum("ij,ij->i", goal_vector, terminal_velocity)
-            / alignment_denom, -1.0, 1.0)
-        reach = np.hypot(x[:, -1] - local_goal[0], y[:, -1] - local_goal[1])
-        return smooth + 0.25 * curvature + alignment + 4.0 * reach
+    def costs(self, basis, xi, local_goal, local_tangent=None):
+        return trajectory_costs(basis, xi, local_goal, local_tangent)
 
     def plan(self, start, velocity, acceleration, corridor, obstacles,
              goal_arc=None):
@@ -201,6 +190,9 @@ class PriestPlanner(object):
         if remaining < 1e-3:
             return Plan(None, None, None, None, 0.0, 0.0, 0, 0.0,
                         reason="AT_GOAL")
+        if self.runtime_band is None:
+            return Plan(None, None, None, None, float("inf"), float("inf"),
+                        0, 0.0, reason="RUNTIME_BAND_UNBOUND")
 
         attempt = min(remaining, self.v_max * self.horizon_for(remaining)
                       / self.margin)
@@ -220,13 +212,20 @@ class PriestPlanner(object):
     def attempt(self, start, velocity, acceleration, corridor, obstacles,
                 start_arc, reach):
         """One sample-project-rank-refit run over a fixed slice of corridor."""
-        obstacles = self.inflate(obstacles)
+        if self.runtime_band is None:
+            return Plan(None, None, None, None, float("inf"), float("inf"),
+                        0, 0.0, reason="RUNTIME_BAND_UNBOUND")
+        raw_obstacles = np.asarray(obstacles, dtype=np.float64)
+        if raw_obstacles.size == 0:
+            raw_obstacles = np.empty((0, 3), dtype=np.float64)
+        obstacles = self.inflate(raw_obstacles)
         horizon_s = self.horizon_for(reach)
         basis, projection = self.basis_for(horizon_s, len(obstacles))
         centres, normals, left, right = corridor.slice(
             start_arc, start_arc + reach, self.steps)
         projection.set_corridor(centres, normals, left, right)
         local_goal = centres[-1]
+        local_tangent = np.array([normals[-1, 1], -normals[-1, 0]])
 
         boundary = [start[0], velocity[0], acceleration[0], local_goal[0],
                     start[1], velocity[1], acceleration[1], local_goal[1]]
@@ -241,7 +240,8 @@ class PriestPlanner(object):
                 samples, boundary, obstacles, self.projection_iterations)
             try:
                 selection = select_priest_elite(
-                    primary_cost=self.costs(basis, xi, local_goal),
+                    primary_cost=self.costs(
+                        basis, xi, local_goal, local_tangent),
                     residual_score=residual,
                     nproj=self.constraint_elite,
                     nelite=self.elite)
@@ -250,11 +250,24 @@ class PriestPlanner(object):
             elite_xi = xi[selection.elite_indices]
             elite_cost = selection.elite_augmented_cost
             elite_residual = residual[selection.elite_indices]
-            leader = int(np.flatnonzero(
-                selection.elite_indices == selection.leader_index)[0])
-            top = elite_xi[leader], elite_cost[leader], elite_residual[leader]
-            if best is None or top[1] < best[1]:
-                best = top
+            dense_candidates = []
+            for candidate in elite_xi:
+                dense = certify_coefficients(
+                    self, coefficients=candidate, degree=self.degree,
+                    horizon_s=horizon_s, control_hz=self.control_hz,
+                    band=self.runtime_band, obstacles=raw_obstacles,
+                    band_grace_m=self.band_grace_m)
+                dense_candidates.append(dense)
+                if dense.certificate.usable:
+                    break
+            chosen = lowest_certified_index(
+                elite_cost[:len(dense_candidates)],
+                [dense.certificate for dense in dense_candidates])
+            if chosen is not None:
+                top = (elite_xi[chosen], elite_cost[chosen],
+                       elite_residual[chosen], dense_candidates[chosen])
+                if best is None or top[1] < best[1]:
+                    best = top
 
             weights = np.exp(-(elite_cost - elite_cost.min())
                              / max(self.temperature, 1e-6))
@@ -270,10 +283,11 @@ class PriestPlanner(object):
                 None, None, None, None, float("inf"), float("inf"), 0,
                 horizon_s, reason="NO_FEASIBLE_TRAJECTORY")
 
-        x, y = basis.positions(best[0][None, :])
-        feasible = bool(projection.violations(
-            best[0][None, :], obstacles).is_within(
-                PROJECTION_CONSTRAINT_TOLERANCES)[0])
-        reason = "" if feasible else "NO_FEASIBLE_TRAJECTORY"
-        return Plan(best[0], x[0], y[0], basis.times, best[2], best[1],
-                    int(feasible), horizon_s, reason)
+        dense = best[3]
+        return Plan(
+            best[0], dense.points[:, 0], dense.points[:, 1], dense.times_s,
+            best[2], best[1], 1, horizon_s,
+            certificate=dense.certificate,
+            velocity_xy_mps=dense.velocity_xy_mps,
+            acceleration_xy_mps2=dense.acceleration_xy_mps2,
+            yaw_rad=dense.yaw_rad, yaw_rate_rps=dense.yaw_rate_rps)

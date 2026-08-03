@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Optional, TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    from priest_feasibility import TrajectoryCertificate
 
 
 class Corridor(object):
@@ -71,7 +76,12 @@ class Plan(object):
             cost: float,
             feasible_samples: int,
             horizon_s: float,
-            reason: str = "") -> None:
+            reason: str = "",
+            certificate: Optional[TrajectoryCertificate] = None,
+            velocity_xy_mps: Optional[np.ndarray] = None,
+            acceleration_xy_mps2: Optional[np.ndarray] = None,
+            yaw_rad: Optional[np.ndarray] = None,
+            yaw_rate_rps: Optional[np.ndarray] = None) -> None:
         self.xi = xi
         self.x = x
         self.y = y
@@ -81,10 +91,16 @@ class Plan(object):
         self.feasible_samples = int(feasible_samples)
         self.horizon_s = float(horizon_s)
         self.reason = reason
+        self.certificate = certificate
+        self.velocity_xy_mps = velocity_xy_mps
+        self.acceleration_xy_mps2 = acceleration_xy_mps2
+        self.yaw_rad = yaw_rad
+        self.yaw_rate_rps = yaw_rate_rps
 
     @property
     def usable(self) -> bool:
-        return self.reason == ""
+        return (self.reason == "" and self.certificate is not None
+                and self.certificate.usable)
 
     def points(self) -> np.ndarray:
         return np.stack([self.x, self.y], axis=1)

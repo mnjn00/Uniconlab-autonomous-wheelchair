@@ -18,6 +18,8 @@ try:
         Pose2D,
         command_for,
     )
+    from priest_feasibility import TrajectoryCertificate
+    from priest_constraints import DEFAULT_CONSTRAINT_TOLERANCES
     from priest_types import Plan
 finally:
     sys.path.remove(str(SCRIPTS))
@@ -26,7 +28,8 @@ finally:
 def plan_with(
         points: list[tuple[float, float]],
         times: list[float],
-        reason: str = "") -> Plan:
+        reason: str = "",
+        certified: bool = True) -> Plan:
     xy = np.asarray(points, dtype=np.float64)
     return Plan(
         xi=np.zeros(2),
@@ -38,6 +41,8 @@ def plan_with(
         feasible_samples=1,
         horizon_s=float(times[-1]),
         reason=reason,
+        certificate=(TrajectoryCertificate.clear(DEFAULT_CONSTRAINT_TOLERANCES)
+                     if certified else None),
     )
 
 
@@ -70,6 +75,30 @@ def test_time_indexed_reference_changes_when_only_plan_times_change() -> None:
         relaxed_limits())
 
     assert fast.linear_x_mps > slow.linear_x_mps
+
+
+def test_exact_dense_reference_arrays_are_executed_without_reconstruction() -> None:
+    plan = plan_with(
+        [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)], [0.0, 1.0, 2.0])
+    plan.velocity_xy_mps = np.tile(np.array([0.25, 0.0]), (3, 1))
+    plan.yaw_rad = np.zeros(3)
+    plan.yaw_rate_rps = np.zeros(3)
+
+    command = command_for(
+        plan, 0.5, Pose2D(0.5, 0.0, 0.0), 0.25,
+        DriveCommand(0.25, 0.0), relaxed_limits())
+
+    assert command.linear_x_mps == pytest.approx(0.25)
+
+
+def test_uncertified_plan_is_exact_zero() -> None:
+    command = command_for(
+        plan_with(
+            [(0.0, 0.0), (1.0, 0.0)], [0.0, 2.0], certified=False),
+        0.2, Pose2D(0.0, 0.0, 0.0), 0.0, stopped())
+
+    assert command == DriveCommand(
+        0.0, 0.0, reason="UNCERTIFIED_PLAN", done=False)
 
 
 def test_output_has_only_differential_drive_motion_components() -> None:

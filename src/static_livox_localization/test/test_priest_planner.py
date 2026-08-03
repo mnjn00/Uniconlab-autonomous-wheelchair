@@ -11,6 +11,8 @@ So the through-line is: when the planner refuses, the refusal has to be
 about the world. Anything else is a budget it set for itself.
 """
 
+from __future__ import annotations
+
 import importlib.util
 import sys
 from pathlib import Path
@@ -38,6 +40,46 @@ def load(name):
 pl = load("priest_planner")
 
 
+class OpenBand:
+    def contains_many(
+            self, points: np.ndarray, grace: float = 0.0) -> np.ndarray:
+        del grace
+        return np.ones(len(points), dtype=bool)
+
+
+class RecordingBand(OpenBand):
+    def __init__(self) -> None:
+        self.last_grace = float("nan")
+
+    def contains_many(
+            self, points: np.ndarray, grace: float = 0.0) -> np.ndarray:
+        self.last_grace = grace
+        return super().contains_many(points, grace)
+
+
+class MalformedBand:
+    def contains_many(
+            self, points: np.ndarray, grace: float = 0.0) -> np.ndarray:
+        del grace
+        return np.ones(len(points), dtype=np.float64)
+
+
+class CorridorBand:
+    def __init__(self, corridor: pl.Corridor) -> None:
+        self.corridor = corridor
+
+    def contains_many(
+            self, points: np.ndarray, grace: float = 0.0) -> np.ndarray:
+        offset = points[:, None, :] - self.corridor.centres[None, :, :]
+        station = np.argmin(np.linalg.norm(offset, axis=2), axis=1)
+        lateral = np.einsum(
+            "ij,ij->i", offset[np.arange(len(points)), station],
+            self.corridor.normals[station])
+        return np.logical_and(
+            lateral <= self.corridor.left_m[station] + grace,
+            lateral >= -self.corridor.right_m[station] - grace)
+
+
 def bent_corridor(length=40.0, amplitude=2.5, half_width=0.8, samples=200):
     s = np.linspace(0.0, length, samples)
     centres = np.stack([s, amplitude * np.sin(s / length * 2 * np.pi)], axis=1)
@@ -48,9 +90,10 @@ def bent_corridor(length=40.0, amplitude=2.5, half_width=0.8, samples=200):
     return pl.Corridor(centres, normals, limits, limits)
 
 
-def drive(corridor, obstacles, seed=0, execute=6, limit=200):
+def drive(corridor, obstacles, seed=0, execute_s=1.5, limit=200):
     """Run the planner in closed loop, executing part of each plan."""
-    planner = pl.PriestPlanner(seed=seed)
+    planner = pl.PriestPlanner(
+        seed=seed, runtime_band=CorridorBand(corridor))
     position = corridor.centres[0].copy()
     velocity = np.zeros(2)
     acceleration = np.zeros(2)
@@ -66,7 +109,9 @@ def drive(corridor, obstacles, seed=0, execute=6, limit=200):
                     "cycles": cycles, "clearance": clearance,
                     "lateral": lateral}
         points = plan.points()
-        step = min(execute, len(points) - 1)
+        step = min(
+            max(1, int(np.searchsorted(plan.times, execute_s, side="right") - 1)),
+            len(points) - 1)
         if len(obstacles):
             circles = np.asarray(obstacles, dtype=np.float64)
             gap = (np.hypot(points[:step + 1, 0][:, None] - circles[:, 0],
@@ -196,7 +241,7 @@ def test_a_short_horizon_is_retried_smaller_before_it_is_called_blocked():
     assert "REACH_BACKOFF" in source and "MIN_REACH_M" in source
 
     corridor = bent_corridor()
-    planner = pl.PriestPlanner(seed=0)
+    planner = pl.PriestPlanner(seed=0, runtime_band=OpenBand())
     plan = planner.plan(corridor.centres[0], np.zeros(2), np.zeros(2),
                         corridor, [])
 
@@ -235,3 +280,48 @@ def test_reaching_the_goal_is_reported_rather_than_driven_past():
 
     assert plan.reason == "AT_GOAL"
     assert not plan.usable
+
+
+def test_runtime_band_must_be_bound_before_a_plan_can_be_usable() -> None:
+    corridor = bent_corridor(length=4.0, amplitude=0.0, half_width=1.2)
+
+    plan = pl.PriestPlanner().plan(
+        corridor.centres[0], np.zeros(2), np.zeros(2), corridor, [])
+
+    assert not plan.usable
+    assert plan.reason == "RUNTIME_BAND_UNBOUND"
+
+
+def test_usable_plan_exposes_dense_runtime_band_certificate() -> None:
+    corridor = bent_corridor(length=4.0, amplitude=0.0, half_width=1.2)
+    band = RecordingBand()
+    planner = pl.PriestPlanner(
+        runtime_band=band, seed=0, batch=80, elite=10,
+        constraint_elite=30, iterations=6, projection_iterations=12)
+
+    plan = planner.plan(
+        corridor.centres[0], np.zeros(2), np.zeros(2), corridor, [])
+
+    assert plan.usable
+    assert plan.certificate is not None and plan.certificate.usable
+    assert band.last_grace == pytest.approx(0.10)
+    assert len(plan.times) == int(np.ceil(plan.horizon_s * 10.0)) + 1
+    assert plan.velocity_xy_mps.shape == (len(plan.times), 2)
+    assert plan.acceleration_xy_mps2.shape == (len(plan.times), 2)
+    assert plan.yaw_rad.shape == plan.times.shape
+    assert plan.yaw_rate_rps.shape == plan.times.shape
+    assert plan.certificate.max_acceleration_mps2 \
+        <= planner.a_max + planner.CONSTRAINT_TOLERANCES.acceleration_mps2
+
+
+def test_malformed_runtime_band_fails_closed() -> None:
+    corridor = bent_corridor(length=4.0, amplitude=0.0, half_width=1.2)
+    planner = pl.PriestPlanner(
+        runtime_band=MalformedBand(), seed=0, batch=40, elite=6,
+        constraint_elite=12, iterations=2, projection_iterations=6)
+
+    plan = planner.plan(
+        corridor.centres[0], np.zeros(2), np.zeros(2), corridor, [])
+
+    assert not plan.usable
+    assert plan.reason == "NO_FEASIBLE_TRAJECTORY"
