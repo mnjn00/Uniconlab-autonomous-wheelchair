@@ -75,6 +75,7 @@ install(
     scripts/priest_feasibility.py
     scripts/priest_follower_io.py
     scripts/priest_follower_planning.py
+    scripts/priest_heading_pid.py
     scripts/priest_projection.py
     scripts/priest_planner.py
     scripts/priest_runtime.py

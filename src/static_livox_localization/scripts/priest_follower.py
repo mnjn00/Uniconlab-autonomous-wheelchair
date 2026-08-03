@@ -36,6 +36,7 @@ from priest_controller import (
     plan_arrays,
 )
 from priest_corridor import corridor_arrays
+from priest_heading_pid import HeadingPid, SteeringFeedback
 from priest_follower_io import (
     CERTIFICATE_HZ,
     CONTROL_HZ,
@@ -85,6 +86,7 @@ class PriestFollower(FollowerIOMixin, FollowerPlanningMixin):
         self.corridor = Corridor(centres, normals, left, right)
         self.planner = make_planner(self.band)
         self.controller_limits = DEFAULT_CONTROLLER_LIMITS
+        self.heading_pid = HeadingPid()
 
         self.enabled = False
         self.done = False
@@ -163,7 +165,9 @@ class PriestFollower(FollowerIOMixin, FollowerPlanningMixin):
             plan, elapsed,
             Pose2D(float(self.centre_xy[0]), float(self.centre_xy[1]),
                    float(self.pose_yaw)),
-            measured, self.previous_command, self.controller_limits)
+            measured, self.previous_command, self.controller_limits,
+            steering=SteeringFeedback(
+                self.heading_pid, float(self.motion.angular_speed_rps)))
         with self.command_lock:
             if not self.enabled or self.done or self.plan is not plan:
                 reason = "DONE" if self.done else "PAUSED"

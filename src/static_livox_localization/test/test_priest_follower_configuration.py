@@ -106,7 +106,7 @@ def test_controller_runtime_and_io_siblings_are_installed() -> None:
     for name in (
             "priest_certificate_types.py", "priest_actuator_control.py",
             "priest_control_types.py",
-            "priest_controller.py",
+            "priest_controller.py", "priest_heading_pid.py",
             "priest_runtime.py",
             "priest_execution_safety.py", "priest_follower_io.py",
             "priest_follower_planning.py", "priest_terminal.py",

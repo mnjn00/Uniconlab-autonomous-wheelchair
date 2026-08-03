@@ -140,11 +140,13 @@ def follower_with(plan: Plan) -> pf.PriestFollower:
     follower.centre_xy = np.zeros(2)
     follower.pose_yaw = 0.0
     follower.velocity = np.zeros(2)
-    follower.motion = types.SimpleNamespace(linear_speed_mps=0.0)
+    follower.motion = types.SimpleNamespace(
+        linear_speed_mps=0.0, angular_speed_rps=0.0)
     follower.previous_command = DriveCommand(0.0, 0.0)
     follower.enabled = True
     follower.done = False
     follower.controller_limits = DEFAULT_CONTROLLER_LIMITS
+    follower.heading_pid = pf.HeadingPid()
     follower.current_speed = follower.last_yaw_rate = 0.0
     follower.cmd_pub = Publisher()
     follower.band = types.SimpleNamespace(
@@ -169,12 +171,16 @@ def ready_step(follower: pf.PriestFollower) -> None:
         arc_of=lambda point: 0.0)
 
 
-def test_track_passes_plan_elapsed_time_to_actual_controller(monkeypatch) -> None:
+def test_track_passes_elapsed_and_measured_yaw_to_controller(monkeypatch) -> None:
     follower = follower_with(plan_with())
     observed: list[float] = []
+    observed_yaw_rate: list[float] = []
+    follower.motion = types.SimpleNamespace(
+        linear_speed_mps=0.0, angular_speed_rps=0.31)
 
     def recording(plan, elapsed_s, *args, **kwargs):
         observed.append(elapsed_s)
+        observed_yaw_rate.append(kwargs["steering"].measured_yaw_rate_rps)
         return command_for(plan, elapsed_s, *args, **kwargs)
 
     monkeypatch.setattr(pf, "command_for", recording, raising=False)
@@ -182,6 +188,7 @@ def test_track_passes_plan_elapsed_time_to_actual_controller(monkeypatch) -> Non
 
     assert reason is None
     assert observed == [1.25]
+    assert observed_yaw_rate == [0.31]
     assert follower.cmd_pub.messages[-1].linear.x > 0.0
 
 
@@ -200,12 +207,14 @@ def test_send_stop_resets_plan_and_controller_state() -> None:
     follower.previous_command = DriveCommand(0.3, 0.2)
     follower.current_speed = 0.3
     follower.last_yaw_rate = 0.2
+    follower.heading_pid.update(0.1, 0.0, 0.0)
 
     follower.send_stop()
 
     assert follower.plan is None
     assert follower.previous_command == DriveCommand(0.0, 0.0)
     assert follower.current_speed == follower.last_yaw_rate == 0.0
+    assert follower.heading_pid.integral_error_rad_s == 0.0
     assert follower.cmd_pub.messages[-1].linear.x == 0.0
 
 

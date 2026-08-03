@@ -18,6 +18,7 @@ from priest_control_types import (
     Pose2D,
     TimedPlan,
 )
+from priest_heading_pid import SteeringFeedback, angular_slew
 from priest_terminal_control import (
     STOPPED_SPEED_MPS,
     preserve_terminal_viability,
@@ -140,16 +141,6 @@ def _bounded_linear(
     return min(max(desired_mps, lower), upper)
 
 
-def _angular_slew(
-        desired_rps: float,
-        previous_rps: float,
-        limits: ControllerLimits) -> float:
-    step = limits.max_yaw_acceleration_rps2 * limits.control_period_s
-    bounded = min(max(desired_rps, previous_rps - step), previous_rps + step)
-    return min(max(bounded, -limits.max_yaw_rate_rps),
-               limits.max_yaw_rate_rps)
-
-
 def _valid_state(
         elapsed_s: float,
         pose: Pose2D,
@@ -170,6 +161,8 @@ def command_for(
         measured_speed_mps: float,
         previous_command: DriveCommand,
         limits: ControllerLimits = DEFAULT_CONTROLLER_LIMITS,
+        *,
+        steering: Optional[SteeringFeedback] = None,
 ) -> DriveCommand:
     """Track the reference at ``elapsed_s`` without a lateral command."""
     if plan.reason:
@@ -218,9 +211,15 @@ def command_for(
     desired_linear = (
         ref_speed * math.cos(heading_error) + 1.2 * longitudinal
         + 0.2 * (ref_speed - measured_speed_mps))
-    desired_angular = (
-        ref_yaw_rate + 1.8 * heading_error + 2.0 * ref_speed * lateral)
-    angular = _angular_slew(desired_angular, previous_angular, limits)
+    if steering is None:
+        heading_command = ref_yaw_rate + 1.8 * heading_error
+    else:
+        if not math.isfinite(steering.measured_yaw_rate_rps):
+            return _stop("INVALID_STATE")
+        heading_command = steering.pid.update(
+            heading_error, ref_yaw_rate, steering.measured_yaw_rate_rps)
+    desired_angular = heading_command + 2.0 * ref_speed * lateral
+    angular = angular_slew(desired_angular, previous_angular, limits)
     if abs(angular) <= YAW_DEADBAND_RAD_S:
         angular = 0.0
     if previous_linear > 1e-9:

@@ -168,6 +168,7 @@ class FollowerIOMixin:
             self.current_speed = 0.0
             self.last_yaw_rate = 0.0
             self.previous_command = DriveCommand(0.0, 0.0)
+            self.heading_pid.reset()
             self.plan = None
             self.cmd_pub.publish(Twist())
 
