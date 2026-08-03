@@ -15,12 +15,14 @@ RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
 # The shipped pair is chair-centred. A sensor-referenced route applies every
 # clearance about a point 0.2 m left of the chair, which under-protects the
 # right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
-ROUTE_NAME = "20260802_route_v4_waypoints.json"
-BAND_NAME = "20260802_route_v4_safety_band.json"
+ROUTE_NAME = "20260803_route_v5_waypoints.json"
+BAND_NAME = "20260803_route_v5_safety_band.json"
 # Superseded pairs. Deployment naming one of these while the bringup launches
 # the other is how a record ends up describing a drive that did not happen,
 # and the old files staying on disk is what lets it pass unnoticed.
 SUPERSEDED = (
+    "20260802_route_v4_waypoints.json",
+    "20260802_route_v4_safety_band.json",
     "20260727_new_route_waypoints.json",
     "20260727_new_route_safety_band.json",
     "20260727_chair_centred_waypoints.json",
@@ -126,7 +128,7 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_shipped_route():
     # The chair has to be able to pick the route up from where it is parked.
     # The follower locks to the NEAREST waypoint and holds OFF_ROUTE when that
     # is beyond 3.5 m, so what matters is the nearest one, not the first: the
-    # 0727 route began at the parking spot, route v4 begins 8.35 m behind it
+    # 0727 route began at the parking spot; route v5 begins 8.35 m behind it
     # and first passes within 0.20 m at waypoint 45. Both are drivable from a
     # standing start; a route whose closest approach exceeded the geofence
     # would hold OFF_ROUTE instead of pulling away, which is the failure a

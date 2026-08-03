@@ -1,0 +1,58 @@
+{
+  "corridor_id": "route_corridor_v5",
+  "frame_id": "map",
+  "map_id": "merged_0707_0725_v1",
+  "map_sha256": "ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431",
+  "image": "route_corridor_v5.png",
+  "image_sha256": "4c3162715bd100bf6c99222f2bce8df625b561d99c0112bb5cee971d40e0b42f",
+  "source_waypoints": "route_centerline_waypoints_dense_0p2m.json",
+  "source_waypoints_sha256": "c865fb8d71ed7d2399f16248a8a1ef953a16c60807e34af115ca239f5d6de189",
+  "band_station_waypoints": "route_centerline_waypoints_field_0p5m.json",
+  "band_station_waypoints_sha256": "91fcf29e78c7cd01b4196ec5fd366f71ef0e24a08e49994747a868b53c72792a",
+  "width": 4151,
+  "height": 2628,
+  "resolution_m_per_pixel": 0.1,
+  "origin": [-106.5, -168.9, 0.0],
+  "corridor_pixel_count": 71397,
+  "corridor_bbox_xy_m": {
+    "xmin": -9.25,
+    "ymin": -90.35,
+    "xmax": 236.65,
+    "ymax": 24.95
+  },
+  "semantics": {
+    "254": "inside the hand-drawn corridor",
+    "205": "outside the hand-drawn corridor"
+  },
+  "band_generation": {
+    "station_source": "route_centerline_waypoints_field_0p5m.json",
+    "lateral_step_m": 0.01,
+    "maximum_lateral_search_m": 6.0,
+    "pixel_index_policy": "floor((coordinate - origin) / resolution)",
+    "inside_value": 254,
+    "limit_policy": "last inside sample before the first non-corridor cell",
+    "physical_edge_policy": "open with zero rise/drop because the archive contains no physical-edge measurement"
+  },
+  "operator_target": {
+    "xy_m": [156.159, -84.341],
+    "dense_waypoint_index": 1120,
+    "band_station_index": 448,
+    "policy": "centreline elsewhere; smooth 8 m transition through exact red target"
+  },
+  "provenance": {
+    "authored_by": "operator, by hand over the merged map",
+    "method": "manual corridor with an explicit target transition",
+    "surveyed": false,
+    "received": "2026-08-03",
+    "source_archive": "route_2d_map_v5.zip",
+    "source_archive_sha256": "6361ff648fab58c162b9860d6f6468155926a51d97256c306026d9be827d62c4",
+    "source_image": "route_2d_map_v5.pgm",
+    "upstream_source_sha256": "458e504cecd8f3cb3201dc23b4cd8f1a60119243e5032efbd2c509f44c1efc42",
+    "note": "The committed PNG is pixel-identical to the source PGM."
+  },
+  "authority": {
+    "evidence_level": "operator_judgement",
+    "is_runtime_corridor_authority": true,
+    "physical_edge_semantics_present": false
+  }
+}
