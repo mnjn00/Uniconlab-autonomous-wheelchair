@@ -306,6 +306,7 @@ if [ "$PLANNER" = "priest" ]; then
 fi
 setsid nohup rosrun static_livox_localization "$FOLLOWER_SCRIPT" \
   _route:="$ROUTE" _safety_band:="$BAND" \
+  _planner:="$PLANNER" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &

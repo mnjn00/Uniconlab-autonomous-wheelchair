@@ -59,6 +59,12 @@ DEPLOY_DIRTY="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all -- 
   tools/deploy_merged_map.sh \
   tools/deploy_fastlio_vn100.sh \
   tools/start_wheelchair_localization.sh \
+  tools/trial_0727.sh \
+  tools/trial_priest_v5.sh \
+  tools/preflight_priest_v5.sh \
+  tools/go.sh \
+  tools/go_priest_v5.sh \
+  tools/stop.sh \
   routes \
   runtime/record_moving_localization_trial.sh \
   docs/runbooks/livox-moving-localization-ko.md)"
@@ -204,6 +210,12 @@ REMOTE_DIRTY="$(git status --porcelain --untracked-files=all -- \
   tools/deploy_merged_map.sh \
   tools/deploy_fastlio_vn100.sh \
   tools/start_wheelchair_localization.sh \
+  tools/trial_0727.sh \
+  tools/trial_priest_v5.sh \
+  tools/preflight_priest_v5.sh \
+  tools/go.sh \
+  tools/go_priest_v5.sh \
+  tools/stop.sh \
   routes \
   runtime/record_moving_localization_trial.sh \
   docs/runbooks/livox-moving-localization-ko.md)"
@@ -311,7 +323,9 @@ echo "  build OK"
 # the chair, so leaving a stale copy behind is the same failure one step
 # further on: a run brought up on last week's settings by a script that looks
 # right.
-for script in start_wheelchair_localization.sh trial_0727.sh go.sh stop.sh; do
+for script in start_wheelchair_localization.sh trial_0727.sh \
+              trial_priest_v5.sh preflight_priest_v5.sh \
+              go.sh go_priest_v5.sh stop.sh; do
   BRINGUP_SRC="$REPO/tools/$script"
   BRINGUP_DST="$HOME/$script"
   [ -f "$BRINGUP_SRC" ] || {
