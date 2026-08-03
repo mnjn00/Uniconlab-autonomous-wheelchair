@@ -48,6 +48,13 @@ STATE="$(timeout 4 rostopic echo -n1 \
 VERIFIED="$(rosparam get /fast_lio_icp/auto_initialization_verified 2>/dev/null)" \
   || fail "auto-initialization receipt is missing"
 [ "$VERIFIED" = "true" ] || fail "auto initialization is not verified"
+STABLE="$(rosparam get /fast_lio_icp/auto_initialization_stable 2>/dev/null)" \
+  || fail "auto-initialization stability receipt is missing"
+[ "$STABLE" = "true" ] || fail "auto initialization is not stable"
+SOURCE="$(rosparam get /fast_lio_icp/auto_initialization_source 2>/dev/null)" \
+  || fail "auto-initialization source receipt is missing"
+[ "$SOURCE" = "global_search" ] \
+  || fail "localization source is '${SOURCE:-missing}', not global_search"
 
 TIP_STATUS="$(timeout 4 rostopic echo -n1 /tip_guard/status 2>/dev/null \
   | sed -n 's/^data: *"\{0,1\}\([^" ]*\).*/\1/p' | head -1)"

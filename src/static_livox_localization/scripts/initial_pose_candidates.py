@@ -30,6 +30,51 @@ class InitializationCandidate(NamedTuple):
     source: str
 
 
+class StationaryStabilityMonitor:
+    def __init__(
+        self,
+        max_localization_translation_m: float,
+        max_localization_yaw_rad: float,
+        max_odometry_translation_m: float,
+        max_odometry_yaw_rad: float,
+    ):
+        self.max_localization_translation_m = max_localization_translation_m
+        self.max_localization_yaw_rad = max_localization_yaw_rad
+        self.max_odometry_translation_m = max_odometry_translation_m
+        self.max_odometry_yaw_rad = max_odometry_yaw_rad
+        self.localization_start = None
+        self.odometry_start = None
+
+    @staticmethod
+    def _delta(first, current):
+        translation = math.hypot(current[0] - first[0], current[1] - first[1])
+        yaw = abs((current[2] - first[2] + math.pi) % (2.0 * math.pi) - math.pi)
+        return translation, yaw
+
+    def observe(self, localization_pose, odometry_pose):
+        if self.localization_start is None:
+            self.localization_start = localization_pose
+            self.odometry_start = odometry_pose
+            return None
+        odometry_translation, odometry_yaw = self._delta(
+            self.odometry_start, odometry_pose
+        )
+        if (
+            odometry_translation > self.max_odometry_translation_m
+            or odometry_yaw > self.max_odometry_yaw_rad
+        ):
+            return "ODOMETRY_MOVED_DURING_INITIALIZATION"
+        localization_translation, localization_yaw = self._delta(
+            self.localization_start, localization_pose
+        )
+        if (
+            localization_translation > self.max_localization_translation_m
+            or localization_yaw > self.max_localization_yaw_rad
+        ):
+            return "LOCALIZATION_MOVED_WHILE_STATIONARY"
+        return None
+
+
 class KnownStartRouteError(Exception):
     """A stable, machine-readable route-prior contract error."""
 

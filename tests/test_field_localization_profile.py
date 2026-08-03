@@ -61,6 +61,8 @@ def test_field_startup_uses_one_hash_pinned_runtime_map_for_auto_init_and_icp():
     assert 'auto_init_map:="$MAP"' in startup
     assert "auto_initialization_verified false" in startup
     assert "rosparam get /fast_lio_icp/auto_initialization_verified" in startup
+    assert 'auto_init_global_only:=true' in startup
+    assert "/fast_lio_icp/auto_initialization_stable" in startup
     assert "MAP_OVERRIDE_COUNT" in startup
     assert "head -1 || true" in startup
 
@@ -160,7 +162,7 @@ def test_field_speed_is_capped_at_point_six_metres_per_second():
     assert re.search(r"^MAX_SPEED\s*=\s*0\.6$", follower, flags=re.MULTILINE)
 
 
-def test_known_start_initializer_is_packaged_and_receives_route_profile():
+def test_initializer_is_packaged_and_field_startup_selects_global_only():
     startup = (ROOT / "tools" / "start_wheelchair_localization.sh").read_text(
         encoding="utf-8"
     )
@@ -171,6 +173,7 @@ def test_known_start_initializer_is_packaged_and_receives_route_profile():
 
     assert 'auto_init_route:="$ROUTE"' in startup
     assert 'auto_init_body_frame_profile:="$BODY_FRAME_PROFILE"' in startup
+    assert 'auto_init_global_only:=true' in startup
     assert '<param name="route" value="$(arg auto_init_route)"/>' in launch
     assert (
         '<param name="body_frame_profile" '

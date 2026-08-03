@@ -76,6 +76,8 @@ def test_priest_v5_preflight_proves_every_runtime_dependency() -> None:
         "/perception/objects_summary",
         "/fast_lio_icp/localization_diagnostics",
         "/fast_lio_icp/auto_initialization_verified",
+        "/fast_lio_icp/auto_initialization_stable",
+        "/fast_lio_icp/auto_initialization_source",
         "/tip_guard/status",
         "/cloud_registered_body",
         "/cmd_vel",
