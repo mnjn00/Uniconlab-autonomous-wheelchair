@@ -12,8 +12,8 @@ provenance:
     intent_reconciliation_sha256: a31092d64375ae1958fa77ea8adb682ffd1232d11f01865109fcb0112fb3607f
   repository_readme:
     path: README.md
-    sha256: cb80a30475fe7ceedf352d9fe30c17e7e52151c236030b6a75ad01d84d194aaf
-    claim_scope: public project overview, actual Gazebo simulation media, build and launch guidance, committed artifact inventory, and explicit safety/authority boundary
+    sha256: db12f769a4856777762a8414ab023fc5d404d34db3f514960c94bffe33e05f4f
+    claim_scope: public project overview, the deployed-vs-designed stack split, measured field localization results and their recordings, vehicle mount geometry, deployment and field-run procedure, and the explicit safety/authority boundary
   local_manual:
     reported_path: /home/mnjn/다운로드/20230725_wheel_manual (2).pdf
     repository_committed: false

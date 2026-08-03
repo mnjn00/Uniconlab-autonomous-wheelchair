@@ -1,274 +1,210 @@
 <p align="center">
-  <img src="docs/assets/hero-route.png" alt="UniconLab autonomous wheelchair route map" width="100%" />
+  <img src="docs/assets/hero-route.png" alt="Hanyang University Unicon Lab autonomous wheelchair" width="100%" />
 </p>
 
-<h1 align="center">UniconLab Autonomous Wheelchair</h1>
+<h1 align="center">Unicon Lab Autonomous Wheelchair</h1>
 
 <p align="center">
-  A fail-closed ROS 1 Noetic software stack for campus-route perception, localization,
-  navigation, mission control, and independent motion-safety supervision.
+  Hanyang University · Unicon Lab, Robotics<br />
+  A fail-closed ROS 1 Noetic stack for map-based localization, route following,
+  and independent motion-safety supervision on a real powered wheelchair.
 </p>
 
 <p align="center">
   <a href="http://wiki.ros.org/noetic"><img src="https://img.shields.io/badge/ROS-Noetic-22314E?style=for-the-badge&logo=ros" alt="ROS Noetic" /></a>
   <a href="https://releases.ubuntu.com/20.04/"><img src="https://img.shields.io/badge/Ubuntu-20.04-E95420?style=for-the-badge&logo=ubuntu" alt="Ubuntu 20.04" /></a>
-  <a href="https://classic.gazebosim.org/"><img src="https://img.shields.io/badge/Gazebo-Classic%2011-7057ff?style=for-the-badge" alt="Gazebo Classic 11" /></a>
-  <img src="https://img.shields.io/badge/status-software%20RC%20candidate-06b6d4?style=for-the-badge" alt="Software RC candidate" />
-  <img src="https://img.shields.io/badge/hardware-locked-f43f5e?style=for-the-badge" alt="Hardware locked" />
+  <img src="https://img.shields.io/badge/LiDAR-Livox%20MID--360-00A8E1?style=for-the-badge" alt="Livox MID-360" />
+  <img src="https://img.shields.io/badge/localization-field%20validated-16a34a?style=for-the-badge" alt="Localization field validated" />
+  <img src="https://img.shields.io/badge/operation-supervised%20only-f59e0b?style=for-the-badge" alt="Supervised operation only" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-f59e0b?style=for-the-badge" alt="Apache 2.0" /></a>
 </p>
 
 <p align="center">
-  <a href="#overview">Overview</a> ·
-  <a href="#gazebo-obstacle-avoidance-demo">Obstacle avoidance</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#quick-start">Quick start</a> ·
+  <a href="#two-stacks-in-one-repository">Two stacks</a> ·
+  <a href="#what-has-actually-been-driven">Field results</a> ·
+  <a href="#the-vehicle">Vehicle</a> ·
+  <a href="#running-it">Running it</a> ·
   <a href="#verification">Verification</a> ·
-  <a href="#safety-and-authority-boundary">Safety boundary</a>
+  <a href="#safety-boundary">Safety boundary</a>
 </p>
 
 > [!IMPORTANT]
-> This repository is a **software RC candidate**, not a physical-driving release.
-> `hardware_motion_authorized: false` and `passenger_operation_authorized: false` remain mandatory.
-> Simulation, replay, maps, workstation tests, and GLIM repeatability do not authorize a real motor endpoint,
-> campus operation, or passenger transport.
+> The chair drives itself, and it does so **only with an operator holding the joystick**.
+> Moving the joystick drops the base out of auto mode and the follower holds within one control
+> cycle. No unsupervised operation and no passenger transport is authorized; the formal release
+> gates in [`contracts/wp0/A16-release-authority.yaml`](contracts/wp0/A16-release-authority.yaml)
+> remain unapproved and are not changed by any field result below.
 
-## Overview
+## Two stacks in one repository
 
-The project targets the bidirectional candidate route between **Hanyang University Aegimun** and the
-**Engineering Center entrance**. It combines immutable route geometry with a single navigation command owner
-and independent safety authorities. Missing, stale, malformed, contradictory, or policy-mismatched evidence
-fails closed to finite zero and `DISARMED`.
+Reading the code without knowing this wastes a lot of time, so it is the first thing here.
 
-| Runtime | Navigation and mission | Independent safety |
+| | `src/static_livox_localization/` | `src/wheelchair_*/` |
 | --- | --- | --- |
-| Ubuntu 20.04 + ROS 1 Noetic | `move_base` is the sole `/cmd_vel_nav` publisher | Collision / TTC supervision |
-| Gazebo Classic 11 for software-in-loop | Immutable outbound and return routes | Slope and roll policy |
-| ROS 2 + GLIM restricted to offline tooling | Deterministic mission FSM and action cancellation | Localization confidence |
-| Explicit simulation, replay, and shadow profiles | Route progress and exact hash bindings | Route/geofence, topology, clock, and deadline guards |
+| Status | **This is what drives the chair** | Designed architecture, not deployed |
+| Localization | FAST-LIO odometry + GICP against a prior map | Adapter, confidence guard, topology guard |
+| Command owner | `waypoint_follower.py` | `move_base` |
+| Deployed to the NUC | Yes, by `tools/push_to_nuc.sh` | No |
+| Formal WP0 contracts | Not bound to them | Bound, frozen, hash-checked |
 
-### Current evidence level
+The `wheelchair_*` packages carry the contract and guard design and most of the test suite. The
+`static_livox_localization` package grew in the field, against a real chair on a real campus route,
+and it is the one on the vehicle. Both are maintained; only the second one moves wheels today.
 
-| Surface | Current result | Authority ceiling |
+## What has actually been driven
+
+Two complete autonomous runs of the 383 m campus route on **2026-07-31**, and three recorded
+sessions on **2026-08-02**. Localization was the open question and is now closed:
+
+| Measured while driving, both 07-31 runs pooled | Value | Gate |
 | --- | --- | --- |
-| Host regression suite | 1,179 passed, one existing opt-in skip, 192 subtests | Software only |
-| Focused route-safety suite | 54 passed | Algorithm evidence |
-| Bounded Noetic/Gazebo replay | CLEAR + armed observed; 84 nonzero navigation messages | `SIMULATION_ONLY` |
-| Actual target NUC | Not fingerprinted or qualified | Blocked |
-| Real driver, e-stop, braking envelope | Not measured and not approved | Hardware locked |
+| Samples | 154 | — |
+| Tracking state | `TRACKING` for every one | — |
+| `inlier_ratio` | 0.9666 – 1.0000 (mean 0.9949) | > 0.20 |
+| `fitness` | 0.0137 – 0.0329 (mean 0.0219) | < 0.28 |
+| Localization holds published or suppressed | 0 | — |
 
-## Gazebo obstacle-avoidance demo
+Both runs initialized with **no manual seed**, reaching `TRACKING` through
+`WAITING_INITIALIZATION` → `VERIFYING`, with FAST-LIO stationary drift of 0.016 m and 0.014 m
+against a 0.15 m health limit. The two runs agree to within 0.0006 on both means, which is what
+makes this a measurement rather than one lucky lap. For reference the same gates were set from
+07-29 figures where the inlier ratio ran 0.44 – 0.79; the worst sample on 07-31 beats that day's
+best, on the same route and the same map.
 
-<p align="center">
-  <a href="docs/assets/gazebo-obstacle-avoidance.mp4">
-    <img src="docs/assets/gazebo-obstacle-avoidance.gif" alt="Thirty-second Gazebo DWA obstacle-avoidance drive" width="100%" />
-  </a>
-</p>
+One excursion is recorded rather than smoothed over: parked at the goal twenty minutes after the
+second run ended, the fix fell to inlier 0.124 – 0.262 and crossed the gate four times with fitness
+still inside its ceiling. Nothing was driving. It is the only time the fix came near failing, so the
+end of the route is its weakest geometry.
 
-<p align="center">
-  <sub>
-    30 seconds of live laser scans, costmaps, and the DWA local planner steering around a collision obstacle.
-    Select the animation to open the 1280×720 MP4.
-  </sub>
-</p>
+The recordings are in [`blackbox/`](blackbox/) under Git LFS, checksummed in per-session manifests
+and verified by `tests/test_blackbox_archive.py`. A truncated bag opens fine and plays short, which
+is the failure that check exists for.
 
-This is a real Gazebo Classic 11 runtime capture—not a map animation or keyframed render. `move_base` used
-`dwa_local_planner/DWAPlannerROS` and a temporary README-only 2D laser scene to command the repository URDF
-through the simulation controller adapter. Across 600 moving frames, the model advanced 5.38 m, deviated
-1.09 m laterally to pass the obstacle, and recorded zero barrier contacts. See the
-[capture receipt](docs/assets/gazebo-obstacle-avoidance-receipt.json).
+## The vehicle
 
-The scene proves only visible software-in-the-loop avoidance behavior. It is not the committed campus world,
-does not qualify physical clearance or braking distance, and grants no hardware, campus, or passenger authority.
+A powered wheelchair with a Livox MID-360 on the front of the left armrest.
 
-### Candidate route geometry
+| Measurement | Value | How it was obtained |
+| --- | --- | --- |
+| Sensor forward of the wheel axle | 0.500 m | Operator measurement, 2026-07-31 |
+| Sensor left of the wheel axle | 0.200 m | Operator measurement, 2026-07-31 |
+| Sensor height above ground | 0.725 m | Operator measurement; the 0727 map independently gives 0.775 m ± 0.018 |
+| Ground-blind radius | ~5.9 m | `0.725 / tan(7°)` from the MID-360's lower field of view |
 
-<p align="center">
-  <img src="docs/assets/route-overview.webp" alt="Aegimun to Engineering Center outbound and return routes" width="100%" />
-</p>
+That blind radius is why drop safety does not come from the live scan. Kerbs and drop-offs sit
+inside it, so they are avoided by keeping the chair inside a **safety band** precomputed from the
+merged map along the route. The scan is used for what the sensor can see: obstacles and people.
 
-The committed route artifact contains 359 outbound and 373 return waypoints in the `map` frame. Both routes
-are candidate geometry: they remain unsurveyed for physical operation, carry zero hardware speed authority,
-and cannot promote themselves from map consistency to real-world permission.
+Frames follow REP-103 in
+[`wheelchair_hardware.urdf.xacro`](src/wheelchair_description/urdf/wheelchair_hardware.urdf.xacro):
+`base_footprint` at the axle midpoint on the ground, `imu_link`/`body` at FAST-LIO's IMU origin,
+`lidar_link` at the Livox optical origin derived from it through the built-in extrinsic.
 
-## Architecture
+## Command path
 
-<p align="center">
-  <img src="docs/assets/system-architecture.svg" alt="Fail-closed ROS 1 Noetic architecture" width="100%" />
-</p>
-
-The motion-authority path is deliberately narrow:
+Deliberately narrow, with each stage able to stop the chair if the one above it misbehaves:
 
 ```text
-move_base (sole publisher)
-  -> /cmd_vel_nav
-  -> independent safety authorities
-  -> wheelchair_safety/safety_gate.py
-  -> /cmd_vel_safe
-  -> simulation adapter or read-only hardware shadow
+waypoint_follower.py          route following, band containment, obstacle policy
+  -> /cmd_vel_raw
+safety_gate.py                independent stopping envelope and swept footprint
+  -> /cmd_vel_gated
+tip_guard.py                  rate limiter and staleness fail-safe, last stage
+  -> /cmd_vel
+wheel_cmd / uart              UART-level watchdog
 ```
 
-No real motor sink is selected by default. The hardware launch boundary must reject incomplete driver or
-release evidence before advertising a motor command topic.
+If the follower misbehaves or dies the gate stops the chair; if the gate dies, tip_guard's staleness
+check stops it; if that dies, the UART watchdog does.
 
-## Core capabilities
+### Obstacle policy
 
-### Perception and localization
+`obstacle_clusters.py` clusters the accumulated scan and tracks each object in the odom frame -
+motion is only a question in a frame that does not move with the chair. The follower then answers
+two situations differently:
 
-- Canonical ROS 1 `sensor_msgs/PointCloud2` and IMU products with strict timestamp and frame ownership.
-- Native Noetic localization candidate plus an independent confidence guard.
-- Exact map, frame, source, reset, policy, and callback-receipt identity checks.
-- Stale, future, regressing, malformed, or conflicting evidence revokes permission.
+- **Watched standing still** → gone around, decided 5 m out so the chair drifts past instead of
+  driving up to it and stopping first. Every sidestep is vetted against the safety band.
+- **Moving, or not yet watched long enough** → waited out where it stands. It resumes on its own
+  once the corridor is clear, with no timer to reset. Stepping around a person is a manoeuvre into
+  where they are about to be.
 
-### Navigation and route safety
+Distances are measured from an object's own returns, not from its bounding box. On 2026-07-31 a
+wall crossing the scan diagonally was published as a box whose near face read 0.69 m dead ahead
+while its nearest return inside the corridor was 2.13 m, and the chair held for 16 minutes on
+evidence that did not exist.
 
-- `move_base` owns `/cmd_vel_nav`; direct navigation-to-driver bypasses are prohibited.
-- Immutable route direction, activation sequence, route hash, and map binding.
-- Independent footprint/geofence intersection and corridor-clearance checks.
-- Callback and source freshness are evaluated independently across timer reuse.
+### Diagnostic mode
 
-### Safety and control
+`SAFETY_POLICIES=false` switches off everything that is a judgement about the world - band
+containment, the raw corridor scan, the localization hold, the geofence, the slope limit - so that
+one run can measure one thing without another guard ending the measurement first and looking, from
+outside a stationary chair, exactly like the thing it was meant to detect.
 
-- Collision/TTC, slope, localization, route/geofence, topology, timing, and driver authorities.
-- Queue-depth-one latest-value processing with monotonic source chronology.
-- Finite-zero output on startup, timeout, clock regression, evidence gaps, or process failure.
-- Explicit arm, e-stop latch, reset, manual-mode, and no-mission-resume contracts.
+What never switches off is the joystick override and the checks it rests on: `MANUAL_MODE` is the
+override, and `BASE_STALE` is whether the channel reporting it is still alive. Suppressed policies
+are still evaluated and published as `WOULD_HOLD:` on `/waypoint_follower/status`, because that run
+is the only place their thresholds can be calibrated against the real thing.
 
-### Offline mapping and replay
+## Running it
 
-- Immutable ROS 2 Livox/IMU source verification and deterministic ROS 1 normalization.
-- Pinned, network-disabled GLIM reproduction with three isolated runs.
-- Candidate 2D occupancy-map and directional-route export with hash bindings.
-- ROS 2 and GLIM are offline artifact tools; they never enter the production Noetic runtime graph.
-
-## Route and dataset
-
-<p align="center">
-  <strong>Aegimun → Engineering Center → Aegimun</strong><br />
-  Livox 3D LiDAR + IMU · 688.225 s · 144,484 source records
-</p>
-
-| Asset | Location | Notes |
-| --- | --- | --- |
-| Occupancy map | `data/hanyang_aegimun_loop/map.pgm` | 0.1 m resolution, candidate map |
-| Map metadata | `data/hanyang_aegimun_loop/map.metadata.json` | Hash and provenance binding |
-| Directional routes | `data/hanyang_aegimun_loop/hanyang_aegimun_loop.waypoints.yaml` | Immutable outbound/return geometry |
-| Source metadata | `data/hanyang_aegimun_loop/livox_rosbag_metadata.yaml` | Original ROS 2 bag inventory |
-| Full bags | External, multi-GB | Deliberately excluded from Git |
-
-The raw recording contains 6,882 Livox clouds and 137,602 IMU messages. The multi-GB DB3 and normalized bags
-stay outside Git; their immutable hashes and reproduction workflow are documented in
-[`docs/replay_and_mapping.md`](docs/replay_and_mapping.md).
-
-## Quick start
-
-### Platform
-
-- Ubuntu 20.04
-- ROS 1 Noetic
-- Gazebo Classic 11
-- catkin
-- Python 3
-
-Install the runtime development dependencies:
+Deployment is one command from a checkout with the map volume attached:
 
 ```bash
-sudo apt update
-sudo apt install -y \
-  ros-noetic-desktop-full \
-  ros-noetic-navigation \
-  ros-noetic-dwa-local-planner \
-  ros-noetic-robot-state-publisher \
-  ros-noetic-xacro \
-  ros-noetic-gazebo-ros \
-  ros-noetic-gazebo-ros-control \
-  ros-noetic-ros-control \
-  ros-noetic-ros-controllers \
-  ros-noetic-topic-tools \
-  python3-catkin-tools python3-pytest
+./tools/push_to_nuc.sh /Volumes/<map-volume>/merged_0707_0725_v1
 ```
 
-### Build
+It verifies the map bundle, syncs and builds the workspace with whichever catkin tool owns the build
+space, and installs the field scripts with checksum verification. Those scripts live in `$HOME`
+outside the checkout, which is how a stale copy once kept launching the previous week's route.
+
+At the chair:
 
 ```bash
-git clone https://github.com/mnjn00/Uniconlab-autonomous-wheelchair.git
-cd Uniconlab-autonomous-wheelchair
-source /opt/ros/noetic/setup.bash
-catkin_make
-source devel/setup.bash
-./scripts/check_ros1_noetic_env.sh
+./trial_0727.sh    # brings the whole stack up, leaves the follower PAUSED
+./go.sh            # starts the drive
+./stop.sh          # stops it, as does moving the joystick
 ```
 
-### Run the software-in-loop stack
+`go.sh` refuses rather than starts if the follower is absent, the object tracker is silent, or
+localization is not `TRACKING`, and it checks all three before commanding anything - a check after
+the first command runs while the chair is already moving. `stop.sh` checks nothing, because a stop
+that refuses on a failed precondition is not a stop.
 
-```bash
-roslaunch wheelchair_bringup sim_bringup.launch \
-  auto_start:=false \
-  gui:=false
-```
-
-The stack starts disarmed. Gazebo is the only simulation clock owner and the simulation controller adapter is
-the only permitted `/cmd_vel_safe` consumer.
-
-### Run replay
-
-Terminal 1:
-
-```bash
-roslaunch wheelchair_bringup bringup.launch \
-  use_sim_time:=true \
-  hardware_profile:=replay
-```
-
-Terminal 2:
-
-```bash
-rosbag play --clock --pause /path/to/normalized.bag
-```
-
-Do not loop or seek backward during a qualification replay. A clock reset or regression disarms the system and
-requires a clean restart plus explicit re-arm.
-
-### Run hardware-disabled shadow
-
-```bash
-roslaunch wheelchair_bringup bringup.launch \
-  hardware_profile:=hardware_shadow \
-  hardware_enable:=false
-```
-
-The shadow adapter observes safe commands but must not create a real driver publisher. Do not add a relay or
-remap around this boundary.
+A black box records pose, diagnostics, commands, wheel status, follower state and the object summary
+for the whole session.
 
 ## Verification
 
-Focused host verification:
-
 ```bash
-python3 scripts/validate_wp0_contracts.py --root .
-python3 -m pytest -q
+python3 -m pytest -q                              # host suite
+python3 scripts/validate_wp0_contracts.py --root . # frozen WP0 contracts
 ```
 
-Pinned Ubuntu 20.04 / Noetic verification:
+Pinned Ubuntu 20.04 / Noetic:
 
 ```bash
 docker build -f tools/noetic/Dockerfile -t wheelchair-noetic-validation .
 docker run --rm --network none wheelchair-noetic-validation bash -lc \
-  'source /opt/ros/noetic/setup.bash &&
-   catkin_make &&
-   catkin_make run_tests &&
-   python3 -m pytest -q'
+  'source /opt/ros/noetic/setup.bash && catkin_make && catkin_make run_tests && python3 -m pytest -q'
 ```
 
-The suites exercise ABI and contract hashes, launch topology, nonfinite/time/TTL/reset boundaries, independent
-safety supervisors, mission determinism, replay conversion, GLIM contracts, Gazebo faults, and release/rollback
-rejection. A missing external dataset, target-NUC run, or physical gate remains blocked; it is never replaced by
-a simulated claim.
+Around 700 host tests pass. Several suites are deliberately evidence-bound and fail without the
+external dataset - a missing GLIM artifact, target-NUC run, or physical gate stays blocked rather
+than being replaced by a simulated claim.
+
+The tests that matter most here are the ones written against something that actually went wrong:
+`test_mount_geometry` (one sensor height living in six files), `test_localization_field_envelope`
+(gates sized outside the measured envelope), `test_object_profile` and `test_cluster_guard`
+(measuring an obstacle from returns rather than a box), `test_drive_policy` (the joystick override
+surviving every switched-off policy), and `test_blackbox_archive` (a recording nobody can repeat).
 
 ## Repository layout
 
 ```text
 src/
+├── static_livox_localization/   # THE DEPLOYED STACK: FAST-LIO + GICP localization,
+│                                #   follower, safety gate, clustering, field scripts
 ├── wheelchair_interfaces/       # frozen ROS messages, actions, and ABI contracts
 ├── wheelchair_perception/       # canonical sensor products; no motion permission
 ├── wheelchair_navigation/       # localizer adapter, route manager, move_base integration
@@ -277,40 +213,30 @@ src/
 ├── wheelchair_safety/           # gate plus collision/slope/localization/topology authorities
 ├── wheelchair_hardware/         # exact driver contract; disabled by default
 ├── wheelchair_bringup/          # explicit sim/replay/shadow/hardware profiles
-├── wheelchair_description/      # provenance-labeled URDF/xacro
+├── wheelchair_description/      # Gazebo and NUC-derived URDFs, not interchangeable
 └── wheelchair_gazebo/           # simulation-only scenarios and evidence collectors
 ```
 
-`wheelchair_description` keeps two non-interchangeable entry points: the
-Gazebo-only `wheelchair.urdf.xacro` and the NUC-derived
-`wheelchair_hardware.urdf.xacro`. Hardware launch and calibration must never
-fall back to the simulation description.
-
-Additional top-level areas:
-
 | Path | Purpose |
 | --- | --- |
+| `routes/` | Route waypoints, safety bands, corridor masks and previews |
+| `blackbox/` | Field recordings (Git LFS) with per-session manifests |
 | `contracts/wp0/` | Frozen ownership, schema, evidence, hazard, and authority contracts |
 | `data/` | Committed candidate map, metadata, and directional routes |
-| `scripts/` | Validation, normalization, GLIM, simulation, release, and rollback tools |
-| `tools/noetic/` | Pinned Noetic build environment |
-| `tools/offline/` | Offline-only conversion dependencies |
-| `docs/` | Operator, mapping, interfaces, simulator, and safety documentation |
+| `tools/` | Deployment, field startup, route/band generation, offline analysis |
+| `docs/` | Operator, mapping, interfaces, simulator, safety, and field reports |
 
-## Safety and authority boundary
+`wheelchair_description` keeps two non-interchangeable entry points: the Gazebo-only
+`wheelchair.urdf.xacro` and the NUC-derived `wheelchair_hardware.urdf.xacro`. Hardware launch and
+calibration must never fall back to the simulation description.
 
-The repository intentionally refuses physical authority while any of these remain unknown or unmeasured:
+## Safety boundary
 
-- exact real-driver topic, type, MD5, sign, units, rate, timeout, mode, and watchdog behavior;
-- physical e-stop and manual/joystick priority and latency;
-- measured LiDAR/IMU extrinsics and clock offsets;
-- footprint, payload, battery, surface, braking, and stopping envelope;
-- fingerprinted target-NUC resource, thermal, 60-minute, and 8-hour qualification;
-- inert HIL repetitions and segregated closed-course no-passenger evidence;
-- surveyed route/corridor/exclusions and written campus approval;
-- a separately reviewed passenger-operation protocol.
+Field operation to date is **supervised**: an operator rides the chair with a hand on the joystick
+for the whole run, on a known route, on a campus footpath, with no passenger other than the
+operator. That is the only mode any result in this repository supports.
 
-Until those gates are measured, bound, reviewed, and approved:
+The formal release gates are unchanged and remain unapproved:
 
 ```yaml
 software_release_candidate_authorized: false
@@ -318,8 +244,14 @@ hardware_motion_authorized: false
 passenger_operation_authorized: false
 campus_operation_authorized: false
 physical_authority: false
-wp7_executed: false
 ```
+
+They stay false while any of these is unknown or unmeasured: the exact real-driver topic, type,
+MD5, sign, units, rate, timeout, mode and watchdog behaviour; physical e-stop and joystick priority
+and latency; footprint, payload, battery, surface, braking and stopping envelope; fingerprinted
+target-NUC resource, thermal and endurance qualification; inert HIL repetitions and segregated
+closed-course no-passenger evidence; surveyed route, corridor and exclusions with written campus
+approval; and a separately reviewed passenger-operation protocol.
 
 See [`contracts/wp0/A16-release-authority.yaml`](contracts/wp0/A16-release-authority.yaml),
 [`contracts/wp0/A14-hazard-log.yaml`](contracts/wp0/A14-hazard-log.yaml), and
@@ -328,6 +260,7 @@ See [`contracts/wp0/A16-release-authority.yaml`](contracts/wp0/A16-release-autho
 ## Documentation
 
 - [Operator runbook](docs/operator_runbook.md)
+- [2026-08-02 field report](docs/2026-08-02-field-report.md)
 - [Replay and offline mapping](docs/replay_and_mapping.md)
 - [Interfaces and ownership](docs/interfaces.md)
 - [Simulator fidelity](docs/simulator_fidelity.md)
@@ -335,4 +268,4 @@ See [`contracts/wp0/A16-release-authority.yaml`](contracts/wp0/A16-release-autho
 
 ## License
 
-This repository is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).
