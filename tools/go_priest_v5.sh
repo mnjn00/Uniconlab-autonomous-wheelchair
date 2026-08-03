@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
+source /opt/ros/noetic/setup.bash >/dev/null 2>&1
+export ROS_MASTER_URI=http://127.0.0.1:11311
+
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 "$SCRIPT_DIR/preflight_priest_v5.sh"
 

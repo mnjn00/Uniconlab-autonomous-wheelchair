@@ -108,6 +108,13 @@ def test_priest_v5_go_runs_preflight_before_any_motion_command() -> None:
     assert checked < auto_mode < start
 
 
+def test_priest_v5_go_loads_ros_commands_in_its_own_shell() -> None:
+    go = script("go_priest_v5.sh")
+
+    assert "source /opt/ros/noetic/setup.bash" in go
+    assert go.index("source /opt/ros/noetic/setup.bash") < go.index("rostopic pub")
+
+
 def test_priest_v5_scripts_are_bound_to_the_reviewed_deployment() -> None:
     # Given the laptop and NUC dirtiness gates plus the install loop.
     push = script("push_to_nuc.sh")
