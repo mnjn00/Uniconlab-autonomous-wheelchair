@@ -1,26 +1,7 @@
-"""Algorithm 1 of PRIEST: sample, project, rank, refit - inside the band.
+"""PRIEST Algorithm 1 proposal search inside an authoritative safety band.
 
-The chair is given a start and a goal and nothing else to follow. What it is
-given instead of a line is a region: the safety band, which says where the
-ground does not break. PRIEST searches inside that region.
-
-That distinction is the whole point and worth being precise about, because
-the band is derived from a recorded route and it would be easy to claim more
-novelty than there is. The band supplies two things: the lateral limits at
-each station (a hard constraint - see priest_projection.Projection) and the
-arc length that tells the planner which way the goal lies. It does not supply
-the path. Where the chair actually goes between those limits, which side of a
-parked car it passes, and how it trades smoothness against progress are all
-decided here, per cycle, from live obstacles. Pure pursuit had none of those
-choices: it tracked one fixed line and could only stop when that line was
-blocked.
-
-Horizon sizing is not a tuning knob. A horizon shorter than
-path_length / v_max is infeasible by construction, and the optimiser cannot
-report that as anything but a stubborn residual - which reads exactly like a
-blocked corridor. Every early failure while building this was that, so the
-horizon is computed from the reach the chair actually needs and the class
-refuses to pretend otherwise.
+Projection proposes polynomial paths; dense runtime certification alone may
+make one usable. The recorded centreline supplies stationing, not a path.
 """
 
 import numpy as np
@@ -28,8 +9,10 @@ import numpy as np
 from priest_constraints import (
     CANONICAL_FOOTPRINT,
     DEFAULT_CONSTRAINT_TOLERANCES,
+    TURN_FLOOR_SPEED_MPS,
     ConstraintTolerances,
     ConstraintViolations,
+    within_goal_tolerance,
 )
 from priest_feasibility import (
     certify_coefficients,
@@ -44,23 +27,18 @@ from priest_sampling import (
     select_priest_elite,
     trajectory_costs,
 )
+from priest_terminal import STOPPED_SPEED_MPS, terminal_correction
 from priest_types import Corridor, Plan
 
 
 class PriestPlanner(object):
-    """Projection-guided sampling over polynomial coefficients.
-
-    Perturbing coefficients rather than control inputs is the paper's stated
-    exploration advantage: a Gaussian on Bernstein coefficients moves whole
-    trajectory shapes, so one sample can sit in a different homotopy - the
-    other side of an obstacle - instead of being a slightly noisier version
-    of the same line.
-    """
+    """Projection-guided sampling and certified elite selection."""
 
     CONSTRAINT_TOLERANCES = DEFAULT_CONSTRAINT_TOLERANCES
     RETRIES = 4
     REACH_BACKOFF = 0.65
     MIN_REACH_M = 1.5
+    GOAL_TOLERANCE_M = 0.05
     # The projection constrains a POINT to stay outside each circle, so the
     # circles have to be grown by everything the point is standing in for.
     # Without this the planner returns trajectories whose clearance to an
@@ -79,12 +57,14 @@ class PriestPlanner(object):
                  max_obstacles=24, batch=200, elite=20, constraint_elite=60,
                  iterations=12, projection_iterations=15, rho=1.0,
                  learning_rate=0.6, temperature=0.5, margin=1.6, seed=0,
-                 runtime_band=None, control_hz=10.0, band_grace_m=0.10):
+                 runtime_band=None, control_hz=10.0, band_grace_m=0.10,
+                 turn_floor_speed_mps=TURN_FLOOR_SPEED_MPS):
         self.degree = degree
         self.steps = steps
         self.v_max = float(v_max)
         self.a_max = float(a_max)
         self.yaw_rate_max = float(yaw_rate_max)
+        self.turn_floor_speed_mps = float(turn_floor_speed_mps)
         require_physical_limits(self)
         self.max_obstacles = int(max_obstacles)
         self.batch = int(batch)
@@ -171,7 +151,7 @@ class PriestPlanner(object):
         return trajectory_costs(basis, xi, local_goal, local_tangent)
 
     def plan(self, start, velocity, acceleration, corridor, obstacles,
-             goal_arc=None):
+             goal_arc=None, initial_yaw_rad=None):
         """One planning cycle. Returns a Plan, usable or with a refusal.
 
         A cycle that cannot find a feasible trajectory takes a smaller bite
@@ -186,20 +166,39 @@ class PriestPlanner(object):
         start = np.asarray(start, dtype=np.float64)
         start_arc = corridor.arc_of(start)
         goal_arc = corridor.length_m if goal_arc is None else float(goal_arc)
-        remaining = max(goal_arc - start_arc, 0.0)
-        if remaining < 1e-3:
+        goal_arc = float(np.clip(goal_arc, 0.0, corridor.length_m))
+        goal_xy = np.array([
+            np.interp(goal_arc, corridor.arc, corridor.centres[:, 0]),
+            np.interp(goal_arc, corridor.arc, corridor.centres[:, 1])])
+        goal_distance = float(np.linalg.norm(goal_xy - start))
+        speed = float(np.linalg.norm(np.asarray(velocity, dtype=np.float64)))
+        if within_goal_tolerance(goal_distance, self.GOAL_TOLERANCE_M) \
+                and speed <= STOPPED_SPEED_MPS:
             return Plan(None, None, None, None, 0.0, 0.0, 0, 0.0,
                         reason="AT_GOAL")
         if self.runtime_band is None:
             return Plan(None, None, None, None, float("inf"), float("inf"),
                         0, 0.0, reason="RUNTIME_BAND_UNBOUND")
+        remaining = max(goal_arc - start_arc, 0.0)
+        correction = terminal_correction(
+            self, start_xy=start, velocity_xy_mps=velocity,
+            goal_xy=goal_xy, initial_yaw_rad=initial_yaw_rad,
+            band=self.runtime_band,
+            obstacles=np.asarray(obstacles, dtype=np.float64))
+        if correction is not None:
+            return correction
+        if remaining < 1e-3:
+            correction_span = max(self.MIN_REACH_M, goal_distance)
+            start_arc = max(0.0, goal_arc - correction_span)
+            remaining = max(goal_arc - start_arc, goal_distance, 1e-3)
 
         attempt = min(remaining, self.v_max * self.horizon_for(remaining)
                       / self.margin)
         best_plan = None
         for _ in range(self.RETRIES):
             plan = self.attempt(start, velocity, acceleration, corridor,
-                                obstacles, start_arc, attempt)
+                                obstacles, start_arc, attempt,
+                                initial_yaw_rad)
             if best_plan is None or plan.residual < best_plan.residual:
                 best_plan = plan
             if plan.usable:
@@ -210,7 +209,7 @@ class PriestPlanner(object):
         return best_plan
 
     def attempt(self, start, velocity, acceleration, corridor, obstacles,
-                start_arc, reach):
+                start_arc, reach, initial_yaw_rad=None):
         """One sample-project-rank-refit run over a fixed slice of corridor."""
         if self.runtime_band is None:
             return Plan(None, None, None, None, float("inf"), float("inf"),
@@ -256,7 +255,8 @@ class PriestPlanner(object):
                     self, coefficients=candidate, degree=self.degree,
                     horizon_s=horizon_s, control_hz=self.control_hz,
                     band=self.runtime_band, obstacles=raw_obstacles,
-                    band_grace_m=self.band_grace_m)
+                    band_grace_m=self.band_grace_m,
+                    initial_yaw_rad=initial_yaw_rad)
                 dense_candidates.append(dense)
                 if dense.certificate.usable:
                     break

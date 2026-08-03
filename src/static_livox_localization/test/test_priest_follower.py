@@ -57,7 +57,7 @@ def load_node():
         "geometry_msgs.msg": ["PoseWithCovarianceStamped", "Twist"],
         "nav_msgs.msg": ["Odometry"],
         "std_msgs.msg": ["Int16MultiArray", "String"],
-        "std_srvs.srv": ["SetBool", "SetBoolResponse"],
+        "std_srvs.srv": ["SetBool", "SetBoolRequest", "SetBoolResponse"],
     }.items():
         module = types.ModuleType(package)
         for name in names:
@@ -100,7 +100,8 @@ def summary_of(objects):
 
 
 def obj(x, y, motion, size=(0.4, 0.6, 1.2)):
-    return {"class": "obstacle", "x": x, "y": y, "size": list(size),
+    return {"class": "obstacle", "x": x, "y": y,
+            "map_x": x, "map_y": y, "size": list(size),
             "points": 40, "motion": motion}
 
 
@@ -114,11 +115,8 @@ def pose_at(x, y, yaw):
     return T
 
 
-def test_obstacles_land_where_the_map_says_they_are():
-    """Chair at (10, 5) facing +y: an object 2 m ahead in the lidar frame
-    must come out near (10, 7) in the map, not near (12, 5). The residual
-    difference from the exact figure is the lidar-to-body extrinsic, which
-    is a few centimetres - a frame slip is metres."""
+def test_obstacles_remain_at_their_source_time_map_coordinates():
+    """A delayed summary must not move again with the consumer's pose."""
     lidar_in_body, rotation = bf.lidar_extrinsics("builtin")
     circles, dropped = rt.planner_obstacles(
         [obj(2.0, 0.0, "static")], pose_at(10.0, 5.0, np.pi / 2),
@@ -127,8 +125,8 @@ def test_obstacles_land_where_the_map_says_they_are():
     assert dropped == 0
     assert len(circles) == 1
     x, y, radius = circles[0]
-    assert abs(x - 10.0) < 0.2
-    assert abs(y - 7.0) < 0.2
+    assert x == 2.0
+    assert y == 0.0
     # circumscribed circle of a 0.4 x 0.6 footprint
     assert radius == pytest.approx(np.hypot(0.2, 0.3))
 

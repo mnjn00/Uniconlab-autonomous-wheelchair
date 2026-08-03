@@ -1,39 +1,55 @@
 #!/usr/bin/env python3
 
-import math
+from pathlib import Path
+import importlib.util
+import sys
 
 import rospy
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Int16MultiArray
 
 
+MODEL_DIRS = (
+    Path(__file__).resolve().parent,
+    Path(__file__).resolve().parents[1] / "static_livox_localization",
+    Path(__file__).resolve().parents[1]
+    / "src" / "static_livox_localization" / "scripts",
+    Path(__file__).resolve().parents[2]
+    / "static_livox_localization" / "scripts",
+)
+MODEL_PATH = None
+for model_dir in MODEL_DIRS:
+    candidate = model_dir / "wheel_command_model.py"
+    if candidate.is_file():
+        MODEL_PATH = candidate
+        break
+if MODEL_PATH is None:
+    raise ImportError("wheel_command_model.py must accompany this guard")
+MODEL_SPEC = importlib.util.spec_from_file_location(
+    "wheel_command_model", MODEL_PATH)
+if MODEL_SPEC is None or MODEL_SPEC.loader is None:
+    raise ImportError("wheel_command_model.py has no import loader")
+MODEL = importlib.util.module_from_spec(MODEL_SPEC)
+sys.modules["wheel_command_model"] = MODEL
+MODEL_SPEC.loader.exec_module(MODEL)
+
+from wheel_command_model import (  # noqa: E402
+    COUNTS_PER_KMH,
+    MAGNITUDE_OFFSET,
+    MAX_ANGULAR_RAD_S,
+    MAX_LINEAR_MPS,
+    STOP_COMMAND,
+    TURN_AUTHORITY_KMH,
+    TURN_AUTHORITY_MAX_LINEAR_MPS,
+    WHEEL_SEPARATION_M,
+    YAW_DEADBAND_RAD_S,
+    encode_wheel_command,
+)
+
+
 AUTO_MODE = 65
 EXPECTED_CMD_CALLER = "/tip_guard"
 EXPECTED_STATUS_CALLER = "/uart"
-MAX_LINEAR_MPS = 1.5
-MAX_ANGULAR_RAD_S = 0.6
-WHEEL_SEPARATION_M = 0.54
-STOP_COMMAND = (83, 33, 83, 33, 79)
-
-# Wheel speeds are sent as tenths of a km/h on top of a 33 offset, so one
-# count is 0.1 km/h (0.028 m/s).
-COUNTS_PER_KMH = 10.0
-MAGNITUDE_OFFSET = 33
-
-# Below this the wheels were observed not to turn the loaded chair at all.
-# On 2026-07-29 the follower held its maximum +0.5 rad/s for four seconds
-# while the faster wheel sat at 0.9 km/h and the chair rotated at 0.03-0.05
-# rad/s - effectively not at all - then rotated at 0.57 rad/s once the
-# wheels reached 1.3-1.6 km/h. The differential itself was correct
-# throughout: 0.9 km/h across 0.54 m is the 0.46 rad/s that was asked for.
-# What was missing was enough absolute speed to break stiction with a rider
-# aboard, so the encoded difference described a turn the base never made.
-TURN_AUTHORITY_KMH = 1.3
-# Reaching that floor means driving both wheels faster, which adds forward
-# speed the planner did not ask for. That is capped hard: enough to turn,
-# never enough to run away.
-TURN_AUTHORITY_MAX_LINEAR_MPS = 0.30
-YAW_DEADBAND_RAD_S = 0.05
 
 
 def message_caller_id(message):
@@ -43,52 +59,7 @@ def message_caller_id(message):
     return str(header.get("callerid", "")).strip()
 
 
-def compute_wheel_command(linear_x, angular_z):
-    try:
-        linear_x = float(linear_x)
-        angular_z = float(angular_z)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(linear_x) or not math.isfinite(angular_z) or \
-            linear_x < 0.0 or linear_x > MAX_LINEAR_MPS or \
-            abs(angular_z) > MAX_ANGULAR_RAD_S:
-        return None
-    left = (linear_x - angular_z * WHEEL_SEPARATION_M / 2.0) * 3.6
-    right = (linear_x + angular_z * WHEEL_SEPARATION_M / 2.0) * 3.6
-
-    # Give a requested turn enough wheel speed to actually happen. Adding
-    # the SAME amount to both wheels leaves right-left untouched, so the
-    # yaw rate is exactly the one asked for; only the forward speed rises,
-    # and only as far as TURN_AUTHORITY_MAX_LINEAR_MPS allows.
-    if abs(angular_z) > YAW_DEADBAND_RAD_S:
-        fastest = max(abs(left), abs(right))
-        headroom = (TURN_AUTHORITY_MAX_LINEAR_MPS - linear_x) * 3.6
-        boost = min(max(TURN_AUTHORITY_KMH - fastest, 0.0), max(headroom, 0.0))
-        left += boost
-        right += boost
-
-    def encode(speed):
-        direction = 67 if speed > 0.0 else (87 if speed < 0.0 else 83)
-        # Round rather than truncate. Truncation drags every wheel toward
-        # zero by up to a full count, which at these speeds is most of the
-        # command: the 0.198 km/h inner wheel above became 1 count, 0.1
-        # km/h, half of what was asked.
-        magnitude = int(round(abs(speed) * COUNTS_PER_KMH)) + MAGNITUDE_OFFSET
-        if magnitude > 127:
-            return None
-        return direction, magnitude
-
-    left_encoded = encode(left)
-    right_encoded = encode(right)
-    if left_encoded is None or right_encoded is None:
-        return None
-    return (
-        left_encoded[0],
-        left_encoded[1],
-        right_encoded[0],
-        right_encoded[1],
-        79,
-    )
+compute_wheel_command = encode_wheel_command
 
 
 class WheelCommandGuard:

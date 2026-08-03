@@ -2,86 +2,46 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from typing import Optional, Protocol
+from typing import Optional
 
 import numpy as np
 
-
-class TimedPlan(Protocol):
-    x: Optional[np.ndarray]
-    y: Optional[np.ndarray]
-    times: Optional[np.ndarray]
-    velocity_xy_mps: Optional[np.ndarray]
-    yaw_rad: Optional[np.ndarray]
-    yaw_rate_rps: Optional[np.ndarray]
-    reason: str
-
-    @property
-    def usable(self) -> bool:
-        ...
-
-
-@dataclass(frozen=True)
-class Pose2D:
-    __slots__ = ("x_m", "y_m", "yaw_rad")
-
-    x_m: float
-    y_m: float
-    yaw_rad: float
-
-
-@dataclass(frozen=True)
-class DriveCommand:
-    """The only executable planar inputs of a differential-drive chair."""
-
-    linear_x_mps: float
-    angular_z_rps: float
-    reason: str = ""
-    done: bool = False
-
-
-@dataclass(frozen=True)
-class ControllerLimits:
-    max_speed_mps: float = 0.6
-    max_acceleration_mps2: float = 0.18
-    max_deceleration_mps2: float = 0.6
-    max_yaw_rate_rps: float = 0.5
-    max_yaw_acceleration_rps2: float = 1.5
-    control_period_s: float = 0.1
-    goal_tolerance_m: float = 0.05
-    turn_in_place_rad: float = 0.6
-
-    def __post_init__(self) -> None:
-        values = (
-            self.max_speed_mps, self.max_acceleration_mps2,
-            self.max_deceleration_mps2, self.max_yaw_rate_rps,
-            self.max_yaw_acceleration_rps2, self.control_period_s,
-            self.goal_tolerance_m, self.turn_in_place_rad)
-        if not all(math.isfinite(value) for value in values):
-            raise ValueError("controller limits must be finite")
-        if min(values[:6]) <= 0.0 or self.goal_tolerance_m < 0.0 \
-                or not 0.0 < self.turn_in_place_rad <= math.pi:
-            raise ValueError("controller limits must be physically positive")
-
-
-DEFAULT_CONTROLLER_LIMITS = ControllerLimits()
-STOPPED_SPEED_MPS = 0.02
+from priest_actuator_control import (
+    effective_acceleration_mps2,
+    select_effective_twist,
+)
+from priest_control_types import (
+    ControllerLimits,
+    DEFAULT_CONTROLLER_LIMITS,
+    DriveCommand,
+    Pose2D,
+    TimedPlan,
+)
+from priest_terminal_control import (
+    STOPPED_SPEED_MPS,
+    preserve_terminal_viability,
+    should_start_braking,
+    terminal_brake,
+)
+from wheel_command_model import YAW_DEADBAND_RAD_S, required_turn_linear_mps
 
 
 def _stop(reason: str, done: bool = False) -> DriveCommand:
     return DriveCommand(0.0, 0.0, reason=reason, done=done)
 
 
-def _plan_arrays(
+def plan_arrays(
         plan: TimedPlan,
 ) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     if plan.x is None or plan.y is None or plan.times is None:
         return None
-    x = np.asarray(plan.x, dtype=np.float64)
-    y = np.asarray(plan.y, dtype=np.float64)
-    times = np.asarray(plan.times, dtype=np.float64)
+    try:
+        x = np.asarray(plan.x, dtype=np.float64)
+        y = np.asarray(plan.y, dtype=np.float64)
+        times = np.asarray(plan.times, dtype=np.float64)
+    except (TypeError, ValueError, OverflowError):
+        return None
     if (x.ndim != 1 or y.shape != x.shape or times.shape != x.shape
             or len(x) < 2 or not np.isfinite(x).all()
             or not np.isfinite(y).all() or not np.isfinite(times).all()
@@ -108,9 +68,12 @@ def _reference(
     if any(value is not None for value in raw):
         if any(value is None for value in raw):
             return None
-        velocity = np.asarray(raw[0], dtype=np.float64)
-        yaw = np.asarray(raw[1], dtype=np.float64)
-        yaw_rate = np.asarray(raw[2], dtype=np.float64)
+        try:
+            velocity = np.asarray(raw[0], dtype=np.float64)
+            yaw = np.asarray(raw[1], dtype=np.float64)
+            yaw_rate = np.asarray(raw[2], dtype=np.float64)
+        except (TypeError, ValueError, OverflowError):
+            return None
         if (velocity.shape != (len(times), 2) or yaw.shape != times.shape
                 or yaw_rate.shape != times.shape
                 or not np.isfinite(velocity).all()
@@ -140,16 +103,40 @@ def _reference(
     )
 
 
-def _linear_slew(
+def command_acceleration_mps2(
+        previous: DriveCommand,
+        command: DriveCommand,
+        period_s: float) -> float:
+    """Cartesian acceleration implied by two constant-twist commands."""
+    return effective_acceleration_mps2(
+        previous.linear_x_mps, previous.angular_z_rps,
+        command.linear_x_mps, command.angular_z_rps, period_s)
+
+
+def _bounded_linear(
         desired_mps: float,
         previous_mps: float,
-        limits: ControllerLimits) -> float:
+        angular_rps: float,
+        limits: ControllerLimits) -> Optional[float]:
+    inverse_period_sq = 1.0 / limits.control_period_s ** 2
+    quadratic = inverse_period_sq + angular_rps ** 2
+    linear = -2.0 * previous_mps * inverse_period_sq
+    constant = previous_mps ** 2 * inverse_period_sq \
+        - limits.max_acceleration_mps2 ** 2
+    discriminant = linear ** 2 - 4.0 * quadratic * constant
+    if discriminant < -1e-12:
+        return None
+    root = math.sqrt(max(discriminant, 0.0))
     lower = max(
-        0.0,
-        previous_mps - limits.max_deceleration_mps2 * limits.control_period_s)
+        0.0, (-linear - root) / (2.0 * quadratic),
+        previous_mps
+        - limits.max_deceleration_mps2 * limits.control_period_s)
     upper = min(
-        limits.max_speed_mps,
-        previous_mps + limits.max_acceleration_mps2 * limits.control_period_s)
+        limits.max_speed_mps, (-linear + root) / (2.0 * quadratic),
+        previous_mps
+        + limits.max_acceleration_mps2 * limits.control_period_s)
+    if lower > upper + 1e-12:
+        return None
     return min(max(desired_mps, lower), upper)
 
 
@@ -189,19 +176,21 @@ def command_for(
         return _stop(plan.reason, done=plan.reason == "AT_GOAL")
     if not bool(getattr(plan, "usable", False)):
         return _stop("UNCERTIFIED_PLAN")
-    arrays = _plan_arrays(plan)
+    arrays = plan_arrays(plan)
     if arrays is None:
         return _stop("INVALID_PLAN")
     if not _valid_state(
             elapsed_s, pose, measured_speed_mps, previous_command):
         return _stop("INVALID_STATE")
     x, y, times = arrays
-    if elapsed_s >= times[-1]:
-        return _stop("AT_PLAN_END", done=True)
-    if math.hypot(x[-1] - pose.x_m, y[-1] - pose.y_m) \
-            <= limits.goal_tolerance_m:
-        return _stop("AT_GOAL", done=True)
-
+    previous_effective = select_effective_twist(
+        previous_command.linear_x_mps, previous_command.angular_z_rps,
+        previous_command.linear_x_mps, previous_command.angular_z_rps,
+        limits)
+    if previous_effective is None:
+        return _stop("INVALID_DYNAMICS")
+    previous_linear = previous_effective.linear_x_mps
+    previous_angular = previous_effective.angular_z_rps
     reference = _reference(plan, x, y, times, elapsed_s)
     if reference is None:
         return _stop("INVALID_PLAN")
@@ -213,19 +202,68 @@ def command_for(
     lateral = -math.sin(pose.yaw_rad) * world_x \
         + math.cos(pose.yaw_rad) * world_y
     heading_error = _wrap(ref_yaw - pose.yaw_rad)
-    aligning = abs(heading_error) > limits.turn_in_place_rad
+    if abs(heading_error) > limits.max_heading_error_rad:
+        return _stop("HEADING_REPLAN")
+    if previous_command.reason == "TERMINAL_BRAKING" \
+            or should_start_braking(
+                x[-1] - pose.x_m, y[-1] - pose.y_m, pose.yaw_rad,
+                previous_linear, previous_angular, measured_speed_mps,
+                limits.goal_tolerance_m, limits):
+        return terminal_brake(
+            previous_linear, previous_angular, measured_speed_mps,
+            math.hypot(x[-1] - pose.x_m, y[-1] - pose.y_m), limits)
+    if elapsed_s >= times[-1]:
+        return _stop("PLAN_EXPIRED")
 
-    desired_linear = 0.0 if aligning else (
+    desired_linear = (
         ref_speed * math.cos(heading_error) + 1.2 * longitudinal
         + 0.2 * (ref_speed - measured_speed_mps))
-    linear = _linear_slew(
-        min(max(desired_linear, 0.0), limits.max_speed_mps),
-        previous_command.linear_x_mps, limits)
-    desired_angular = 1.8 * heading_error if aligning else (
+    desired_angular = (
         ref_yaw_rate + 1.8 * heading_error + 2.0 * ref_speed * lateral)
-    if aligning and max(linear, measured_speed_mps) > STOPPED_SPEED_MPS:
-        desired_angular = 0.0
-    angular = _angular_slew(
-        desired_angular, previous_command.angular_z_rps, limits)
-    return DriveCommand(
-        linear, angular, reason="ALIGNING" if aligning else "")
+    angular = _angular_slew(desired_angular, previous_angular, limits)
+    if abs(angular) <= YAW_DEADBAND_RAD_S:
+        angular = 0.0
+    if previous_linear > 1e-9:
+        turn_cap = limits.max_acceleration_mps2 \
+            / previous_linear
+        angular = math.copysign(min(abs(angular), turn_cap), angular)
+    required_turn_speed = max(
+        limits.turn_floor_speed_mps, required_turn_linear_mps(angular)) \
+        if abs(angular) > YAW_DEADBAND_RAD_S else 0.0
+    desired_linear = max(desired_linear, required_turn_speed)
+    linear = _bounded_linear(
+        desired_linear, previous_linear, angular, limits)
+    if linear is None:
+        return _stop("INVALID_DYNAMICS")
+    accelerating = abs(angular) > YAW_DEADBAND_RAD_S and min(
+        linear, measured_speed_mps) + 1e-9 < required_turn_speed
+    if accelerating:
+        angular = 0.0
+        linear = _bounded_linear(
+            desired_linear, previous_linear, angular, limits)
+        if linear is None:
+            return _stop("INVALID_DYNAMICS")
+    effective = select_effective_twist(
+        linear, angular, previous_linear, previous_angular, limits)
+    if effective is None:
+        return _stop("INVALID_DYNAMICS")
+    viable = preserve_terminal_viability(
+        effective, x[-1] - pose.x_m, y[-1] - pose.y_m, pose.yaw_rad,
+        previous_linear, previous_angular, measured_speed_mps,
+        limits.goal_tolerance_m, limits)
+    if viable is None:
+        return terminal_brake(
+            previous_linear, previous_angular, measured_speed_mps,
+            math.hypot(x[-1] - pose.x_m, y[-1] - pose.y_m), limits)
+    effective = viable
+    turning_transition = accelerating or (
+        abs(angular) > YAW_DEADBAND_RAD_S
+        and abs(effective.angular_z_rps) <= YAW_DEADBAND_RAD_S)
+    command = DriveCommand(
+        effective.linear_x_mps, effective.angular_z_rps,
+        reason="TURN_ACCELERATING" if turning_transition else "")
+    if command_acceleration_mps2(
+            previous_command, command, limits.control_period_s) \
+            > limits.max_acceleration_mps2 + 1e-9:
+        return _stop("INVALID_DYNAMICS")
+    return command

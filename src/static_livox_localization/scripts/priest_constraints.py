@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import hypot
+from math import hypot, isfinite
 from typing import Final
 
 import numpy as np
@@ -222,3 +222,24 @@ PROJECTION_CONSTRAINT_TOLERANCES: Final = ConstraintTolerances(
     acceleration_mps2=0.02,
     yaw_rate_rps=0.02,
 )
+
+# Loaded-chair measurement: below this faster-wheel-equivalent floor, a
+# commanded turn does not begin reliably. Planner and controller share it.
+TURN_FLOOR_SPEED_MPS: Final = 0.30
+
+# A raw twist can survive both relay watchdogs after a single downstream
+# process failure. The execution horizon covers both TTLs plus one nominal
+# scheduling period at each stage; 1.30 rounds that 1.2867 s bound upward.
+RAW_INPUT_STALE_S: Final = 0.6
+GATED_INPUT_STALE_S: Final = 0.6
+SAFETY_GATE_RATE_HZ: Final = 15.0
+TIP_GUARD_RATE_HZ: Final = 50.0
+COMMAND_RETENTION_HORIZON_S: Final = 1.30
+GOAL_COMPARISON_EPSILON_M: Final = 1e-9
+
+
+def within_goal_tolerance(distance_m: float, tolerance_m: float) -> bool:
+    """Compare goal distance with only floating-point-scale slack."""
+    return (isfinite(distance_m) and isfinite(tolerance_m)
+            and distance_m >= 0.0 and tolerance_m >= 0.0
+            and distance_m <= tolerance_m + GOAL_COMPARISON_EPSILON_M)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Optional, TYPE_CHECKING
 
 import numpy as np
@@ -31,10 +32,27 @@ class Corridor(object):
         return float(self.arc[-1])
 
     def arc_of(self, point: np.ndarray) -> float:
-        """Arc length of the nearest centreline sample to ``point``."""
-        distance = np.linalg.norm(
-            self.centres - np.asarray(point, dtype=np.float64), axis=1)
-        return float(self.arc[int(np.argmin(distance))])
+        """Continuous arc length of the nearest centreline segment."""
+        query = np.asarray(point, dtype=np.float64)
+        if query.shape != (2,) or not np.isfinite(query).all():
+            raise ValueError("corridor query must be one finite planar point")
+        if len(self.centres) < 2:
+            return 0.0
+        start = self.centres[:-1]
+        delta = np.diff(self.centres, axis=0)
+        length_sq = np.einsum("ij,ij->i", delta, delta)
+        valid = length_sq > 1e-12
+        if not np.any(valid):
+            return 0.0
+        fraction = np.einsum("ij,ij->i", query - start, delta) \
+            / np.maximum(length_sq, 1e-12)
+        fraction = np.clip(fraction, 0.0, 1.0)
+        closest = start + fraction[:, None] * delta
+        distance = np.linalg.norm(closest - query, axis=1)
+        distance[~valid] = float("inf")
+        index = int(np.argmin(distance))
+        return float(self.arc[index] + fraction[index] * math.sqrt(
+            length_sq[index]))
 
     def slice(
             self,

@@ -55,7 +55,7 @@ def relaxed_limits() -> ControllerLimits:
         max_yaw_acceleration_rps2=10.0,
         control_period_s=0.1,
         goal_tolerance_m=0.01,
-        turn_in_place_rad=0.6,
+        max_heading_error_rad=0.6,
     )
 
 
@@ -111,19 +111,17 @@ def test_output_has_only_differential_drive_motion_components() -> None:
     assert not hasattr(command, "linear_y_mps")
 
 
-def test_from_rest_body_yaw_mismatch_turns_then_resumes_translation() -> None:
+def test_from_rest_large_yaw_mismatch_replans_then_aligned_plan_moves() -> None:
     plan = plan_with([(0.0, 0.0), (1.0, 0.0)], [0.0, 2.0])
     limits = ControllerLimits()
 
-    turning = command_for(
+    refused = command_for(
         plan, 0.0, Pose2D(0.0, 0.0, np.pi / 2.0), 0.0, stopped(),
         limits)
     resumed = command_for(
-        plan, 0.0, Pose2D(0.0, 0.0, 0.0), 0.0, turning, limits)
+        plan, 0.0, Pose2D(0.0, 0.0, 0.0), 0.0, stopped(), limits)
 
-    assert turning.linear_x_mps == 0.0
-    assert turning.angular_z_rps < 0.0
-    assert turning.reason == "ALIGNING"
+    assert refused == DriveCommand(0.0, 0.0, reason="HEADING_REPLAN")
     assert resumed.linear_x_mps > 0.0
     assert resumed.reason == ""
 
@@ -153,7 +151,7 @@ def test_time_indexed_turn_produces_bounded_angular_command() -> None:
     assert command.angular_z_rps <= relaxed_limits().max_yaw_rate_rps
 
 
-def test_turning_from_motion_brakes_at_the_deceleration_limit() -> None:
+def test_large_heading_error_from_motion_fails_closed() -> None:
     limits = ControllerLimits()
     previous = DriveCommand(0.5, 0.0)
 
@@ -161,11 +159,7 @@ def test_turning_from_motion_brakes_at_the_deceleration_limit() -> None:
         plan_with([(0.0, 0.0), (1.0, 0.0)], [0.0, 2.0]),
         0.0, Pose2D(0.0, 0.0, np.pi / 2.0), 0.5, previous, limits)
 
-    assert command.reason == "ALIGNING"
-    assert command.linear_x_mps == pytest.approx(
-        previous.linear_x_mps
-        - limits.max_deceleration_mps2 * limits.control_period_s)
-    assert command.angular_z_rps == 0.0
+    assert command == DriveCommand(0.0, 0.0, reason="HEADING_REPLAN")
 
 
 def test_measured_motion_suppresses_turn_when_previous_command_is_stale() -> None:
@@ -173,9 +167,7 @@ def test_measured_motion_suppresses_turn_when_previous_command_is_stale() -> Non
         plan_with([(0.0, 0.0), (1.0, 0.0)], [0.0, 2.0]),
         0.0, Pose2D(0.0, 0.0, np.pi / 2.0), 0.5, stopped())
 
-    assert command.reason == "ALIGNING"
-    assert command.linear_x_mps == 0.0
-    assert command.angular_z_rps == 0.0
+    assert command == DriveCommand(0.0, 0.0, reason="HEADING_REPLAN")
 
 
 def test_reference_is_continuous_across_a_timed_turn_knot() -> None:
@@ -190,7 +182,7 @@ def test_reference_is_continuous_across_a_timed_turn_knot() -> None:
         max_yaw_acceleration_rps2=100.0,
         control_period_s=0.1,
         goal_tolerance_m=0.001,
-        turn_in_place_rad=float(np.pi),
+        max_heading_error_rad=float(np.pi),
     )
     pose = Pose2D(1.0, 0.0, np.pi / 4.0)
     previous = DriveCommand(0.7, 0.0)
@@ -212,27 +204,48 @@ def test_all_stationary_reference_is_rejected() -> None:
         0.0, 0.0, reason="INVALID_PLAN", done=False)
 
 
-def test_hard_speed_and_yaw_limits_saturate_independently_of_slew() -> None:
+def test_hard_speed_and_yaw_limits_hold_after_actuator_quantization() -> None:
     limits = ControllerLimits(
-        max_speed_mps=0.2,
+        max_speed_mps=0.4,
         max_acceleration_mps2=100.0,
         max_deceleration_mps2=100.0,
         max_yaw_rate_rps=0.1,
         max_yaw_acceleration_rps2=100.0,
         control_period_s=0.1,
         goal_tolerance_m=0.001,
-        turn_in_place_rad=float(np.pi),
+        max_heading_error_rad=float(np.pi),
     )
 
     command = command_for(
         plan_with(
             [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
             [0.0, 1.0, 2.0]),
-        0.5, Pose2D(0.5, 0.0, 0.0), 0.2,
-        DriveCommand(0.2, 0.0), limits)
+        0.5, Pose2D(0.5, 0.0, 0.0), 0.4,
+        DriveCommand(0.4, 0.0), limits)
 
-    assert command.linear_x_mps == limits.max_speed_mps
-    assert command.angular_z_rps == limits.max_yaw_rate_rps
+    assert command.linear_x_mps <= limits.max_speed_mps
+    assert abs(command.angular_z_rps) <= limits.max_yaw_rate_rps
+
+
+def test_curved_limit_reference_converges_via_a_safe_speed_sacrifice() -> None:
+    plan = plan_with([(0.0, 0.0), (6.0, 0.0)], [0.0, 10.0])
+    plan.velocity_xy_mps = np.tile(np.array([0.60, 0.0]), (2, 1))
+    plan.yaw_rad = np.zeros(2)
+    plan.yaw_rate_rps = np.full(2, 0.30)
+    previous = DriveCommand(7.0 / 12.0, 0.0)
+    commands = []
+
+    for _ in range(8):
+        command = command_for(
+            plan, 0.0, Pose2D(0.0, 0.0, 0.0),
+            previous.linear_x_mps, previous)
+        assert command.reason == ""
+        commands.append(command)
+        previous = command
+
+    assert min(item.linear_x_mps for item in commands) < 7.0 / 12.0 - 0.01
+    assert abs(commands[-1].angular_z_rps) \
+        > abs(commands[0].angular_z_rps) + 0.04
 
 
 @pytest.mark.parametrize("times", [
@@ -264,7 +277,7 @@ def test_nonfinite_pose_or_elapsed_fails_closed() -> None:
     assert bad_time.linear_x_mps == bad_time.angular_z_rps == 0.0
 
 
-def test_plan_refusal_and_goal_stop_are_exact_zero() -> None:
+def test_plan_refusal_is_zero_but_normal_endpoints_brake() -> None:
     refused = command_for(
         plan_with(
             [(0.0, 0.0), (1.0, 0.0)], [0.0, 2.0],
@@ -272,19 +285,18 @@ def test_plan_refusal_and_goal_stop_are_exact_zero() -> None:
         0.0, Pose2D(0.0, 0.0, 0.0), 0.0, stopped())
     ended = command_for(
         plan_with([(0.0, 0.0), (1.0, 0.0)], [0.0, 2.0]),
-        2.0, Pose2D(0.9, 0.0, 0.0), 0.2,
-        DriveCommand(0.2, 0.1))
+        2.0, Pose2D(0.9, 0.0, 0.0), 0.3,
+        DriveCommand(0.3, 0.0))
     at_goal = command_for(
         plan_with([(0.0, 0.0), (1.0, 0.0)], [0.0, 2.0]),
-        1.0, Pose2D(0.99, 0.0, 0.0), 0.2,
-        DriveCommand(0.2, 0.1))
+        1.0, Pose2D(0.99, 0.0, 0.0), 0.3,
+        DriveCommand(0.3, 0.0))
 
     assert refused == DriveCommand(
         0.0, 0.0, reason="NO_FEASIBLE_TRAJECTORY", done=False)
-    assert ended == DriveCommand(
-        0.0, 0.0, reason="AT_PLAN_END", done=True)
-    assert at_goal == DriveCommand(
-        0.0, 0.0, reason="AT_GOAL", done=True)
+    assert ended.reason == at_goal.reason == "TERMINAL_BRAKING"
+    assert 0.0 < ended.linear_x_mps < 0.3
+    assert 0.0 < at_goal.linear_x_mps < 0.3
 
 
 def test_planner_at_goal_null_plan_is_done_and_exact_zero() -> None:

@@ -42,12 +42,16 @@ from drive_policy import announce
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            filter_obstacle_points, motion_hold_reason,
                            stopping_envelope, swept_footprint_collision)
-from priest_constraints import CANONICAL_FOOTPRINT
+from priest_constraints import (
+    CANONICAL_FOOTPRINT,
+    RAW_INPUT_STALE_S,
+    SAFETY_GATE_RATE_HZ,
+)
 from scan_accumulator import CloudAccumulator
 
 
-GATE_HZ = 15.0
-INPUT_STALE_S = 0.6
+GATE_HZ = SAFETY_GATE_RATE_HZ
+INPUT_STALE_S = RAW_INPUT_STALE_S
 CLOUD_STALE_S = 1.0
 ODOM_STALE_S = 0.35
 MOTION_EPSILON = 0.02

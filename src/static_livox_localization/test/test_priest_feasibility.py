@@ -159,6 +159,7 @@ def test_zero_speed_heading_reversal_is_not_certified_as_zero_yaw() -> None:
     {"v_max": np.nan},
     {"a_max": np.inf},
     {"yaw_rate_max": np.nan},
+    {"turn_floor_speed_mps": 0.61},
 ])
 def test_certificate_settings_cannot_weaken_runtime_contract(
         settings: dict[str, float]) -> None:

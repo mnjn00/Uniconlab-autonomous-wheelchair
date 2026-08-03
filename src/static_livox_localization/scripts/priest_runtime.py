@@ -7,14 +7,17 @@ from typing import NamedTuple, Optional, Sequence
 
 import numpy as np
 
-from body_frame import lidar_to_body
 from cluster_guard import Summary, object_box, object_motion
 from cluster_tracking import STATIC
-from priest_constraints import CANONICAL_FOOTPRINT
+from priest_constraints import (
+    CANONICAL_FOOTPRINT,
+    DEFAULT_CONSTRAINT_TOLERANCES,
+)
 
 
 WAIT_RADIUS_M = 2.5
 OBSTACLE_WAIT = "OBSTACLE_WAIT"
+CONNECTOR_STEP_M = 0.02
 
 
 class ObstacleCircle(NamedTuple):
@@ -54,17 +57,20 @@ def _map_circle(
         map_T_body: np.ndarray,
         lidar_in_body: np.ndarray,
         lidar_to_body_rotation: np.ndarray) -> Optional[ObstacleCircle]:
+    del map_T_body, lidar_in_body, lidar_to_body_rotation
     box = object_box(item)
     if box is None:
         return None
-    x, y, half_x, half_y = box
-    body = lidar_to_body(
-        np.array([[x, y, 0.0]], dtype=np.float64),
-        lidar_in_body,
-        lidar_to_body_rotation)[0]
-    world = map_T_body[:3, :3] @ body + map_T_body[:3, 3]
+    _, _, half_x, half_y = box
+    try:
+        map_x = float(item["map_x"])
+        map_y = float(item["map_y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not math.isfinite(map_x) or not math.isfinite(map_y):
+        return None
     return ObstacleCircle(
-        float(world[0]), float(world[1]), math.hypot(half_x, half_y),
+        map_x, map_y, math.hypot(half_x, half_y),
         object_motion(item))
 
 
@@ -89,13 +95,66 @@ def planner_obstacles(
         if not isinstance(item, dict) or object_motion(item) != STATIC:
             continue
         circle = _map_circle(item, transform, offset, rotation)
-        if circle is not None:
-            circles.append(circle)
+        if circle is None:
+            raise ValueError(
+                "static obstacle has no source-time map position")
+        circles.append(circle)
     circles.sort(key=lambda circle: math.hypot(
         circle.x_m - transform[0, 3], circle.y_m - transform[1, 3]))
     kept = circles[:int(limit)]
     return ([[circle.x_m, circle.y_m, circle.radius_m]
              for circle in kept], max(0, len(circles) - len(kept)))
+
+
+def static_obstacles_clear(
+        trajectory_xy: np.ndarray,
+        obstacles: Sequence[Sequence[float]]) -> bool:
+    """Revalidate an accepted path against the latest STATIC circles."""
+    trajectory = np.asarray(trajectory_xy, dtype=np.float64)
+    circles = np.asarray(obstacles, dtype=np.float64)
+    if (trajectory.ndim != 2 or trajectory.shape[1:] != (2,)
+            or len(trajectory) < 2 or not np.isfinite(trajectory).all()):
+        return False
+    if circles.size == 0:
+        return True
+    if (circles.ndim != 2 or circles.shape[1] != 3
+            or not np.isfinite(circles).all() or np.any(circles[:, 2] < 0.0)):
+        return False
+    separation = np.array([
+        _distance_to_polyline(circle[:2], trajectory) for circle in circles])
+    required = (
+        circles[:, 2]
+        + CANONICAL_FOOTPRINT.circumscribed_radius_m
+        + CANONICAL_FOOTPRINT.planning_margin_m)
+    return bool(np.all(
+        separation + DEFAULT_CONSTRAINT_TOLERANCES.obstacle_m >= required))
+
+
+def execution_path(
+        current_xy: np.ndarray,
+        trajectory_xy: np.ndarray,
+        times_s: np.ndarray,
+        elapsed_s: float) -> Optional[np.ndarray]:
+    """Current-to-reference connector followed by the unexecuted plan."""
+    current = np.asarray(current_xy, dtype=np.float64)
+    trajectory = np.asarray(trajectory_xy, dtype=np.float64)
+    times = np.asarray(times_s, dtype=np.float64)
+    if (current.shape != (2,) or trajectory.ndim != 2
+            or trajectory.shape[1:] != (2,) or len(trajectory) < 2
+            or times.shape != (len(trajectory),)
+            or not np.isfinite(current).all()
+            or not np.isfinite(trajectory).all()
+            or not np.isfinite(times).all() or np.any(np.diff(times) <= 0.0)
+            or not math.isfinite(elapsed_s) or elapsed_s < 0.0):
+        return None
+    reference = np.array([
+        np.interp(elapsed_s, times, trajectory[:, 0]),
+        np.interp(elapsed_s, times, trajectory[:, 1])])
+    distance = float(np.linalg.norm(reference - current))
+    connector_count = max(2, int(math.ceil(distance / CONNECTOR_STEP_M)) + 1)
+    connector = np.linspace(current, reference, connector_count)
+    suffix_index = int(np.searchsorted(times, elapsed_s, side="right"))
+    return np.vstack([connector, trajectory[suffix_index:]])
 
 
 def _lookahead_polyline(

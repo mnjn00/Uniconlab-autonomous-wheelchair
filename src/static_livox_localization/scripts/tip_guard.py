@@ -28,10 +28,11 @@ from std_msgs.msg import String
 # which imports the modules directly, still passes.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from priest_constraints import GATED_INPUT_STALE_S, TIP_GUARD_RATE_HZ
 from tip_guard_policy import next_linear_speed
 
-GUARD_HZ = 50.0
-INPUT_STALE_S = 0.6
+GUARD_HZ = TIP_GUARD_RATE_HZ
+INPUT_STALE_S = GATED_INPUT_STALE_S
 ACCEL_LIMIT = 0.30
 
 

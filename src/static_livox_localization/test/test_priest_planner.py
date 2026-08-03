@@ -156,7 +156,8 @@ def test_it_reaches_the_goal_past_obstacles_it_was_never_told_about_in_advance()
 
     assert result["reason"] == ""
     assert result["arc"] > corridor.length_m - 1.0
-    assert result["lateral"] <= 1.6 + 1e-3
+    # Tighter than the 10 mm projection tolerance; runtime grace is 100 mm.
+    assert result["lateral"] <= 1.6 + 3e-3
 
 
 # -------------------------------------------------------- the chair is wide

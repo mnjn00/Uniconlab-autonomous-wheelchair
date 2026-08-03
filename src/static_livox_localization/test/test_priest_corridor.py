@@ -35,6 +35,7 @@ def load(name):
 
 
 pc = load("priest_corridor")
+pt = load("priest_types")
 sb = load("safety_band")
 
 
@@ -153,3 +154,14 @@ def test_a_band_too_short_to_have_a_direction_is_refused(tmp_path):
          "right_m": 1.0, "left_drop_m": 0.0, "right_drop_m": 0.0}]}))
     with pytest.raises(ValueError):
         pc.corridor_arrays(str(stub))
+
+
+def test_arc_progress_is_continuous_inside_the_final_station_cell() -> None:
+    corridor = pt.Corridor(
+        np.array([[0.0, 0.0], [1.0, 0.0]]),
+        np.array([[0.0, 1.0], [0.0, 1.0]]),
+        np.ones(2), np.ones(2))
+
+    assert corridor.arc_of(np.array([0.94, 0.02])) == pytest.approx(0.94)
+    assert corridor.length_m - corridor.arc_of(np.array([0.94, 0.02])) \
+        == pytest.approx(0.06)

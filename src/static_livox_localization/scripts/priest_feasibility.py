@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from typing import Optional, Protocol, Sequence
+from typing import Optional, Protocol
 
 import numpy as np
 
@@ -13,7 +12,18 @@ from priest_constraints import (
     ConstraintTolerances,
     ConstraintViolations,
 )
+from priest_certificate_types import (
+    CertifiedTrajectory,
+    TrajectoryCertificate,
+    lowest_certified_index,
+)
+from priest_execution_safety import oriented_footprint_contained
 from priest_projection import bernstein_basis
+from wheel_command_model import (
+    TURN_AUTHORITY_KMH,
+    WHEEL_SEPARATION_M,
+    YAW_DEADBAND_RAD_S,
+)
 
 
 MIN_CERTIFICATE_HZ = 10.0
@@ -30,6 +40,7 @@ class PlannerLimits(Protocol):
     v_max: float
     a_max: float
     yaw_rate_max: float
+    turn_floor_speed_mps: float
     CONSTRAINT_TOLERANCES: ConstraintTolerances
 
 
@@ -45,68 +56,19 @@ def validated_certificate_settings(
 
 
 def require_physical_limits(planner: PlannerLimits) -> None:
-    limits = (planner.v_max, planner.a_max, planner.yaw_rate_max)
-    if not all(math.isfinite(value) and value > 0.0 for value in limits):
+    limits = (
+        planner.v_max, planner.a_max, planner.yaw_rate_max,
+        planner.turn_floor_speed_mps)
+    if (not all(math.isfinite(value) and value > 0.0 for value in limits)
+            or planner.turn_floor_speed_mps > planner.v_max):
         raise ValueError("physical limits must be finite and positive")
-
-
-@dataclass(frozen=True)
-class TrajectoryCertificate:
-    __slots__ = (
-        "reason", "violations", "tolerances", "runtime_band_contained",
-        "min_obstacle_clearance_m", "max_speed_mps",
-        "max_acceleration_mps2", "max_yaw_rate_rps")
-
-    reason: str
-    violations: ConstraintViolations
-    tolerances: ConstraintTolerances
-    runtime_band_contained: bool
-    min_obstacle_clearance_m: float
-    max_speed_mps: float
-    max_acceleration_mps2: float
-    max_yaw_rate_rps: float
-
-    @property
-    def usable(self) -> bool:
-        return self.reason == ""
-
-    @staticmethod
-    def clear(tolerances: ConstraintTolerances) -> TrajectoryCertificate:
-        return TrajectoryCertificate(
-            "", ConstraintViolations(0.0, 0.0, 0.0, 0.0, 0.0),
-            tolerances, True,
-            float("inf"), 0.0, 0.0, 0.0)
-
-    @staticmethod
-    def refusal(
-            reason: str,
-            tolerances: ConstraintTolerances) -> TrajectoryCertificate:
-        return TrajectoryCertificate(
-            reason,
-            ConstraintViolations(0.0, float("inf"), 0.0, 0.0, 0.0),
-            tolerances, False,
-            float("inf"), 0.0, 0.0, 0.0)
-
-
-@dataclass(frozen=True)
-class CertifiedTrajectory:
-    __slots__ = (
-        "points", "times_s", "velocity_xy_mps", "acceleration_xy_mps2",
-        "yaw_rad", "yaw_rate_rps", "certificate")
-
-    points: np.ndarray
-    times_s: np.ndarray
-    velocity_xy_mps: np.ndarray
-    acceleration_xy_mps2: np.ndarray
-    yaw_rad: np.ndarray
-    yaw_rate_rps: np.ndarray
-    certificate: TrajectoryCertificate
 
 
 def _reason(
         band_contained: bool,
         violations: ConstraintViolations,
-        tolerances: ConstraintTolerances) -> str:
+        tolerances: ConstraintTolerances,
+        turn_speed_deficit_mps: float) -> str:
     if not band_contained:
         return "OUTSIDE_RUNTIME_BAND"
     if violations.obstacle_m > tolerances.obstacle_m:
@@ -117,6 +79,8 @@ def _reason(
         return "ACCELERATION_LIMIT"
     if violations.yaw_rate_rps > tolerances.yaw_rate_rps:
         return "YAW_RATE_LIMIT"
+    if turn_speed_deficit_mps > tolerances.speed_mps:
+        return "TURN_FLOOR_SPEED"
     return ""
 
 
@@ -134,14 +98,31 @@ def _circles(obstacles: np.ndarray) -> np.ndarray:
 def _yaw_evidence(
         velocity: np.ndarray,
         acceleration: np.ndarray,
-        times_s: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        times_s: np.ndarray,
+        initial_yaw_rad: Optional[float] = None,
+) -> tuple[np.ndarray, np.ndarray]:
     speed_sq = np.einsum("ij,ij->i", velocity, velocity)
     moving = speed_sq > 1e-12
     yaw = np.zeros(len(velocity), dtype=np.float64)
+    initial_mismatch = False
+    if initial_yaw_rad is not None and not math.isfinite(initial_yaw_rad):
+        raise ValueError("initial body yaw must be finite")
     if np.any(moving):
+        moving_indices = np.flatnonzero(moving)
         moving_yaw = np.unwrap(np.arctan2(
             velocity[moving, 1], velocity[moving, 0]))
         yaw = np.interp(times_s, times_s[moving], moving_yaw)
+        if initial_yaw_rad is not None:
+            delta = math.atan2(
+                math.sin(float(moving_yaw[0]) - initial_yaw_rad),
+                math.cos(float(moving_yaw[0]) - initial_yaw_rad))
+            first = int(moving_indices[0])
+            if first == 0:
+                initial_mismatch = abs(delta) > 1e-6
+            else:
+                yaw[:first] = float(moving_yaw[0]) - delta
+    elif initial_yaw_rad is not None:
+        yaw.fill(initial_yaw_rad)
     cross = velocity[:, 0] * acceleration[:, 1] \
         - velocity[:, 1] * acceleration[:, 0]
     curvature_rate = np.zeros(len(velocity), dtype=np.float64)
@@ -150,6 +131,8 @@ def _yaw_evidence(
     yaw_rate = np.where(
         np.abs(curvature_rate) >= np.abs(reference_rate),
         curvature_rate, reference_rate)
+    if initial_mismatch:
+        yaw_rate[0] = float("inf")
     return yaw, yaw_rate
 
 
@@ -158,6 +141,7 @@ def _certificate(
         points: np.ndarray,
         velocity: np.ndarray,
         acceleration: np.ndarray,
+        yaw: np.ndarray,
         yaw_rate: np.ndarray,
         band: BandContainment,
         obstacles: np.ndarray,
@@ -167,9 +151,9 @@ def _certificate(
             or band_grace_m > MAX_RUNTIME_BAND_GRACE_M):
         raise ValueError("band grace exceeds runtime containment semantics")
     try:
-        contained = np.asarray(
-            band.contains_many(points, grace=band_grace_m))
-    except (TypeError, ValueError):
+        contained = oriented_footprint_contained(
+            band, points, yaw, band_grace_m)
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return TrajectoryCertificate.refusal(
             "RUNTIME_BAND_INVALID", planner.CONSTRAINT_TOLERANCES)
     if contained.shape != (len(points),) or contained.dtype.kind != "b":
@@ -179,6 +163,14 @@ def _certificate(
     max_speed = float(np.linalg.norm(velocity, axis=1).max())
     max_acceleration = float(np.linalg.norm(acceleration, axis=1).max())
     max_yaw_rate = float(np.abs(yaw_rate).max())
+    yaw_magnitude = np.abs(yaw_rate)
+    authority_floor = TURN_AUTHORITY_KMH / 3.6 \
+        - WHEEL_SEPARATION_M * yaw_magnitude / 2.0
+    turn_floor = np.where(
+        yaw_magnitude > YAW_DEADBAND_RAD_S,
+        np.maximum(planner.turn_floor_speed_mps, authority_floor), 0.0)
+    turn_speed_deficit = float(np.maximum(
+        turn_floor - np.linalg.norm(velocity, axis=1), 0.0).max())
     circles = _circles(obstacles)
     if len(circles):
         separation = np.linalg.norm(
@@ -197,10 +189,12 @@ def _certificate(
         acceleration_mps2=max(0.0, max_acceleration - planner.a_max),
         yaw_rate_rps=max(0.0, max_yaw_rate - planner.yaw_rate_max))
     return TrajectoryCertificate(
-        _reason(band_contained, violations, planner.CONSTRAINT_TOLERANCES),
+        _reason(
+            band_contained, violations, planner.CONSTRAINT_TOLERANCES,
+            turn_speed_deficit),
         violations, planner.CONSTRAINT_TOLERANCES, band_contained,
         min_clearance, max_speed,
-        max_acceleration, max_yaw_rate)
+        max_acceleration, max_yaw_rate, turn_speed_deficit)
 
 
 def certify_coefficients(
@@ -212,7 +206,8 @@ def certify_coefficients(
         control_hz: float,
         band: BandContainment,
         obstacles: np.ndarray,
-        band_grace_m: float = 0.0) -> CertifiedTrajectory:
+        band_grace_m: float = 0.0,
+        initial_yaw_rad: Optional[float] = None) -> CertifiedTrajectory:
     """Evaluate a Bernstein candidate densely at its execution frequency."""
     control_hz, band_grace_m = validated_certificate_settings(
         control_hz, band_grace_m)
@@ -234,25 +229,13 @@ def certify_coefficients(
     acceleration = np.stack([
         acceleration_basis @ control_x,
         acceleration_basis @ control_y], axis=1)
-    yaw, yaw_rate = _yaw_evidence(velocity, acceleration, times)
+    yaw, yaw_rate = _yaw_evidence(
+        velocity, acceleration, times, initial_yaw_rad)
     certificate = _certificate(
-        planner, points, velocity, acceleration, yaw_rate, band, obstacles,
+        planner, points, velocity, acceleration, yaw, yaw_rate, band, obstacles,
         band_grace_m)
     return CertifiedTrajectory(
         points, times, velocity, acceleration, yaw, yaw_rate, certificate)
-
-
-def lowest_certified_index(
-        augmented_cost: np.ndarray,
-        certificates: Sequence[TrajectoryCertificate]) -> Optional[int]:
-    costs = np.asarray(augmented_cost, dtype=np.float64)
-    if costs.ndim != 1 or len(costs) != len(certificates):
-        raise ValueError("one augmented cost is required per certificate")
-    usable = [index for index, certificate in enumerate(certificates)
-              if certificate.usable and math.isfinite(float(costs[index]))]
-    if not usable:
-        return None
-    return min(usable, key=lambda index: float(costs[index]))
 
 
 def certify_trajectory(
@@ -262,7 +245,8 @@ def certify_trajectory(
         times_s: np.ndarray,
         band: BandContainment,
         obstacles: np.ndarray,
-        band_grace_m: float = 0.0) -> TrajectoryCertificate:
+        band_grace_m: float = 0.0,
+        initial_yaw_rad: Optional[float] = None) -> TrajectoryCertificate:
     """Reject a proposed centre path unless every executable bound holds."""
     xy = np.asarray(points, dtype=np.float64)
     times = np.asarray(times_s, dtype=np.float64)
@@ -276,7 +260,8 @@ def certify_trajectory(
     acceleration = np.stack([
         np.gradient(velocity[:, 0], times),
         np.gradient(velocity[:, 1], times)], axis=1)
-    _, yaw_rate = _yaw_evidence(velocity, acceleration, times)
+    yaw, yaw_rate = _yaw_evidence(
+        velocity, acceleration, times, initial_yaw_rad)
     return _certificate(
-        planner, xy, velocity, acceleration, yaw_rate, band, obstacles,
+        planner, xy, velocity, acceleration, yaw, yaw_rate, band, obstacles,
         band_grace_m)
