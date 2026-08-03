@@ -19,6 +19,7 @@ ROOT = Path(__file__).parents[1]
 SCRIPTS = ROOT / "scripts"
 BAND_0727 = ROOT.parents[1] / "routes" / "20260727_chair_centred_safety_band.json"
 BAND_V4 = ROOT.parents[1] / "routes" / "20260802_route_v4_safety_band.json"
+BAND_V5 = ROOT.parents[1] / "routes" / "20260803_route_v5_safety_band.json"
 
 
 def load(name):
@@ -86,8 +87,8 @@ def test_crossed_measured_limits_remain_an_empty_runtime_corridor(
         "planner turned a crossed, empty runtime band into a legal centreline")
 
 
-@pytest.mark.parametrize("band", [BAND_0727, BAND_V4],
-                         ids=["0727-measured", "v4-drawn"])
+@pytest.mark.parametrize("band", [BAND_0727, BAND_V4, BAND_V5],
+                         ids=["0727-measured", "v4-drawn", "v5-drawn"])
 def test_the_corridor_exactly_matches_the_runtime_band(band):
     if not band.exists():
         pytest.skip("band not shipped")
@@ -101,13 +102,13 @@ def test_the_corridor_exactly_matches_the_runtime_band(band):
 
 
 def test_the_drawn_corridor_narrows_where_it_is_present():
-    """On v4 every station carries the drawing, and corridor_limit insets
+    """On v5 every station carries the drawing, and corridor_limit insets
     the chair half width from it - so the planning limit must sit at or
     inside the drawn value, never between the drawing and the raw edge."""
-    if not BAND_V4.exists():
+    if not BAND_V5.exists():
         pytest.skip("band not shipped")
-    _, _, left, right = pc.corridor_arrays(str(BAND_V4))
-    for index, station in enumerate(stations(BAND_V4)):
+    _, _, left, right = pc.corridor_arrays(str(BAND_V5))
+    for index, station in enumerate(stations(BAND_V5)):
         assert left[index] <= station["left_corridor_m"] + 1e-9
         assert right[index] <= station["right_corridor_m"] + 1e-9
 
@@ -135,10 +136,10 @@ def test_normals_point_left_of_the_station_heading():
     """Positive lateral offset must mean left, matching left_m/right_m.
     A flipped normal swaps the kerb side silently - the corridor stays the
     same width and every clearance is measured against the wrong edge."""
-    if not BAND_V4.exists():
+    if not BAND_V5.exists():
         pytest.skip("band not shipped")
-    centres, normals, _, _ = pc.corridor_arrays(str(BAND_V4))
-    for station, normal in zip(stations(BAND_V4)[::50], normals[::50]):
+    centres, normals, _, _ = pc.corridor_arrays(str(BAND_V5))
+    for station, normal in zip(stations(BAND_V5)[::50], normals[::50]):
         heading = math.radians(station["heading_deg"])
         forward = np.array([math.cos(heading), math.sin(heading)])
         assert abs(float(np.dot(normal, forward))) < 1e-9

@@ -6,8 +6,8 @@ only implementation of measured hazards, drawings, negative limits and crossed
 stations. This adapter copies its already-computed arrays; it never rebuilds or
 floors them.
 
-On the v4 band every edge kind is "open" and every drop is zero - the ZIP
-carried no drop measurement, and the band says so itself under
+On the current drawn band every edge kind is "open" and every drop is zero -
+the ZIP carried no drop measurement, and the band says so itself under
 physical_edge_semantics. usable_limit() therefore subtracts nothing there,
 and the whole constraint is the operator's drawing. That is the shipped
 reality, not a choice made here; it is recorded in the README's warning and
