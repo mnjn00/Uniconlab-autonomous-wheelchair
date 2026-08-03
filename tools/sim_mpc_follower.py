@@ -124,9 +124,13 @@ def run_scenario(name, band, goal_xy, start_x0, obstacles):
                    for o in obstacles)
         print(f"    min obstacle dist: {dmin:.3f} m (padding "
               f"{solver.p.obstacle_padding:.2f} m)")
+    final = "GOAL" if reached else (
+        str(statuses[-1]) if len(statuses) else "TIMEOUT")
     return {"reached": reached, "containment": float(inside.mean())
             if len(inside) else 0.0, "steps": steps, "ok": ok,
-            "min_obstacle_dist": dmin}
+            "min_obstacle_dist": dmin, "final": final,
+            "traj": np.round(traj, 4).tolist() if len(traj) else [],
+            "statuses": statuses.tolist()}
 
 
 def main(argv=None):
@@ -134,6 +138,9 @@ def main(argv=None):
     parser.add_argument("--scenario",
                         choices=["clear", "obstacle", "blocked", "both"],
                         default="both")
+    parser.add_argument("--save-json", default=None,
+                        help="write the simulated trajectories to this path "
+                             "for tools/viz_mpc_open3d.py")
     args = parser.parse_args(argv)
 
     waypoints, band = load_route(ROOT)
@@ -190,6 +197,16 @@ def main(argv=None):
         print(f"  [{'PASS' if blk['min_obstacle_dist'] >= 0.35 else 'FAIL'}] "
               f"blocked run keeps >= 0.35 m from the obstacle: "
               f"{blk['min_obstacle_dist']:.3f} m")
+    if args.save_json:
+        payload = {"goal": [float(goal[0]), float(goal[1])],
+                   "start": [float(start[0]), float(start[1]),
+                             float(start[2])],
+                   "obstacle_station": {"obstacle": int(wide),
+                                        "blocked": int(narrow)},
+                   "scenarios": results}
+        with open(args.save_json, "w") as f:
+            json.dump(payload, f)
+        print(f"trajectories written to {args.save_json}")
     return 0
 
 
