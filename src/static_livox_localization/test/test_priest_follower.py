@@ -12,6 +12,8 @@ the lidar frame and the planner works in the map frame, and a frame slip
 here does not crash - it plans around obstacles that are somewhere else.
 """
 
+from __future__ import annotations
+
 import importlib.util
 import json
 import sys
@@ -41,6 +43,7 @@ def load(name):
 
 cg = load("cluster_guard")
 bf = load("body_frame")
+rt = load("priest_runtime")
 
 
 def load_node():
@@ -117,7 +120,7 @@ def test_obstacles_land_where_the_map_says_they_are():
     difference from the exact figure is the lidar-to-body extrinsic, which
     is a few centimetres - a frame slip is metres."""
     lidar_in_body, rotation = bf.lidar_extrinsics("builtin")
-    circles, dropped = pf.planner_obstacles(
+    circles, dropped = rt.planner_obstacles(
         [obj(2.0, 0.0, "static")], pose_at(10.0, 5.0, np.pi / 2),
         lidar_in_body, rotation)
 
@@ -130,22 +133,22 @@ def test_obstacles_land_where_the_map_says_they_are():
     assert radius == pytest.approx(np.hypot(0.2, 0.3))
 
 
-def test_moving_objects_are_not_planned_around():
+def test_moving_and_unknown_objects_are_not_planned_around():
     """A trajectory around where a walker is now is a trajectory into where
     they are next. They are handled by waiting, not by routing."""
     lidar_in_body, rotation = bf.lidar_extrinsics("builtin")
-    circles, _ = pf.planner_obstacles(
+    circles, _ = rt.planner_obstacles(
         [obj(2.0, 0.0, "moving"), obj(4.0, 1.0, "static"),
          obj(5.0, -1.0, "unknown")],
         pose_at(0.0, 0.0, 0.0), lidar_in_body, rotation)
 
-    assert len(circles) == 2  # static and unknown; moving excluded
+    assert len(circles) == 1  # only confirmed static objects are routed around
 
 
 def test_the_nearest_obstacles_survive_the_cap():
     lidar_in_body, rotation = bf.lidar_extrinsics("builtin")
     far_first = [obj(9.0 - i, 0.5, "static") for i in range(6)]
-    circles, dropped = pf.planner_obstacles(
+    circles, dropped = rt.planner_obstacles(
         far_first, pose_at(0.0, 0.0, 0.0), lidar_in_body, rotation, limit=3)
 
     assert len(circles) == 3
@@ -159,7 +162,7 @@ def test_a_malformed_object_is_not_given_an_invented_position():
     it as blocking at zero range, which holds the chair without this list
     placing it somewhere it never was."""
     lidar_in_body, rotation = bf.lidar_extrinsics("builtin")
-    circles, _ = pf.planner_obstacles(
+    circles, _ = rt.planner_obstacles(
         [{"class": "obstacle", "x": "near", "y": 0.0, "size": [1, 1, 1]}],
         pose_at(0.0, 0.0, 0.0), lidar_in_body, rotation)
 
@@ -168,24 +171,73 @@ def test_a_malformed_object_is_not_given_an_invented_position():
 
 # ------------------------------------------------------------------- waiting
 
+def wait_on(
+        summary: cg.Summary,
+        trajectory: np.ndarray | None = None,
+        wait_radius_m: float = 2.5) -> str | None:
+    if trajectory is None:
+        trajectory = np.array([[0.0, 0.0], [3.0, 0.0]])
+    return rt.wait_reason(
+        summary,
+        pose_at(0.0, 0.0, 0.0),
+        np.zeros(3),
+        np.eye(3),
+        np.zeros(2),
+        np.asarray(trajectory, dtype=np.float64),
+        wait_radius_m,
+    )
+
+
 def test_something_moving_close_ahead_is_waited_for():
-    assert pf.wait_reason(summary_of([obj(2.0, 0.0, "moving")])) \
+    assert wait_on(summary_of([obj(2.0, 0.0, "moving")])) \
         == "OBSTACLE_WAIT"
 
 
 def test_something_parked_close_ahead_is_not_waited_for():
     """Parked things are the planner's job - it routes around them."""
-    assert pf.wait_reason(summary_of([obj(2.0, 0.0, "static")])) is None
+    assert wait_on(summary_of([obj(2.0, 0.0, "static")])) is None
 
 
 def test_something_moving_far_ahead_is_not_waited_for_yet():
-    assert pf.wait_reason(summary_of([obj(6.0, 0.0, "moving")])) is None
+    assert wait_on(summary_of([obj(6.0, 0.0, "moving")])) is None
+
+
+@pytest.mark.parametrize("motion", ["moving", "unknown"])
+def test_off_centre_unpredictable_full_extent_conflicts(motion: str) -> None:
+    summary = summary_of([obj(2.0, 0.70, motion, size=(0.4, 0.2, 1.2))])
+
+    assert wait_on(summary) == "OBSTACLE_WAIT"
+
+
+def test_off_centre_unknown_nonconflict_does_not_hold() -> None:
+    summary = summary_of([
+        obj(2.0, 1.50, "unknown", size=(0.4, 0.2, 1.2))])
+
+    assert wait_on(summary) is None
+
+
+def test_malformed_unpredictable_input_cannot_clear() -> None:
+    summary = summary_of([
+        {"class": "obstacle", "x": "near", "motion": "unknown"}])
+
+    assert wait_on(summary) == "OBSTACLE_WAIT"
+
+
+def test_unknown_conflict_with_current_full_footprint_holds() -> None:
+    summary = summary_of([
+        obj(0.0, 0.80, "unknown", size=(0.4, 0.2, 1.2))])
+
+    assert wait_on(summary, np.array([[0.0, 0.0]])) == "OBSTACLE_WAIT"
+
+
+def test_malformed_wait_radius_cannot_clear() -> None:
+    assert wait_on(summary_of([]), wait_radius_m=np.nan) == "OBSTACLE_WAIT"
 
 
 def test_a_producer_that_cannot_see_reads_as_someone_on_the_bumper():
     unusable = cg.parse_summary(json.dumps(
         {"stamp": 100.0, "status": "NO_CLOUD", "objects": []}))
-    assert pf.wait_reason(unusable) == "OBSTACLE_WAIT"
+    assert wait_on(unusable) == "OBSTACLE_WAIT"
 
 
 # ------------------------------------------------------------ no diagnostics
