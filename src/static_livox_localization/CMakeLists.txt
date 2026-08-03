@@ -46,11 +46,9 @@ catkin_install_python(
     scripts/fastlio_init_health.py
     scripts/enable_auto_correction_after_seed.py
     scripts/tip_guard.py
-    scripts/priest_follower.py
     scripts/waypoint_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
-    scripts/wheel_command_model.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(
@@ -63,26 +61,6 @@ install(
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
-    scripts/obstacle_accumulator.py
-    scripts/obstacle_cluster_geometry.py
-    scripts/priest_constraints.py
-    scripts/priest_certificate_types.py
-    scripts/priest_actuator_control.py
-    scripts/priest_control_types.py
-    scripts/priest_controller.py
-    scripts/priest_execution_safety.py
-    scripts/priest_corridor.py
-    scripts/priest_feasibility.py
-    scripts/priest_follower_io.py
-    scripts/priest_follower_planning.py
-    scripts/priest_heading_pid.py
-    scripts/priest_projection.py
-    scripts/priest_planner.py
-    scripts/priest_runtime.py
-    scripts/priest_sampling.py
-    scripts/priest_terminal.py
-    scripts/priest_terminal_control.py
-    scripts/priest_types.py
     scripts/safety_band.py
     scripts/scan_accumulator.py
     scripts/tip_guard_policy.py

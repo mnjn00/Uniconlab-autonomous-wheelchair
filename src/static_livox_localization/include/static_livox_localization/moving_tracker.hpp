@@ -50,12 +50,6 @@ Eigen::Isometry3d limit_map_T_odom_step(
     const Eigen::Isometry3d& candidate_map_T_odom,
     const TrackingConfig& config);
 
-bool tracking_motion_exceeds_threshold(
-    const Eigen::Isometry3d& reference_odom_T_base,
-    const Eigen::Isometry3d& current_odom_T_base,
-    double minimum_translation_m,
-    double minimum_rotation_rad);
-
 const char* tracking_state_name(TrackingState state);
 
 class TrackingStateMachine {

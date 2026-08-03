@@ -3,7 +3,6 @@
   <arg name="visualization" default="true"/>
   <arg name="rviz" default="false"/>
   <arg name="auto_init" default="false"/>
-  <arg name="auto_init_global_only" default="false"/>
   <arg name="map_path" default="/home/mprp3/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd"/>
   <arg name="map_sha256" default="ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"/>
   <arg name="map_id" default="merged_0707_0725_v1"/>
@@ -75,7 +74,6 @@
     <param name="route" value="$(arg auto_init_route)"/>
     <param name="body_frame_profile" value="$(arg auto_init_body_frame_profile)"/>
     <param name="min_refined_score" value="$(arg auto_init_min_refined_score)"/>
-    <param name="global_only" value="$(arg auto_init_global_only)"/>
   </node>
 </launch>
 

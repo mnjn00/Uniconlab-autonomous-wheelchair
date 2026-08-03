@@ -20,8 +20,8 @@ MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
 MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
 TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260803_route_v5_waypoints.json}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260803_route_v5_safety_band.json}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260802_route_v4_waypoints.json}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260802_route_v4_safety_band.json}"
 RVIZ="${RVIZ:-true}"
 # SAFETY_POLICIES=false drives with every discretionary guard switched off,
 # leaving the joystick override as the failsafe. It exists to measure one
@@ -32,16 +32,6 @@ SAFETY_POLICIES="${SAFETY_POLICIES:-true}"
 if [ "$SAFETY_POLICIES" != "true" ] && [ "$SAFETY_POLICIES" != "false" ]; then
   echo "ERROR: SAFETY_POLICIES must be true or false, got '$SAFETY_POLICIES'" >&2
   exit 65
-fi
-# PLANNER=priest swaps the route follower for the PRIEST corridor planner
-# (field-trial opt-in; same topics, service and status contract). The
-# field-validated route follower stays the default, and the PRIEST node
-# refuses SAFETY_POLICIES=false outright - an unvalidated planner with its
-# guards off is not a diagnostic configuration.
-PLANNER="${PLANNER:-route}"
-if [ "$PLANNER" != "route" ] && [ "$PLANNER" != "priest" ]; then
-  echo "ERROR: PLANNER must be route or priest, got '$PLANNER'" >&2
-  exit 66
 fi
 LOG=$HOME
 
@@ -210,10 +200,8 @@ source "$HOME/fast_lio_ws/devel/setup.bash"
 echo "[4/5] localization + rviz + auto init"
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
 rosparam set /fast_lio_icp/auto_initialization_verified false
-rosparam set /fast_lio_icp/auto_initialization_stable false
-rosparam set /fast_lio_icp/auto_initialization_source none
 setsid nohup roslaunch static_livox_localization moving_localization.launch \
-  rviz:="$RVIZ" auto_init:=true auto_init_global_only:=true \
+  rviz:="$RVIZ" auto_init:=true \
   map_path:="$MAP" map_sha256:="$MAP_SHA256" map_id:="$MAP_ID" \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
   auto_init_route:="$ROUTE" \
@@ -239,19 +227,9 @@ while [ "$(date +%s)" -lt "$AUTO_INIT_DEADLINE" ]; do
     rosparam get /fast_lio_icp/auto_initialization_verified 2>/dev/null ||
       echo false
   )
-  AUTO_INITIALIZATION_STABLE=$(
-    rosparam get /fast_lio_icp/auto_initialization_stable 2>/dev/null ||
-      echo false
-  )
-  AUTO_INITIALIZATION_SOURCE=$(
-    rosparam get /fast_lio_icp/auto_initialization_source 2>/dev/null ||
-      echo none
-  )
   echo "  state: $STATE"
   if echo "$STATE" | grep -q TRACKING &&
-     [ "$AUTO_INITIALIZATION_VERIFIED" = "true" ] &&
-     [ "$AUTO_INITIALIZATION_STABLE" = "true" ] &&
-     [ "$AUTO_INITIALIZATION_SOURCE" = "global_search" ]; then
+     [ "$AUTO_INITIALIZATION_VERIFIED" = "true" ]; then
     LOCALIZED=1
     break
   fi
@@ -264,8 +242,8 @@ while [ "$(date +%s)" -lt "$AUTO_INIT_DEADLINE" ]; do
   sleep 2
 done
 if [ "$LOCALIZED" != "1" ]; then
-  echo "WARNING: global no-prior localization did not become stable."
-  echo "Inspect $LOG/live_localization.log; motion remains disabled."
+  echo "WARNING: not TRACKING after automatic prior/global fallback."
+  echo "Inspect $LOG/live_localization.log; use the documented manual seed only after review."
   exit 4
 fi
 echo "LOCALIZED"
@@ -311,14 +289,8 @@ for i in $(seq 1 10); do
   sleep 1
 done
 echo "  final-stage relay up - watch /tip_guard/status"
-FOLLOWER_SCRIPT="waypoint_follower.py"
-if [ "$PLANNER" = "priest" ]; then
-  FOLLOWER_SCRIPT="priest_follower.py"
-  echo "  PLANNER=priest - PRIEST corridor planner (opt-in, guards always on)"
-fi
-setsid nohup rosrun static_livox_localization "$FOLLOWER_SCRIPT" \
+setsid nohup rosrun static_livox_localization waypoint_follower.py \
   _route:="$ROUTE" _safety_band:="$BAND" \
-  _planner:="$PLANNER" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &

@@ -36,10 +36,10 @@ def test_initializer_publishes_an_explicit_success_receipt_for_startup():
     assert '"/fast_lio_icp/auto_initialization_verified", True' in text
 
 
-def test_auto_init_only_tries_the_unambiguous_global_winner():
+def test_auto_init_falls_back_to_next_candidate_on_rejection():
     text = script_text()
-    assert "None, (decision.candidate,), args.min_score, 1" in text
-    assert "failed verification, trying next" not in text
+    assert "failed verification, trying next" in text
+    assert "--top" not in text or "args.top" in text
 
 
 def test_auto_init_refuses_low_confidence_global_fallbacks():
@@ -51,7 +51,7 @@ def test_auto_init_refuses_low_confidence_global_fallbacks():
 def test_auto_init_supports_dry_run_without_publishing():
     text = script_text()
     dry_run_guard = text.index("if not args.dry_run")
-    known_start_attempt = text.index("if route_prior is not None:")
+    known_start_attempt = text.index("try_candidate(route_prior")
     assert dry_run_guard < known_start_attempt
 
 
@@ -64,7 +64,7 @@ def test_launch_exposes_optional_auto_init_node():
     assert 'if="$(arg auto_init)"' in launch
 
 
-def test_legacy_mode_attempts_known_start_before_global_map_search():
+def test_known_start_route_is_attempted_before_global_map_search():
     text = script_text()
     candidate_policy = (
         ROOT / "scripts" / "initial_pose_candidates.py"
@@ -72,22 +72,8 @@ def test_legacy_mode_attempts_known_start_before_global_map_search():
 
     assert "load_known_start" in text
     assert "known_start_route" in candidate_policy
-    assert text.index("if route_prior is not None:") < text.index(
+    assert text.index("try_candidate(route_prior") < text.index(
         "map_points = load_pcd_xyz"
-    )
-
-
-def test_field_mode_skips_every_route_pose_prior():
-    text = script_text()
-    launch = (ROOT / "launch" / "moving_localization.launch").read_text(
-        encoding="utf-8"
-    )
-
-    assert "global_only" in text
-    assert '<arg name="auto_init_global_only" default="false"/>' in launch
-    assert (
-        '<param name="global_only" value="$(arg auto_init_global_only)"/>'
-        in launch
     )
 
 

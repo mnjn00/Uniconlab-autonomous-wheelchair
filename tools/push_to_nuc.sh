@@ -59,12 +59,6 @@ DEPLOY_DIRTY="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all -- 
   tools/deploy_merged_map.sh \
   tools/deploy_fastlio_vn100.sh \
   tools/start_wheelchair_localization.sh \
-  tools/trial_0727.sh \
-  tools/trial_priest_v5.sh \
-  tools/preflight_priest_v5.sh \
-  tools/go.sh \
-  tools/go_priest_v5.sh \
-  tools/stop.sh \
   routes \
   runtime/record_moving_localization_trial.sh \
   docs/runbooks/livox-moving-localization-ko.md)"
@@ -210,12 +204,6 @@ REMOTE_DIRTY="$(git status --porcelain --untracked-files=all -- \
   tools/deploy_merged_map.sh \
   tools/deploy_fastlio_vn100.sh \
   tools/start_wheelchair_localization.sh \
-  tools/trial_0727.sh \
-  tools/trial_priest_v5.sh \
-  tools/preflight_priest_v5.sh \
-  tools/go.sh \
-  tools/go_priest_v5.sh \
-  tools/stop.sh \
   routes \
   runtime/record_moving_localization_trial.sh \
   docs/runbooks/livox-moving-localization-ko.md)"
@@ -225,14 +213,14 @@ REMOTE_DIRTY="$(git status --porcelain --untracked-files=all -- \
   exit 1
 }
 
-for f in routes/20260803_route_v5_waypoints.json \
-         routes/20260803_route_v5_safety_band.json; do
+for f in routes/20260802_route_v4_waypoints.json \
+         routes/20260802_route_v4_safety_band.json; do
   [ -f "$f" ] || { echo "ERROR: $f missing after pull" >&2; exit 1; }
 done
 python3 -c "
 import json
-w = json.load(open('routes/20260803_route_v5_waypoints.json'))
-b = json.load(open('routes/20260803_route_v5_safety_band.json'))
+w = json.load(open('routes/20260802_route_v4_waypoints.json'))
+b = json.load(open('routes/20260802_route_v4_safety_band.json'))
 assert all('z' in p for p in w['waypoints']), 'waypoints need z'
 assert w.get('reference_point') == 'chair_centre', 'route must be chair-centred'
 assert any('left_kind' in s for s in b['stations']), 'band needs edge kinds'
@@ -244,7 +232,7 @@ assert c, 'band carries no corridor; regenerate with apply_route_corridor_mask.p
 covered = sum('left_corridor_m' in s for s in b['stations'])
 assert covered == c['stations_covered'], 'corridor summary disagrees with the stations'
 print('  route: %d waypoints (with height)' % w['count'])
-print('  band : %d stations (ZIP v5 mask authority)' % len(b['stations']))
+print('  band : %d stations (ZIP v4 mask authority)' % len(b['stations']))
 print('  band : corridor on %d/%d stations (%s)' % (
     covered, len(b['stations']), c['source']))
 "
@@ -323,9 +311,7 @@ echo "  build OK"
 # the chair, so leaving a stale copy behind is the same failure one step
 # further on: a run brought up on last week's settings by a script that looks
 # right.
-for script in start_wheelchair_localization.sh trial_0727.sh \
-              trial_priest_v5.sh preflight_priest_v5.sh \
-              go.sh go_priest_v5.sh stop.sh; do
+for script in start_wheelchair_localization.sh trial_0727.sh go.sh stop.sh; do
   BRINGUP_SRC="$REPO/tools/$script"
   BRINGUP_DST="$HOME/$script"
   [ -f "$BRINGUP_SRC" ] || {

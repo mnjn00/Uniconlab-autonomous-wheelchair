@@ -174,13 +174,6 @@ class MovingIcpLocalizer {
                                    "/fast_lio_icp/initialpose");
     private_nh_.param("initialization_window_s", initialization_window_s_, 3.0);
     private_nh_.param("correction_period_s", correction_period_s_, 1.0);
-    private_nh_.param("min_tracking_correction_translation_m",
-                      min_tracking_correction_translation_m_, 0.10);
-    double min_tracking_correction_yaw_deg = 2.0;
-    private_nh_.param("min_tracking_correction_yaw_deg",
-                      min_tracking_correction_yaw_deg, 2.0);
-    min_tracking_correction_rotation_rad_ =
-        min_tracking_correction_yaw_deg * M_PI / 180.0;
 
     private_nh_.param("voxel_resolution", registration_config_.voxel_resolution,
                       0.20);
@@ -273,7 +266,6 @@ class MovingIcpLocalizer {
     if (response.success && request.data) {
       rolling_submap_.clear();
       correction_in_progress_ = false;
-      has_tracking_correction_reference_ = false;
       initialization_start_stamp_s_ = ros::Time::now().toSec();
       last_correction_stamp_s_ = -1.0;
     }
@@ -302,7 +294,6 @@ class MovingIcpLocalizer {
       has_map_T_odom_ = false;
       has_seed_map_T_odom_guess_ = false;
       correction_in_progress_ = false;
-      has_tracking_correction_reference_ = false;
       initialization_start_stamp_s_ = -1.0;
       last_correction_stamp_s_ = -1.0;
       rolling_submap_.clear();
@@ -418,16 +409,6 @@ class MovingIcpLocalizer {
                              : last_correction_stamp_s_;
       if (correction_in_progress_ ||
           stamp.toSec() - reference_stamp < required_period) return;
-      if (!initializing && has_tracking_correction_reference_ &&
-          !static_livox_localization::tracking_motion_exceeds_threshold(
-              tracking_correction_reference_odom_, odom.odom_T_base,
-              min_tracking_correction_translation_m_,
-              min_tracking_correction_rotation_rad_)) {
-        last_correction_stamp_s_ = stamp.toSec();
-        publish_diagnostic_locked("STATIONARY_CORRECTION_SUPPRESSED",
-                                  RegistrationResult(), CorrectionDecision());
-        return;
-      }
       submap = rolling_submap_.build_in_base_frame(odom.odom_T_base);
       if (!submap ||
           static_cast<int>(submap->size()) < registration_config_.min_points) {
@@ -465,8 +446,6 @@ class MovingIcpLocalizer {
             alignment_controller_.observe_candidate(candidate_map_T_odom);
         if (consensus.ready) {
           map_T_odom_ = candidate_map_T_odom;
-          tracking_correction_reference_odom_ = odom.odom_T_base;
-          has_tracking_correction_reference_ = true;
           if (state_machine_.state() ==
               TrackingState::WAITING_INITIALIZATION) {
             state_machine_.initialize(stamp.toSec());
@@ -479,8 +458,6 @@ class MovingIcpLocalizer {
       } else {
         map_T_odom_ = static_livox_localization::limit_map_T_odom_step(
             map_T_odom_, candidate_map_T_odom, tracking_config_);
-        tracking_correction_reference_odom_ = odom.odom_T_base;
-        has_tracking_correction_reference_ = true;
         state_machine_.observe(true, stamp.toSec());
         publish_correction_locked(odom);
         publish_diagnostic_locked(decision.reason, registration, decision);
@@ -656,13 +633,8 @@ class MovingIcpLocalizer {
   int path_max_poses_ = 2000;
   double initialization_window_s_ = 3.0;
   double correction_period_s_ = 1.0;
-  double min_tracking_correction_translation_m_ = 0.10;
-  double min_tracking_correction_rotation_rad_ = 2.0 * M_PI / 180.0;
   double initialization_start_stamp_s_ = -1.0;
   double last_correction_stamp_s_ = -1.0;
-  Eigen::Isometry3d tracking_correction_reference_odom_ =
-      Eigen::Isometry3d::Identity();
-  bool has_tracking_correction_reference_ = false;
 
   std::string map_path_;
   std::string map_sha256_;
@@ -688,3 +660,4 @@ int main(int argc, char** argv) {
   }
   return 0;
 }
+

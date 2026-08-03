@@ -41,108 +41,6 @@ def test_the_trial_does_not_drive():
     assert "mode_cmd" not in trial
 
 
-def test_priest_v5_trial_enables_the_guarded_runtime_profile() -> None:
-    # Given the dedicated live-navigation bringup script.
-    trial = script("trial_priest_v5.sh")
-
-    # When its exported runtime profile is inspected.
-    expected = (
-        "export SAFETY_POLICIES=true",
-        "export PLANNER=priest",
-        "20260803_route_v5_waypoints.json",
-        "20260803_route_v5_safety_band.json",
-    )
-
-    # Then it selects PRIEST over the latest band without starting motion.
-    assert all(token in trial for token in expected)
-    assert '"$SCRIPT_DIR/stop.sh"' in trial
-    assert '"$SCRIPT_DIR/preflight_priest_v5.sh"' in trial
-    assert "data: true" not in trial
-    assert "std_msgs/Int16 65" not in trial
-
-
-def test_priest_v5_preflight_proves_every_runtime_dependency() -> None:
-    # Given the profile-specific preflight and generic bringup.
-    preflight = script("preflight_priest_v5.sh")
-    startup = script("start_wheelchair_localization.sh")
-
-    # When the machine-consumed checks are enumerated.
-    required = (
-        "/waypoint_follower/planner",
-        "/waypoint_follower/route",
-        "/waypoint_follower/safety_band",
-        "/waypoint_follower/safety_policies",
-        "/safety_gate/safety_policies",
-        "/perception/objects_summary",
-        "/fast_lio_icp/localization_diagnostics",
-        "/fast_lio_icp/auto_initialization_verified",
-        "/fast_lio_icp/auto_initialization_stable",
-        "/fast_lio_icp/auto_initialization_source",
-        "/tip_guard/status",
-        "/cloud_registered_body",
-        "/cmd_vel",
-        "[r]osbag record",
-    )
-
-    # Then stale planner, global route, guards, sensors, or recorder refuse.
-    assert all(token in preflight for token in required)
-    overlay = preflight.index('source "$HOME/ws_livox/devel/setup.bash"')
-    first_livox_sample = preflight.index("for topic in /livox/lidar/header")
-    assert overlay < first_livox_sample
-    assert '_planner:="$PLANNER"' in startup
-    assert '[ -n "$LINEAR" ] && [ -n "$ANGULAR" ]' in preflight
-    assert "data: true" not in preflight
-    assert "std_msgs/Int16 65" not in preflight
-
-
-def test_priest_v5_go_runs_preflight_before_any_motion_command() -> None:
-    # Given the PRIEST-specific start command.
-    go = script("go_priest_v5.sh")
-
-    # When its command ordering is inspected.
-    checked = go.index("preflight_priest_v5.sh")
-    auto_mode = go.index("rostopic pub -1 /mode_cmd")
-    start = go.index("waypoint_follower/start")
-
-    # Then the complete preflight finishes before auto mode or follower start.
-    assert checked < auto_mode < start
-
-
-def test_priest_v5_go_loads_ros_commands_in_its_own_shell() -> None:
-    go = script("go_priest_v5.sh")
-
-    assert "source /opt/ros/noetic/setup.bash" in go
-    assert go.index("source /opt/ros/noetic/setup.bash") < go.index("rostopic pub")
-
-
-def test_priest_v5_scripts_are_bound_to_the_reviewed_deployment() -> None:
-    # Given the laptop and NUC dirtiness gates plus the install loop.
-    push = script("push_to_nuc.sh")
-    local_start = push.index('DEPLOY_DIRTY="')
-    local_gate = push[local_start:push.index(')"', local_start)]
-    remote_start = push.index('REMOTE_DIRTY="')
-    remote_gate = push[remote_start:push.index(')"', remote_start)]
-    install_start = push.index("for script in ")
-    install_loop = push[install_start:push.index("; do", install_start)]
-
-    # When every installed field script is resolved in each exact surface.
-    names = (
-        "start_wheelchair_localization.sh",
-        "trial_0727.sh",
-        "trial_priest_v5.sh",
-        "preflight_priest_v5.sh",
-        "go.sh",
-        "go_priest_v5.sh",
-        "stop.sh",
-    )
-
-    # Then no uncommitted local or NUC copy can bypass the reviewed commit.
-    for name in names:
-        assert "tools/" + name in local_gate
-        assert "tools/" + name in remote_gate
-        assert name in install_loop
-
-
 def test_go_refuses_when_the_follower_is_not_there():
     go = script("go.sh")
     assert "rosnode ping -c1 /waypoint_follower" in go
@@ -181,14 +79,7 @@ def test_stop_checks_nothing_and_tolerates_failure():
     assert 'data: false' in stop
 
 
-@pytest.mark.parametrize("name", [
-    "trial_0727.sh",
-    "trial_priest_v5.sh",
-    "preflight_priest_v5.sh",
-    "go.sh",
-    "go_priest_v5.sh",
-    "stop.sh",
-])
+@pytest.mark.parametrize("name", ["trial_0727.sh", "go.sh", "stop.sh"])
 def test_each_script_is_deployed_and_checksum_verified(name):
     """They live in $HOME, outside the checkout, so a pull never touches
     them - the same way the bringup was found still running the previous
@@ -198,13 +89,6 @@ def test_each_script_is_deployed_and_checksum_verified(name):
     assert "did not install cleanly" in push
 
 
-@pytest.mark.parametrize("name", [
-    "trial_0727.sh",
-    "trial_priest_v5.sh",
-    "preflight_priest_v5.sh",
-    "go.sh",
-    "go_priest_v5.sh",
-    "stop.sh",
-])
+@pytest.mark.parametrize("name", ["trial_0727.sh", "go.sh", "stop.sh"])
 def test_each_script_is_executable(name):
     assert (TOOLS / name).stat().st_mode & 0o111, "%s is not executable" % name

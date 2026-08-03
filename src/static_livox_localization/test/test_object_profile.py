@@ -73,7 +73,7 @@ def lift(module_path, names):
     return namespace
 
 
-_producer = lift(SCRIPTS / "obstacle_cluster_geometry.py",
+_producer = lift(SCRIPTS / "obstacle_clusters.py",
                  {"PROFILE_BIN_M", "MAX_PROFILE_BINS", "lateral_profile"})
 lateral_profile = _producer["lateral_profile"]
 
