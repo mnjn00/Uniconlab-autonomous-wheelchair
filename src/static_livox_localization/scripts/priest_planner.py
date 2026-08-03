@@ -30,9 +30,11 @@ from priest_constraints import (
     DEFAULT_CONSTRAINT_TOLERANCES,
     ConstraintTolerances,
     ConstraintViolations,
+    PROJECTION_CONSTRAINT_TOLERANCES,
 )
 from priest_feasibility import certify_trajectory
 from priest_projection import Projection, TrajectoryBasis
+from priest_sampling import NoFiniteCandidateError, select_priest_elite
 from priest_types import Corridor, Plan
 
 
@@ -46,7 +48,6 @@ class PriestPlanner(object):
     of the same line.
     """
 
-    FEASIBLE_M = 0.05
     CONSTRAINT_TOLERANCES = DEFAULT_CONSTRAINT_TOLERANCES
     RETRIES = 4
     REACH_BACKOFF = 0.65
@@ -112,7 +113,8 @@ class PriestPlanner(object):
         if key not in self._basis:
             basis = TrajectoryBasis(self.degree, self.steps, key[0])
             self._basis[key] = (basis, Projection(
-                basis, slots, self.v_max, self.a_max, self.rho))
+                basis, slots, self.v_max, self.a_max, self.rho,
+                self.yaw_rate_max))
         return self._basis[key]
 
     def inflate(self, obstacles):
@@ -162,11 +164,22 @@ class PriestPlanner(object):
         x, y = basis.positions(xi)
         (vx, vy), (ax, ay) = basis.derivatives(xi)
         smooth = (ax ** 2 + ay ** 2).mean(axis=1)
-        # Arrive pointing along the way you are going, not sideways into the
-        # corridor wall.
-        heading = np.hypot(vx[:, -1], vy[:, -1])
+        speed_sq = vx ** 2 + vy ** 2
+        cross = np.abs(vx * ay - vy * ax)
+        curvature = np.where(
+            speed_sq > 0.05 ** 2,
+            cross / np.maximum(speed_sq, 0.05 ** 2) ** 1.5,
+            0.0).mean(axis=1)
+        goal_vector = local_goal[None, :] - np.stack([x[:, 0], y[:, 0]], axis=1)
+        terminal_velocity = np.stack([vx[:, -1], vy[:, -1]], axis=1)
+        alignment_denom = np.maximum(
+            np.linalg.norm(goal_vector, axis=1)
+            * np.linalg.norm(terminal_velocity, axis=1), 1e-6)
+        alignment = 1.0 - np.clip(
+            np.einsum("ij,ij->i", goal_vector, terminal_velocity)
+            / alignment_denom, -1.0, 1.0)
         reach = np.hypot(x[:, -1] - local_goal[0], y[:, -1] - local_goal[1])
-        return smooth + 4.0 * reach - 0.5 * heading
+        return smooth + 0.25 * curvature + alignment + 4.0 * reach
 
     def plan(self, start, velocity, acceleration, corridor, obstacles,
              goal_arc=None):
@@ -226,20 +239,21 @@ class PriestPlanner(object):
             samples[0] = mean                      # keep the incumbent
             xi, residual = projection.solve(
                 samples, boundary, obstacles, self.projection_iterations)
-            keep = np.argsort(residual)[:self.constraint_elite]
-            augmented = (self.costs(basis, xi[keep], local_goal)
-                         + 40.0 * residual[keep])
-            order = np.argsort(augmented)[:self.elite]
-            elite_xi = xi[keep][order]
-            elite_cost = augmented[order]
-
-            # Ranked by residual, not by cost. A cheaper trajectory that is
-            # further from feasible is not the one to carry forward - the
-            # cost is only meaningful among trajectories that can be driven.
-            elite_residual = residual[keep][order]
-            leader = int(np.argmin(elite_residual))
+            try:
+                selection = select_priest_elite(
+                    primary_cost=self.costs(basis, xi, local_goal),
+                    residual_score=residual,
+                    nproj=self.constraint_elite,
+                    nelite=self.elite)
+            except NoFiniteCandidateError:
+                break
+            elite_xi = xi[selection.elite_indices]
+            elite_cost = selection.elite_augmented_cost
+            elite_residual = residual[selection.elite_indices]
+            leader = int(np.flatnonzero(
+                selection.elite_indices == selection.leader_index)[0])
             top = elite_xi[leader], elite_cost[leader], elite_residual[leader]
-            if best is None or top[2] < best[2]:
+            if best is None or top[1] < best[1]:
                 best = top
 
             weights = np.exp(-(elite_cost - elite_cost.min())
@@ -251,7 +265,15 @@ class PriestPlanner(object):
             cov = ((1 - self.learning_rate) * cov + self.learning_rate
                    * (spread.T * weights) @ spread + 1e-6 * np.eye(len(mean)))
 
+        if best is None:
+            return Plan(
+                None, None, None, None, float("inf"), float("inf"), 0,
+                horizon_s, reason="NO_FEASIBLE_TRAJECTORY")
+
         x, y = basis.positions(best[0][None, :])
-        reason = "" if best[2] <= self.FEASIBLE_M else "NO_FEASIBLE_TRAJECTORY"
+        feasible = bool(projection.violations(
+            best[0][None, :], obstacles).is_within(
+                PROJECTION_CONSTRAINT_TOLERANCES)[0])
+        reason = "" if feasible else "NO_FEASIBLE_TRAJECTORY"
         return Plan(best[0], x[0], y[0], basis.times, best[2], best[1],
-                    int(best[2] <= self.FEASIBLE_M), horizon_s, reason)
+                    int(feasible), horizon_s, reason)

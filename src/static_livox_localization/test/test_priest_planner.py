@@ -200,15 +200,19 @@ def test_a_short_horizon_is_retried_smaller_before_it_is_called_blocked():
     plan = planner.plan(corridor.centres[0], np.zeros(2), np.zeros(2),
                         corridor, [])
 
-    assert plan.usable and plan.residual <= planner.FEASIBLE_M
+    assert plan.usable
 
 
-def test_the_leader_is_the_most_feasible_elite_not_the_cheapest():
-    """Cost only means anything among trajectories that can be driven. Taking
-    the cheapest of the elite set let a slightly infeasible trajectory lead,
-    and its residual is what the caller then decides to drive on."""
-    source = (SCRIPTS / "priest_planner.py").read_text(encoding="utf-8")
-    assert "leader = int(np.argmin(elite_residual))" in source
+def test_augmented_cost_selects_leader_not_lowest_residual():
+    """Algorithm 1 returns the lowest augmented-cost member of EliteSet."""
+    selection = pl.select_priest_elite(
+        primary_cost=np.array([50.0, 0.0]),
+        residual_score=np.array([0.0, 0.10]),
+        nproj=2,
+        nelite=2,
+    )
+
+    assert selection.leader_index == 1
 
 
 def test_the_projection_is_sized_to_the_scene():

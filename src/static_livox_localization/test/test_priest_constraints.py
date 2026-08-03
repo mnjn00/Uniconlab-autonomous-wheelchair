@@ -56,7 +56,8 @@ def test_priest_support_modules_are_installed_for_relay_imports() -> None:
     cmake = (PACKAGE_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 
     for module in (
-            "priest_constraints.py", "priest_feasibility.py", "priest_types.py"):
+            "priest_constraints.py", "priest_feasibility.py",
+            "priest_sampling.py", "priest_types.py"):
         assert "scripts/%s" % module in cmake, (
             "%s is imported by installed PRIEST code but is not installed"
             % module)

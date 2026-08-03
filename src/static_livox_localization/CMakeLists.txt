@@ -67,6 +67,7 @@ install(
     scripts/priest_feasibility.py
     scripts/priest_projection.py
     scripts/priest_planner.py
+    scripts/priest_sampling.py
     scripts/priest_types.py
     scripts/safety_band.py
     scripts/scan_accumulator.py

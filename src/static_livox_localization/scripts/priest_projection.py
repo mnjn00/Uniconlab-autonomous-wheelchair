@@ -48,7 +48,17 @@ Two dimensions, not three: the chair is planar, and dropping z removes the
 beta angles the paper needs for a quadrotor.
 """
 
+from __future__ import annotations
+
 import numpy as np
+
+from priest_constraints import (
+    DEFAULT_CONSTRAINT_TOLERANCES,
+    PROJECTION_CONSTRAINT_TOLERANCES,
+    ProjectionViolations,
+    max_yaw_rate_rps,
+    projected_violations,
+)
 
 # Some BLAS builds raise spurious divide/overflow flags out of matmul on
 # perfectly finite operands. The values are checked for finiteness where it
@@ -130,12 +140,13 @@ class Projection(object):
     """
 
     def __init__(self, basis, max_obstacles=24, v_max=0.6, a_max=0.5,
-                 rho=1.0):
+                 rho=1.0, yaw_rate_max=0.6):
         self.basis = basis
         self.max_obstacles = int(max_obstacles)
         self.v_max = float(v_max)
         self.a_max = float(a_max)
         self.rho = float(rho)
+        self.yaw_rate_max = float(yaw_rate_max)
 
         obstacle_block = np.tile(basis.P, (self.max_obstacles, 1))
         axis = np.vstack([obstacle_block, basis.Pdot, basis.Pddot])
@@ -279,25 +290,20 @@ class Projection(object):
             lam = lam - self.rho * ((xi @ self.F.T) - e) @ self.F
         return xi, self.residual(xi, padded)
 
-    def residual(self, xi, obstacles):
-        """How far each trajectory still is from feasible, in metres.
+    def violations(self, xi, obstacles) -> ProjectionViolations:
+        """Maximum positive excess for every constraint, in native units."""
+        obstacles = self.pad_obstacles(obstacles)
+        x, y = self.basis.positions(xi)
+        (vx, vy), (ax, ay) = self.basis.derivatives(xi)
+        corridor_excess = ((xi @ self.G.T) - self.tau if len(self.G)
+                           else np.zeros((len(xi), 0), dtype=np.float64))
+        return projected_violations(
+            x=x, y=y, vx=vx, vy=vy, ax=ax, ay=ay,
+            obstacles=obstacles, corridor_excess_m=corridor_excess,
+            times_s=self.basis.times, v_max=self.v_max, a_max=self.a_max,
+            yaw_rate_max=self.yaw_rate_max)
 
-        Only the violated side counts. A trajectory 3 m clear of an obstacle
-        is not 3 m of residual, and summing a signed gap would let a wide
-        berth on one side pay for a collision on the other.
-        """
-        if obstacles.shape[0] != self.max_obstacles:
-            obstacles = self.pad_obstacles(obstacles)
-        basis = self.basis
-        x, y = basis.positions(xi)
-        (vx, vy), (ax, ay) = basis.derivatives(xi)
-        ox, oy, radius = obstacles[:, 0], obstacles[:, 1], obstacles[:, 2]
-        reach = np.hypot(x[:, None, :] - ox[None, :, None],
-                         y[:, None, :] - oy[None, :, None])
-        total = np.clip(radius[None, :, None] - reach, 0.0, None).sum(axis=(1, 2))
-        total = total + np.clip(np.hypot(vx, vy) - self.v_max, 0.0, None).sum(axis=1)
-        total = total + np.clip(np.hypot(ax, ay) - self.a_max, 0.0, None).sum(axis=1)
-        if len(self.G):
-            total = total + np.clip((xi @ self.G.T) - self.tau,
-                                    0.0, None).sum(axis=1)
-        return total
+    def residual(self, xi, obstacles):
+        """Dimensionless worst-unit score used only for Algorithm 1 ranking."""
+        return self.violations(
+            xi, obstacles).score(PROJECTION_CONSTRAINT_TOLERANCES)
