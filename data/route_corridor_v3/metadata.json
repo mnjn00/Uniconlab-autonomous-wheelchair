@@ -1,0 +1,37 @@
+{
+  "corridor_id": "route_corridor_v3",
+  "frame_id": "map",
+  "map_id": "merged_0707_0725_v1",
+  "map_sha256": "ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431",
+  "image": "route_corridor_v3.png",
+  "image_sha256": "94a15e76f0eab61fbf726de021f336845186ad2336516d7565ac38a2b2423779",
+  "width": 4151,
+  "height": 2628,
+  "resolution_m_per_pixel": 0.1,
+  "origin": [-106.5, -168.9, 0.0],
+  "corridor_pixel_count": 70122,
+  "corridor_bbox_xy_m": {
+    "xmin": -9.25,
+    "ymin": -91.25,
+    "xmax": 236.65,
+    "ymax": 24.95
+  },
+  "semantics": {
+    "254": "inside the hand-drawn corridor",
+    "205": "outside the hand-drawn corridor"
+  },
+  "provenance": {
+    "authored_by": "operator, by hand over the merged map",
+    "method": "manual",
+    "surveyed": false,
+    "received": "2026-08-02",
+    "source_archive": "route_2d_map_v3.zip",
+    "source_image": "route_2d_map_v3.pgm",
+    "note": "Shipped as PNG. The PGM in the source archive is 10.9 MB and pixel-identical to this 24 KB PNG; map_server reads either. Repository size discipline, see 12334c6."
+  },
+  "authority": {
+    "evidence_level": "operator_judgement",
+    "may_widen_the_map_derived_band": false,
+    "may_narrow_the_map_derived_band": true
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "corridor_id": "route_corridor_v4",
+  "frame_id": "map",
+  "map_id": "merged_0707_0725_v1",
+  "map_sha256": "ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431",
+  "image": "route_corridor_v4.png",
+  "image_sha256": "7bedbed4470cd74dbeea42312f0ae606c96130c02f676fb9050ed504beefc236",
+  "source_waypoints": "route_centerline_waypoints_dense_0p2m.json",
+  "source_waypoints_sha256": "ee7cc0e9027c7a2471259e410b1ba695de7478c7cf4f171b2a09b106085b44bf",
+  "width": 4151,
+  "height": 2628,
+  "resolution_m_per_pixel": 0.1,
+  "origin": [-106.5, -168.9, 0.0],
+  "corridor_pixel_count": 67436,
+  "corridor_bbox_xy_m": {
+    "xmin": -9.25,
+    "ymin": -91.25,
+    "xmax": 236.65,
+    "ymax": 24.95
+  },
+  "semantics": {
+    "254": "inside the hand-drawn corridor",
+    "205": "outside the hand-drawn corridor"
+  },
+  "provenance": {
+    "authored_by": "operator, by hand over the merged map",
+    "method": "manual",
+    "surveyed": false,
+    "received": "2026-08-02",
+    "source_archive": "route_2d_map_v4.zip",
+    "source_image": "route_2d_map_v4.pgm",
+    "note": "PNG is pixel-identical to the 10.9 MB source PGM."
+  },
+  "authority": {
+    "evidence_level": "operator_judgement",
+    "is_runtime_corridor_authority": true,
+    "physical_edge_semantics_present": false
+  }
+}

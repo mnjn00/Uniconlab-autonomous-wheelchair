@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Live obstacle clustering: people / vehicles / other, published for
-monitoring and logging.
+monitoring, logging and tracked-cluster avoidance.
 
-Observer only - nothing in the motion chain consumes these topics. The
-safety_gate keeps its own independent corridor check on the raw cloud,
-so a bug here cannot affect stopping behavior; this node exists so the
-operator (and the black box) can SEE what the chair was driving past.
+The hand-drawn route corridor is consulted after clustering. A cluster whose
+sampled returns all sit outside the effective safety band is kept and tracked,
+but is labelled ``outside_band`` rather than guessed to be a vehicle from its
+length. Keeping it is deliberate: a person or car beside the corridor may move
+into it, and the motion guard must continue to see that box. If a synchronized
+map pose is unavailable, semantic classification is left untouched rather than
+using a stale transform to hide an object.
 
 Input is /cloud_registered_body (FAST-LIO's motion-undistorted scan in
 the body frame), accumulated over a short window because a single 0.1 s
@@ -33,7 +36,7 @@ import sys
 
 import numpy as np
 import rospy
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
@@ -44,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
                         lidar_extrinsics, lidar_to_body)
 from cluster_tracking import UNKNOWN, Tracker
+from safety_band import SafetyBand
 import tf.transformations as tft
 
 PROCESS_HZ = 5.0
@@ -80,6 +84,34 @@ MIN_CELL_POINTS = 2
 MIN_CLUSTER_POINTS = 8
 MAX_CLUSTERS = 40
 
+# The classifier and the band live in different frames. A localization pose
+# this far from the newest accumulated scan is not evidence about where that
+# cluster sits on the map; in that case the original class wins.
+MAP_POSE_MAX_DELTA_S = 0.30
+# Classification tolerates the same order of localization/corridor error as
+# the follower's containment check. This is a semantic relabel only, never a
+# reason to delete a collision box.
+OBJECT_BAND_GRACE_M = 0.10
+MAX_BAND_SAMPLE_POINTS = 96
+OUTSIDE_MAX_INSIDE_FRACTION = 0.05
+INSIDE_MIN_INSIDE_FRACTION = 0.95
+OUTSIDE_BAND = "outside_band"
+
+# Lateral slices of a cluster's OWN returns, so a consumer can ask how far
+# this object actually is inside a corridor of its choosing. A box cannot
+# answer that. An axis-aligned box around a wall running diagonally across
+# the scan reports a near face at a corner where the wall has no returns at
+# all: on 2026-07-31 run 1 the box put a wall 0.69 m dead ahead when its
+# nearest return inside the corridor was 2.13 m, and the follower held for
+# 16 minutes because every candidate bypass lane was inside the same box.
+# 0.2 m matches the clustering cell, so a slice is never finer than the
+# evidence that built it.
+PROFILE_BIN_M = 0.2
+# A cluster spanning the whole ROI would otherwise publish hundreds of
+# numbers five times a second. Past this the slices are widened instead,
+# which costs resolution and stays conservative.
+MAX_PROFILE_BINS = 64
+
 PERSON_MAX_FOOTPRINT_M = 0.9
 PERSON_HEIGHT_M = (1.1, 2.0)
 VEHICLE_MIN_FOOTPRINT_M = 1.5
@@ -89,7 +121,100 @@ CLASS_COLORS = {
     "person": (0.9, 0.2, 0.2),
     "vehicle": (0.2, 0.4, 0.9),
     "obstacle": (0.9, 0.7, 0.1),
+    OUTSIDE_BAND: (0.45, 0.45, 0.45),
 }
+
+
+class MapPoseBuffer:
+    """Small timestamped history of map_T_body localization poses."""
+
+    def __init__(self):
+        self.poses = []
+
+    def add(self, stamp_s, matrix):
+        if not math.isfinite(stamp_s) or stamp_s <= 0.0:
+            return
+        matrix = np.asarray(matrix, dtype=np.float64)
+        if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+            return
+        if self.poses and stamp_s <= self.poses[-1][0]:
+            return
+        self.poses.append((float(stamp_s), matrix))
+        self.poses = self.poses[-80:]
+
+    def nearest(self, stamp_s, max_delta_s=MAP_POSE_MAX_DELTA_S):
+        if not self.poses or not math.isfinite(stamp_s):
+            return None
+        times = np.array([t for t, _ in self.poses])
+        k = int(np.argmin(np.abs(times - stamp_s)))
+        if abs(times[k] - stamp_s) > max_delta_s:
+            return None
+        return self.poses[k][1]
+
+
+def cluster_band_relation(cluster, map_T_body, band, lidar_in_body,
+                          lidar_to_body_rotation, grace_m):
+    """Return (relation, inside_fraction) for one lidar-frame cluster.
+
+    ``outside`` means the sampled returns are outside the band; it does not
+    claim they are a wall. The distinction matters on this route because the
+    hand drawing also excludes road traffic and open forecourt that the chair
+    should not enter.
+    """
+    if map_T_body is None or band is None:
+        return "unavailable", None
+    count = min(len(cluster), MAX_BAND_SAMPLE_POINTS)
+    if not count:
+        return "unavailable", None
+    indexes = np.linspace(0, len(cluster) - 1, count, dtype=int)
+    sampled = np.asarray(cluster[indexes], dtype=np.float64)
+    in_body = lidar_to_body(
+        sampled, lidar_in_body, lidar_to_body_rotation)
+    in_map = in_body @ map_T_body[:3, :3].T + map_T_body[:3, 3]
+    inside = band.contains_many(in_map[:, :2], grace=grace_m)
+    fraction = float(np.mean(inside))
+    if fraction <= OUTSIDE_MAX_INSIDE_FRACTION:
+        return "outside", fraction
+    if fraction >= INSIDE_MIN_INSIDE_FRACTION:
+        return "inside", fraction
+    return "crossing", fraction
+
+
+def lateral_profile(cluster, bin_m=PROFILE_BIN_M, max_bins=MAX_PROFILE_BINS):
+    """Nearest forward return in each lateral slice of one cluster.
+
+    ``{"bin_m", "y0", "min_x"}`` where ``min_x[k]`` is the closest return
+    whose y falls in ``[y0 + k*bin_m, y0 + (k+1)*bin_m)``, or None where
+    this cluster has no return in that slice.
+
+    An empty slice is not a claim that the ground there is free - only that
+    THIS object is not in it. Every other cluster is profiled separately and
+    the consumer takes the nearest across all of them, so the guard still
+    sees anything that is really there.
+
+    Chair-aligned lidar frame, the same frame as x/y/size beside it.
+    """
+    points = np.asarray(cluster, dtype=np.float64)
+    if points.ndim != 2 or points.shape[0] == 0 or points.shape[1] < 2:
+        return None
+    finite = np.isfinite(points[:, 0]) & np.isfinite(points[:, 1])
+    if not finite.any():
+        return None
+    x, y = points[finite, 0], points[finite, 1]
+    span = float(y.max()) - float(y.min())
+    while bin_m > 0.0 and (span / bin_m) + 1.0 > max_bins:
+        bin_m *= 2.0
+    first = int(math.floor(float(y.min()) / bin_m))
+    count = int(math.floor(float(y.max()) / bin_m)) - first + 1
+    index = np.clip(np.floor(y / bin_m).astype(int) - first, 0, count - 1)
+    nearest = np.full(count, np.inf)
+    np.minimum.at(nearest, index, x)
+    return {
+        "bin_m": round(float(bin_m), 3),
+        "y0": round(float(first * bin_m), 3),
+        "min_x": [None if not math.isfinite(v) else round(float(v), 2)
+                  for v in nearest],
+    }
 
 
 class Accumulator:
@@ -222,6 +347,13 @@ class ObstacleClusters:
         self.lidar_in_body = lidar_in_body
         self.lidar_to_body_rotation = lidar_to_body_rotation
         self.tracker = Tracker()
+        self.band = SafetyBand(rospy.get_param("~safety_band"))
+        self.band_grace_m = float(rospy.get_param(
+            "~object_band_grace", OBJECT_BAND_GRACE_M))
+        if not math.isfinite(self.band_grace_m) or self.band_grace_m < 0.0:
+            raise rospy.ROSInitException(
+                "~object_band_grace must be a finite non-negative distance")
+        self.map_poses = MapPoseBuffer()
         self.marker_pub = rospy.Publisher(
             "/perception/objects", MarkerArray, queue_size=1)
         self.summary_pub = rospy.Publisher(
@@ -230,6 +362,22 @@ class ObstacleClusters:
                          self.accumulator.add_cloud, queue_size=2)
         rospy.Subscriber("/Odometry", Odometry,
                          self.accumulator.add_odom, queue_size=50)
+        rospy.Subscriber("/fast_lio_icp/pose", PoseWithCovarianceStamped,
+                         self.add_map_pose, queue_size=20)
+
+    def add_map_pose(self, message):
+        p = message.pose.pose.position
+        q = message.pose.pose.orientation
+        stamp_s = message.header.stamp.to_sec()
+        values = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)
+        norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
+        if not all(math.isfinite(v) for v in values) or abs(norm - 1.0) > 0.05:
+            rospy.logwarn_throttle(
+                5.0, "object band ignored an invalid localization pose")
+            return
+        matrix = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
+        matrix[:3, 3] = (p.x, p.y, p.z)
+        self.map_poses.add(stamp_s, matrix)
 
     def track(self, boxes):
         """Follow each box in the odom frame and return its Track, or [].
@@ -278,25 +426,49 @@ class ObstacleClusters:
         clusters = cluster_grid(points) if len(points) else []
         clusters = sorted(clusters, key=len, reverse=True)[:MAX_CLUSTERS]
 
-        boxes = []
+        cloud_stamp = None if self.accumulator.reference is None else \
+            self.accumulator.reference[0]
+        map_pose = None if cloud_stamp is None else \
+            self.map_poses.nearest(cloud_stamp)
+        band_status = "OK" if map_pose is not None else "NO_MAP_POSE"
+
+        boxes, band_context = [], []
         for cluster in clusters:
             lo = cluster.min(axis=0)
             hi = cluster.max(axis=0)
-            boxes.append((classify(cluster), (lo + hi) / 2.0,
+            raw_label = classify(cluster)
+            relation, inside_fraction = cluster_band_relation(
+                cluster, map_pose, self.band, self.lidar_in_body,
+                self.lidar_to_body_rotation, self.band_grace_m)
+            label = OUTSIDE_BAND if relation == "outside" else raw_label
+            boxes.append((label, (lo + hi) / 2.0,
                           np.maximum(hi - lo, 0.1), len(cluster)))
+            band_context.append((raw_label, relation, inside_fraction,
+                                 lateral_profile(cluster)))
         tracks = self.track(boxes)
 
         markers, objects = MarkerArray(), []
         wipe = Marker()
         wipe.action = Marker.DELETEALL
         markers.markers.append(wipe)
-        for i, (label, center, size, points) in enumerate(boxes):
+        for i, ((label, center, size, points), context) in enumerate(
+                zip(boxes, band_context)):
+            raw_label, band_relation, inside_fraction, profile = context
             track = tracks[i] if tracks else None
             objects.append({
                 "class": label,
+                "raw_class": raw_label,
+                "band_relation": band_relation,
+                "band_inside_fraction": None if inside_fraction is None else
+                                        round(inside_fraction, 3),
                 "x": round(float(center[0]), 2),
                 "y": round(float(center[1]), 2),
                 "size": [round(float(v), 2) for v in size],
+                # Where this object's returns ACTUALLY are, slice by slice.
+                # The box above is kept for the markers and for a consumer
+                # that predates this, but the guard measures distance from
+                # here - see cluster_guard.corridor_reach.
+                "profile": profile,
                 "points": int(points),
                 # A consumer that steers around what this says is parked
                 # needs to know when nothing said it. Without a reference
@@ -328,6 +500,7 @@ class ObstacleClusters:
         self.summary_pub.publish(String(data=json.dumps({
             "stamp": stamp.to_sec(),
             "status": "OK",
+            "band_status": band_status,
             # Stated because a consumer now steers by these numbers. They
             # are chair-aligned lidar-frame, the same frame every clearance
             # constant in the follower is written in - NOT the "body" the

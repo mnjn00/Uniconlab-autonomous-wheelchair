@@ -21,6 +21,15 @@ bounded it, not applied uniformly:
   - An edge the scan could not see past (depth < 0, no returns) is
     treated as severe. Absence of data is not evidence of flat ground.
 
+A station may additionally carry left_corridor_m / right_corridor_m, the
+operator's hand-drawn corridor (tools/apply_route_corridor_mask.py). That
+narrows the usable limits and nothing else. hazard_clearance, safe_offset
+and is_narrow keep reading the measured fields, because they answer
+physical questions - how far is the fall, which way is away from it, does
+the chair fit - and a drawing is not evidence about any of them. In
+particular is_narrow still gates on the MEASURED width, so the corridor
+cannot make the chair creep down a stretch the map says is open.
+
 Deliberately free of ROS imports so the geometry can be unit-tested against
 the shipped band JSON; see test/test_safety_band.py.
 """
@@ -108,6 +117,43 @@ def usable_limit(raw_m, drop_m, kind=None):
     return max(strict, BAND_FLOOR)
 
 
+def corridor_limit(usable_m, corridor_m):
+    """Narrow a measured limit to the operator's hand-drawn corridor.
+
+    The measured band says how far the chair CAN go before the ground
+    breaks; on open ground that is often 2.45 m, and the follower will use
+    it to step around a pedestrian. The drawing says how far it SHOULD go.
+    Only the second is being applied here, and only in one direction:
+
+      - It never widens. A drawing cannot authorise ground the map says
+        breaks, so a corridor wider than the measured limit is ignored.
+      - CHAIR_HALF_WIDTH is inset because the corridor was drawn for the
+        chair, not for the point it turns about. No BAND_MARGIN on top:
+        the corridor edge is a judgement, not a fall, and the fall margin
+        is already carried by the measured limit this is a min() against.
+      - The corridor's own contribution never goes negative. The driven
+        line is the only path known to have been driven; a drawing that
+        excludes it is a drawing error, and holding the corridor term at
+        zero keeps the line legal so the chair reproduces the run instead
+        of stopping. apply_route_corridor_mask.py's audit is where that
+        gets found and fixed.
+
+    The zero floor is applied to the corridor term ALONE, never to the
+    result. usable_limit deliberately returns a NEGATIVE limit toward a
+    measured fall - the kerb is inside the line and the chair must sit off
+    it - and flooring the result at zero would hand that station back the
+    0.20 m of clearance the map says is not there. min() last is what keeps
+    the drawing incapable of loosening a kerb.
+
+    `corridor_m` is None for a station the drawing does not cover, which is
+    72 of 381 on the 0727 route. Those keep the measured limit untouched -
+    an absent drawing is not a statement about the ground.
+    """
+    if corridor_m is None:
+        return usable_m
+    return min(usable_m, max(0.0, corridor_m - CHAIR_HALF_WIDTH))
+
+
 class SafetyBand:
     def __init__(self, path):
         data = json.load(open(path))
@@ -116,13 +162,25 @@ class SafetyBand:
         self.normals = np.stack([-np.sin(heading), np.cos(heading)], axis=1)
         usable_left, usable_right, narrow = [], [], []
         edge_left, edge_right, sev_left, sev_right = [], [], [], []
+        corridor_yielded = []
         for s in data["stations"]:
             kind_left = s.get("left_kind")
             kind_right = s.get("right_kind")
-            usable_left.append(
-                usable_limit(s["left_m"], s.get("left_drop_m"), kind_left))
-            usable_right.append(
-                usable_limit(s["right_m"], s.get("right_drop_m"), kind_right))
+            measured_l = usable_limit(s["left_m"], s.get("left_drop_m"), kind_left)
+            measured_r = usable_limit(s["right_m"], s.get("right_drop_m"), kind_right)
+            drawn_l = corridor_limit(measured_l, s.get("left_corridor_m"))
+            drawn_r = corridor_limit(measured_r, s.get("right_corridor_m"))
+            # A station whose limits cross has nowhere the chair may be, and
+            # the follower holds there. The measurement is allowed to say
+            # that - a kerb inside the line is a fact. A drawing is not, so
+            # where the corridor would create the condition and the measured
+            # band did not, the whole station reverts to the measurement and
+            # is reported. Measured on the 0727 route this fires at 3 of 381
+            # stations; without it they became three new stops.
+            yielded = (drawn_l + drawn_r < 0.0) and (measured_l + measured_r >= 0.0)
+            corridor_yielded.append(yielded)
+            usable_left.append(measured_l if yielded else drawn_l)
+            usable_right.append(measured_r if yielded else drawn_r)
             narrow.append(s["left_m"] + s["right_m"] < NARROW_BAND_WIDTH)
             edge_left.append(s["left_m"])
             edge_right.append(s["right_m"])
@@ -135,6 +193,7 @@ class SafetyBand:
         self.edge_right = np.array(edge_right)
         self.severe_left = np.array(sev_left)
         self.severe_right = np.array(sev_right)
+        self.corridor_yielded = np.array(corridor_yielded)
 
     def lateral_limits(self, point):
         """Signed cross-track offset and the limits that bracket it.
@@ -158,6 +217,42 @@ class SafetyBand:
     def contains(self, point, grace=0.0):
         lateral, lo, hi = self.lateral_limits(point)
         return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
+
+    def contains_many(self, points, grace=0.0):
+        """Vectorised containment for map-frame ``(x, y)`` points.
+
+        Object perception has dozens of clusters and each cluster has many
+        returns. Calling contains() once per return would repeat the same
+        381-station nearest-neighbour search thousands of times at 5 Hz. This
+        is exactly the scalar geometry above, evaluated in one NumPy batch so
+        the perception node can ask which returns lie in the driven corridor
+        without maintaining a second, drifting copy of the band rules.
+        """
+        array = np.asarray(points, dtype=float)
+        if array.ndim != 2 or array.shape[1] != 2:
+            raise ValueError("points must have shape (N, 2)")
+        if not len(array):
+            return np.zeros(0, dtype=bool)
+
+        delta = array[:, None, :] - self.xy[None, :, :]
+        distance_sq = np.einsum("nsi,nsi->ns", delta, delta)
+        if len(self.xy) == 1:
+            order = np.zeros((len(array), 1), dtype=int)
+        else:
+            # Only the two nearest stations matter. A full 381-element sort
+            # here consumed almost half of the perception node's 200 ms
+            # cycle when forty 96-point clusters were present.
+            order = np.argpartition(distance_sq, 1, axis=1)[:, :2]
+            pair_distance = np.take_along_axis(distance_sq, order, axis=1)
+            swap = pair_distance[:, 0] > pair_distance[:, 1]
+            order[swap] = order[swap, ::-1]
+        nearest = order[:, 0]
+        lateral = np.einsum(
+            "ni,ni->n", array - self.xy[nearest], self.normals[nearest])
+        lo = -np.min(self.right[order], axis=1)
+        hi = np.min(self.left[order], axis=1)
+        return ((lateral >= lo - grace - 1e-6) &
+                (lateral <= hi + grace + 1e-6))
 
     def hazard_clearance(self, point):
         """Distance from the nearest WHEEL to the nearest fall hazard.

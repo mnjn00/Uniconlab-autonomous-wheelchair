@@ -18,9 +18,31 @@ around; anything moving - or not yet watched long enough to say - is waited
 out where it stands. A raw return cannot support that distinction at all,
 because it has no identity from one scan to the next.
 
-The geometry uses each object's BOX, not its centre. A vehicle whose centre
-sits 3 m to the side can still have a corner in the corridor, and a guard
-comparing centres would drive into it.
+The geometry uses each object's EXTENT, not its centre. A vehicle whose
+centre sits 3 m to the side can still have a corner in the corridor, and a
+guard comparing centres would drive into it.
+
+Extent means the object's own returns, sliced laterally, wherever the
+producer publishes them. An axis-aligned box was the first answer and is
+still the fallback, but its near face is a corner of the bounding volume
+rather than anything the sensor saw.
+
+For a wall crossing the scan diagonally the two answers are far apart, and
+on 2026-07-31 the gap cost a 16-minute hold at waypoint 349. The box put
+the wall 0.69 m dead ahead; its nearest return inside the corridor was
+2.13 m. 0.69 m is inside the 0.9 m floor on the stop radius, so the chair
+stopped - and a stopped chair's stopping envelope stays at that floor, so
+the phantom near face stayed inside it and no amount of waiting could
+change anything. The tracker had it right the whole time: static, and
+therefore never going to move out of the way.
+
+Sidestepping was not the missing answer and is not the fix. That wall
+really does span the corridor, and the route curves past it; what the chair
+needed was to not be hard-stopped by a face with no returns behind it.
+Measured from the returns it reads 1.72 m - outside the stop radius, inside
+the slow radius - so the chair creeps and the route does the rest. See
+test/test_object_profile.py, which reconstructs the wall from the recorded
+box and pins both numbers.
 
 Everything unreadable fails closed, and fails closed as MOVING. A malformed
 object is reported at zero distance rather than skipped, because skipping it
@@ -99,14 +121,8 @@ def parse_summary(payload):
     return Summary(float(stamp), str(data.get("status", "")), objects)
 
 
-def object_reach(item, lateral_shift_m):
-    """(lateral gap, forward distance, motion) for one object's box.
-
-    The lateral gap is how far the near side of the box sits from the
-    chair's centre line; negative means it straddles the line. Forward
-    distance is the near face, clamped at zero - an object whose box already
-    contains the chair is not at a negative distance, it is here.
-    """
+def object_box(item):
+    """(x, y, half_x, half_y) for one object, or None if it does not parse."""
     try:
         x = float(item["x"])
         y = float(item["y"])
@@ -114,13 +130,110 @@ def object_reach(item, lateral_shift_m):
         half_x = abs(float(size[0])) / 2.0
         half_y = abs(float(size[1])) / 2.0
     except (KeyError, IndexError, TypeError, ValueError):
-        return -1.0, BLOCKED, MOVING
+        return None
     if not all(math.isfinite(v) for v in (x, y, half_x, half_y)):
-        return -1.0, BLOCKED, MOVING
+        return None
+    return x, y, half_x, half_y
+
+
+def object_motion(item):
     motion = item.get("motion", UNKNOWN)
-    if motion not in (STATIC, MOVING, UNKNOWN):
-        motion = MOVING
-    return abs(y - lateral_shift_m) - half_y, max(0.0, x - half_x), motion
+    return motion if motion in (STATIC, MOVING, UNKNOWN) else MOVING
+
+
+def object_reach(item, lateral_shift_m):
+    """(lateral gap, forward distance, motion) for one object's box.
+
+    The lateral gap is how far the near side of the box sits from the
+    chair's centre line; negative means it straddles the line. Forward
+    distance is the near face, clamped at zero - an object whose box already
+    contains the chair is not at a negative distance, it is here.
+
+    This is the fallback. The near face of an AXIS-ALIGNED box is a corner
+    of the bounding volume, and for anything not aligned with the chair
+    there are no returns there: a wall crossing the scan diagonally reported
+    0.69 m on 2026-07-31 with its nearest return in the corridor at 2.13 m.
+    Where the producer supplies a lateral profile, corridor_reach measures
+    from that instead.
+    """
+    box = object_box(item)
+    if box is None:
+        return -1.0, BLOCKED, MOVING
+    x, y, half_x, half_y = box
+    return (abs(y - lateral_shift_m) - half_y, max(0.0, x - half_x),
+            object_motion(item))
+
+
+def profile_reach(item, lateral_shift_m, half_width_m):
+    """(blocks, distance) from the object's own returns, or None.
+
+    None means this object carries no profile and the caller must fall back
+    to its box. A profile that is PRESENT but unreadable is not a fallback:
+    it blocks at zero, because a producer emitting a broken profile is one
+    whose box is no more trustworthy, and the fallback would quietly restore
+    the very over-approximation this exists to remove.
+
+    A slice counts when it overlaps the corridor at all, so a return sitting
+    just inside a slice that straddles the corridor edge is never missed.
+    """
+    profile = item.get("profile")
+    if profile is None:
+        return None
+    if not isinstance(profile, dict):
+        return True, BLOCKED
+    try:
+        bin_m = float(profile["bin_m"])
+        y0 = float(profile["y0"])
+        slices = profile["min_x"]
+    except (KeyError, TypeError, ValueError):
+        return True, BLOCKED
+    if not isinstance(slices, list) or not slices or \
+            not math.isfinite(bin_m) or bin_m <= 0.0 or not math.isfinite(y0):
+        return True, BLOCKED
+    low = lateral_shift_m - half_width_m
+    high = lateral_shift_m + half_width_m
+    nearest = None
+    for index, value in enumerate(slices):
+        if value is None:
+            continue
+        if y0 + (index + 1) * bin_m <= low or y0 + index * bin_m >= high:
+            continue
+        try:
+            x = float(value)
+        except (TypeError, ValueError):
+            return True, BLOCKED
+        if not math.isfinite(x):
+            return True, BLOCKED
+        x = max(0.0, x)
+        if nearest is None or x < nearest:
+            nearest = x
+    if nearest is None:
+        return False, None
+    return True, nearest
+
+
+def corridor_reach(item, lateral_shift_m, half_width_m):
+    """(blocks, distance, motion) for one object against one corridor.
+
+    The single place the question "is this in the way, and how far" is
+    answered. Measures from the object's returns where they are published
+    and from its box otherwise; anything that does not parse blocks at zero
+    and reads as MOVING, so a producer bug can neither hide an obstacle nor
+    make one look parked enough to drive around.
+    """
+    if object_box(item) is None:
+        return True, BLOCKED, MOVING
+    motion = object_motion(item)
+    measured = profile_reach(item, lateral_shift_m, half_width_m)
+    if measured is not None:
+        blocks, distance = measured
+        if not blocks:
+            return False, None, motion
+        return True, BLOCKED if distance is None else distance, motion
+    gap, distance, _ = object_reach(item, lateral_shift_m)
+    if gap > half_width_m:
+        return False, None, motion
+    return True, distance, motion
 
 
 def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
@@ -134,8 +247,9 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
         return Threat(BLOCKED, MOVING, summary.status or "unusable")
     nearest = None
     for item in summary.objects:
-        gap, distance, motion = object_reach(item, lateral_shift_m)
-        if gap > half_width_m:
+        blocks, distance, motion = corridor_reach(
+            item, lateral_shift_m, half_width_m)
+        if not blocks:
             continue
         if nearest is None or distance < nearest.distance_m:
             nearest = Threat(distance, motion, str(item.get("class", "")))
