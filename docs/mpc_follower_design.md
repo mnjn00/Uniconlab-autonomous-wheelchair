@@ -191,6 +191,30 @@ command-chain delay (gate + relay + base response), not from `now`. Not
 yet in the offline core - the simulated plant has no lag; it lands with
 the ROS node once L is measured on the NUC.
 
+State-anchor smoothing is a node requirement, measured 2026-08-04: the
+anchor must blend the (jittery) localisation pose with wheel-odometry
+v/w through an EMA (~0.4 gain validated) instead of re-anchoring on the
+raw pose. With 2 cm of injected lateral jitter the raw anchor produces
+5.0 yaw-command reversals per metre - busy, hunting-adjacent steering;
+the EMA anchor cuts that to 1.3/m with no tracking regression (lateral
+RMS 13 mm either way). At 5 cm jitter the raw anchor stalls the run at
+183 m; the smoothed one runs to the route's choke point. No sustained
+oscillation was found in any configuration - the 2 s limit-cycle screen
+and the lateral spectrum stay clean - but the busyness is exactly what
+would feel like hunting on the chair, so the smoothing is mandatory,
+not a tune-later.
+
+One residual, same measurement: with jitter present (smoothed or not)
+the run ends in an INFEASIBLE_STOP at the route's ~334 m choke point,
+which the noiseless run clears. The stop is safe - that is the ladder
+working - but a stall there on every drive is not acceptable. The fix
+is for the node to shape v_ref with the follower's existing speed
+policy (narrow-band creep, slope slowdown) instead of a constant 0.6:
+a slower approach shrinks the dynamic constraint pressure over the
+horizon exactly where the corridor leaves no margin. The offline sim
+kept the constant reference on purpose, so this gap is a node
+requirement, recorded here rather than discovered in the field.
+
 ## 8. CPU budget (NUC11PHKi7C, i7-1165G7, 4C/8T, 28 W sustained)
 
 | Consumer | Budget (cores) |
