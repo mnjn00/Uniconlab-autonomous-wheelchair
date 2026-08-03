@@ -200,8 +200,10 @@ source "$HOME/fast_lio_ws/devel/setup.bash"
 echo "[4/5] localization + rviz + auto init"
 source "$HOME/livox_static_localization_ws/devel/setup.bash"
 rosparam set /fast_lio_icp/auto_initialization_verified false
+rosparam set /fast_lio_icp/auto_initialization_stable false
+rosparam set /fast_lio_icp/auto_initialization_source none
 setsid nohup roslaunch static_livox_localization moving_localization.launch \
-  rviz:="$RVIZ" auto_init:=true \
+  rviz:="$RVIZ" auto_init:=true auto_init_global_only:=true \
   map_path:="$MAP" map_sha256:="$MAP_SHA256" map_id:="$MAP_ID" \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
   auto_init_route:="$ROUTE" \
@@ -227,9 +229,19 @@ while [ "$(date +%s)" -lt "$AUTO_INIT_DEADLINE" ]; do
     rosparam get /fast_lio_icp/auto_initialization_verified 2>/dev/null ||
       echo false
   )
+  AUTO_INITIALIZATION_STABLE=$(
+    rosparam get /fast_lio_icp/auto_initialization_stable 2>/dev/null ||
+      echo false
+  )
+  AUTO_INITIALIZATION_SOURCE=$(
+    rosparam get /fast_lio_icp/auto_initialization_source 2>/dev/null ||
+      echo none
+  )
   echo "  state: $STATE"
   if echo "$STATE" | grep -q TRACKING &&
-     [ "$AUTO_INITIALIZATION_VERIFIED" = "true" ]; then
+     [ "$AUTO_INITIALIZATION_VERIFIED" = "true" ] &&
+     [ "$AUTO_INITIALIZATION_STABLE" = "true" ] &&
+     [ "$AUTO_INITIALIZATION_SOURCE" = "global_search" ]; then
     LOCALIZED=1
     break
   fi
@@ -242,8 +254,8 @@ while [ "$(date +%s)" -lt "$AUTO_INIT_DEADLINE" ]; do
   sleep 2
 done
 if [ "$LOCALIZED" != "1" ]; then
-  echo "WARNING: not TRACKING after automatic prior/global fallback."
-  echo "Inspect $LOG/live_localization.log; use the documented manual seed only after review."
+  echo "WARNING: global no-prior localization did not become stable."
+  echo "Inspect $LOG/live_localization.log; motion remains disabled."
   exit 4
 fi
 echo "LOCALIZED"

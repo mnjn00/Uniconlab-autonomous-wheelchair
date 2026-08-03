@@ -102,6 +102,17 @@ Eigen::Isometry3d limit_map_T_odom_step(
   return current_map_T_odom * limited_delta;
 }
 
+bool tracking_motion_exceeds_threshold(
+    const Eigen::Isometry3d& reference_odom_T_base,
+    const Eigen::Isometry3d& current_odom_T_base,
+    double minimum_translation_m,
+    double minimum_rotation_rad) {
+  const Eigen::Isometry3d delta =
+      reference_odom_T_base.inverse() * current_odom_T_base;
+  return planar_translation(delta.translation()) >= minimum_translation_m ||
+         yaw_angle(delta.rotation()) >= minimum_rotation_rad;
+}
+
 const char* tracking_state_name(TrackingState state) {
   switch (state) {
     case TrackingState::WAITING_INITIALIZATION:

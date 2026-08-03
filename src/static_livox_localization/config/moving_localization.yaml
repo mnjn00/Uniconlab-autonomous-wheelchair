@@ -19,6 +19,8 @@ preview_max_rate_hz: 5.0
 initialization_window_s: 3.0
 rolling_window_s: 2.0
 correction_period_s: 1.0
+min_tracking_correction_translation_m: 0.10
+min_tracking_correction_yaw_deg: 2.0
 max_cloud_odom_skew_s: 0.10
 max_cloud_samples: 20
 max_submap_points: 120000

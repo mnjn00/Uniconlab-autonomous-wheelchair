@@ -24,6 +24,7 @@ using static_livox_localization::TrackingStateMachine;
 using static_livox_localization::compute_map_T_odom;
 using static_livox_localization::evaluate_correction;
 using static_livox_localization::limit_map_T_odom_step;
+using static_livox_localization::tracking_motion_exceeds_threshold;
 
 TEST(MovingTracker, ComputesMapToOdomWithoutMovingMapFrame) {
   const Eigen::Isometry3d map_T_base = pose(12.0, -3.0, 0.4);
@@ -104,6 +105,17 @@ TEST(MovingTracker, LimitsAcceptedMapToOdomCorrectionStep) {
   EXPECT_NEAR(limited.translation().norm(), 0.30, 1e-9);
   EXPECT_NEAR(Eigen::AngleAxisd(limited.rotation()).angle(),
               config.max_correction_rotation_rad, 1e-9);
+}
+
+TEST(MovingTracker, RequiresRealMotionBeforeAnotherTrackingCorrection) {
+  const Eigen::Isometry3d reference = pose(2.0, 3.0, 0.2);
+
+  EXPECT_FALSE(tracking_motion_exceeds_threshold(
+      reference, pose(2.007, 3.0, 0.205), 0.10, 2.0 * M_PI / 180.0));
+  EXPECT_TRUE(tracking_motion_exceeds_threshold(
+      reference, pose(2.11, 3.0, 0.205), 0.10, 2.0 * M_PI / 180.0));
+  EXPECT_TRUE(tracking_motion_exceeds_threshold(
+      reference, pose(2.0, 3.0, 0.25), 0.10, 2.0 * M_PI / 180.0));
 }
 
 TEST(MovingTracker, DegradesThenLosesAndNeedsConfirmedRecovery) {

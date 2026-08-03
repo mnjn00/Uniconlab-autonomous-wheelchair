@@ -143,6 +143,24 @@ def test_handshake_accepts_only_same_generation_after_verifying():
     assert module.tracking_was_verified(tracking, 11, 4, True)
 
 
+def test_stationary_stability_rejects_localization_walk_with_fixed_odometry():
+    module = load_module()
+    monitor = module.StationaryStabilityMonitor()
+
+    assert monitor.observe((10.0, 4.0, 0.1), (0.0, 0.0, 0.0)) is None
+    refusal = monitor.observe((10.3, 4.0, 0.1), (0.004, 0.0, 0.0))
+
+    assert refusal == "LOCALIZATION_MOVED_WHILE_STATIONARY"
+
+
+def test_stationary_stability_accepts_sensor_noise_inside_both_bounds():
+    module = load_module()
+    monitor = module.StationaryStabilityMonitor()
+
+    assert monitor.observe((10.0, 4.0, 0.1), (0.0, 0.0, 0.0)) is None
+    assert monitor.observe((10.03, 4.02, 0.11), (0.01, 0.0, 0.005)) is None
+
+
 def test_known_start_rejects_a_route_that_faces_away_from_its_own_path(tmp_path):
     """The 0727 route stored -175 deg where the chair actually faced +4 deg:
     generated from a spin-in-place start, the polyline direction between
