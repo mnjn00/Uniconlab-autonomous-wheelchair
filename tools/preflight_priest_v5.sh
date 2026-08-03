@@ -2,6 +2,7 @@
 set -eo pipefail
 
 source /opt/ros/noetic/setup.bash >/dev/null 2>&1
+source "$HOME/ws_livox/devel/setup.bash" >/dev/null 2>&1
 export ROS_MASTER_URI=http://127.0.0.1:11311
 
 fail() { echo "REFUSING PRIEST START: $1" >&2; exit 1; }

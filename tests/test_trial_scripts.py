@@ -84,6 +84,9 @@ def test_priest_v5_preflight_proves_every_runtime_dependency() -> None:
 
     # Then stale planner, global route, guards, sensors, or recorder refuse.
     assert all(token in preflight for token in required)
+    overlay = preflight.index('source "$HOME/ws_livox/devel/setup.bash"')
+    first_livox_sample = preflight.index("for topic in /livox/lidar/header")
+    assert overlay < first_livox_sample
     assert '_planner:="$PLANNER"' in startup
     assert '[ -n "$LINEAR" ] && [ -n "$ANGULAR" ]' in preflight
     assert "data: true" not in preflight
