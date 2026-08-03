@@ -33,6 +33,16 @@ if [ "$SAFETY_POLICIES" != "true" ] && [ "$SAFETY_POLICIES" != "false" ]; then
   echo "ERROR: SAFETY_POLICIES must be true or false, got '$SAFETY_POLICIES'" >&2
   exit 65
 fi
+# PLANNER=priest swaps the route follower for the PRIEST corridor planner
+# (field-trial opt-in; same topics, service and status contract). The
+# field-validated route follower stays the default, and the PRIEST node
+# refuses SAFETY_POLICIES=false outright - an unvalidated planner with its
+# guards off is not a diagnostic configuration.
+PLANNER="${PLANNER:-route}"
+if [ "$PLANNER" != "route" ] && [ "$PLANNER" != "priest" ]; then
+  echo "ERROR: PLANNER must be route or priest, got '$PLANNER'" >&2
+  exit 66
+fi
 LOG=$HOME
 
 source /opt/ros/noetic/setup.bash
@@ -289,7 +299,12 @@ for i in $(seq 1 10); do
   sleep 1
 done
 echo "  final-stage relay up - watch /tip_guard/status"
-setsid nohup rosrun static_livox_localization waypoint_follower.py \
+FOLLOWER_SCRIPT="waypoint_follower.py"
+if [ "$PLANNER" = "priest" ]; then
+  FOLLOWER_SCRIPT="priest_follower.py"
+  echo "  PLANNER=priest - PRIEST corridor planner (opt-in, guards always on)"
+fi
+setsid nohup rosrun static_livox_localization "$FOLLOWER_SCRIPT" \
   _route:="$ROUTE" _safety_band:="$BAND" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \

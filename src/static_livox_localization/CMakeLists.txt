@@ -46,6 +46,7 @@ catkin_install_python(
     scripts/fastlio_init_health.py
     scripts/enable_auto_correction_after_seed.py
     scripts/tip_guard.py
+    scripts/priest_follower.py
     scripts/waypoint_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
@@ -61,6 +62,7 @@ install(
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
+    scripts/priest_corridor.py
     scripts/priest_projection.py
     scripts/priest_planner.py
     scripts/safety_band.py
