@@ -61,6 +61,7 @@ install(
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
+    scripts/mpc_core.py
     scripts/safety_band.py
     scripts/scan_accumulator.py
     scripts/tip_guard_policy.py
