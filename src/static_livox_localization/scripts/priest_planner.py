@@ -25,79 +25,15 @@ refuses to pretend otherwise.
 
 import numpy as np
 
+from priest_constraints import (
+    CANONICAL_FOOTPRINT,
+    DEFAULT_CONSTRAINT_TOLERANCES,
+    ConstraintTolerances,
+    ConstraintViolations,
+)
+from priest_feasibility import certify_trajectory
 from priest_projection import Projection, TrajectoryBasis
-
-
-class Corridor(object):
-    """A band centreline with per-station lateral limits, indexed by arc length.
-
-    Kept separate from the planner because it is the one piece that comes
-    from the map rather than from the live scene, and because slicing it by
-    arc length is the only place route geometry enters the search.
-    """
-
-    def __init__(self, centres, normals, left_m, right_m):
-        self.centres = np.asarray(centres, dtype=np.float64)
-        self.normals = np.asarray(normals, dtype=np.float64)
-        self.left_m = np.asarray(left_m, dtype=np.float64)
-        self.right_m = np.asarray(right_m, dtype=np.float64)
-        steps = np.linalg.norm(np.diff(self.centres, axis=0), axis=1)
-        self.arc = np.concatenate([[0.0], np.cumsum(steps)])
-
-    @property
-    def length_m(self):
-        return float(self.arc[-1])
-
-    def arc_of(self, point):
-        """Arc length of the nearest centreline sample to `point`."""
-        d = np.linalg.norm(self.centres - np.asarray(point, dtype=np.float64),
-                           axis=1)
-        return float(self.arc[int(np.argmin(d))])
-
-    def slice(self, start_arc, end_arc, steps):
-        """Resample the corridor over [start_arc, end_arc] at `steps` points.
-
-        The planner needs one station per planning timestep, which is what
-        makes the band's limits expressible as affine half-planes. Sampling
-        by arc length rather than by index keeps the spacing even where the
-        band's own stations are not.
-        """
-        end_arc = max(end_arc, start_arc + 1e-3)
-        wanted = np.linspace(start_arc, min(end_arc, self.arc[-1]), steps)
-        centres = np.stack([np.interp(wanted, self.arc, self.centres[:, 0]),
-                            np.interp(wanted, self.arc, self.centres[:, 1])],
-                           axis=1)
-        normals = np.stack([np.interp(wanted, self.arc, self.normals[:, 0]),
-                            np.interp(wanted, self.arc, self.normals[:, 1])],
-                           axis=1)
-        norm = np.linalg.norm(normals, axis=1, keepdims=True)
-        normals = normals / np.maximum(norm, 1e-9)
-        return (centres, normals,
-                np.interp(wanted, self.arc, self.left_m),
-                np.interp(wanted, self.arc, self.right_m))
-
-
-class Plan(object):
-    """One cycle's answer, with enough evidence to refuse to drive it."""
-
-    def __init__(self, xi, x, y, times, residual, cost, feasible_samples,
-                 horizon_s, reason=""):
-        self.xi = xi
-        self.x = x
-        self.y = y
-        self.times = times
-        self.residual = float(residual)
-        self.cost = float(cost)
-        self.feasible_samples = int(feasible_samples)
-        self.horizon_s = float(horizon_s)
-        self.reason = reason
-
-    @property
-    def usable(self):
-        return self.reason == ""
-
-    def points(self):
-        return np.stack([self.x, self.y], axis=1)
+from priest_types import Corridor, Plan
 
 
 class PriestPlanner(object):
@@ -111,6 +47,7 @@ class PriestPlanner(object):
     """
 
     FEASIBLE_M = 0.05
+    CONSTRAINT_TOLERANCES = DEFAULT_CONSTRAINT_TOLERANCES
     RETRIES = 4
     REACH_BACKOFF = 0.65
     MIN_REACH_M = 1.5
@@ -120,13 +57,15 @@ class PriestPlanner(object):
     # obstacle surface is a few centimetres - correct for a point, and a
     # collision for a 0.70 m wide chair.
     CHAIR_HALF_WIDTH_M = 0.35
-    OBSTACLE_MARGIN_M = 0.10
+    CHAIR_RADIUS_M = CANONICAL_FOOTPRINT.circumscribed_radius_m
+    OBSTACLE_MARGIN_M = CANONICAL_FOOTPRINT.planning_margin_m
     # Horizons are quantised so the basis and its KKT inverse are actually
     # reused. Recomputed every cycle as `remaining` shrinks, that inverse
     # was most of the planning time.
     HORIZON_QUANTUM_S = 2.0
 
     def __init__(self, degree=10, steps=40, v_max=0.6, a_max=0.5,
+                 yaw_rate_max=0.6,
                  max_obstacles=24, batch=200, elite=20, constraint_elite=60,
                  iterations=12, projection_iterations=15, rho=1.0,
                  learning_rate=0.6, temperature=0.5, margin=1.6, seed=0):
@@ -134,6 +73,7 @@ class PriestPlanner(object):
         self.steps = steps
         self.v_max = float(v_max)
         self.a_max = float(a_max)
+        self.yaw_rate_max = float(yaw_rate_max)
         self.max_obstacles = int(max_obstacles)
         self.batch = int(batch)
         self.elite = int(elite)
@@ -185,8 +125,10 @@ class PriestPlanner(object):
         if not len(obstacles):
             return obstacles
         grown = np.array(obstacles, dtype=np.float64).copy()
-        grown[:, 2] += self.CHAIR_HALF_WIDTH_M + self.OBSTACLE_MARGIN_M
+        grown[:, 2] += self.CHAIR_RADIUS_M + self.OBSTACLE_MARGIN_M
         return grown
+
+    certify = certify_trajectory
 
     def horizon_for(self, reach_m, floor_s=4.0, ceiling_s=40.0):
         """Seconds needed to cover `reach_m`, with room to go round things.

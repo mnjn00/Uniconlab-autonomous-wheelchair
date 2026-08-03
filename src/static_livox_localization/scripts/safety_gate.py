@@ -42,6 +42,7 @@ from drive_policy import announce
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            filter_obstacle_points, motion_hold_reason,
                            stopping_envelope, swept_footprint_collision)
+from priest_constraints import CANONICAL_FOOTPRINT
 from scan_accumulator import CloudAccumulator
 
 
@@ -68,10 +69,10 @@ MIN_BRAKE_DECEL_MPS2 = 0.5
 MIN_YAW_DECEL_RPS2 = 0.5
 GEOMETRY_MARGIN_M = 0.9
 FORWARD_CHECK_EXTRA_M = 0.6
-FOOTPRINT_FRONT_M = 0.50
-FOOTPRINT_REAR_M = 0.50
-FOOTPRINT_HALF_WIDTH_M = 0.30
-SWEEP_MARGIN_M = 0.15
+FOOTPRINT_FRONT_M = CANONICAL_FOOTPRINT.front_m
+FOOTPRINT_REAR_M = CANONICAL_FOOTPRINT.rear_m
+FOOTPRINT_HALF_WIDTH_M = CANONICAL_FOOTPRINT.half_width_m
+SWEEP_MARGIN_M = CANONICAL_FOOTPRINT.sweep_margin_m
 RIDER_EXCLUDE_X_MIN_M = -1.0
 RIDER_EXCLUDE_X_MAX_M = 0.55
 RIDER_EXCLUDE_HALF_WIDTH_M = 0.40

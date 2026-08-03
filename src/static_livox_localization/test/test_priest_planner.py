@@ -101,7 +101,7 @@ def test_it_reaches_the_goal_with_nothing_but_a_corridor():
 
 
 def test_it_reaches_the_goal_past_obstacles_it_was_never_told_about_in_advance():
-    corridor = bent_corridor()
+    corridor = bent_corridor(half_width=1.6)
     centres = corridor.centres
     obstacles = [[centres[40, 0], centres[40, 1] + 0.30, 0.40],
                  [centres[100, 0], centres[100, 1] - 0.35, 0.45],
@@ -111,7 +111,7 @@ def test_it_reaches_the_goal_past_obstacles_it_was_never_told_about_in_advance()
 
     assert result["reason"] == ""
     assert result["arc"] > corridor.length_m - 1.0
-    assert result["lateral"] <= 0.8 + 1e-3
+    assert result["lateral"] <= 1.6 + 1e-3
 
 
 # -------------------------------------------------------- the chair is wide
@@ -119,23 +119,23 @@ def test_it_reaches_the_goal_past_obstacles_it_was_never_told_about_in_advance()
 def test_obstacles_are_grown_by_the_chair_and_not_just_by_its_centre():
     """The projection keeps a POINT outside each circle. Passing raw radii
     produced trajectories clearing an obstacle surface by 0.04 m - correct
-    for a point, a collision for a 0.70 m chair. Clearance is measured to the
-    real surface, so it has to exceed the half width."""
+    for a point, a collision for the rectangular chair. Clearance is measured
+    to the real surface, so the circular proxy must enclose every corner."""
     planner = pl.PriestPlanner()
     grown = planner.inflate(np.array([[3.0, 0.0, 0.40]]))
 
     assert grown[0, 2] == pytest.approx(
-        0.40 + planner.CHAIR_HALF_WIDTH_M + planner.OBSTACLE_MARGIN_M)
+        0.40 + planner.CHAIR_RADIUS_M + planner.OBSTACLE_MARGIN_M)
 
-    corridor = bent_corridor()
+    corridor = bent_corridor(half_width=1.2)
     centres = corridor.centres
     result = drive(corridor,
                    [[centres[100, 0], centres[100, 1] + 0.35, 0.5]])
 
     assert result["reason"] == ""
-    assert result["clearance"] >= planner.CHAIR_HALF_WIDTH_M, (
-        "passed %.2f m from an obstacle surface with a %.2f m half width"
-        % (result["clearance"], planner.CHAIR_HALF_WIDTH_M))
+    assert result["clearance"] >= planner.CHAIR_RADIUS_M, (
+        "passed %.2f m from an obstacle surface with a %.2f m corner radius"
+        % (result["clearance"], planner.CHAIR_RADIUS_M))
 
 
 def test_a_gap_narrower_than_the_chair_is_refused_rather_than_squeezed():

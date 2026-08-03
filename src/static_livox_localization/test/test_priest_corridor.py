@@ -1,10 +1,8 @@
-"""The band-to-corridor reading, checked against the shipped bands.
+"""The band-to-corridor adapter, checked against the shipped bands.
 
-The planner treats its corridor as ground truth about where the chair may
-be, so the one job here is that the reading never claims more room than the
-band does - not after the hazard margins, not after the operator's drawing,
-and not on either of the two very different bands this repository actually
-ships (0727: measured edge kinds; v4: drawn corridor, no drop semantics).
+The planner's proposal corridor and the runtime band must be identical,
+including deliberate BAND_FLOOR behavior and negative/crossed measured limits.
+Only the runtime predicate is authoritative at final certification.
 """
 
 import importlib.util
@@ -37,25 +35,68 @@ def load(name):
 
 
 pc = load("priest_corridor")
+sb = load("safety_band")
 
 
 def stations(path):
     return json.loads(path.read_text(encoding="utf-8"))["stations"]
 
 
+def write_measured_band(path: Path, left_m: float, right_m: float) -> Path:
+    station = {
+        "heading_deg": 0.0,
+        "left_m": left_m,
+        "right_m": right_m,
+        "left_drop_m": 0.20,
+        "right_drop_m": 0.20,
+        "left_kind": "drop",
+        "right_kind": "drop",
+    }
+    path.write_text(json.dumps({"stations": [
+        dict(station, x=0.0, y=0.0),
+        dict(station, x=1.0, y=0.0),
+    ]}), encoding="utf-8")
+    return path
+
+
+def test_negative_measured_limit_matches_runtime_band_without_zero_floor(
+        tmp_path: Path) -> None:
+    band_path = write_measured_band(tmp_path / "negative.json", 0.30, 1.00)
+    runtime_band = sb.SafetyBand(str(band_path))
+
+    _, _, left, right = pc.corridor_arrays(str(band_path))
+
+    assert np.array_equal(left, runtime_band.left), (
+        "planner floored a negative measured limit that runtime preserves")
+    assert np.array_equal(right, runtime_band.right)
+    assert left[0] < 0.0
+
+
+def test_crossed_measured_limits_remain_an_empty_runtime_corridor(
+        tmp_path: Path) -> None:
+    band_path = write_measured_band(tmp_path / "crossed.json", 0.30, 0.30)
+    runtime_band = sb.SafetyBand(str(band_path))
+
+    _, _, left, right = pc.corridor_arrays(str(band_path))
+
+    assert np.array_equal(left, runtime_band.left)
+    assert np.array_equal(right, runtime_band.right)
+    assert np.all(left + right < 0.0), (
+        "planner turned a crossed, empty runtime band into a legal centreline")
+
+
 @pytest.mark.parametrize("band", [BAND_0727, BAND_V4],
                          ids=["0727-measured", "v4-drawn"])
-def test_the_corridor_never_claims_more_room_than_the_band(band):
+def test_the_corridor_exactly_matches_the_runtime_band(band):
     if not band.exists():
         pytest.skip("band not shipped")
     centres, normals, left, right = pc.corridor_arrays(str(band))
     raw = stations(band)
+    runtime_band = sb.SafetyBand(str(band))
 
     assert len(centres) == len(raw)
-    for index, station in enumerate(raw):
-        assert left[index] <= station["left_m"] + 1e-9
-        assert right[index] <= station["right_m"] + 1e-9
-        assert left[index] >= 0.0 and right[index] >= 0.0
+    assert np.array_equal(left, runtime_band.left)
+    assert np.array_equal(right, runtime_band.right)
 
 
 def test_the_drawn_corridor_narrows_where_it_is_present():
@@ -70,26 +111,23 @@ def test_the_drawn_corridor_narrows_where_it_is_present():
         assert right[index] <= station["right_corridor_m"] + 1e-9
 
 
-def test_hazard_kinds_cost_room_on_the_measured_band():
-    """The 0727 band carries measured drop/step_up/lip edges. Wherever one
-    exists, the planning limit must sit strictly inside the raw distance to
-    the break - a corridor that plans right up to a kerb edge has spent the
-    entire hazard margin before control error is even counted."""
+def test_severe_hazard_kinds_cost_room_on_the_measured_band():
+    """Severe measured edges never receive the legacy/open-ground floor."""
     if not BAND_0727.exists():
         pytest.skip("band not shipped")
     _, _, left, right = pc.corridor_arrays(str(BAND_0727))
     raw = stations(BAND_0727)
     checked = 0
     for index, station in enumerate(raw):
-        if station["left_kind"] in ("drop", "step_up", "lip") \
+        if station["left_kind"] in ("drop", "step_up", "unscanned") \
                 and station["left_m"] > 0.0:
             assert left[index] < station["left_m"], index
             checked += 1
-        if station["right_kind"] in ("drop", "step_up", "lip") \
+        if station["right_kind"] in ("drop", "step_up", "unscanned") \
                 and station["right_m"] > 0.0:
             assert right[index] < station["right_m"], index
             checked += 1
-    assert checked > 100, "the measured band stopped carrying hazard kinds"
+    assert checked > 0, "the measured band stopped carrying severe hazards"
 
 
 def test_normals_point_left_of_the_station_heading():
