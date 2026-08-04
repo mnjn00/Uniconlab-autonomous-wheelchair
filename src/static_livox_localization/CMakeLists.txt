@@ -47,6 +47,7 @@ catkin_install_python(
     scripts/enable_auto_correction_after_seed.py
     scripts/tip_guard.py
     scripts/waypoint_follower.py
+    scripts/mpc_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
@@ -61,7 +62,9 @@ install(
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
+    scripts/mpc_anchor.py
     scripts/mpc_core.py
+    scripts/mpc_speed.py
     scripts/safety_band.py
     scripts/scan_accumulator.py
     scripts/tip_guard_policy.py

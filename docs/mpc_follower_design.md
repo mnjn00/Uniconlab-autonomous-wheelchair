@@ -231,6 +231,40 @@ horizon exactly where the corridor leaves no margin. The offline sim
 kept the constant reference on purpose, so this gap is a node
 requirement, recorded here rather than discovered in the field.
 
+**Amended 2026-08-04, when the node was built.** The paragraph above is
+wrong in both halves, and is kept rather than deleted because the
+reasoning in it is the reasoning anyone would repeat. Measured before
+implementing it, over the v4 band with 2 cm jitter and the EMA anchor:
+
+- *A slower approach does not clear the choke.* A constant 0.6 reaches
+  350 m; a constant 0.3 stops **earlier**, at 334 m. The pinch leaves the
+  chair centre 0.13 m of lateral freedom, and a hard half-plane corridor
+  that narrow is infeasible against jitter regardless of entry speed. The
+  gap is geometric, and reference shaping cannot close it. Closing it
+  needs a different lever - softening the band rows at pinches the way
+  obstacle rows already are, or a corridor that is not 0.13 m wide - and
+  neither is a node change, so neither was made here.
+- *Creep would not have been slow-but-moving, it would have been stopped.*
+  Sweeping a constant reference from a standing start: at and below
+  0.22 m/s the chair settles at exactly zero while the solve reports OK.
+  There is no progress term in the objective, so forward motion is bought
+  only by `w_vel * (v - v_ref)^2`, and below ~0.22 that no longer covers
+  the lateral, heading and rate cost of moving. Implementing "narrow-band
+  creep" at CREEP_SPEED 0.15 would have parked the chair at the first
+  narrow station and reported nothing.
+
+What the node does instead: the reference is floored at TURN_FLOOR_SPEED
+(0.30 - the follower's own constant, from the measurement that the loaded
+base does not rotate below ~1.3 km/h at the faster wheel), and any policy
+verdict below that floor becomes a stop rather than a slower reference.
+This controller has no creep regime. See `scripts/mpc_speed.py`, which
+carries the sweep, and `tests/test_mpc_vehicle_layer.py`, which pins the
+floor above the standstill zone so neither constant can drift into it.
+
+Note also that section 10's gates were measured **without** injected
+localisation noise. They stand as written for that condition; they are not
+evidence about the jittered route, and the jittered route does not finish.
+
 ## 8. CPU budget (NUC11PHKi7C, i7-1165G7, 4C/8T, 28 W sustained)
 
 | Consumer | Budget (cores) |
