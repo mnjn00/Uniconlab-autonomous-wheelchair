@@ -159,6 +159,9 @@ def closed_loop(band, x0, steps, obstacles=(), v_target=0.4):
         lat.append(ref.frame_at(x[:2])[2])
         solve_ms.append(info.get("solve_ms", 0.0))
         inputs.append(u0.copy())
+        if status in (core.STATUS_INFEASIBLE_STOP, core.STATUS_BUDGET_STOP,
+                      core.STATUS_BLOCKED_STOP):
+            break  # a stop ends the scenario, as it does in the sim/node
         x = core.unicycle_step(x, u0, solver.p.dt)
         traj.append(x.copy())
         warm = (info.get("xbar"), info.get("ubar")) \
@@ -211,8 +214,40 @@ class SolverBehaviourTest(unittest.TestCase):
             band, np.array([0.0, 0.0, 0.0, 0.0, 0.0]), steps=400,
             obstacles=[np.array([10.0, 0.0])], v_target=0.4)
         self.assertIn(core.STATUS_BLOCKED_STOP, statuses)
+        # impassability manifests through the blocked-detection rung, never
+        # as infeasibility - the obstacle rows are soft and cannot make the
+        # QP unsolvable, so an INFEASIBLE_STOP here would mean the stop was
+        # named by the wrong mechanism
+        self.assertNotIn(core.STATUS_INFEASIBLE_STOP, statuses)
         dist = np.linalg.norm(traj[:, :2] - np.array([10.0, 0.0]), axis=1)
         self.assertGreater(dist.min(), 0.35)
+
+    def test_obstacle_rows_cannot_cause_or_mask_infeasibility(self):
+        # The obstacle rows carry unbounded slack, so they can neither
+        # create infeasibility nor hide it: the verdict belongs to the band
+        # alone. Pinning both directions keeps a future "harden the
+        # obstacle rows" change from silently re-arming the dead branch a
+        # counterfactual classifier turned out to be (46d9e41, reverted).
+        band = make_straight_band(n=120, half_width=0.4)
+        ref = core.Reference(band)
+        obstacle_xy = np.array([6.0, 0.0])
+        ob = core.obstacle_half_plane(ref, obstacle_xy,
+                                      core.MpcParams().obstacle_padding)
+
+        outside = np.array([5.0, 5.0, 0.0, 0.3, 0.0])   # 5 m off the band
+        v_ref, th_ref = core.polyline_refs(band, outside[:2], 25, 0.1, 0.4)
+        _u, status_plain, _i = core.MpcSolver(ref).solve_cycle(
+            outside, v_ref, th_ref, [])
+        _u, status_with_ob, _i = core.MpcSolver(ref).solve_cycle(
+            outside, v_ref, th_ref, [ob])
+        self.assertEqual(status_plain, core.STATUS_INFEASIBLE_STOP)
+        self.assertEqual(status_with_ob, core.STATUS_INFEASIBLE_STOP)
+
+        inside = np.array([5.0, 0.0, 0.0, 0.3, 0.0])     # on the centreline
+        v_ref, th_ref = core.polyline_refs(band, inside[:2], 25, 0.1, 0.4)
+        _u, status_ok, _i = core.MpcSolver(ref).solve_cycle(
+            inside, v_ref, th_ref, [ob])
+        self.assertEqual(status_ok, core.STATUS_OK)
 
 
 class DriveLimitsTest(unittest.TestCase):

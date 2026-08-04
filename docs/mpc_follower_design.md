@@ -180,7 +180,15 @@ The ladder, with a 40 ms budget per 100 ms cycle:
    an osqp infeasibility-certificate misfire from a real conflict) -> if
    still unsolved, cold iterate and cold solve (separates a degenerate
    linearisation point from a real conflict);
-2. still unsolved after all three -> INFEASIBLE_STOP, controlled stop;
+2. still unsolved after all three -> INFEASIBLE_STOP, controlled stop.
+   Obstacles need no say in this naming and get none: their rows are soft
+   with unbounded slack, so they can neither cause infeasibility nor hide
+   it - INFEASIBLE_STOP always means a band-plus-dynamics conflict, and
+   impassability by obstacle arrives through the blocked-detection rung
+   below instead. A counterfactual re-solve without the obstacle planes
+   was tried (46d9e41) and reverted (2e14191) once review proved the
+   branch could never fire; test_obstacle_rows_cannot_cause_or_mask_-
+   infeasibility pins the property so it cannot be un-proved silently;
 3. solved but over budget -> reuse the previous first input, up to 3
    consecutive cycles (REUSED), then BUDGET_STOP;
 4. solved, but blocked detection says otherwise: never sit inside an
