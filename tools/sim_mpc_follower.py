@@ -19,6 +19,7 @@ compensation is untestable without the hardware).
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -129,6 +130,7 @@ def run_scenario(name, band, goal_xy, start_x0, obstacles):
     return {"reached": reached, "containment": float(inside.mean())
             if len(inside) else 0.0, "steps": steps, "ok": ok,
             "min_obstacle_dist": dmin, "final": final,
+            "solve_p99": float(np.percentile(solve, 99)) if len(solve) else 0.0,
             "traj": np.round(traj, 4).tolist() if len(traj) else [],
             "statuses": statuses.tolist()}
 
@@ -197,6 +199,15 @@ def main(argv=None):
         print(f"  [{'PASS' if blk['min_obstacle_dist'] >= 0.35 else 'FAIL'}] "
               f"blocked run keeps >= 0.35 m from the obstacle: "
               f"{blk['min_obstacle_dist']:.3f} m")
+    # solve-time gate: the design's development-machine budget, actually
+    # enforced this time. The load average is printed beside it because a
+    # loaded box can fail this gate without the planner having regressed.
+    worst_p99 = max(r["solve_p99"] for r in results.values())
+    load1 = os.getloadavg()[0]
+    print(f"  [{'PASS' if worst_p99 <= 10.0 else 'FAIL'}] "
+          f"solve p99 <= 10 ms on the development machine: "
+          f"{worst_p99:.1f} ms (1-min load average {load1:.1f}, "
+          f"{os.cpu_count()} cores)")
     if args.save_json:
         payload = {"goal": [float(goal[0]), float(goal[1])],
                    "start": [float(start[0]), float(start[1]),

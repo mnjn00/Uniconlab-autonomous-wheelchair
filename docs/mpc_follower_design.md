@@ -147,7 +147,15 @@ All linear per step after linearisation around the warm-start iterate:
   an inaccurate solve must never accumulate velocity past MAX_SPEED. This
   is not theoretical: with the cap soft, inaccurate solves accumulated
   1.44 m/s in simulation.
-- **Actuators:** bounds and slew from section 4, `v >= 0`.
+- **Yaw-rate cap (hard):** `|w| <= w_max` on every step, as a STATE bound.
+  The first implementation bounded the yaw ACCELERATION with w_max
+  instead, which over-clamped alpha by 3x and left w itself unbounded: a
+  60/90/120-degree heading error then commanded 0.69/0.86/1.02 rad/s, up
+  to twice the cap, and the gate's clamp would have executed a trajectory
+  the plan never validated - the same failure mode as the soft speed cap.
+  Caught by review; held by DriveLimitsTest.
+- **Actuators:** bounds and slew from section 4, `v >= 0`. All hard bounds
+  hold within the solver's feasibility tolerance (~1e-3), no tighter.
 - **Terminal (soft):** lateral inside the band and heading aligned with
   the corridor tangent at step N, so the truncated horizon does not aim
   the chair at the band edge.
@@ -263,7 +271,11 @@ Gates as passed: band containment 100 % in every scenario; clear-run
 cross-track p95 0.021 m <= 0.25 m; zero unreported infeasibilities, zero
 silent budget overruns; solve time p99 <= 6.5 ms <= 10 ms on the
 development machine. The NUC gate remains p99 <= 25 ms, measured on
-hardware; even a 4x slowdown factor clears it.
+hardware; even a 4x slowdown factor clears it. The solve-time gate is
+enforced by the sim script itself (a PASS/FAIL line, with the 1-minute
+load average printed beside it so a loaded box is not mistaken for a
+planner regression) - the first version of the script claimed the gate in
+this document without checking it, and review caught that too.
 
 The obstacles were placed by the band itself - the passable one at the
 widest usable station in the middle half of the route, the blocked one at
