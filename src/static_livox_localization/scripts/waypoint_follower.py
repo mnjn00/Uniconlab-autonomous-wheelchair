@@ -21,9 +21,10 @@ Per control cycle:
     is stepped around within the band, from 5 m out so the chair drifts past
     rather than stopping first; anything moving, or not yet watched long
     enough to say, is waited out where it stands and driving resumes on its
-    own once the corridor is clear. Raw-scan returns carry no identity, so
-    they keep the older rule: blocking for 3 s is the only evidence of
-    parkedness they can offer
+    own once the corridor is clear. Classified objects are the ONLY obstacle
+    source here: the raw five-point scan check was removed on 2026-08-05
+    because a source with no identity was authorising bypass manoeuvres.
+    safety_gate.py keeps its own raw check and can still stop the chair
   - slope guard and bounded DEGRADED-localization grace
   - speed policy: 0.6 m/s cap (operator-directed), curvature slowdown,
     accel/yaw-rate limiting
@@ -70,7 +71,7 @@ from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, REFERENCE_BODY,
 from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S, GO_ROUND,
                            Threat, avoidance_decision, is_stale,
                            nearest_threat, parse_summary)
-from cluster_tracking import MOVING, UNKNOWN
+from cluster_tracking import MOVING
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import localization_hold_reason
 from scan_accumulator import CloudAccumulator
@@ -99,13 +100,10 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
-# Obstacle detection is limited to a forward cone. The MID360 sees
-# 360 deg but only the forward sector matters for driving; side and
-# rear returns are the rider, the wheelchair frame, and irrelevant
-# scenery. The cone half-angle and minimum range together exclude the
-# rider's legs and the wheelchair footrest from the obstacle guard.
-FORWARD_FOV_HALF_DEG = 50.0
-CORRIDOR_MIN_RANGE_M = 0.50
+# The forward-cone and minimum-range constants that used to live here
+# belonged to the raw five-point scan check, removed 2026-08-05. The same
+# geometry still exists in safety_gate.py, which keeps its own independent
+# raw check - see corridor_threat for why the follower no longer has one.
 GUARD_STOP_MIN_M = 0.9
 GUARD_SLOW_EXTRA_M = 1.2
 ACCUMULATION_WINDOW_S = 1.0
@@ -113,8 +111,6 @@ PIPELINE_BUDGET_S = 0.2
 MIN_BRAKE_DECEL_MPS2 = 0.5
 MIN_YAW_DECEL_RPS2 = 0.5
 ODOM_STALE_S = 0.35
-OBSTACLE_MIN_Z = 0.18
-OBSTACLE_MAX_Z = 1.9
 # Speed follows how much lateral slack the chair actually has, not whether
 # the band happens to be under a width threshold. The old binary test
 # (total width < 1.2 m -> 0.2 m/s) spent the same caution on a corridor
@@ -259,6 +255,15 @@ class WaypointFollower:
         # people when everything else is off.
         self.clusters_enabled = bool(
             rospy.get_param("~cluster_avoidance", True))
+        # Since 2026-08-05 this is the only thing looking for obstacles. It
+        # used to be the half that survived ~safety_policies:=false while the
+        # raw check covered the other case; with the raw check gone, starting
+        # with it off is starting blind, and no combination of the remaining
+        # guards would notice. Refuse rather than drive.
+        if not self.clusters_enabled:
+            raise rospy.ROSInitException(
+                "~cluster_avoidance:=false leaves no obstacle source at all "
+                "since the raw scan check was removed; run with it on")
         # Absent means guarded, and anything that arrives as a string rather
         # than a bool is truthy and therefore also guarded. Both failure
         # directions leave the guards on; the startup line below is how the
@@ -401,9 +406,6 @@ class WaypointFollower:
             geometry_margin_m=GUARD_STOP_MIN_M)
         return envelope.distance_m
 
-    def guard_slow(self):
-        return self.guard_stop() + GUARD_SLOW_EXTRA_M
-
     def cluster_stop_radius(self):
         """Stop radius for the cluster guard.
 
@@ -436,12 +438,11 @@ class WaypointFollower:
     def stop_radius(self):
         """The distance inside which anything reported is a stop.
 
-        Two sources with different latencies: the raw check reads the scan
-        this node accumulated itself, while a cluster summary is already a
-        publish cycle old on top of its own accumulation window. The radius
-        has to cover the OLDEST data feeding it, so with both on it is the
-        larger. With only the raw check on this is guard_stop() exactly,
-        which is the field-validated behaviour.
+        guard_stop() is the braking envelope - reaction time plus stopping
+        distance - and stands whatever reports the obstacle, so it remains
+        the floor. cluster_stop_radius() covers the extra latency a summary
+        carries over the scan this node accumulated itself. The radius has
+        to cover the OLDEST data feeding it, hence the larger of the two.
         """
         radii = []
         if self.policies:
@@ -464,25 +465,30 @@ class WaypointFollower:
             self.cluster_summary, CORRIDOR_HALF_WIDTH, lateral_shift)
 
     def corridor_threat(self, lateral_shift=0.0):
-        """Nearest obstacle from every enabled source, or None if all clear.
+        """Nearest classified object in the corridor, or None if clear.
 
-        A raw-scan return comes back UNKNOWN rather than parked: five points
-        in a corridor have no identity from one scan to the next, so nothing
-        that source reports can ever be watched standing still. That leaves
-        it on the old time-based rule below, which is all it ever supported.
+        Classified objects are the only obstacle source. The raw five-points-
+        in-a-box check that used to sit alongside them was removed on
+        2026-08-05 after it stopped three runs in one evening, and the way it
+        failed is worth keeping written down.
+
+        It reported UNKNOWN, because five loose returns have no identity from
+        one scan to the next. avoidance_decision cannot watch an UNKNOWN
+        stand still, so it fell through to the time rule - blocked for three
+        seconds and not MOVING - and UNKNOWN is never MOVING. Every raw
+        false positive therefore became an authorisation to drive around
+        something nobody could name, and the offset it chose steered the
+        chair at a wall. Detection and identity were never separable here:
+        a source that cannot say what it saw should not be able to say what
+        to do about it.
+
+        Removing it makes perception a single point of failure, which is why
+        CLUSTERS_STALE is an OVERRIDE hold and why the constructor refuses to
+        start with no obstacle source at all.
         """
-        nearest = None
-        if self.policies:
-            distance = self.obstacle_distance(lateral_shift)
-            if distance is not None:
-                nearest = Threat(distance, UNKNOWN, "scan")
-        if self.clusters_enabled:
-            clustered = self.cluster_threat(lateral_shift)
-            if clustered is not None and \
-                    (nearest is None or
-                     clustered.distance_m < nearest.distance_m):
-                nearest = clustered
-        return nearest
+        if not self.clusters_enabled:
+            return None
+        return self.cluster_threat(lateral_shift)
 
     def take_a_way_round(self, clear_for_m):
         """Offset far enough to clear the corridor without leaving the band.
@@ -510,30 +516,6 @@ class WaypointFollower:
         rospy.logwarn_throttle(
             10, "no side of this has room in the band - waiting")
         return False
-
-    def obstacle_distance(self, lateral_shift=0.0):
-        """Nearest obstacle in the forward corridor from the live scan,
-        or None. The scan sees people and objects, not near ground.
-        Detection is limited to a forward FOV cone; the rider's body
-        and the wheelchair frame behind the minimum range are excluded."""
-        if self.cloud is None or len(self.cloud) < 100:
-            return 0.0  # no data = treat as blocked
-        pts = self.cloud
-        ground_plane = -self.sensor_height
-        dy = pts[:, 1] - lateral_shift
-        azimuth = np.abs(np.degrees(np.arctan2(dy, pts[:, 0])))
-        m = ((pts[:, 0] > CORRIDOR_MIN_RANGE_M) &
-             (pts[:, 0] < self.guard_slow() + 0.6) &
-             (azimuth < FORWARD_FOV_HALF_DEG) &
-             (np.abs(dy) < CORRIDOR_HALF_WIDTH))
-        zone = pts[m]
-        if not len(zone):
-            return None
-        rel = zone[:, 2] - ground_plane
-        obstacles = zone[(rel > OBSTACLE_MIN_Z) & (rel < OBSTACLE_MAX_Z)]
-        if len(obstacles) < 5:
-            return None
-        return float(np.percentile(obstacles[:, 0], 5))
 
     def bypass_target_ok(self, offset):
         """A lateral bypass is allowed only if the offset corridor stays
@@ -788,10 +770,10 @@ class WaypointFollower:
         recovering = self.policies and self.route_locked and \
             not self.band.contains(self.pose_xy, grace=OFF_BAND_GRACE)
 
-        # None reads downstream as "nothing in the corridor", which is what
-        # a switched-off source has to mean here - obstacle_distance returns
-        # 0.0 for missing data, so calling it and discarding the answer would
-        # fail closed on exactly the run that must not.
+        # None reads downstream as "nothing in the corridor". A missing
+        # cluster summary does NOT come back as None - cluster_threat
+        # reports it as blocking - so a quiet producer stops the chair
+        # rather than reading as clear road.
         threat = self.corridor_threat(self.lateral_offset)
         obstacle_dist = None if threat is None else threat.distance_m
 
