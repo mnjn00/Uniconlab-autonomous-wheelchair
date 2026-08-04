@@ -111,19 +111,23 @@ than 57 cm from the obstacle guard.
 A route is the centreline; the band is the lateral limit at each station. The follower is
 constrained by the band, not merely advised by it.
 
-| | `20260727_chair_centred_*` | `20260802_route_v4_*` |
+| | `20260727_chair_centred_*` | `20260803_route_v5_*` |
 | --- | --- | --- |
-| Waypoints | 1,446 (0.2 m) | 2,002 (0.2 m) |
-| Length | 383.4 m | 378.5 m |
-| Band stations | 381 at 1.0 m | 758 at 0.5 m |
-| Origin | Resampled from a recorded drive | Operator-drawn corridor (`route_2d_map_v4.zip`) |
+| Waypoints | 1,446 (0.2 m) | 2,004 (0.2 m) |
+| Length | 383.4 m | 379.7 m |
+| Band stations | 381 at 1.0 m | 802 at 0.5 m |
+| Origin | Resampled from a recorded drive | Operator-drawn corridor (`route_2d_map_v5.zip`) |
 | Shipped by the bringup | No | **Yes** |
 | Localization validated on it | **Yes** (07-31) | Not yet |
+
+v5 supersedes v4 and preserves the operator's exact target at `(156.159, -84.341)` through the
+archive's smooth 8 m centreline transition. The source ZIP, mask, 0.2 m centreline and 0.5 m band
+stations are hash-pinned under `data/route_corridor_v5/`.
 
 > [!WARNING]
 > **The shipped band's edges are drawn, not measured.** Every one of the 0727 band's 762 edges
 > carried a measured verdict - `step_up` 266, `drop` 203, `lip` 104, `open` 177, `unscanned` 12.
-> All 1,516 edges of the v4 band are `open`, because the ZIP carried no drop measurement; the
+> All 1,604 edges of the v5 band are `open`, because the ZIP carried no drop measurement; the
 > band says so itself under `physical_edge_semantics`. On the shipped route, the thing keeping
 > the chair away from a kerb is the operator's drawing, not a ground-break measurement. That is
 > a deliberate, recorded choice and not a defect, but it is the single most load-bearing
@@ -242,7 +246,7 @@ The tests worth reading are the ones written against something that actually wen
 | `test_localization_field_envelope.py` | Gates must sit outside the measured envelope, both ways |
 | `test_object_profile.py`, `test_cluster_guard.py` | A bounding-box corner is not an obstacle |
 | `test_drive_policy.py` | The joystick override must survive every switched-off policy |
-| `test_route_corridor.py`, `test_route_v4.py` | A drawn corridor may narrow but never widen |
+| `test_route_corridor.py`, `test_route_v4.py`, `test_route_v5.py` | A drawn corridor may narrow but never widen |
 | `test_blackbox_archive.py` | A recording nobody can repeat, and truncation that reads as valid |
 
 ## Repository layout
@@ -301,9 +305,9 @@ written campus approval; and a separately reviewed passenger-operation protocol.
 
 Known open items, kept here rather than in a tracker nobody reads:
 
-- The shipped v4 band carries no measured drop semantics (see the warning above).
-- The localization envelope was measured on the 0727 route; v4 has not been re-measured.
-- A chair parked at the recorded origin joins v4 at waypoint 44, leaving its first 8.8 m undriven.
+- The shipped v5 band carries no measured drop semantics (see the warning above).
+- The localization envelope was measured on the 0727 route; v5 has not been re-measured.
+- A chair parked at the recorded origin joins v5 at waypoint 45, leaving its first 8.5 m undriven.
 
 See [`contracts/wp0/A16-release-authority.yaml`](contracts/wp0/A16-release-authority.yaml),
 [`contracts/wp0/A14-hazard-log.yaml`](contracts/wp0/A14-hazard-log.yaml), and

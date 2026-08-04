@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Known-start localization with verified global-search fallback.
+# noqa: SIZE_OK — one ROS initialization transaction owns shared callback state
+"""Verified map-based localization with an optional known-start shortcut.
 
 The first waypoint of the selected route is an explicit pose prior when the
 wheelchair is placed at its known start. It is sent directly to the localizer,
@@ -28,6 +29,7 @@ import tf.transformations as tft
 
 from initial_pose_candidates import (
     KnownStartRouteError,
+    StationaryStabilityMonitor,
     initialization_attempts,
     load_known_start,
     seed_was_acknowledged,
@@ -237,9 +239,70 @@ def disable_correction(enable, rank):
         )
 
 
+def planar_pose(pose):
+    orientation = pose.orientation
+    yaw = tft.euler_from_quaternion(
+        [orientation.x, orientation.y, orientation.z, orientation.w]
+    )[2]
+    return (pose.position.x, pose.position.y, yaw)
+
+
+def wait_for_stationary_stability(
+    state,
+    expected_reset_count,
+    duration_s,
+):
+    monitor = StationaryStabilityMonitor()
+    initial_pose_sequence = state["pose_sequence"]
+    initial_odom_sequence = state["odom_sequence"]
+    observed_sequences = None
+    observations = 0
+    deadline = rospy.Time.now() + rospy.Duration(duration_s)
+    while not rospy.is_shutdown() and rospy.Time.now() < deadline:
+        if (
+            state["message"] != "TRACKING"
+            or state["reset_count"] != expected_reset_count
+        ):
+            rospy.logerr(
+                "localization left TRACKING during stationary verification: %s",
+                state["message"],
+            )
+            return False
+        sequences = (state["pose_sequence"], state["odom_sequence"])
+        if (
+            state["localization_pose"] is not None
+            and state["odometry_pose"] is not None
+            and sequences != observed_sequences
+        ):
+            refusal = monitor.observe(
+                state["localization_pose"], state["odometry_pose"]
+            )
+            if refusal is not None:
+                rospy.logerr("stationary localization verification failed: %s", refusal)
+                return False
+            observed_sequences = sequences
+            observations += 1
+        rospy.sleep(0.1)
+    fresh_pose = state["pose_sequence"] > initial_pose_sequence
+    fresh_odom = state["odom_sequence"] > initial_odom_sequence
+    if observations < 10 or not fresh_pose or not fresh_odom:
+        rospy.logerr("stationary localization verification had stale pose/odometry")
+        return False
+    rospy.loginfo("stationary localization stable for %.1f s", duration_s)
+    return True
+
+
+def publish_initialization_receipt(source):
+    rospy.set_param("/fast_lio_icp/auto_initialization_source", source)
+    rospy.set_param("/fast_lio_icp/auto_initialization_stable", True)
+    rospy.set_param("/fast_lio_icp/auto_initialization_verified", True)
+
+
 def main():
     rospy.init_node("auto_initial_pose")
     rospy.set_param("/fast_lio_icp/auto_initialization_verified", False)
+    rospy.set_param("/fast_lio_icp/auto_initialization_stable", False)
+    rospy.set_param("/fast_lio_icp/auto_initialization_source", "none")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--map", default=rospy.get_param("~map", ""))
     parser.add_argument("--traj", default=rospy.get_param("~traj", ""))
@@ -261,23 +324,46 @@ def main():
     parser.add_argument("--window-s", type=float, default=2.0)
     parser.add_argument("--max-range", type=float, default=25.0)
     parser.add_argument("--verify-timeout", type=float, default=20.0)
+    parser.add_argument(
+        "--global-only",
+        action="store_true",
+        default=bool(rospy.get_param("~global_only", False)),
+    )
+    parser.add_argument(
+        "--stability-window-s",
+        type=float,
+        default=float(rospy.get_param("~stability_window_s", 5.0)),
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(rospy.myargv(sys.argv)[1:])
-    for argument in ("map", "traj", "route", "body_frame_profile"):
+    required_arguments = ["map", "traj"]
+    if not args.global_only:
+        required_arguments.extend(("route", "body_frame_profile"))
+    for argument in required_arguments:
         if not getattr(args, argument):
             parser.error("--{} or private ROS parameter ~{} is required".format(
                 argument.replace("_", "-"), argument
             ))
-    try:
-        route_prior = load_known_start(
-            Path(args.route), "map", args.body_frame_profile
-        )
-    except KnownStartRouteError as error:
-        rospy.logerr("invalid known-start route: %s", error)
-        return 5
+    route_prior = None
+    if not args.global_only:
+        try:
+            route_prior = load_known_start(
+                Path(args.route), "map", args.body_frame_profile
+            )
+        except KnownStartRouteError as error:
+            rospy.logerr("invalid known-start route: %s", error)
+            return 5
 
     collector = SubmapCollector(args.window_s)
-    state = {"message": "", "reset_count": None, "sequence": 0}
+    state = {
+        "message": "",
+        "reset_count": None,
+        "sequence": 0,
+        "localization_pose": None,
+        "odometry_pose": None,
+        "pose_sequence": 0,
+        "odom_sequence": 0,
+    }
 
     def on_diag(message):
         for status in message.status:
@@ -290,6 +376,14 @@ def main():
                     state["reset_count"] = None
                 state["sequence"] += 1
 
+    def on_pose(message):
+        state["localization_pose"] = planar_pose(message.pose.pose)
+        state["pose_sequence"] += 1
+
+    def on_stability_odom(message):
+        state["odometry_pose"] = planar_pose(message.pose.pose)
+        state["odom_sequence"] += 1
+
     seed_pub = None
     enable = None
     if not args.dry_run:
@@ -299,6 +393,15 @@ def main():
             on_diag,
             queue_size=5,
         )
+        rospy.Subscriber(
+            "/fast_lio_icp/pose",
+            PoseWithCovarianceStamped,
+            on_pose,
+            queue_size=20,
+        )
+        rospy.Subscriber(
+            "/Odometry", Odometry, on_stability_odom, queue_size=100
+        )
         seed_pub = rospy.Publisher(
             "/fast_lio_icp/initialpose", PoseWithCovarianceStamped, queue_size=1
         )
@@ -306,12 +409,20 @@ def main():
             "/fast_lio_icp/enable_auto_correction", SetBool
         )
         rospy.sleep(0.5)
-        if try_candidate(route_prior, 1, state, seed_pub, enable, args.verify_timeout):
-            rospy.set_param(
-                "/fast_lio_icp/auto_initialization_verified", True
-            )
-            return 0
-        rospy.logwarn("known start was not verified; starting global fallback")
+        if route_prior is not None:
+            if try_candidate(
+                route_prior, 1, state, seed_pub, enable, args.verify_timeout
+            ):
+                if wait_for_stationary_stability(
+                    state,
+                    state["reset_count"],
+                    args.stability_window_s,
+                ):
+                    publish_initialization_receipt(route_prior.source)
+                    return 0
+                disable_correction(enable, 1)
+                return 8
+            rospy.logwarn("known start was not verified; starting global fallback")
 
     deadline = rospy.Time.now() + rospy.Duration(30.0)
     submap = None
@@ -425,7 +536,9 @@ def main():
         np.degrees(decision.candidate.yaw_rad), decision.candidate.score,
     )
 
-    attempts = initialization_attempts(None, refined, args.min_score, args.top)
+    attempts = initialization_attempts(
+        None, (decision.candidate,), args.min_score, 1
+    )
     if not attempts:
         best = refined[0].score if refined else 0.0
         rospy.logerr(
@@ -435,7 +548,8 @@ def main():
         )
         return 3
 
-    for rank, candidate in enumerate(attempts, start=2):
+    start_rank = 1 if args.global_only else 2
+    for rank, candidate in enumerate(attempts, start=start_rank):
         if try_candidate(
             candidate,
             rank,
@@ -444,11 +558,16 @@ def main():
             enable,
             args.verify_timeout,
         ):
-            rospy.set_param(
-                "/fast_lio_icp/auto_initialization_verified", True
-            )
-            return 0
-        rospy.logwarn("candidate %d failed verification, trying next", rank)
+            if wait_for_stationary_stability(
+                state,
+                state["reset_count"],
+                args.stability_window_s,
+            ):
+                publish_initialization_receipt(candidate.source)
+                return 0
+            disable_correction(enable, rank)
+            return 8
+        rospy.logwarn("candidate %d failed verification", rank)
     rospy.logerr("no candidate passed verification")
     return 4
 

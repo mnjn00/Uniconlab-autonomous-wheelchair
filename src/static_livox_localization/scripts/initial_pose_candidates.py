@@ -5,7 +5,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import Mapping, NamedTuple, Optional, Sequence, Tuple
+from typing import Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,6 +28,45 @@ class InitializationCandidate(NamedTuple):
     yaw_rad: float
     score: Optional[float]
     source: str
+
+
+class StationaryStabilityMonitor:
+    def __init__(self):
+        self.max_localization_translation_m = 0.15
+        self.max_localization_yaw_rad = math.radians(3.0)
+        self.max_odometry_translation_m = 0.05
+        self.max_odometry_yaw_rad = math.radians(2.0)
+        self.localization_start = None
+        self.odometry_start = None
+
+    @staticmethod
+    def _delta(first, current):
+        translation = math.hypot(current[0] - first[0], current[1] - first[1])
+        yaw = abs((current[2] - first[2] + math.pi) % (2.0 * math.pi) - math.pi)
+        return translation, yaw
+
+    def observe(self, localization_pose, odometry_pose):
+        if self.localization_start is None:
+            self.localization_start = localization_pose
+            self.odometry_start = odometry_pose
+            return None
+        odometry_translation, odometry_yaw = self._delta(
+            self.odometry_start, odometry_pose
+        )
+        if (
+            odometry_translation > self.max_odometry_translation_m
+            or odometry_yaw > self.max_odometry_yaw_rad
+        ):
+            return "ODOMETRY_MOVED_DURING_INITIALIZATION"
+        localization_translation, localization_yaw = self._delta(
+            self.localization_start, localization_pose
+        )
+        if (
+            localization_translation > self.max_localization_translation_m
+            or localization_yaw > self.max_localization_yaw_rad
+        ):
+            return "LOCALIZATION_MOVED_WHILE_STATIONARY"
+        return None
 
 
 class KnownStartRouteError(Exception):
@@ -161,7 +200,7 @@ def initialization_attempts(
 
 
 def seed_was_acknowledged(
-    state: Mapping[str, object],
+    state: Mapping[str, Optional[Union[int, str]]],
     baseline_sequence: int,
     baseline_reset_count: int,
 ) -> bool:
@@ -181,7 +220,7 @@ def seed_was_acknowledged(
 
 
 def tracking_was_verified(
-    state: Mapping[str, object],
+    state: Mapping[str, Optional[Union[int, str]]],
     enable_sequence: int,
     candidate_reset_count: int,
     saw_verifying: bool,

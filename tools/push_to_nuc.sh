@@ -213,14 +213,14 @@ REMOTE_DIRTY="$(git status --porcelain --untracked-files=all -- \
   exit 1
 }
 
-for f in routes/20260802_route_v4_waypoints.json \
-         routes/20260802_route_v4_safety_band.json; do
+for f in routes/20260803_route_v5_waypoints.json \
+         routes/20260803_route_v5_safety_band.json; do
   [ -f "$f" ] || { echo "ERROR: $f missing after pull" >&2; exit 1; }
 done
 python3 -c "
 import json
-w = json.load(open('routes/20260802_route_v4_waypoints.json'))
-b = json.load(open('routes/20260802_route_v4_safety_band.json'))
+w = json.load(open('routes/20260803_route_v5_waypoints.json'))
+b = json.load(open('routes/20260803_route_v5_safety_band.json'))
 assert all('z' in p for p in w['waypoints']), 'waypoints need z'
 assert w.get('reference_point') == 'chair_centre', 'route must be chair-centred'
 assert any('left_kind' in s for s in b['stations']), 'band needs edge kinds'
@@ -232,7 +232,7 @@ assert c, 'band carries no corridor; regenerate with apply_route_corridor_mask.p
 covered = sum('left_corridor_m' in s for s in b['stations'])
 assert covered == c['stations_covered'], 'corridor summary disagrees with the stations'
 print('  route: %d waypoints (with height)' % w['count'])
-print('  band : %d stations (ZIP v4 mask authority)' % len(b['stations']))
+print('  band : %d stations (ZIP v5 mask authority)' % len(b['stations']))
 print('  band : corridor on %d/%d stations (%s)' % (
     covered, len(b['stations']), c['source']))
 "

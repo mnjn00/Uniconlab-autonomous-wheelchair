@@ -92,3 +92,12 @@ def test_a_correction_is_published_against_the_freshest_odometry():
     # both accepted-correction branches must go through it, not straight
     # to the raw publisher
     assert text.count("publish_correction_locked(odom);") == 2
+
+
+def test_stationary_tracking_cannot_walk_map_to_odom():
+    text = node_text()
+
+    assert "tracking_motion_exceeds_threshold" in text
+    gate = text.index("tracking_motion_exceeds_threshold")
+    registration = text.index("register_cloud", gate)
+    assert gate < registration
