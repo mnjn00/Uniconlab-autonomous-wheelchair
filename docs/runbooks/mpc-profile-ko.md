@@ -57,15 +57,23 @@
 
 ## 1. 배포
 
-```bash
-cd ~/unicon-wheelchair && ./tools/push_to_nuc.sh
-```
-
-NUC에서 (실행 코드는 `~/livox_static_localization_ws`에 있다):
+맵 디렉터리는 필수 인자다. 노트북에서:
 
 ```bash
-cd ~/livox_static_localization_ws && catkin build static_livox_localization
+cd ~/unicon-wheelchair && ./tools/push_to_nuc.sh /Volumes/무제/merged_0707_0725_v1
 ```
+
+이 스크립트가 **NUC에서 catkin 빌드까지 수행한다**(`~/livox_static_localization_ws`,
+빌드 스페이스를 소유한 도구를 자동 선택). 따로 빌드할 필요가 없다.
+`build OK`가 출력되는지 확인할 것.
+
+배포 전 두 가지를 거부한다는 점을 알아둘 것 — 배포 대상에 커밋 안 된 변경이
+있거나, 로컬 HEAD가 `origin/main`과 정확히 같지 않으면 아무것도 바꾸지 않고
+중단한다. 즉 **작업 디렉터리를 먼저 `origin/main`에 맞춰야 한다.**
+
+같은 스크립트가 브링업 4종(`start_wheelchair_localization.sh`, `trial_0727.sh`,
+`go.sh`, `stop.sh`)을 NUC의 `$HOME/`에 설치한다. 그래서 아래 명령들은
+`~/tools/`가 아니라 `~/`에서 실행한다.
 
 ### 1.1 osqp 설치 확인 — 주행 전 필수
 
@@ -107,11 +115,17 @@ python3 -c "import sys; sys.path.insert(0, '$HOME/livox_static_localization_ws/d
 ## 2. 실행
 
 ```bash
-PROFILE=mpc ./tools/start_wheelchair_localization.sh
+PROFILE=mpc ~/start_wheelchair_localization.sh
 ```
 
 `PROFILE`은 `pursuit`(기본) 또는 `mpc` 두 리터럴만 받는다. 오타는 exit 65로
 거부된다 — 오타가 제어기를 고르는 일은 없어야 하므로.
+
+> **`trial_0727.sh`를 MPC 첫 주행에 쓰지 말 것.** 그 스크립트는
+> `SAFETY_POLICIES=false`로 띄운다 — 로컬라이제이션만 측정하려고 재량 가드를
+> 전부 끈 구성이고, 그때 실패해도 조이스틱밖에 안 남는다. 검증 안 된 제어기를
+> 가드 없이 처음 굴리는 건 두 가지 미지수를 곱하는 짓이다. 위 명령은 가드가
+> 켜진 기본 구성으로 띄운다.
 
 부팅 로그에 다음이 보여야 한다:
 
@@ -183,7 +197,7 @@ MPC wp=412/758 v=0.58 w=+0.03 OK
 되돌리기는 `PROFILE`을 빼고 재실행하면 된다. 코드 롤백이 필요 없다:
 
 ```bash
-./tools/start_wheelchair_localization.sh
+~/start_wheelchair_localization.sh
 ```
 
 ---
@@ -200,13 +214,19 @@ MPC wp=412/758 v=0.58 w=+0.03 OK
 rosbag record -O latency.bag /cmd_vel_raw /Odometry /wheel_status
 ```
 
-몇 차례 가감속 후, 두 시계열의 상호상관에서 지연을 얻는다. 값이 나오면:
+몇 차례 가감속 후, 두 시계열의 상호상관에서 지연을 얻는다. 값이 나오면
+브링업에 환경변수로 넘긴다:
 
 ```bash
-PROFILE=mpc rosrun static_livox_localization mpc_follower.py _latency_s:=0.12
+LATENCY_S=0.12 PROFILE=mpc ~/start_wheelchair_localization.sh
 ```
 
-또는 부팅 스크립트에 인자를 추가한다. 넣고 나면 조향 위상이 바뀌므로 4절의
+노드를 `rosrun`으로 직접 띄우지 말 것 — `_route`, `_safety_band`,
+`_body_frame_profile`이 필수 파라미터라 그냥 죽고, 스택의 나머지도 안 뜬다.
+`LATENCY_S`도 브링업 스크립트가 읽는 값이지 노드가 읽는 환경변수가 아니다.
+
+숫자가 아니면 exit 65로 거부된다. 기본값은 0이고, 그때 부팅 로그에
+`latency compensation OFF`가 뜬다. 넣고 나면 조향 위상이 바뀌므로 4절의
 중단 기준을 다시 적용한다.
 
 ---

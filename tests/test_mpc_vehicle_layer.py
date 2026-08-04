@@ -361,6 +361,53 @@ def test_profile_rejects_anything_but_the_two_literals():
     assert "PROFILE must be pursuit or mpc" in text
 
 
+def test_latency_is_settable_from_the_bringup_and_defaults_to_zero():
+    """The runbook tells the operator to set LATENCY_S once L is measured.
+    That instruction is only true while the bringup actually forwards it -
+    the node reads ~latency_s, which nothing else sets."""
+    text = bringup()
+    assert 'LATENCY_S="${LATENCY_S:-0}"' in text
+    assert '_latency_s:="$LATENCY_S"' in text
+    assert "LATENCY_S must be a non-negative number" in text
+
+
+def runbook():
+    return (ROOT / "docs" / "runbooks" / "mpc-profile-ko.md").read_text(
+        "utf-8")
+
+
+def test_runbook_calls_the_bringup_where_it_is_actually_installed():
+    """push_to_nuc installs the bringup to $HOME on the NUC, not into a
+    checkout. A runbook that says ./tools/... sends the operator to a path
+    that does not exist on the machine they are typing at."""
+    assert "~/start_wheelchair_localization.sh" in runbook()
+    assert "./tools/start_wheelchair_localization.sh" not in runbook()
+
+
+def test_runbook_passes_the_map_directory_push_to_nuc_requires():
+    """push_to_nuc.sh takes the map directory as a required argument."""
+    for line in runbook().splitlines():
+        if "push_to_nuc.sh" in line and not line.startswith(("#", ">")):
+            assert re.search(r"push_to_nuc\.sh\s+\S", line), (
+                "runbook calls push_to_nuc.sh with no map directory: %s"
+                % line.strip())
+
+
+def test_runbook_does_not_tell_anyone_to_rosrun_the_node_directly():
+    """The node needs ~route, ~safety_band and ~body_frame_profile and
+    raises without them, so a bare rosrun just dies - and takes none of the
+    rest of the stack up with it."""
+    assert "rosrun static_livox_localization mpc_follower.py" not in runbook()
+
+
+def test_runbook_warns_off_the_policies_off_trial_script():
+    """trial_0727.sh brings the stack up with SAFETY_POLICIES=false. That is
+    the right configuration for measuring localisation and the wrong one for
+    the first run of an unvalidated controller."""
+    text = runbook()
+    assert "trial_0727.sh" in text and "SAFETY_POLICIES=false" in text
+
+
 def test_bringup_launches_the_selected_follower():
     text = bringup()
     assert 'rosrun static_livox_localization "$FOLLOWER_NODE"' in text
