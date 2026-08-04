@@ -1,0 +1,2 @@
+[console_scripts]
+rosbags-convert = rosbags.convert.__main__:main
