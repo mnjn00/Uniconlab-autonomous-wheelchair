@@ -32,7 +32,28 @@ try:
 finally:
     sys.path.pop(0)
 
-BAND = ROOT / "routes" / "20260802_route_v4_safety_band.json"
+def shipped_band():
+    """The band the bringup actually launches with, read from the bringup.
+
+    This used to be a hard-coded v4 path, and on 2026-08-04 the bringup
+    moved to v5 while the path here did not. Nothing failed - which is the
+    problem. Every corridor assertion below would have gone on passing
+    against a band the chair had stopped driving, and the speed policy they
+    check is tuned to corridor widths that differ between the two by a
+    factor of three at the pinch. A test that pins the wrong artifact is
+    worse than no test: it reports a guard that is not guarding anything.
+    """
+    text = (ROOT / "tools" / "start_wheelchair_localization.sh").read_text(
+        encoding="utf-8")
+    match = re.search(r'^BAND="\$\{BAND:-.*?/routes/(\S+?)\}"', text, re.M)
+    assert match, "cannot tell which band the bringup ships"
+    path = ROOT / "routes" / match.group(1)
+    assert path.exists(), "bringup ships a band that is not in the repo: %s" \
+        % match.group(1)
+    return path
+
+
+BAND = shipped_band()
 
 
 @pytest.fixture(scope="module")
@@ -131,13 +152,20 @@ def test_slope_and_degraded_land_exactly_on_the_floor(band):
         assert v_ref[0] == pytest.approx(mpc_speed.TURN_FLOOR_SPEED)
 
 
-def test_corridor_shaping_slows_for_the_narrowest_metre(band):
-    """The route's tightest station is infeasible at 0.5 m/s and solves at
-    0.4 (measured). The chair must arrive there at or below that."""
+def test_a_thirteen_centimetre_corridor_is_entered_at_the_measured_speed():
+    """The measurement is about width, not about a route: on the v4 band's
+    0.13 m pinch, 0.5 m/s was infeasible and 0.4 solved. v5 has no corridor
+    that tight, but the ramp must still honour the number if one appears -
+    a band is a deployment choice and has already changed once."""
+    assert mpc_speed.speed_for_width(0.13) <= 0.4
+
+
+def test_the_shipped_band_is_entered_slower_where_it_is_tightest(band):
+    """Whatever ships, the tightest place on it must not be taken at cruise."""
     widths = np.array([band.lateral_limits(q)[2] - band.lateral_limits(q)[1]
                        for q in band.xy])
     tightest = band.xy[int(np.argmin(widths))]
-    assert mpc_speed.corridor_speed(band, tightest) <= 0.4
+    assert mpc_speed.corridor_speed(band, tightest) < mpc_speed.MAX_SPEED
 
 
 def test_corridor_shaping_slows_before_arriving_not_on_arrival(band):

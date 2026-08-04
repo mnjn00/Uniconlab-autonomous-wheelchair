@@ -134,8 +134,19 @@ def corridor_speed(band, point, lookahead_m=CORRIDOR_LOOKAHEAD_M):
         tail = tail[arc <= lookahead_m]
     width = min(_corridor_width(band, q) for q in tail) \
         if len(tail) else _corridor_width(band, point)
+    return speed_for_width(width)
+
+
+def speed_for_width(width_m):
+    """The ramp itself, as a function of corridor width alone.
+
+    Separated from the band lookup because the measurement behind it is
+    about WIDTH, not about a particular route: a 0.13 m corridor was
+    infeasible at 0.5 m/s and solved at 0.4. Which band ships is a
+    deployment decision that has already changed once.
+    """
     span = CORRIDOR_FULL_M - CORRIDOR_TIGHT_M
-    ratio = max(0.0, min(1.0, (width - CORRIDOR_TIGHT_M) / span))
+    ratio = max(0.0, min(1.0, (float(width_m) - CORRIDOR_TIGHT_M) / span))
     return TURN_FLOOR_SPEED + ratio * (MAX_SPEED - TURN_FLOOR_SPEED)
 
 
