@@ -1,7 +1,13 @@
 # MPC follower design
 
-Status: draft for review. No vehicle change until section 10's offline gates
-pass and a supervised field protocol is run on the NUC.
+Status: implemented, simulation-validated, never driven. The node and the
+bringup switch exist (`PROFILE=mpc`, default pursuit); section 7 is amended
+in place with what the implementation measured, including two of this
+document's own conclusions that the measurements overturned. Still no
+vehicle change until a supervised field protocol runs on the NUC.
+
+New here? Start at `docs/mpc_handoff.md`, then this document for the
+reasoning and `docs/runbooks/mpc-profile-ko.md` for the procedure.
 
 This document fixes the model, horizon, constraints, solver, CPU budget and
 fallback ladder for a model-predictive follower, and records why the
@@ -230,6 +236,117 @@ a slower approach shrinks the dynamic constraint pressure over the
 horizon exactly where the corridor leaves no margin. The offline sim
 kept the constant reference on purpose, so this gap is a node
 requirement, recorded here rather than discovered in the field.
+
+**Amended 2026-08-04, when the node was built.** The instinct above -
+slow down for the pinch - is right. The quantity to slow for, the speed
+to slow to, and above all the diagnosis were not, and the route does not
+finish until a defect underneath all of it is fixed. What follows is what
+the measurements said, in the order they said it, because the first two
+findings were wrong and the way they were wrong is the useful part.
+
+*First attempt, and a false conclusion.* Measured over the v4 band at
+2 cm jitter with the EMA anchor: a constant 0.6 reaches 350 m, a constant
+0.3 stops **earlier** at 334 m. That reads as proof that speed is not the
+lever, and it was written up as such. It was measured on top of a defect.
+
+*The defect.* `polyline_refs` snapped the heading reference to whichever
+polyline segment a horizon step landed on. Stations are 0.5 m apart and a
+step covers 0.06 m at cruise, so eight steps shared a segment and the
+ninth inherited the entire inter-station heading change - up to 26.7
+degrees, which the cost reads as a demand to rotate at 4.7 rad/s against
+a 0.5 rad/s cap. The chair spent its yaw authority chasing corners that
+were not there, drifted laterally, and met the hard band rows. The
+resulting INFEASIBLE_STOP at 350 m looked exactly like a corridor too
+narrow to drive. It was a staircase in the reference. Interpolating the
+heading along arc - no smoothing, so the genuine 71-degree turn at 372 m
+is untouched - drops the steepest demand the route contains from 2.2 to
+0.563 rad/s. The residual over the cap is handled by
+`mpc_speed.curvature_speed`, which limits v to w_max / curvature at the
+two stations of 756 where the geometry really does out-turn the chair.
+
+*Second finding, which stands.* Creep would not have been slow-but-moving,
+it would have been stopped. Sweeping a constant reference from a standing
+start: at and below 0.22 m/s the chair settles at exactly zero while the
+solve reports OK. There is no progress term in the objective, so forward
+motion is bought only by `w_vel * (v - v_ref)^2`, and below ~0.22 that no
+longer covers the lateral, heading and rate cost of moving. "Narrow-band
+creep" at CREEP_SPEED 0.15 would have parked the chair at the first
+narrow station and reported nothing.
+
+*The choke, correctly diagnosed.* With the heading honest, the chair
+reaches 334 m inside the band with 0.011 m of lateral offset and stops
+anyway - and widening the band by 1 cm makes it solvable. The corridor
+there is 0.13 m, and `band_inset` was taking 25 % per side of it: half the
+pinch spent on a linearisation reserve, leaving an upper bound 3.5 mm
+under where the chair already was. That reserve is a numerical allowance,
+not a safety margin, and it was sized by a round number rather than by the
+error. Measured, the gap between the planned trajectory and the same
+inputs applied to the nonlinear model is 0.0 mm at one step, 16 mm
+mid-horizon at 0.6 m/s, 4.5 mm at 0.3 m/s, 74 mm worst case at the horizon
+end. So 80 mm is right for the far end and the *fraction* was the problem:
+at 15 % the pinch keeps 19.5 mm of reserve, still 4x the error measured at
+the speed the chair passes it.
+
+*And the part the fraction alone did not fix.* With the fraction at 15 %
+the chair still stopped, now at 335 m, with the corridor shaping already
+holding it at the 0.30 floor. Relaxing the band rows one horizon segment
+at a time located it exactly: **steps 0-4**. Not the pinch 15 m ahead -
+the near horizon. The reserve was flat across all 25 steps, so step 1,
+which is 0.03 m ahead and carries 0.0 mm of measured error, was being
+given the same 52 mm the far end needs. At a station where the corridor is
+0.35 m wide that reserve fenced off ground the chair was already standing
+on, and the near steps are precisely the ones it cannot maneuver out of:
+at 0.3 m/s there is half a second before step 5, and a corridor whose
+centre shifts between adjacent stations can move further than that in the
+time. So the reserve is now a ramp - `band_inset * (k+1)/N`, floored at
+10 mm, which is 2x the 4.5 mm worst one-step error - matching the shape of
+the error curve it was always supposed to be covering.
+
+Two things this was NOT. It was not the second SQP iteration: forcing that
+pass on every cycle still stopped 2 runs of 3, and forcing it off stopped
+3 of 3. And it was not solver load - though that pass IS gated on wall
+clock (`first_ok_ms < 40 % of budget`), which means the refinement the
+chair gets depends on machine load. That is worth knowing before the NUC
+run and is listed as an open item; it was not the cause here.
+
+*What the node does.* Reference floored at TURN_FLOOR_SPEED 0.30 - the
+follower's own constant, from the measurement that the loaded base does
+not rotate below ~1.3 km/h at the faster wheel - with any policy verdict
+below the floor returned as a stop, not a slower reference; this
+controller has no creep regime. On top of that, v is shaped by the
+narrowest corridor within 15 m (the pinch is infeasible at 0.5 m/s and
+solves at 0.4) and by curvature. The corridor rule is this controller's
+own and is deliberately not transcribed from pursuit, which never writes
+the band into a solver and so has no reason for it.
+
+*How much jitter is the right amount.* Everything above turns on injecting
+2 cm of lateral noise, which until now was a guess. Measured from the black
+box - `/fast_lio_icp/pose` over the three complete runs that carry enough
+straight running to separate noise from corner-cutting, 9782 samples taken
+on sections whose heading changes less than 2 degrees across the window and
+whose speed is above 0.15 m/s - the real residual about a smoothed track is:
+
+| condition | median | p95 | p99 |
+|---|---|---|---|
+| **measured, 9782 samples** | **4.0 mm** | **11.2 mm** | **21.8 mm** |
+| injected sigma 0.02 (passes) | 22.2 mm | 46.2 mm | 57.4 mm |
+| injected sigma 0.03 (stops) | 33.2 mm | 69.2 mm | 85.9 mm |
+| injected sigma 0.05 (stops) | 55.4 mm | 115.7 mm | 143.3 mm |
+
+The passing condition's MEDIAN exceeds the chair's 99th percentile, and its
+own p99 is 2.6x the chair's. So the route completes under noise that is
+harsher than the real thing throughout the distribution, not merely at the
+tail - which is the useful direction for a validation to be wrong in.
+
+It also says where the edge is, and the edge is not far away: sigma 0.03
+stops at 335 m. That is 1.5x the chair's p99 as a *continuous* condition,
+so there is real margin, but nobody should read "it completes" as "it has
+margin to spare". At sigma 0.05 the usable corridor at the pinch is 65 mm
+against noise of comparable size, and stopping is the correct behaviour
+rather than a defect to design away.
+
+Note that section 10's gates were measured **without** injected
+localisation noise, and remain valid only for that condition.
 
 ## 8. CPU budget (NUC11PHKi7C, i7-1165G7, 4C/8T, 28 W sustained)
 

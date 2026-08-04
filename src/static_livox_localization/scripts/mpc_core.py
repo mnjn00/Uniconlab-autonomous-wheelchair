@@ -51,6 +51,30 @@ class MpcParams:
     # under it - still 5 cm outside the chair's own half-width.
     obstacle_floor_m: float = 0.40
     band_inset: float = 0.08         # linearisation-error reserve, never lent out
+    # ...but a reserve is only honest at the size of the error it reserves
+    # against. Measured over a full v4 run (2 cm jitter), the lateral gap
+    # between the planned trajectory and the same inputs applied to the
+    # nonlinear model is 0.0 mm at one step, 16 mm mid-horizon at 0.6 m/s,
+    # 4.5 mm at 0.3 m/s, and 74 mm worst case at the horizon end. So 80 mm
+    # is right for the far end and enormously over-provisioned everywhere
+    # else, and the FRACTION below is what decides a choke: at 25 % per
+    # side it took half of a 0.13 m corridor and made the route's narrowest
+    # metre infeasible by 3.5 mm. 15 % leaves 19.5 mm there, still 4x the
+    # error measured at the speed the chair actually passes it at - which
+    # is 0.30 m/s, because mpc_speed slows for the corridor ahead. The two
+    # are a pair: this fraction is only defensible while that shaping runs.
+    band_inset_fraction: float = 0.15
+    # ...and it is applied as a RAMP, because the error it reserves against
+    # is a ramp. A flat reserve is wrong at both ends of the horizon, and
+    # wrong in the dangerous direction at the near end: step 1 is 0.03 m
+    # ahead with 0.0 mm of measured error, and giving it the same 52 mm the
+    # far end needs excludes ground the chair is ALREADY STANDING ON. That
+    # is how the 335 m stop happened - relaxing only steps 0-4 restored
+    # feasibility, relaxing any later group did not. The near steps are
+    # also the ones the chair cannot maneuver out of: at 0.3 m/s it has
+    # half a second to clear step 5, and a corridor whose centre shifts
+    # between adjacent stations can move further than that in the time.
+    band_inset_min: float = 0.01     # 2x the 4.5 mm measured at one step
     obstacle_plan_m: float = 10.0    # start bending round this far ahead
     obstacle_ramp_done_m: float = 2.0  # full clearance demanded this far before
     obstacle_pass_m: float = 1.5     # ...and hold the plane until this far past
@@ -143,7 +167,30 @@ class Obstacle:
 
 def polyline_refs(band, xy, horizon, dt, v_target):
     """Velocity and heading references for the horizon, walked along the
-    band station polyline at v_target from the nearest station."""
+    band station polyline at v_target from the nearest station.
+
+    The heading is INTERPOLATED along arc length, not snapped to whichever
+    segment the step lands on. Snapping is what the first version did, and
+    it is worth saying why it was wrong, because the failure did not look
+    like a reference problem at all.
+
+    Stations are 0.5 m apart and a horizon step covers 0.06 m at cruise, so
+    roughly eight consecutive steps share one segment and then the ninth
+    inherits the entire inter-station heading change at once. On this route
+    that step change reaches 26.7 degrees, which the cost reads as a demand
+    to rotate 4.7 rad/s - against a 0.5 rad/s cap. The chair cannot do it,
+    so the solve spends its yaw authority fighting a reference that is not
+    a real corner, drifts laterally while doing so, and eventually meets the
+    hard band rows: an INFEASIBLE_STOP at 350 m of 378 m that reads exactly
+    like a corridor too narrow to drive, and is not.
+
+    Interpolating removes the staircase without touching the geometry: the
+    steepest demand the route actually contains drops from 2.2 rad/s to
+    0.563 rad/s. It is deliberately NOT smoothed - smoothing would also
+    round off the genuine 71-degree turn at 372 m, and the residual 0.563
+    over the cap belongs to the speed policy (see mpc_speed.curvature_speed)
+    rather than to a filter that hides it.
+    """
     xy_s = band.xy
     k0 = int(np.argmin(np.linalg.norm(xy_s - xy, axis=1)))
     tail = xy_s[k0:]
@@ -152,15 +199,14 @@ def polyline_refs(band, xy, horizon, dt, v_target):
                 np.full(horizon, math.atan2(0.0, 1.0)))
     seg = np.linalg.norm(np.diff(tail, axis=0), axis=1)
     arc = np.concatenate([[0.0], np.cumsum(seg)])
-    heading = np.arctan2(np.diff(tail[:, 1]), np.diff(tail[:, 0]))
-    v_ref = np.full(horizon, v_target)
-    th_ref = np.empty(horizon)
-    for k in range(horizon):
-        s = v_target * (k + 1) * dt
-        j = int(np.searchsorted(arc, s)) - 1
-        j = min(max(j, 0), len(heading) - 1)
-        th_ref[k] = heading[j]
-    return v_ref, th_ref
+    # A segment's heading describes the path at its middle, not at its
+    # start: sampling it at the midpoints is what makes the interpolation
+    # symmetric about a corner instead of lagging it by half a station.
+    mid = 0.5 * (arc[:-1] + arc[1:])
+    heading = np.unwrap(
+        np.arctan2(np.diff(tail[:, 1]), np.diff(tail[:, 0])))
+    s = v_target * (np.arange(horizon) + 1) * dt
+    return np.full(horizon, v_target), np.interp(s, mid, heading)
 
 
 def wrap_angle(a):
@@ -267,9 +313,12 @@ class MpcSolver:
         for k in range(N):
             pbar = xbar[k + 1, 0:2]
             normal, _h, lat_iter, lo_lim, hi_lim = self.ref.frame_at(pbar)
-            # the linearisation reserve may not eat more than a quarter of
-            # the remaining corridor, or a narrow choke becomes infeasible
-            inset = min(p.band_inset, (hi_lim - lo_lim) * 0.25)
+            # the reserve grows with the horizon step, because so does the
+            # error it covers, and it may not eat more than its share of the
+            # remaining corridor, or a narrow choke becomes infeasible
+            inset = min(max(p.band_inset * (k + 1) / N, p.band_inset_min),
+                        p.band_inset,
+                        (hi_lim - lo_lim) * p.band_inset_fraction)
             hi_lim -= inset
             lo_lim += inset
             for sign, bound in ((1.0, hi_lim), (-1.0, lo_lim)):

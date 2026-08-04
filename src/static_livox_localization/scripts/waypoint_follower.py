@@ -553,7 +553,17 @@ class WaypointFollower:
         self.cmd_pub.publish(Twist())
 
     # ------------------------------------------------------------ control
-    def pure_pursuit_target(self):
+    def advance_progress(self):
+        """Move the progress marker along the route, and lock on first use.
+
+        Extracted from pure_pursuit_target() without a change of behaviour
+        so a second control law advances progress the SAME way - see
+        mpc_follower.py. This is not bookkeeping for the status line: it is
+        what sets route_locked, and the OFF_ROUTE geofence and the OFF_BAND
+        containment test are both written to apply only once locked. A
+        follower that never called this would run with those two guards
+        silently inert for the whole route.
+        """
         d = np.linalg.norm(self.waypoints - self.pose_xy, axis=1)
         if not self.route_locked:
             self.nearest_index = int(np.argmin(d))
@@ -578,6 +588,8 @@ class WaypointFollower:
         else:
             self.nearest_index = windowed_index
 
+    def pure_pursuit_target(self):
+        self.advance_progress()
         wanted = 1.0 + 1.6 * self.current_speed
         target, self.chord_speed_cap, self.chord_safe = \
             self.safe_target(wanted)
@@ -725,8 +737,20 @@ class WaypointFollower:
                 self.pose_xy, grace=BAND_RECOVER_MAX):
             yield "OFF_BAND", POLICY
 
-    def step(self):
-        now = rospy.Time.now()
+    def handled_before_driving(self, now):
+        """Run every hold and the goal test, and say whether one of them has
+        already taken the cycle.
+
+        Extracted from step() without a change of behaviour so that a second
+        control law can be put behind the SAME guards rather than behind a
+        copy of them - see mpc_follower.py. A copy is the failure mode worth
+        engineering against here: the judgements themselves live in
+        hold_candidates and evaluate_holds and would have been shared
+        anyway, but the dispatch around them carries the DEGRADED
+        bookkeeping, the WOULD_HOLD publish that the black box records, and
+        the stop - and a second copy of that drifts from this one silently,
+        in the direction of a follower that does not stop.
+        """
         if self.tracking_state == "DEGRADED":
             if self.degraded_since is None:
                 self.degraded_since = now
@@ -747,12 +771,18 @@ class WaypointFollower:
                 self.status = reason
             self.status_pub.publish(String(data="HOLD:" + reason))
             self.send_stop()
-            return
+            return True
 
         if np.linalg.norm(self.waypoints[-1] - self.pose_xy) < GOAL_TOLERANCE_M:
             self.done = True
             self.send_stop()
             rospy.loginfo("GOAL REACHED")
+            return True
+        return False
+
+    def step(self):
+        now = rospy.Time.now()
+        if self.handled_before_driving(now):
             return
 
         recovering = self.policies and self.route_locked and \
