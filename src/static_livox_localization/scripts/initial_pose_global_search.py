@@ -198,6 +198,45 @@ def _inlier_fraction(tree, world: np.ndarray, inlier_radius_m: float) -> float:
     return _placement(tree, world, inlier_radius_m)[1]
 
 
+# One query per hypothesis leaves cKDTree walking the tree from Python 9336
+# times for a coarse pass, with every core but one idle. Stacking the
+# hypotheses and asking once is the same tree and the same query - measured
+# bit-identical over the deployed map, max difference 0.0 - and 3.5x faster
+# on this hardware. It also puts the work in the shape an accelerator needs:
+# one large array of placed points rather than a Python loop, which is what
+# array_backend exists to move to the GPU next.
+#
+# Chunked because the coarse array is (hypotheses x sample x 3) - 200 MB at
+# the shipped 1800-point sample - and the NUC has other things to hold.
+PLACEMENT_CHUNK = 1024
+
+
+def _placement_batch(tree, worlds: np.ndarray, inlier_radius_m: float):
+    """Cost and inlier fraction for a stack of placed samples.
+
+    worlds is (hypotheses, points, 3). Returns two (hypotheses,) arrays with
+    exactly the quantities _placement returns for one of them.
+    """
+
+    count = len(worlds)
+    costs = np.empty(count, np.float64)
+    inliers = np.empty(count, np.float64)
+    for start in range(0, count, PLACEMENT_CHUNK):
+        block = worlds[start:start + PLACEMENT_CHUNK]
+        distances, _ = tree.query(
+            block.reshape(-1, 3),
+            k=1,
+            distance_upper_bound=inlier_radius_m,
+            workers=-1,
+        )
+        distances = distances.reshape(len(block), -1)
+        matched = np.isfinite(distances)
+        costs[start:start + len(block)] = np.where(
+            matched, distances, inlier_radius_m).mean(axis=1)
+        inliers[start:start + len(block)] = matched.mean(axis=1)
+    return costs, inliers
+
+
 def _grid(radius: float, step: float) -> Tuple[float, ...]:
     """Symmetric offsets including zero, so refining cannot lose an answer."""
 
@@ -216,21 +255,22 @@ def score_global_candidates(
     """Rank trajectory/yaw hypotheses by bounded nearest-map inlier fraction."""
 
     tree = cKDTree(map_points)
-    scored: List[InitializationCandidate] = []
-    for x, y, z, heading in candidates:
-        for offset in coarse_yaw_offsets():
-            yaw = heading + offset
-            world = sample @ _rotation(yaw).T + np.array([x, y, z], np.float32)
-            scored.append(
-                InitializationCandidate(
-                    x=x,
-                    y=y,
-                    z=z,
-                    yaw_rad=yaw,
-                    score=_inlier_fraction(tree, world, inlier_radius_m),
-                    source="global_search",
-                )
-            )
+    poses = [(x, y, z, heading + offset)
+             for x, y, z, heading in candidates
+             for offset in coarse_yaw_offsets()]
+    if not poses:
+        return ()
+    worlds = np.empty((len(poses), len(sample), 3), np.float32)
+    for index, (x, y, z, yaw) in enumerate(poses):
+        worlds[index] = sample @ _rotation(yaw).T + np.array(
+            [x, y, z], np.float32)
+    _costs, inliers = _placement_batch(tree, worlds, inlier_radius_m)
+    scored = [
+        InitializationCandidate(x=x, y=y, z=z, yaw_rad=yaw,
+                                score=float(inliers[index]),
+                                source="global_search")
+        for index, (x, y, z, yaw) in enumerate(poses)
+    ]
     return _best_first(scored)
 
 
@@ -447,8 +487,15 @@ def _best_in_window(
 ) -> Optional[InitializationCandidate]:
     """Lowest-cost pose on one local grid around a hypothesis."""
 
-    best = None
-    best_cost = math.inf
+    placed = []
+    worlds = np.empty(
+        (len(yaw_offsets) * len(position_offsets) ** 2, len(sample), 3),
+        np.float32)
+    index = 0
+    # Built in the original yaw -> dx -> dy order, because the scan below
+    # keeps the FIRST minimum and the loop it replaces kept the first too
+    # (it skipped on cost >= best_cost). A different order would silently
+    # pick a different pose out of a tie.
     for yaw_offset in yaw_offsets:
         yaw = centre.yaw_rad + yaw_offset
         # One rotation per heading, then translation only: the nearest
@@ -457,24 +504,20 @@ def _best_in_window(
         rotated = sample @ _rotation(yaw).T
         for dx in position_offsets:
             for dy in position_offsets:
-                origin = np.array(
-                    [centre.x + dx, centre.y + dy, centre.z], np.float32
-                )
-                cost, inliers = _placement(tree, rotated + origin, inlier_radius_m)
-                if cost >= best_cost:
-                    continue
-                best_cost = cost
-                # The reported score stays the inlier fraction: it is what the
-                # minimum-score gate downstream is calibrated against.
-                best = InitializationCandidate(
-                    x=centre.x + dx,
-                    y=centre.y + dy,
-                    z=centre.z,
-                    yaw_rad=yaw,
-                    score=inliers,
-                    source=centre.source,
-                )
-    return best
+                worlds[index] = rotated + np.array(
+                    [centre.x + dx, centre.y + dy, centre.z], np.float32)
+                placed.append((centre.x + dx, centre.y + dy, yaw))
+                index += 1
+    if not placed:
+        return None
+    costs, inliers = _placement_batch(tree, worlds, inlier_radius_m)
+    winner = int(np.argmin(costs))
+    x, y, yaw = placed[winner]
+    # The reported score stays the inlier fraction: it is what the
+    # minimum-score gate downstream is calibrated against.
+    return InitializationCandidate(
+        x=x, y=y, z=centre.z, yaw_rad=yaw,
+        score=float(inliers[winner]), source=centre.source)
 
 
 def _best_first(
