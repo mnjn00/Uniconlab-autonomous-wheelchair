@@ -180,15 +180,7 @@ The ladder, with a 40 ms budget per 100 ms cycle:
    an osqp infeasibility-certificate misfire from a real conflict) -> if
    still unsolved, cold iterate and cold solve (separates a degenerate
    linearisation point from a real conflict);
-2. still unsolved after all three -> controlled stop, named by a
-   counterfactual: re-solve the same problem with the obstacle planes
-   removed. If that solves, the corridor does not fit past the obstacle
-   and the stop is BLOCKED_STOP (cause: obstacle); if it does not, the
-   conflict is band-plus-dynamics and the stop is INFEASIBLE_STOP. Under
-   CPU load the degradation ladder can flip what would have been a blocked
-   stop into an infeasible one; the counterfactual keeps the diagnostic
-   honest either way, and the extra solve is cheap because the chair is
-   stopping regardless;
+2. still unsolved after all three -> INFEASIBLE_STOP, controlled stop;
 3. solved but over budget -> reuse the previous first input, up to 3
    consecutive cycles (REUSED), then BUDGET_STOP;
 4. solved, but blocked detection says otherwise: never sit inside an
