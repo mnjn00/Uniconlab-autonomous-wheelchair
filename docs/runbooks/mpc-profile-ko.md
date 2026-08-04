@@ -1,7 +1,8 @@
 # MPC 프로파일 실차 절차서
 
 대상: NUC에서 `PROFILE=mpc`로 주행 제어기를 바꿔 실행하려는 운용자.
-관련 문서: `docs/mpc_follower_design.md` (설계, 특히 7·10·12절).
+관련 문서: `docs/mpc_handoff.md` (인수인계 진입점 — 처음이면 여기부터),
+`docs/mpc_follower_design.md` (설계, 특히 7·10·12절).
 
 ---
 

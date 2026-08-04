@@ -13,6 +13,7 @@ The runbook carries the on-vehicle checks that only a running node can give.
 import ast
 import math
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -368,6 +369,25 @@ def test_bringup_launches_the_selected_follower():
 
 
 # --------------------------------------------------- the pursuit refactor
+
+def test_the_handoff_doc_names_tests_that_exist():
+    """docs/mpc_handoff.md hands the next person a table of invariants and,
+    for each one, the test that pins it. That table is only worth anything
+    while the names in it resolve - a renamed test would leave a reader
+    (or an agent) chasing a guard that appears to be enforced and is not.
+    """
+    doc = (ROOT / "docs" / "mpc_handoff.md").read_text(encoding="utf-8")
+    cited = set(re.findall(r"`(test_[a-z0-9_]+)`", doc))
+    assert cited, "the handoff doc cites no tests at all - did it move?"
+    # a citation resolves either to a test function in this file or to a
+    # test module - the doc names both, and both can be renamed away
+    known = set(re.findall(r"^def (test_[a-z0-9_]+)",
+                           Path(__file__).read_text(encoding="utf-8"), re.M))
+    known |= {p.stem for p in (ROOT / "tests").glob("test_*.py")}
+    missing = sorted(cited - known)
+    assert not missing, (
+        "docs/mpc_handoff.md cites tests that no longer exist: %s" % missing)
+
 
 def test_pursuit_step_still_runs_the_guards_through_the_shared_path():
     tree = ast.parse((SCRIPTS / "waypoint_follower.py").read_text("utf-8"))

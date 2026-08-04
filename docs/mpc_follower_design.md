@@ -1,7 +1,13 @@
 # MPC follower design
 
-Status: draft for review. No vehicle change until section 10's offline gates
-pass and a supervised field protocol is run on the NUC.
+Status: implemented, simulation-validated, never driven. The node and the
+bringup switch exist (`PROFILE=mpc`, default pursuit); section 7 is amended
+in place with what the implementation measured, including two of this
+document's own conclusions that the measurements overturned. Still no
+vehicle change until a supervised field protocol runs on the NUC.
+
+New here? Start at `docs/mpc_handoff.md`, then this document for the
+reasoning and `docs/runbooks/mpc-profile-ko.md` for the procedure.
 
 This document fixes the model, horizon, constraints, solver, CPU budget and
 fallback ladder for a model-predictive follower, and records why the
