@@ -40,21 +40,41 @@ def installed_scripts():
                                                    block.group(1)))
 
 
-def sibling_modules():
-    """Modules that live beside the nodes and are not nodes themselves."""
-    return {p.stem for p in SCRIPTS.glob("*.py")} - set(
-        Path(s).stem for s in installed_scripts())
+def sibling_modules(script=None):
+    """Everything a node could import from its own installed directory.
+
+    Both lists count, not just the policy modules: a node installed through
+    catkin_install_python lands in the same directory as the modules, so one
+    node importing another - mpc_follower subclassing waypoint_follower to
+    inherit its guards - has exactly the hazard this file is about. Only the
+    importing script itself is excluded, since it cannot import itself.
+    """
+    everything = {p.stem for p in SCRIPTS.glob("*.py")}
+    return everything - ({Path(script).stem} if script else set())
 
 
 def sibling_imports(script):
     text = (SCRIPTS / script).read_text(encoding="utf-8")
-    siblings = sibling_modules()
+    siblings = sibling_modules(script)
     found = set()
     for match in re.finditer(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)",
                              text, re.M):
         if match.group(1) in siblings:
             found.add(match.group(1))
     return found
+
+
+def first_import_at(text, module):
+    """Where a module is first imported, in either spelling.
+
+    Looking only for "from x " skips "import x" entirely and, because the
+    detector above accepts both, raised ValueError on the first node to use
+    the plain form rather than reporting anything.
+    """
+    match = re.search(r"^\s*(?:from|import)\s+%s\b" % re.escape(module),
+                      text, re.M)
+    assert match, "%s is imported but cannot be located" % module
+    return match.start()
 
 
 def test_every_installed_node_importing_a_sibling_recovers_its_own_directory():
@@ -69,8 +89,7 @@ def test_every_installed_node_importing_a_sibling_recovers_its_own_directory():
             continue
         # and it has to happen BEFORE the first sibling import
         guard = text.index(SYS_PATH_RECOVERY)
-        first = min(text.index(name) for name in
-                    ("from %s " % m for m in sorted(imports)))
+        first = min(first_import_at(text, m) for m in sorted(imports))
         if guard > first:
             offenders.append("%s recovers sys.path after importing" % script)
     assert not offenders, (
