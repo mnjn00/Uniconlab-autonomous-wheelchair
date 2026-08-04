@@ -58,6 +58,22 @@ if [ "$PROFILE" = "mpc" ]; then
 else
   FOLLOWER_NODE=waypoint_follower.py
 fi
+# Actuation delay, in seconds, for the MPC profile to plan from where the
+# chair WILL be rather than where it was. Zero until measured on this NUC -
+# a guessed lead biases every command on the route in one direction, which
+# is worse than no compensation at all. The runbook carries the procedure.
+# Rejected rather than rounded if it is not a plain non-negative number: a
+# typo here becomes a steering phase shift nobody typed.
+LATENCY_S="${LATENCY_S:-0}"
+case "$LATENCY_S" in
+  *[!0-9.]*|*.*.*|'') LATENCY_BAD=1 ;;   # stray characters, or two dots
+  *[0-9]*)            LATENCY_BAD=  ;;   # ...and it has to contain a digit
+  *)                  LATENCY_BAD=1 ;;   # a lone "." reaches here
+esac
+if [ -n "$LATENCY_BAD" ]; then
+  echo "ERROR: LATENCY_S must be a non-negative number, got '$LATENCY_S'" >&2
+  exit 65
+fi
 LOG=$HOME
 
 source /opt/ros/noetic/setup.bash
@@ -322,6 +338,7 @@ setsid nohup rosrun static_livox_localization "$FOLLOWER_NODE" \
   _route:="$ROUTE" _safety_band:="$BAND" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
+  _latency_s:="$LATENCY_S" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &
 
 echo "[7/7] black-box recorder"
