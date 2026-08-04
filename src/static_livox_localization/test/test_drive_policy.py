@@ -138,15 +138,18 @@ def test_the_gate_keeps_its_chain_integrity_checks():
         assert "self.policies" not in line.split("elif")[-1]
 
 
-def test_the_obstacle_guard_is_skipped_rather_than_called_and_ignored():
-    """obstacle_distance returns 0.0 - blocked - when there is no data, so
-    calling it and discarding the answer would fail closed on exactly the
-    run that must not stop."""
+def test_obstacle_detection_does_not_switch_off_with_the_policies():
+    """The raw scan check used to be the half of obstacle detection that
+    ~safety_policies could switch off; the cluster path was deliberately
+    left outside that switch so something kept watching for people. With
+    the raw check removed there is one source left, and it must stay
+    outside the switch - otherwise policies:=false drives blind.
+    """
     text = follower_text()
     start = text.index("def corridor_threat")
     body = text[start:text.index("\n    def ", start + 1)]
-    assert "if self.policies:\n            distance = self.obstacle_distance" \
-        in body
+    assert "self.policies" not in body
+    assert "self.cluster_threat(lateral_shift)" in body
 
 
 # ------------------------------------------------- the real chain, end to end

@@ -49,10 +49,13 @@ def test_follower_speed_policy_is_bounded():
 
 def test_follower_obstacle_detection_uses_forward_fov_cone():
     text = follower_text()
-    assert "FORWARD_FOV_HALF_DEG = 50.0" in text
-    assert "CORRIDOR_MIN_RANGE_M = 0.50" in text
-    assert "azimuth < FORWARD_FOV_HALF_DEG" in text
-    assert "pts[:, 0] > CORRIDOR_MIN_RANGE_M" in text
+    # The follower's own raw five-point corridor check was removed on
+    # 2026-08-05: a source that cannot say what it saw was authorising
+    # bypass manoeuvres. The same geometry is still asserted against
+    # safety_gate.py below, which keeps an independent raw check - it may
+    # stop the chair, it just may not steer it.
+    assert "def obstacle_distance" not in text
+    assert "Threat(distance, UNKNOWN" not in text
 
 
 def test_obstacle_stop_radius_covers_braking_distance_at_full_speed():
@@ -62,7 +65,10 @@ def test_obstacle_stop_radius_covers_braking_distance_at_full_speed():
     assert "stopping_envelope(" in text
     assert "self.motion.linear_speed_mps" in text
     assert "ACCUMULATION_WINDOW_S" in text
-    assert "self.guard_stop()" in text and "self.guard_slow()" in text
+    # guard_slow() the method went with the raw check; the slow radius it
+    # returned is now computed where it is used, in step().
+    assert "self.guard_stop()" in text
+    assert "guard_slow = guard_stop + GUARD_SLOW_EXTRA_M" in text
 
 
 def test_follower_bypasses_static_obstacles_only_inside_band():
@@ -86,9 +92,18 @@ def test_the_band_still_vets_a_way_round_when_the_policies_are_off():
     assert "self.policies" not in body
 
 
-def test_missing_cloud_data_is_treated_as_blocked():
+def test_missing_obstacle_data_is_treated_as_blocked():
+    """The property outlived the check that used to carry it.
+
+    The raw scan returned 0.0 - blocked - when it had no cloud. With that
+    check gone the same guarantee has to come from the only remaining
+    source: cluster_threat reports a missing summary as a blocking threat
+    at zero distance, and a quiet producer is separately an OVERRIDE hold.
+    Silence must never read as clear road.
+    """
     text = follower_text()
-    assert "return 0.0  # no data = treat as blocked" in text
+    assert 'return Threat(0.0, MOVING, "no summary")' in text
+    assert "CLUSTERS_STALE" in text
 
 
 def test_degraded_localization_times_out_to_a_hold():
