@@ -39,10 +39,11 @@ fi
 #
 # pursuit  the validated one. Two complete autonomous runs of the 0727 route
 #          on 2026-07-31. This is the default and should stay the default.
-# mpc      NOT validated. It does not finish the route in simulation - it
-#          stops at about 350 m of 378 m where the corridor pinches - and it
-#          has never driven the chair. It is here to be measured on the NUC,
-#          under an operator who is expecting it to stop early.
+# mpc      Completes the route in simulation, at a jitter measured to be
+#          harsher than the chair's own, without leaving the band. Has never
+#          driven the chair. Those are different things: it is here to be
+#          measured on the NUC, watched, and promoted only on evidence from
+#          the ground rather than from a plant model.
 #
 # Same two-literal rule as above, for the same reason: a typo must not pick a
 # control law. Unlike SAFETY_POLICIES the unset default is the SAFE one, so
@@ -314,7 +315,8 @@ for i in $(seq 1 10); do
 done
 echo "  final-stage relay up - watch /tip_guard/status"
 if [ "$PROFILE" = "mpc" ]; then
-  echo "  PROFILE=mpc - UNVALIDATED control law, expect a stop near 350 m"
+  echo "  PROFILE=mpc - simulation-only control law, never driven on the chair"
+  echo "  watch /waypoint_follower/status; see docs/runbooks/mpc-profile-ko.md"
 fi
 setsid nohup rosrun static_livox_localization "$FOLLOWER_NODE" \
   _route:="$ROUTE" _safety_band:="$BAND" \

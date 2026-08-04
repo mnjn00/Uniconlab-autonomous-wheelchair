@@ -26,18 +26,22 @@ What that leaves this file responsible for is small and stated plainly:
 
 READ THIS BEFORE PUTTING IT ON THE CHAIR
 ----------------------------------------
-This profile does NOT complete the 0727 route in simulation. With 2 cm of
-lateral jitter it ends in an INFEASIBLE_STOP at about 350 m of 378 m, at a
-pinch where the band leaves the chair centre 0.13 m of lateral freedom and
-the hard corridor half-planes have nothing left to give. Driving it slower
-makes it stop sooner, not later (0.3 m/s stops at 334 m), so the remaining
-gap is geometric and no amount of reference shaping closes it.
+It completes the 0727 route in simulation, at an injected jitter measured
+from the black box to sit around the p98 of what the chair actually sees,
+across seeds, never leaving the band. It has never driven the chair.
 
-It is committed in that state deliberately, wired but switched off:
-PROFILE defaults to pursuit, this node runs only when an operator asks for
-it by name, and the stop it produces is a real stop rather than a drift.
-Section 10's offline gates are not all passed and the runbook says so. Do
-not promote it to the default on the strength of it existing.
+Those are different claims and the gap between them is the whole reason
+PROFILE still defaults to pursuit. Pursuit drove this route twice on
+2026-07-31, on the real ground, with a person in the chair. This has passed
+a simulation - one whose fidelity is bounded by a unicycle plant with no
+actuation lag, on a band that is itself a recording. Simulation is what
+caught the three defects behind the old 350 m stop; it is not what
+establishes that a controller is safe to sit in.
+
+So: run it when an operator asks for it by name, watch it, and promote it
+only on evidence from the chair. The runbook carries what to watch and
+what is still unmeasured (latency, NUC solve time, the feel of the
+steering).
 """
 
 import math
@@ -196,13 +200,21 @@ class MpcFollower(WaypointFollower):
 
         self.publish_state("MPC wp=%d/%d v=%.2f w=%+.2f %s%s" % (
             self.nearest_index, len(self.waypoints), speed, yaw_rate,
-            status, "" if self.policies else " POLICIES_OFF"))
+            status, "" if self.policies else " POLICIES_OFF"),
+            state="MPC:" + status)
 
-    def publish_state(self, text):
+    def publish_state(self, text, state=None):
+        """Publish every cycle, log only on a change of state.
+
+        The published line carries v and w, which move every cycle - so
+        comparing the whole line to decide whether to log would log at
+        10 Hz. `state` is the coarse word the operator actually watches.
+        """
         self.status_pub.publish(String(data=text))
-        if text != self.status:
+        state = state or text
+        if state != self.status:
             rospy.loginfo("state: %s", text)
-            self.status = text
+            self.status = state
 
 
 if __name__ == "__main__":

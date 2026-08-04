@@ -5,20 +5,28 @@ Section 7 of docs/mpc_follower_design.md asks the node to shape v_ref with
 "the follower's existing speed policy (narrow-band creep, slope slowdown)
 instead of a constant 0.6", on the grounds that arriving at the route's
 ~334 m choke at cruise is what ends the jittered runs in an INFEASIBLE_STOP.
-Both halves of that were measured on 2026-08-04 before implementing them,
-and both came back different. The mandate is implemented here in the shape
-the measurements support, not the shape it was written in.
+Both halves of that were measured on 2026-08-04 before implementing them.
+Its instinct - slow down for the pinch - turned out right; the quantity to
+slow for and the speed to slow to were both wrong, and finding that out
+meant fixing a defect in the heading reference first. The mandate is
+implemented here in the shape the measurements support.
 
 WHAT THE MEASUREMENTS SAID
 --------------------------
-1. Slowing down does not relieve the choke. Over the v4 band with 2 cm of
-   lateral jitter and the EMA anchor, a constant 0.6 reference reaches
-   350 m; a constant 0.3 reference stops EARLIER, at 334 m. The pinch is
-   geometric, not dynamic - the band leaves the chair centre 0.13 m of
-   lateral freedom there, and a hard half-plane corridor that narrow is
-   infeasible against jitter no matter how slowly it is entered. Speed is
-   not the lever, so nothing here claims to fix it. See the runbook: the
-   MPC profile does not complete the route, and ships gated off.
+1. Slowing down relieves the choke - but only after a defect underneath it
+   was fixed, and the first pass here concluded the opposite. Measured over
+   the v4 band at 2 cm jitter, a constant 0.6 reached 350 m and a constant
+   0.3 stopped EARLIER, at 334 m, which reads as clear evidence that speed
+   is not the lever. It was not. The dominant fault was in the HEADING
+   reference: mpc_core.polyline_refs snapped to the nearest polyline
+   segment, turning a 26.7-degree inter-station step into a demand to
+   rotate at 2.2 rad/s against a 0.5 rad/s cap, and both speeds were
+   drowning in that. With the heading interpolated along arc instead, the
+   same pinch is infeasible at 0.5 m/s and solves at 0.4.
+
+   The lesson is kept here because the reasoning was sound and the answer
+   was still wrong: a lever measured on top of a defect measures the
+   defect. Section 7 of the design doc is amended with the same story.
 
 2. Below a threshold the controller does not move at all. Sweeping a
    constant reference over 20 s from a standing start:
@@ -46,11 +54,17 @@ faster wheel the loaded base does not rotate at all. That the physical floor
 sits above the solver's dead zone is luck, but it means one number serves
 both and neither is a fudge.
 
-The policy sources are the follower's, not new tuning: the hazard ramp is
-slack_speed() transcribed, and the slope and DEGRADED rules are the ones
-around it in update(). is_narrow is deliberately NOT among them - the
-pursuit follower does not consult it, and adding it here would be new
-tuning wearing the clothes of an existing policy.
+On top of that floor the reference is shaped by the corridor ahead, which
+IS the lever once the heading reference is honest: the route's narrowest
+metre is infeasible at 0.5 m/s and solves at 0.4, so the chair arrives at
+it already slow. That rule is this controller's own and is not transcribed
+from pursuit, for a reason worth stating - pursuit never writes the band
+into a solver, so a pinch is only a line it must not cross, while here it
+is a constraint the whole horizon has to satisfy in advance.
+
+The remaining policy sources ARE the follower's, not new tuning: the hazard
+ramp is slack_speed() transcribed, and the slope and DEGRADED rules are the
+ones around it in update().
 
 CAVEAT ON THE HAZARD RAMP: hazard_clearance is finite at 0 of 758 stations
 on the v4 band, as it was at 0 of 152 sampled on v5. The ramp below is
@@ -77,7 +91,99 @@ SLOPE_PITCH_RAD = math.radians(3.0)
 # the solver's measured standstill threshold of 0.22.
 TURN_FLOOR_SPEED = 0.30
 
+# Corridor-width shaping. This one is NOT transcribed from the pursuit
+# follower, and the reason it is justified here and absent there is the
+# whole difference between the two controllers: this one writes the band
+# into the QP as HARD half-planes over a 2.5 s horizon, so a corridor that
+# pinches is a constraint it must satisfy in advance, not a limit it merely
+# must not cross. Pursuit has no such obligation and needs no such rule.
+#
+# The route's narrowest metre leaves 0.13 m. Measured at that state: 0.5 m/s
+# is infeasible, 0.4 m/s solves. The ramp below puts the chair at the floor
+# there, with the numbers chosen so the whole v4 route completes at 2 cm
+# jitter across seeds.
+CORRIDOR_TIGHT_M = 0.25
+CORRIDOR_FULL_M = 0.60
+# Deliberately far longer than braking needs - 0.6 to 0.3 takes under a
+# metre. The horizon is what has to be feasible, not just the wheels, so
+# the chair should already be slow when the pinch enters the horizon, not
+# when it reaches the axle.
+CORRIDOR_LOOKAHEAD_M = 15.0
+# The curvature cap needs only to cover the horizon it is shaping - a bend
+# 15 m away does not constrain the yaw rate of the next 1.5 m, and using the
+# corridor's lookahead here would drag the whole route down to the sharpest
+# turn anywhere in sight.
+CURVE_LOOKAHEAD_M = 2.5
+
 STOP = "STOP"
+
+
+def corridor_speed(band, point, lookahead_m=CORRIDOR_LOOKAHEAD_M):
+    """Speed the narrowest corridor within reach will accept.
+
+    Takes the MINIMUM width ahead rather than the width here: arriving at a
+    pinch fast is what makes it infeasible, and by the time the narrow
+    station is under the chair it is far too late to be braking for it.
+    """
+    point = np.asarray(point, dtype=float)
+    k0 = int(np.argmin(np.linalg.norm(band.xy - point, axis=1)))
+    tail = band.xy[k0:]
+    if len(tail) > 1:
+        seg = np.linalg.norm(np.diff(tail, axis=0), axis=1)
+        arc = np.concatenate([[0.0], np.cumsum(seg)])
+        tail = tail[arc <= lookahead_m]
+    width = min(_corridor_width(band, q) for q in tail) \
+        if len(tail) else _corridor_width(band, point)
+    span = CORRIDOR_FULL_M - CORRIDOR_TIGHT_M
+    ratio = max(0.0, min(1.0, (width - CORRIDOR_TIGHT_M) / span))
+    return TURN_FLOOR_SPEED + ratio * (MAX_SPEED - TURN_FLOOR_SPEED)
+
+
+def _corridor_width(band, point):
+    _lateral, lo, hi = band.lateral_limits(point)
+    return hi - lo
+
+
+def curvature_speed(band, point, w_max=None, lookahead_m=CURVE_LOOKAHEAD_M):
+    """Speed at which the chair can actually hold the reference heading.
+
+    The heading reference sweeps at curvature x speed. Where the route bends
+    hardest that product reaches 0.563 rad/s at cruise, against a 0.5 rad/s
+    cap - so at exactly two of 756 stations the reference asks for a turn
+    the chair cannot make. Capping v at w_max / curvature makes the demand
+    equal to what the chair has, which is the honest version of the same
+    request.
+
+    This is the residual left over from fixing polyline_refs, and it is left
+    to the speed policy on purpose: the alternative was smoothing the
+    curvature away, which would have hidden a real 71-degree turn rather
+    than slowing for it.
+    """
+    if w_max is None:
+        # taken from the solver's own limit rather than kept as a second
+        # copy of it: two constants for one physical cap disagree quietly,
+        # and the direction they disagree in is a reference the chair
+        # cannot follow.
+        import mpc_core
+        w_max = mpc_core.MpcParams().w_max
+    point = np.asarray(point, dtype=float)
+    k0 = int(np.argmin(np.linalg.norm(band.xy - point, axis=1)))
+    span = band.xy[k0:]
+    if len(span) < 3:
+        return MAX_SPEED
+    seg = np.diff(span, axis=0)
+    ds = np.linalg.norm(seg, axis=1)
+    within = np.cumsum(ds) <= lookahead_m
+    if within.sum() < 2:
+        within[:2] = True
+    heading = np.unwrap(np.arctan2(seg[within, 1], seg[within, 0]))
+    if len(heading) < 2:
+        return MAX_SPEED
+    kappa = np.abs(np.diff(heading)) / np.maximum(ds[within][1:], 1e-6)
+    peak = float(kappa.max())
+    if peak < 1e-6:
+        return MAX_SPEED
+    return min(MAX_SPEED, float(w_max) / peak)
 
 
 def hazard_speed(clearance_m):
@@ -115,6 +221,10 @@ def horizon_speed(band, point, horizon_m=None, pitch_rad=0.0, degraded=False,
     arrival. The walk is along the band's own stations, so it follows the
     corridor round a bend rather than probing a straight line through
     whatever the bend encloses.
+
+    corridor_speed is folded in once rather than at every sample: it already
+    carries its own, much longer lookahead, so calling it per sample would
+    re-scan the same 15 m six times for the same answer.
     """
     point = np.asarray(point, dtype=float)
     if horizon_m is None:
@@ -131,7 +241,8 @@ def horizon_speed(band, point, horizon_m=None, pitch_rad=0.0, degraded=False,
             if j >= len(tail):
                 break
             limit = min(limit, at(tail[j]))
-    return float(limit)
+    return float(min(limit, corridor_speed(band, point),
+                     curvature_speed(band, point)))
 
 
 def shaped_reference(band, point, horizon, pitch_rad=0.0, degraded=False,

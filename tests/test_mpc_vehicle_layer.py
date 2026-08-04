@@ -24,6 +24,7 @@ SCRIPTS = ROOT / "src" / "static_livox_localization" / "scripts"
 
 sys.path.insert(0, str(SCRIPTS))
 try:
+    import mpc_core
     import mpc_speed
     from mpc_anchor import StateAnchor, blend_angle, wrap_angle
     from safety_band import SafetyBand
@@ -129,6 +130,33 @@ def test_slope_and_degraded_land_exactly_on_the_floor(band):
         assert v_ref[0] == pytest.approx(mpc_speed.TURN_FLOOR_SPEED)
 
 
+def test_corridor_shaping_slows_for_the_narrowest_metre(band):
+    """The route's tightest station is infeasible at 0.5 m/s and solves at
+    0.4 (measured). The chair must arrive there at or below that."""
+    widths = np.array([band.lateral_limits(q)[2] - band.lateral_limits(q)[1]
+                       for q in band.xy])
+    tightest = band.xy[int(np.argmin(widths))]
+    assert mpc_speed.corridor_speed(band, tightest) <= 0.4
+
+
+def test_corridor_shaping_slows_before_arriving_not_on_arrival(band):
+    """A pinch must be seen from far enough back that the chair is already
+    slow when the pinch enters the horizon."""
+    widths = np.array([band.lateral_limits(q)[2] - band.lateral_limits(q)[1]
+                       for q in band.xy])
+    k = int(np.argmin(widths))
+    approach = band.xy[max(0, k - 20)]          # 10 m back
+    assert mpc_speed.corridor_speed(band, approach) < mpc_speed.MAX_SPEED
+
+
+def test_corridor_shaping_leaves_open_road_alone(band):
+    """It must not be a blanket slowdown: the wide majority of the route
+    still runs at full speed, or this is just a slower chair."""
+    full = sum(1 for q in band.xy[::5]
+               if mpc_speed.corridor_speed(band, q) >= mpc_speed.MAX_SPEED)
+    assert full > 0.5 * len(band.xy[::5])
+
+
 def test_reference_is_flat_across_the_horizon(band):
     v_ref, _ = mpc_speed.shaped_reference(band, band.xy[10], 25)
     assert len(set(np.round(v_ref, 9))) == 1
@@ -160,6 +188,106 @@ def test_the_hazard_ramp_is_inert_on_the_shipped_band(band):
         "hazard_clearance is now finite at %d stations - the band carries "
         "drop semantics at last; re-check the speed policy against it and "
         "update this test" % finite)
+
+
+# ------------------------------------- the reference the solver is given
+
+def test_heading_reference_never_demands_more_yaw_than_the_chair_has(band):
+    """The regression that cost the route.
+
+    polyline_refs used to snap the heading to whichever polyline segment a
+    step landed on. Stations are 0.5 m apart and a step covers 0.06 m, so
+    eight steps shared a segment and the ninth inherited the whole
+    inter-station heading change - up to 26.7 degrees, read by the cost as
+    a demand for 4.7 rad/s against a 0.5 rad/s cap. The chair spent its yaw
+    authority chasing a corner that was not there, drifted, and met the
+    hard band rows as an INFEASIBLE_STOP at 350 m that looked for all the
+    world like a corridor too narrow to drive.
+    """
+    params = mpc_core.MpcParams()
+    worst = 0.0
+    for k in range(0, len(band.xy), 5):
+        # at the speed the policy would actually be running here, since the
+        # curvature cap is the half of the fix that lives in mpc_speed
+        v_ref, stop = mpc_speed.shaped_reference(band, band.xy[k],
+                                                 params.horizon)
+        if stop:
+            continue
+        _v, th = mpc_core.polyline_refs(band, band.xy[k], params.horizon,
+                                        params.dt, float(v_ref[0]))
+        if len(th) > 1:
+            worst = max(worst, float(np.abs(np.diff(th)).max()) / params.dt)
+    assert worst <= params.w_max + 1e-9, (
+        "heading reference demands %.3f rad/s, cap is %.2f" % (worst,
+                                                               params.w_max))
+
+
+def test_curvature_cap_is_rare_rather_than_a_blanket_slowdown(band):
+    """Only two stations of 756 demand more yaw than the chair has. If this
+    starts biting everywhere, the curvature estimate has gone noisy and the
+    chair is being slowed for nothing."""
+    capped = sum(1 for q in band.xy[::5]
+                 if mpc_speed.curvature_speed(band, q) < mpc_speed.MAX_SPEED)
+    assert capped < 0.25 * len(band.xy[::5])
+
+
+def test_heading_reference_still_turns_the_real_corner(band):
+    """Smoothing would also have passed the test above, by rounding off the
+    genuine 71-degree turn near 372 m. Interpolation must not: over the
+    corner the reference has to actually sweep through it."""
+    seg = np.diff(band.xy, axis=0)
+    heading = np.unwrap(np.arctan2(seg[:, 1], seg[:, 0]))
+    arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(seg, axis=1))])
+    k = int(np.argmax(np.abs(np.diff(heading))))
+    params = mpc_core.MpcParams()
+    # from the corner itself: at 0.6 m/s the horizon reaches 1.5 m, so
+    # starting further back would simply not arrive at the bend
+    _v, th = mpc_core.polyline_refs(band, band.xy[k], params.horizon,
+                                    params.dt, 0.6)
+    swept = abs(float(th[-1] - th[0]))
+    assert swept > math.radians(15.0), (
+        "reference sweeps only %.1f degrees through the corner at %.0f m"
+        % (math.degrees(swept), arc[k]))
+
+
+def test_near_horizon_reserve_cannot_exclude_where_the_chair_already_is():
+    """The 335 m stop, pinned.
+
+    The reserve used to be flat across the horizon. Step 1 is 0.03 m ahead
+    with 0.0 mm of measured error, and a flat 52 mm reserve there fenced off
+    ground the chair was standing on - while being the step it has the least
+    time to maneuver out of. Relaxing steps 0-4 restored feasibility;
+    relaxing any later group did not.
+    """
+    p = mpc_core.MpcParams()
+    near = min(max(p.band_inset * 1 / p.horizon, p.band_inset_min),
+               p.band_inset)
+    far = min(max(p.band_inset * p.horizon / p.horizon, p.band_inset_min),
+              p.band_inset)
+    assert near <= 0.015, "near-horizon reserve is %.3f m" % near
+    assert far >= 0.05, "far-horizon reserve collapsed to %.3f m" % far
+    assert near < far
+
+
+def test_reserve_never_falls_under_the_measured_one_step_error():
+    """It is a reserve against a measured quantity, not a free parameter:
+    4.5 mm was the worst one-step lateral error over a full run."""
+    assert mpc_core.MpcParams().band_inset_min >= 0.0045
+
+
+def test_linearisation_reserve_leaves_the_tightest_station_drivable(band):
+    """The reserve is a numerical allowance, not a safety margin, and at
+    25 % per side it took half of the 0.13 m pinch and made it infeasible
+    by 3.5 mm. Measured error at the speed the chair passes it is 4.5 mm."""
+    params = mpc_core.MpcParams()
+    widths = np.array([band.lateral_limits(q)[2] - band.lateral_limits(q)[1]
+                       for q in band.xy])
+    tightest = float(widths.min())
+    inset = min(params.band_inset, tightest * params.band_inset_fraction)
+    assert tightest - 2 * inset >= 0.09, (
+        "reserve leaves only %.3f m of the %.3f m pinch"
+        % (tightest - 2 * inset, tightest))
+    assert inset >= 0.0045 * 2, "reserve is under 2x the measured error"
 
 
 # ------------------------------------------------- guards are not copied
