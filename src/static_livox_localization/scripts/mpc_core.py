@@ -468,6 +468,20 @@ class MpcSolver:
         solve_ms = (time.monotonic() - t0) * 1e3
         if not solved:
             self.reuse_streak += 1
+            if obstacles:
+                # Counterfactual before naming the failure: if the same
+                # problem solves with the obstacle planes removed, the
+                # corridor simply does not fit past this obstacle - that is
+                # a BLOCKED_STOP, and saying INFEASIBLE_STOP instead would
+                # blame the solver for what the map already says. The extra
+                # solve is cheap because we are stopping anyway.
+                P3, q3, A3, l3, u3 = self._assemble(xbar, ubar, v_ref,
+                                                    th_ref, [])
+                res3 = self._try_solve(P3, q3, A3, l3, u3, warm=False)
+                if res3.info.status in ("solved", "solved_inaccurate"):
+                    return (np.array([p.a_min, 0.0]), STATUS_BLOCKED_STOP,
+                            {"solve_ms": solve_ms, "raw": res.info.status,
+                             "cause": "obstacle"})
             return (np.array([p.a_min, 0.0]), STATUS_INFEASIBLE_STOP,
                     {"solve_ms": solve_ms, "raw": res.info.status})
         if first_ok_ms > p.solve_budget_s * 1e3:
