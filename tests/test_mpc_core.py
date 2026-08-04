@@ -146,7 +146,7 @@ def closed_loop(band, x0, steps, obstacles=(), v_target=0.4):
     solver = core.MpcSolver(ref)
     x = x0.copy()
     traj = [x.copy()]
-    statuses, lat, solve_ms = [], [], []
+    statuses, lat, solve_ms, inputs = [], [], [], []
     warm = None
     for _ in range(steps):
         v_ref, th_ref = core.polyline_refs(band, x[:2], solver.p.horizon,
@@ -158,11 +158,13 @@ def closed_loop(band, x0, steps, obstacles=(), v_target=0.4):
         statuses.append(status)
         lat.append(ref.frame_at(x[:2])[2])
         solve_ms.append(info.get("solve_ms", 0.0))
+        inputs.append(u0.copy())
         x = core.unicycle_step(x, u0, solver.p.dt)
         traj.append(x.copy())
         warm = (info.get("xbar"), info.get("ubar")) \
             if status == core.STATUS_OK else warm
-    return np.array(traj), statuses, np.array(lat), np.array(solve_ms)
+    return (np.array(traj), statuses, np.array(lat), np.array(solve_ms),
+            np.array(inputs))
 
 
 class SolverBehaviourTest(unittest.TestCase):
@@ -172,7 +174,7 @@ class SolverBehaviourTest(unittest.TestCase):
 
     def test_drives_straight_inside_the_band(self):
         x0 = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
-        traj, statuses, lat, solve_ms = closed_loop(
+        traj, statuses, lat, solve_ms, _inputs = closed_loop(
             self.band, x0, steps=60, v_target=0.4)
         self.assertTrue(all(s == core.STATUS_OK for s in statuses))
         self.assertGreater(traj[-1, 0], 1.0)           # actually moved
@@ -182,7 +184,7 @@ class SolverBehaviourTest(unittest.TestCase):
     def test_avoids_obstacle_and_stays_in_band(self):
         x0 = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
         obstacle_xy = np.array([8.0, 0.0])
-        traj, statuses, lat, _ = closed_loop(
+        traj, statuses, lat, _, _inputs = closed_loop(
             self.band, x0, steps=160,
             obstacles=[obstacle_xy], v_target=0.4)
         ok = sum(1 for s in statuses if s == core.STATUS_OK)
@@ -205,12 +207,53 @@ class SolverBehaviourTest(unittest.TestCase):
     def test_unpassable_obstacle_blocks_instead_of_squeezing(self):
         # 0.8 m corridor, 0.5 m padded obstacle on the line: no room around
         band = make_straight_band(n=120, half_width=0.4)
-        traj, statuses, _lat, _ms = closed_loop(
+        traj, statuses, _lat, _ms, _inputs = closed_loop(
             band, np.array([0.0, 0.0, 0.0, 0.0, 0.0]), steps=400,
             obstacles=[np.array([10.0, 0.0])], v_target=0.4)
         self.assertIn(core.STATUS_BLOCKED_STOP, statuses)
         dist = np.linalg.norm(traj[:, :2] - np.array([10.0, 0.0]), axis=1)
         self.assertGreater(dist.min(), 0.35)
+
+
+class DriveLimitsTest(unittest.TestCase):
+    """The drive caps must be HARD. The band-containment proof assumes the
+    executed trajectory is the planned one; a command beyond the caps is
+    executed as something else by the gate's clamp, in a region the plan
+    never validated. The yaw-rate case is the one that bit: bounding the
+    yaw ACCELERATION with w_max left the yaw RATE itself unbounded, and a
+    heading error then commanded twice the cap.
+    """
+
+    def setUp(self):
+        solver_or_skip(self)
+        self.p = core.MpcParams()
+
+    def assert_limits(self, traj, inputs):
+        tol = 1e-2                      # osqp feasibility tolerance is 1e-3
+        self.assertLessEqual(traj[:, 3].max(), self.p.v_max + tol)
+        self.assertGreaterEqual(traj[:, 3].min(), -tol)
+        self.assertLessEqual(np.abs(traj[:, 4]).max(), self.p.w_max + tol)
+        self.assertLessEqual(inputs[:, 0].max(), self.p.a_max + tol)
+        self.assertGreaterEqual(inputs[:, 0].min(), self.p.a_min - tol)
+        self.assertLessEqual(np.abs(inputs[:, 1]).max(), self.p.al_max + tol)
+
+    def test_limits_hold_in_cruise(self):
+        band = make_straight_band(n=120, half_width=1.5)
+        traj, _statuses, _lat, _ms, inputs = closed_loop(
+            band, np.array([0.0, 0.0, 0.0, 0.0, 0.0]), steps=80,
+            v_target=0.6)
+        self.assert_limits(traj, inputs)
+
+    def test_limits_hold_under_heading_error(self):
+        # shapes that reach the chair in real life: post-initialisation
+        # heading, or recovery after being shoved sideways in a narrow
+        # stretch - with the old bug these commanded up to 2x the yaw cap
+        band = make_straight_band(n=120, half_width=1.5)
+        for offset_deg in (60.0, 90.0, 120.0):
+            x0 = np.array([3.0, 0.0, math.radians(offset_deg), 0.0, 0.0])
+            traj, _statuses, _lat, _ms, inputs = closed_loop(
+                band, x0, steps=400, v_target=0.6)
+            self.assert_limits(traj, inputs)
 
 
 if __name__ == "__main__":

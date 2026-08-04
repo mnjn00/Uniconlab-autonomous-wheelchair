@@ -310,17 +310,25 @@ class MpcSolver:
                          (self._s(k), 1.0)],
                         required - base, np.inf)
 
-        # ---- input bounds, v in [0, v_max], slack >= 0. The speed cap is
-        # HARD, not just a cost term: an inaccurate solve must never be
-        # able to accumulate velocity beyond the follower's MAX_SPEED.
+        # ---- input bounds, v in [0, v_max], w in [-w_max, w_max],
+        # slack >= 0. Both caps are HARD, not cost terms: an inaccurate
+        # solve must never accumulate velocity or yaw rate past the
+        # follower's limits. The yaw-rate bound lives on the STATE, not the
+        # input - bounding the yaw acceleration al with w_max (a bug this
+        # replaced) clamped the wrong variable and left w itself unbounded,
+        # which let a 90-degree heading error command 0.86 rad/s, twice the
+        # cap; the safety gate's clamp would then have executed a trajectory
+        # the plan never validated.
         for k in range(N):
             add_row([(self._u(k) + 0, 1.0)],
                     p.a_min - ubar[k, 0], p.a_max - ubar[k, 0])
             add_row([(self._u(k) + 1, 1.0)],
-                    -p.w_max - ubar[k, 1], p.w_max - ubar[k, 1])
+                    -p.al_max - ubar[k, 1], p.al_max - ubar[k, 1])
             add_row([(self._z(k) + 3, 1.0)], -xbar[k + 1, 3], np.inf)
             add_row([(self._z(k) + 3, 1.0)],
                     -np.inf, p.v_max - xbar[k + 1, 3])
+            add_row([(self._z(k) + 4, 1.0)],
+                    -p.w_max - xbar[k + 1, 4], p.w_max - xbar[k + 1, 4])
             add_row([(self._s(k), 1.0)], 0.0, np.inf)
 
         # ---- cost: 0.5 xi' P xi + q' xi  (P built upper-triangular, doubled)
@@ -424,16 +432,21 @@ class MpcSolver:
             P, q, A, l, u = self._assemble(xbar, ubar, v_ref, th_ref,
                                            list(obstacles))
             res = self._try_solve(P, q, A, l, u, warm=False)
-        solve_ms = (time.monotonic() - t0) * 1e3
 
         solved = res.info.status in ("solved", "solved_inaccurate")
+        # The budget verdict belongs to the first rung that produced a
+        # solved answer. The refinement below is best-effort and must never
+        # demote that answer: a slow refinement used to turn solved cycles
+        # into REUSED ones, which is worse than the drift it polishes.
+        first_ok_ms = (time.monotonic() - t0) * 1e3 if solved else None
         if solved and res.x is not None:
             self._prev_x = res.x
             self._prev_y = res.y
-        # Second SQP iteration, re-linearising about the solution just found,
-        # when at least half the budget remains: one pass leaves residual
-        # linearisation drift exactly where the band narrows fast.
-        if solved and (time.monotonic() - t0) < p.solve_budget_s * 0.5:
+        # Second SQP iteration, re-linearising about the solution just
+        # found: one pass leaves residual linearisation drift exactly where
+        # the band narrows fast. Only attempted when the first answer came
+        # back with enough of the budget left to spend.
+        if solved and first_ok_ms < p.solve_budget_s * 1e3 * 0.4:
             z_sol = res.x[:self.n_state].reshape(p.horizon, NX)
             mu_sol = res.x[self.n_state:self.n_state + self.n_input].reshape(
                 p.horizon, NU)
@@ -447,17 +460,17 @@ class MpcSolver:
             P2, q2, A2, l2, u2 = self._assemble(xbar2, ubar2, v_ref, th_ref,
                                                 list(obstacles))
             res2 = self._try_solve(P2, q2, A2, l2, u2, warm=True)
-            solve_ms = (time.monotonic() - t0) * 1e3
             if res2.info.status in ("solved", "solved_inaccurate") \
                     and res2.x is not None:
                 res, xbar, ubar = res2, xbar2, ubar2
                 self._prev_x = res.x
                 self._prev_y = res.y
+        solve_ms = (time.monotonic() - t0) * 1e3
         if not solved:
             self.reuse_streak += 1
             return (np.array([p.a_min, 0.0]), STATUS_INFEASIBLE_STOP,
                     {"solve_ms": solve_ms, "raw": res.info.status})
-        if solve_ms > p.solve_budget_s * 1e3:
+        if first_ok_ms > p.solve_budget_s * 1e3:
             self.reuse_streak += 1
             if self.reuse_streak <= p.max_reuse and warm is not None:
                 u0 = np.clip(warm[1][0], [p.a_min, -p.al_max],
