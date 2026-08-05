@@ -1,6 +1,8 @@
 #include "static_livox_localization/registration.hpp"
 
 #include <cmath>
+#include <chrono>
+#include <exception>
 #include <limits>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/crop_box.h>
@@ -9,27 +11,50 @@
 #include <pcl/kdtree/kdtree_flann.h>
 #include <pcl/registration/gicp.h>
 
+#ifdef STATIC_LIVOX_HAS_FAST_VGICP_CUDA
+#include <fast_gicp/gicp/fast_vgicp_cuda.hpp>
+#endif
+
 namespace static_livox_localization {
+
+bool registration_backend_available(const std::string& backend) {
+  if (backend == "pcl_gicp") return true;
+#ifdef STATIC_LIVOX_HAS_FAST_VGICP_CUDA
+  if (backend == "fast_vgicp_cuda") return true;
+#endif
+  return false;
+}
 
 RegistrationResult register_cloud(
     const pcl::PointCloud<pcl::PointXYZI>::ConstPtr& scan,
     const pcl::PointCloud<pcl::PointXYZI>::ConstPtr& map,
     const Eigen::Isometry3d& seed,
     const RegistrationConfig& config) {
+  const auto started = std::chrono::steady_clock::now();
   RegistrationResult result;
-  if (!scan || !map || static_cast<int>(scan->size()) < config.min_points || map->empty()) return result;
+  result.backend = config.backend;
+  const auto finish = [&]() {
+    result.elapsed_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    return result;
+  };
+  if (!registration_backend_available(config.backend)) {
+    result.error = "REGISTRATION_BACKEND_UNAVAILABLE";
+    return finish();
+  }
+  if (!scan || !map || static_cast<int>(scan->size()) < config.min_points || map->empty()) return finish();
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr finite(new pcl::PointCloud<pcl::PointXYZI>);
   std::vector<int> kept;
   pcl::removeNaNFromPointCloud(*scan, *finite, kept);
-  if (static_cast<int>(finite->size()) < config.min_points) return result;
+  if (static_cast<int>(finite->size()) < config.min_points) return finish();
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr source(new pcl::PointCloud<pcl::PointXYZI>);
   pcl::VoxelGrid<pcl::PointXYZI> voxel;
   voxel.setLeafSize(config.voxel_resolution, config.voxel_resolution, config.voxel_resolution);
   voxel.setInputCloud(finite);
   voxel.filter(*source);
-  if (static_cast<int>(source->size()) < config.min_points) return result;
+  if (static_cast<int>(source->size()) < config.min_points) return finish();
 
   pcl::CropBox<pcl::PointXYZI> crop;
   crop.setInputCloud(map);
@@ -46,22 +71,53 @@ RegistrationResult register_cloud(
   crop.filter(*target);
   result.source_points = static_cast<int>(source->size());
   result.target_points = static_cast<int>(target->size());
-  if (static_cast<int>(target->size()) < config.min_points) return result;
+  if (static_cast<int>(target->size()) < config.min_points) return finish();
 
-  pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
-  gicp.setInputSource(source);
-  gicp.setInputTarget(target);
-  gicp.setMaxCorrespondenceDistance(config.max_correspondence);
-  gicp.setMaximumIterations(config.max_iterations);
-  gicp.setTransformationEpsilon(1e-6);
-  gicp.setEuclideanFitnessEpsilon(1e-6);
   pcl::PointCloud<pcl::PointXYZI>::Ptr aligned(
       new pcl::PointCloud<pcl::PointXYZI>);
-  gicp.align(*aligned, seed.matrix().cast<float>());
-  if (!gicp.hasConverged()) return result;
+  Eigen::Matrix4f final_transformation = Eigen::Matrix4f::Identity();
+  try {
+    if (config.backend == "pcl_gicp") {
+      pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZI, pcl::PointXYZI> gicp;
+      gicp.setInputSource(source);
+      gicp.setInputTarget(target);
+      gicp.setMaxCorrespondenceDistance(config.max_correspondence);
+      gicp.setMaximumIterations(config.max_iterations);
+      gicp.setTransformationEpsilon(1e-6);
+      gicp.setEuclideanFitnessEpsilon(1e-6);
+      gicp.align(*aligned, seed.matrix().cast<float>());
+      if (!gicp.hasConverged()) return finish();
+      final_transformation = gicp.getFinalTransformation();
+      result.fitness = gicp.getFitnessScore(config.max_correspondence);
+    }
+#ifdef STATIC_LIVOX_HAS_FAST_VGICP_CUDA
+    else if (config.backend == "fast_vgicp_cuda") {
+      fast_gicp::FastVGICPCuda<pcl::PointXYZI, pcl::PointXYZI> gicp;
+      gicp.setInputSource(source);
+      gicp.setInputTarget(target);
+      gicp.setResolution(config.voxel_resolution);
+      gicp.setNeighborSearchMethod(fast_gicp::NeighborSearchMethod::DIRECT7);
+      gicp.setNearestNeighborSearchMethod(
+          fast_gicp::NearestNeighborMethod::CPU_PARALLEL_KDTREE);
+      gicp.setMaxCorrespondenceDistance(config.max_correspondence);
+      gicp.setMaximumIterations(config.max_iterations);
+      gicp.setTransformationEpsilon(1e-6);
+      gicp.setEuclideanFitnessEpsilon(1e-6);
+      gicp.align(*aligned, seed.matrix().cast<float>());
+      if (!gicp.hasConverged()) return finish();
+      final_transformation = gicp.getFinalTransformation();
+      result.fitness = gicp.getFitnessScore(config.max_correspondence);
+    }
+#endif
+  } catch (const std::exception& exception) {
+    result.error = std::string("REGISTRATION_BACKEND_ERROR: ") + exception.what();
+    return finish();
+  } catch (...) {
+    result.error = "REGISTRATION_BACKEND_ERROR: unknown exception";
+    return finish();
+  }
 
-  result.map_T_base.matrix() = gicp.getFinalTransformation().cast<double>();
-  result.fitness = gicp.getFitnessScore(config.max_correspondence);
+  result.map_T_base.matrix() = final_transformation.cast<double>();
   const Eigen::Isometry3d delta = seed.inverse() * result.map_T_base;
   const double translation = delta.translation().norm();
   const double rotation = Eigen::AngleAxisd(delta.rotation()).angle();
@@ -101,7 +157,7 @@ RegistrationResult register_cloud(
   result.converged = std::isfinite(result.fitness) && result.fitness <= config.max_fitness &&
                      translation <= config.max_seed_translation &&
                      rotation <= config.max_seed_rotation_rad;
-  return result;
+  return finish();
 }
 
 }  // namespace static_livox_localization

@@ -1,8 +1,15 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(static_livox_localization)
 
+option(ENABLE_FAST_GICP_CUDA "Enable the fail-closed fast_vgicp CUDA registration backend" OFF)
+
+set(STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS)
+if(ENABLE_FAST_GICP_CUDA)
+  list(APPEND STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS fast_gicp)
+endif()
+
 add_compile_options(-std=c++14 -Wall -Wextra)
-find_package(catkin REQUIRED COMPONENTS roscpp sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions)
+find_package(catkin REQUIRED COMPONENTS roscpp sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions ${STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS})
 find_package(PCL REQUIRED COMPONENTS common io filters registration kdtree)
 find_package(OpenSSL REQUIRED)
 
@@ -16,6 +23,9 @@ add_definitions(${PCL_DEFINITIONS})
 
 add_library(static_registration src/registration.cpp)
 target_link_libraries(static_registration ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+if(ENABLE_FAST_GICP_CUDA)
+  target_compile_definitions(static_registration PRIVATE STATIC_LIVOX_HAS_FAST_VGICP_CUDA=1)
+endif()
 add_library(moving_tracker src/moving_tracker.cpp)
 target_link_libraries(moving_tracker ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 add_library(rolling_submap src/rolling_submap.cpp)

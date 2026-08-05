@@ -3,10 +3,12 @@
 #include <Eigen/Geometry>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <string>
 
 namespace static_livox_localization {
 
 struct RegistrationConfig {
+  std::string backend = "pcl_gicp";
   double voxel_resolution = 0.20;
   double roi_radius = 20.0;
   double roi_z_half_extent = 5.0;
@@ -25,7 +27,12 @@ struct RegistrationResult {
   bool converged = false;
   int source_points = 0;
   int target_points = 0;
+  double elapsed_ms = 0.0;
+  std::string backend = "pcl_gicp";
+  std::string error;
 };
+
+bool registration_backend_available(const std::string& backend);
 
 RegistrationResult register_cloud(
     const pcl::PointCloud<pcl::PointXYZI>::ConstPtr& scan,
