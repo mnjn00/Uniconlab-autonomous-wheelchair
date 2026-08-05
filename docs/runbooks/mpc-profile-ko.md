@@ -152,6 +152,7 @@ PROFILE=mpc ~/start_wheelchair_localization.sh
 ```
 PROFILE=mpc - simulation-only control law, never driven on the chair
 watch /waypoint_follower/status; see docs/runbooks/mpc-profile-ko.md
+control law: mpc
 MPC profile: horizon 25 x 0.10 s, anchor gain 0.40, latency 0.000 s
 latency compensation OFF (~latency_s unset)
 ```
@@ -162,6 +163,27 @@ latency compensation OFF (~latency_s unset)
 ```bash
 rosservice call /waypoint_follower/start "data: true"
 ```
+
+### 2.1 MPC 주행은 `go_mpc.sh`로 시작한다
+
+`go.sh`는 제어법을 가리지 않는다 — 어느 쪽이 돌든 성립해야 하는 것만 본다.
+그래서 **`PROFILE=mpc`를 빼먹었는지는 아무 데서도 안 걸린다.** 두 프로파일은
+노드 이름·토픽·서비스가 같고, 상태줄도 의자가 움직이기 전까지는 양쪽 다
+`HOLD:PAUSED`다. pursuit 주행을 MPC 계측으로 기록해도 알 방법이 없다.
+
+```bash
+~/go_mpc.sh
+```
+
+이 스크립트는 폴로워가 **스스로 게시한** `~control_law`를 읽어 `mpc`가 아니면
+거부하고, 확인되면 `go.sh`로 넘긴다. 안전 검사는 하나도 복제하지 않는다.
+
+식별자를 실행기가 아니라 클래스가 게시하는 이유는 전례가 있어서다.
+`~/preflight_priest_v5.sh`는 자기가 한 줄 위에서 export한 `PLANNER`를 자기가
+다시 비교했고, `81fed5d`가 PRIEST를 되돌려 브링업이 `_planner`를 더 이상
+넘기지 않게 된 뒤에도 계속 "priest"를 통과시켰다.
+
+되돌아가려면 `PROFILE` 없이 재기동한 뒤 평소대로 `~/go.sh`를 쓴다.
 
 ---
 

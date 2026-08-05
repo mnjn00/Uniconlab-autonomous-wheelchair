@@ -443,6 +443,100 @@ def test_bringup_launches_the_selected_follower():
     assert "FOLLOWER_NODE=waypoint_follower.py" in text
 
 
+# ------------------------------------------------ which law is driving
+
+def pursuit_source():
+    return (SCRIPTS / "waypoint_follower.py").read_text("utf-8")
+
+
+def class_attribute(source, class_name, attribute):
+    """The literal a class assigns to a bare class-level name."""
+    tree = ast.parse(source)
+    cls = next(n for n in ast.walk(tree)
+               if isinstance(n, ast.ClassDef) and n.name == class_name)
+    for node in cls.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == attribute
+                for t in node.targets):
+            return ast.literal_eval(node.value)
+    return None
+
+
+def test_each_control_law_declares_which_one_it_is():
+    assert class_attribute(
+        pursuit_source(), "WaypointFollower", "CONTROL_LAW") == "pursuit"
+    assert class_attribute(
+        (SCRIPTS / "mpc_follower.py").read_text("utf-8"),
+        "MpcFollower", "CONTROL_LAW") == "mpc"
+
+
+def test_the_two_laws_do_not_answer_to_the_same_name():
+    """The whole point is telling them apart. If a refactor ever made these
+    equal, every check downstream would pass on the wrong controller and
+    report success."""
+    pursuit = class_attribute(
+        pursuit_source(), "WaypointFollower", "CONTROL_LAW")
+    mpc = class_attribute((SCRIPTS / "mpc_follower.py").read_text("utf-8"),
+                          "MpcFollower", "CONTROL_LAW")
+    assert pursuit != mpc
+
+
+def test_the_identity_comes_from_the_class_not_the_launcher():
+    """set_param must read the attribute, not a parameter or a literal.
+
+    A launcher-asserted identity is what PLANNER=priest was: the preflight
+    compared a shell variable against itself and kept passing after the
+    planner it named had been reverted. Reading self.CONTROL_LAW means the
+    class that implements the law is the one that names it, so a subclass
+    cannot inherit the wrong answer.
+    """
+    assert 'rospy.set_param("~control_law", self.CONTROL_LAW)' \
+        in pursuit_source()
+
+
+def test_the_mpc_follower_does_not_publish_its_identity_separately():
+    """It overrides the attribute and inherits the publishing. A second
+    set_param call would be a second place to forget."""
+    assert "set_param" not in (SCRIPTS / "mpc_follower.py").read_text("utf-8")
+
+
+def go_mpc():
+    return (ROOT / "tools" / "go_mpc.sh").read_text("utf-8")
+
+
+def test_go_mpc_refuses_a_law_that_is_not_mpc():
+    text = go_mpc()
+    assert "rosparam get /waypoint_follower/control_law" in text
+    assert '[ "$LAW" = "mpc" ] || fail' in text
+
+
+def test_go_mpc_refuses_rather_than_defaulting_when_the_param_is_absent():
+    """An older follower publishes no identity. Reading that as 'probably
+    fine' would defeat the check on exactly the stack it exists to catch."""
+    text = go_mpc()
+    assert re.search(r'rosparam get /waypoint_follower/control_law[^\n]*\)"'
+                     r'\s*\|\|\s*fail', text), \
+        "go_mpc.sh must fail, not default, when the identity is missing"
+
+
+def test_go_mpc_does_not_restate_the_checks_go_sh_already_owns():
+    """Same rule the MPC follower follows for the hold ladder: a second copy
+    of a guard drifts from the first, always toward the one that starts."""
+    text = go_mpc()
+    for owned in ("objects_summary", "localization_diagnostics",
+                  "/waypoint_follower/start", "mode_cmd"):
+        assert owned not in text, (
+            "%s is go.sh's check - go_mpc.sh must delegate, not copy" % owned)
+    assert 'exec "$SCRIPT_DIR/go.sh"' in text
+
+
+def test_go_mpc_is_installed_onto_the_nuc():
+    """It is typed at $HOME on the NUC like the rest of the bringup, so
+    push_to_nuc has to carry it or the operator finds an empty path."""
+    text = (ROOT / "tools" / "push_to_nuc.sh").read_text("utf-8")
+    assert "go_mpc.sh" in text
+
+
 # --------------------------------------------------- the pursuit refactor
 
 def test_the_handoff_doc_names_tests_that_exist():

@@ -150,6 +150,12 @@ LOOKAHEAD_BACKOFF_M = 0.4
 
 
 class WaypointFollower:
+    # Which control law this class turns a pose into a Twist with. Both
+    # profiles run as the same node under the same name, so the node alone
+    # does not say which one started; subclasses override this and __init__
+    # publishes it. See the ~control_law param below for why it exists.
+    CONTROL_LAW = "pursuit"
+
     def __init__(self):
         rospy.init_node("waypoint_follower")
         with open(rospy.get_param("~route")) as f:
@@ -269,6 +275,20 @@ class WaypointFollower:
         # directions leave the guards on; the startup line below is how the
         # operator finds out which way it went.
         self.policies = bool(rospy.get_param("~safety_policies", True))
+        # The identity of the control law that is about to drive, published
+        # by the class that implements it rather than by whoever launched it.
+        # PROFILE picks a node in the bringup; nothing downstream could see
+        # that choice, because both profiles are this node name, these
+        # topics, and this service. A preflight that wants to confirm the
+        # chair is running the law the operator asked for had nothing to read.
+        #
+        # It is set here, from the class attribute, for a specific reason:
+        # `PLANNER=priest` was a shell variable a preflight compared against
+        # itself, so it went on reporting "priest" after the PRIEST planner
+        # was reverted in 81fed5d and the bringup stopped forwarding it. An
+        # identity the launcher asserts proves nothing about the process.
+        rospy.set_param("~control_law", self.CONTROL_LAW)
+        rospy.loginfo("control law: %s", self.CONTROL_LAW)
         rospy.loginfo("cluster avoidance: %s",
                       "ON" if self.clusters_enabled else "OFF")
         if self.policies:
