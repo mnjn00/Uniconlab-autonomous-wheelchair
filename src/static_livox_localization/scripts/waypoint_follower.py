@@ -463,15 +463,17 @@ class WaypointFollower:
     def cluster_threat(self, lateral_shift=0.0):
         """Nearest classified object overlapping the corridor, or None.
 
-        Same corridor half width as the raw check, but measured against each
-        object's box rather than a percentile of loose returns, so a wall
-        alongside contributes its near face instead of its point spread.
-        Nothing received yet reads as blocked, not as clear.
+        The cluster coordinates are about the lidar/IMU body origin, while
+        the corridor belongs around the chair centre 0.20 m to its right.
+        A bypass offset is relative to that centre, so both translations are
+        applied before measuring each object's own-return profile. Nothing
+        received yet reads as blocked, not as clear.
         """
         if self.cluster_summary is None:
             return Threat(0.0, MOVING, "no summary")
+        corridor_centre_y = CHAIR_CENTRE_IN_BODY_XYZ[1] + lateral_shift
         return nearest_threat(
-            self.cluster_summary, CORRIDOR_HALF_WIDTH, lateral_shift)
+            self.cluster_summary, CORRIDOR_HALF_WIDTH, corridor_centre_y)
 
     def corridor_threat(self, lateral_shift=0.0):
         """Nearest classified object in the corridor, or None if clear.

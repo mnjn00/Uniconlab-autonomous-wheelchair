@@ -167,6 +167,33 @@ def test_both_consumers_pass_the_measured_lateral_centre():
         assert "CHAIR_CENTRE_IN_BODY_XYZ" in text, name
 
 
+def test_forward_corridor_is_centred_on_the_chair_not_the_lidar():
+    from motion_safety import filter_forward_corridor_points
+
+    # Equal distances from the chair centre (-0.20 m), on opposite sides.
+    # The first was outside a sensor-centred corridor and the second inside;
+    # a chair-centred corridor must treat them symmetrically.
+    points = np.array([[1.0, -0.60], [1.0, 0.20]], dtype=float)
+    selected = filter_forward_corridor_points(
+        points, min_range_m=0.5, max_range_m=2.0, half_width_m=0.5,
+        fov_half_deg=50.0,
+        centre_y_m=body_frame.CHAIR_CENTRE_IN_BODY_XYZ[1])
+
+    assert np.array_equal(selected, points)
+
+
+def test_forward_corridor_drops_sensor_left_point_outside_the_chair():
+    from motion_safety import filter_forward_corridor_points
+
+    selected = filter_forward_corridor_points(
+        np.array([[1.0, 0.40]], dtype=float),
+        min_range_m=0.5, max_range_m=2.0, half_width_m=0.5,
+        fov_half_deg=50.0,
+        centre_y_m=body_frame.CHAIR_CENTRE_IN_BODY_XYZ[1])
+
+    assert len(selected) == 0
+
+
 @pytest.mark.parametrize("name", [
     "20260727_new_route_waypoints.json",
     "20260727_chair_centred_waypoints.json",

@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import CHAIR_CENTRE_IN_BODY_XYZ, lidar_extrinsics
 from drive_policy import announce
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
+                           filter_forward_corridor_points,
                            filter_obstacle_points, motion_hold_reason,
                            stopping_envelope, swept_footprint_collision)
 from scan_accumulator import CloudAccumulator
@@ -171,14 +172,13 @@ class SafetyGate:
             self_y_centre_m=CHAIR_CENTRE_IN_BODY_XYZ[1])
 
         if len(obstacles):
-            azimuth = np.abs(np.degrees(np.arctan2(
-                obstacles[:, 1], obstacles[:, 0])))
-            zone = obstacles[
-                (obstacles[:, 0] > CORRIDOR_MIN_RANGE_M) &
-                (obstacles[:, 0] <
-                 envelope.distance_m + FORWARD_CHECK_EXTRA_M) &
-                (azimuth < FORWARD_FOV_HALF_DEG) &
-                (np.abs(obstacles[:, 1]) < HALF_WIDTH_M)]
+            zone = filter_forward_corridor_points(
+                obstacles,
+                min_range_m=CORRIDOR_MIN_RANGE_M,
+                max_range_m=envelope.distance_m + FORWARD_CHECK_EXTRA_M,
+                half_width_m=HALF_WIDTH_M,
+                fov_half_deg=FORWARD_FOV_HALF_DEG,
+                centre_y_m=CHAIR_CENTRE_IN_BODY_XYZ[1])
         else:
             zone = obstacles
         if len(zone) >= 5 and \

@@ -207,6 +207,40 @@ def filter_obstacle_points(
     return points[keep, :2]
 
 
+def filter_forward_corridor_points(
+        points_xy: np.ndarray,
+        min_range_m: float,
+        max_range_m: float,
+        half_width_m: float,
+        fov_half_deg: float,
+        centre_y_m: float = 0.0) -> np.ndarray:
+    """Points inside the chair's forward stopping corridor.
+
+    Ranges and azimuth are measured from the lidar because that is where the
+    returns originate. Lateral clearance is measured from ``centre_y_m``
+    because the MID360 is mounted 0.20 m left of the chair centre; using
+    ``abs(y)`` over-watches the left and leaves the same amount blind on the
+    right.
+    """
+    points = np.asarray(points_xy)
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise MotionSafetyInputError("points_xy must have shape (N, 2)")
+    limits = (min_range_m, max_range_m, half_width_m, fov_half_deg,
+              centre_y_m)
+    if not all(math.isfinite(value) for value in limits) or \
+            min_range_m < 0.0 or max_range_m <= min_range_m or \
+            half_width_m <= 0.0 or not 0.0 < fov_half_deg <= 180.0:
+        raise MotionSafetyInputError("invalid forward-corridor limits")
+    finite = np.all(np.isfinite(points), axis=1)
+    azimuth = np.abs(np.degrees(np.arctan2(points[:, 1], points[:, 0])))
+    keep = finite & \
+        (points[:, 0] > min_range_m) & \
+        (points[:, 0] < max_range_m) & \
+        (azimuth < fov_half_deg) & \
+        (np.abs(points[:, 1] - centre_y_m) < half_width_m)
+    return points[keep]
+
+
 def swept_footprint_collision(
         points_xy: np.ndarray,
         linear_speed_mps: float,

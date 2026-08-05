@@ -48,6 +48,8 @@ def load(name):
 
 cg = load("cluster_guard")
 ct = load("cluster_tracking")
+bf = load("body_frame")
+CHAIR_CENTRE_Y = bf.CHAIR_CENTRE_IN_BODY_XYZ[1]
 
 
 class Band:
@@ -81,12 +83,16 @@ def follower_with(objects, open_offsets=(0.6, -0.6, 1.0, -1.0),
 
 
 def parked(x, y, size=(0.6, 0.6, 1.2)):
-    return {"class": "obstacle", "x": x, "y": y, "size": list(size),
+    """A parked object at a chair-relative lateral coordinate."""
+    return {"class": "obstacle", "x": x, "y": CHAIR_CENTRE_Y + y,
+            "size": list(size),
             "points": 40, "motion": ct.STATIC}
 
 
 def walking(x, y, size=(0.6, 0.6, 1.7)):
-    return {"class": "person", "x": x, "y": y, "size": list(size),
+    """A moving object at a chair-relative lateral coordinate."""
+    return {"class": "person", "x": x, "y": CHAIR_CENTRE_Y + y,
+            "size": list(size),
             "points": 40, "motion": ct.MOVING}
 
 
@@ -186,6 +192,22 @@ def test_a_silent_producer_reads_as_blocked_not_as_clear():
     threat = follower.corridor_threat()
     assert threat.distance_m == 0.0
     assert not threat.parked
+
+
+def test_follower_corridor_is_centred_on_the_chair_not_the_lidar():
+    # Narrow return at y=-0.60 is outside the old lidar-centred +/-0.45 m
+    # corridor but inside the chair-centred [-0.65, +0.25] m corridor.
+    _module, follower = follower_with([
+        parked(2.0, -0.40, size=(0.1, 0.1, 1.0))])
+    assert follower.corridor_threat() is not None
+
+
+def test_follower_does_not_overwatch_the_lidar_left_side():
+    # y=+0.40 was inside the lidar-centred corridor but is outside the
+    # chair-centred corridor once the measured -0.20 m offset is applied.
+    _module, follower = follower_with([
+        parked(2.0, 0.60, size=(0.1, 0.1, 1.0))])
+    assert follower.corridor_threat() is None
 
 
 def test_a_producer_that_cannot_see_reads_as_blocked():

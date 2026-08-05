@@ -198,9 +198,13 @@ def test_the_gate_corrects_the_same_frame_as_the_follower():
 
 def test_the_gate_uses_the_same_forward_fov_cone():
     gate = (ROOT / "scripts" / "safety_gate.py").read_text(encoding="utf-8")
+    motion = (ROOT / "scripts" / "motion_safety.py").read_text(
+        encoding="utf-8")
     assert "FORWARD_FOV_HALF_DEG = 50.0" in gate
     assert "CORRIDOR_MIN_RANGE_M = 0.50" in gate
-    assert "azimuth < FORWARD_FOV_HALF_DEG" in gate
+    assert "filter_forward_corridor_points(" in gate
+    assert "azimuth < fov_half_deg" in motion
+    assert "points[:, 0] > min_range_m" in motion
 
 
 def test_gate_checks_rotation_with_pose_derived_motion_and_full_footprint():
