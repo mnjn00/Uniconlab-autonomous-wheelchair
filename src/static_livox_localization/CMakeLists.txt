@@ -55,6 +55,7 @@ catkin_install_python(
 install(
   FILES
     scripts/array_backend.py
+    scripts/gpu_voxel_scorer.py
     scripts/body_frame.py
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py

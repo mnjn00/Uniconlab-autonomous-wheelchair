@@ -317,6 +317,22 @@ def main():
     parser.add_argument("--top", type=int, default=4)
     parser.add_argument("--refine-top", type=int, default=4)
     parser.add_argument(
+        "--require-gpu",
+        action="store_true",
+        default=bool(rospy.get_param("~require_gpu", False)),
+        help="fail closed instead of running the CPU-limited coarse search",
+    )
+    parser.add_argument(
+        "--gpu-lateral-radius",
+        type=float,
+        default=float(rospy.get_param("~gpu_lateral_radius_m", 10.0)),
+    )
+    parser.add_argument(
+        "--gpu-lateral-step",
+        type=float,
+        default=float(rospy.get_param("~gpu_lateral_step_m", 1.0)),
+    )
+    parser.add_argument(
         "--min-refined-score",
         type=float,
         default=rospy.get_param("~min_refined_score", 0.80),
@@ -458,12 +474,20 @@ def main():
     candidates = load_trajectory_candidates(Path(args.traj), args.spacing)
     rospy.loginfo("%d trajectory candidates", len(candidates))
 
-    scored = score_global_candidates(
-        sample,
-        map_points,
-        candidates,
-        args.inlier_radius,
-    )
+    try:
+        scored = score_global_candidates(
+            sample,
+            map_points,
+            candidates,
+            args.inlier_radius,
+            gpu_lateral_radius_m=args.gpu_lateral_radius,
+            gpu_lateral_step_m=args.gpu_lateral_step,
+            require_gpu=args.require_gpu,
+            log=rospy.loginfo,
+        )
+    except RuntimeError as error:
+        rospy.logerr("global initial-pose search stopped: %s", error)
+        return 9
 
     rospy.loginfo("top coarse candidates:")
     for candidate in scored[:6]:
