@@ -92,6 +92,17 @@ def test_the_band_still_vets_a_way_round_when_the_policies_are_off():
     assert "self.policies" not in body
 
 
+def test_automatic_bypass_is_fail_safe_and_off_by_default():
+    text = follower_text()
+    assert 'rospy.get_param("~auto_bypass_enabled", False) is True' in text
+    assert "decision == GO_ROUND and self.auto_bypass_enabled" in text
+
+    startup = (ROOT.parents[1] / "tools" /
+               "start_wheelchair_localization.sh").read_text(encoding="utf-8")
+    assert 'AUTO_BYPASS_ENABLED="${AUTO_BYPASS_ENABLED:-false}"' in startup
+    assert '_auto_bypass_enabled:="$AUTO_BYPASS_ENABLED"' in startup
+
+
 def test_missing_obstacle_data_is_treated_as_blocked():
     """The property outlived the check that used to carry it.
 

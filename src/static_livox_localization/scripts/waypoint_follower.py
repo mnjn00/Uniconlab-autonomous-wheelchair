@@ -264,6 +264,13 @@ class WaypointFollower:
             raise rospy.ROSInitException(
                 "~cluster_avoidance:=false leaves no obstacle source at all "
                 "since the raw scan check was removed; run with it on")
+        # Bypass changes steering and therefore needs a stronger authority
+        # boundary than obstacle detection. It is off unless the parameter is
+        # the actual boolean True: a string or any other malformed value must
+        # not silently enable a manoeuvre. Detection remains on and will wait
+        # in place when bypass is disabled.
+        self.auto_bypass_enabled = \
+            rospy.get_param("~auto_bypass_enabled", False) is True
         # Absent means guarded, and anything that arrives as a string rather
         # than a bool is truthy and therefore also guarded. Both failure
         # directions leave the guards on; the startup line below is how the
@@ -271,6 +278,8 @@ class WaypointFollower:
         self.policies = bool(rospy.get_param("~safety_policies", True))
         rospy.loginfo("cluster avoidance: %s",
                       "ON" if self.clusters_enabled else "OFF")
+        rospy.loginfo("automatic obstacle bypass: %s",
+                      "ON" if self.auto_bypass_enabled else "OFF (wait only)")
         if self.policies:
             rospy.loginfo(announce(True, "waypoint_follower", []))
         else:
@@ -806,7 +815,8 @@ class WaypointFollower:
             None if self.blocked_since is None
             else (now - self.blocked_since).to_sec(),
             PLAN_AHEAD_M, BYPASS_AFTER_S)
-        if decision == GO_ROUND and abs(self.lateral_offset) < 0.01:
+        if decision == GO_ROUND and self.auto_bypass_enabled and \
+                abs(self.lateral_offset) < 0.01:
             self.take_a_way_round(max(guard_slow, PLAN_AHEAD_M))
         if blocking is None:
             self.blocked_since = None

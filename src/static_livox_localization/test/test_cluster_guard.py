@@ -186,10 +186,14 @@ def test_a_moving_thing_is_never_gone_around_however_long_it_blocks():
     assert decide(threat(1.0, ct.MOVING), blocked_for_s=30.0) == cg.WAIT
 
 
-def test_an_untrackable_return_that_has_not_moved_for_3s_is_gone_around():
-    """The raw scan has no identity, so standing there is all the evidence
-    it can offer, and this is the pre-existing behaviour it keeps."""
-    assert decide(threat(1.0, ct.UNKNOWN), blocked_for_s=4.0) == cg.GO_ROUND
+def test_an_unknown_cluster_never_earns_bypass_from_elapsed_time():
+    """Elapsed time is not an identity or a motion verdict.
+
+    The raw source that once needed this fallback is gone. Letting UNKNOWN
+    through after a timer would recreate its unsafe authority for any
+    classified cluster that has not yet accumulated a trustworthy track.
+    """
+    assert decide(threat(1.0, ct.UNKNOWN), blocked_for_s=30.0) == cg.WAIT
 
 
 def test_a_clear_corridor_is_clear():

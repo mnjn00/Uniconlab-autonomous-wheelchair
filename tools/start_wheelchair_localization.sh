@@ -33,6 +33,16 @@ if [ "$SAFETY_POLICIES" != "true" ] && [ "$SAFETY_POLICIES" != "false" ]; then
   echo "ERROR: SAFETY_POLICIES must be true or false, got '$SAFETY_POLICIES'" >&2
   exit 65
 fi
+# Detection is always on, but steering around a detection is a separate
+# authority. Keep it off until the gradual bypass path and footprint sweep
+# have field evidence. Only the two ROS boolean literals are accepted so a
+# typo cannot silently grant steering authority.
+AUTO_BYPASS_ENABLED="${AUTO_BYPASS_ENABLED:-false}"
+if [ "$AUTO_BYPASS_ENABLED" != "true" ] && \
+        [ "$AUTO_BYPASS_ENABLED" != "false" ]; then
+  echo "ERROR: AUTO_BYPASS_ENABLED must be true or false, got '$AUTO_BYPASS_ENABLED'" >&2
+  exit 65
+fi
 # PROFILE picks the control law. Both run behind the same guards, publish the
 # same status topic and answer the same start service; they differ only in
 # how a pose becomes a Twist.
@@ -350,6 +360,7 @@ setsid nohup rosrun static_livox_localization "$FOLLOWER_NODE" \
   _route:="$ROUTE" _safety_band:="$BAND" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
+  _auto_bypass_enabled:="$AUTO_BYPASS_ENABLED" \
   _latency_s:="$LATENCY_S" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &
 
@@ -368,14 +379,15 @@ if [ "$SAFETY_POLICIES" = "false" ]; then
   echo "*********************************************************************"
   echo "SAFETY POLICIES ARE OFF. No band containment, no raw-scan obstacle"
   echo "stop, no localization hold, no geofence."
-  echo "STILL ACTIVE: tracked-cluster avoidance - the chair steers around"
-  echo "what has been seen standing still and waits for what is moving."
+  echo "STILL ACTIVE: tracked-cluster detection. Automatic bypass is"
+  echo "$AUTO_BYPASS_ENABLED; with it off the chair waits for every obstacle."
   echo "The joystick is the failsafe. Keep a hand on it for the whole run."
   echo "Suppressed guards are published as WOULD_HOLD: on"
   echo "/waypoint_follower/status and recorded in the black box."
   echo "*********************************************************************"
   echo ""
 fi
+echo "Automatic obstacle bypass: $AUTO_BYPASS_ENABLED"
 echo "READY. To drive the route:"
 echo "  1) rostopic pub -1 /mode_cmd std_msgs/Int16 65     # auto mode"
 echo "  2) rosservice call /waypoint_follower/start \"data: true\""

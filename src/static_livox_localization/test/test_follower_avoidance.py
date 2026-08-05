@@ -167,6 +167,12 @@ def test_a_walking_person_is_waited_for_rather_than_driven_around():
     assert cg.avoidance_decision(threat, True, 30.0, 5.0, 3.0) == cg.WAIT
 
 
+def test_an_unjudged_cluster_is_waited_for_forever():
+    """A timer cannot turn missing tracking evidence into steering authority."""
+    threat = cg.Threat(0.5, ct.UNKNOWN, "vehicle")
+    assert cg.avoidance_decision(threat, True, 30.0, 5.0, 3.0) == cg.WAIT
+
+
 def test_the_chair_moves_again_once_they_are_out_of_the_corridor():
     """No timer and nothing to reset: the person steps clear, the corridor
     has nothing in it, and the answer is CLEAR."""

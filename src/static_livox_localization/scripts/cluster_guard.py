@@ -274,17 +274,19 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     Nothing here resumes the chair explicitly: once they leave the corridor
     the threat is gone, the answer becomes CLEAR, and it drives on.
 
-    blocked_for_s is the fallback for sources that carry no identity. A
-    raw-scan return is UNKNOWN forever, so standing in the way is the only
-    evidence of parkedness it can ever offer - but it never overrules a
-    tracker that says the thing is moving.
+    Only a STATIC tracking verdict can authorise a manoeuvre. The follower's
+    raw source was removed on 2026-08-05, so the old time fallback no longer
+    has a legitimate caller. Keeping it would turn a classified-but-UNKNOWN
+    cluster into GO_ROUND after three seconds, recreating the same unsafe
+    authority through a different perception source.
+
+    blocked_for_s and bypass_after_s stay in the signature for compatibility
+    with the follower and replay tools. They do not establish identity and
+    therefore cannot authorise bypass.
     """
     if threat is None:
         return CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
-        return GO_ROUND
-    if blocking and blocked_for_s is not None and \
-            blocked_for_s > bypass_after_s and threat.motion != MOVING:
         return GO_ROUND
     return WAIT if blocking else CLEAR
 
