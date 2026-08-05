@@ -335,3 +335,15 @@ def test_field_startup_passes_the_same_band_as_the_follower():
     command = startup.split("obstacle_clusters.py", 1)[1].split(
         "> \"$LOG/live_clusters.log\"", 1)[0]
     assert '_safety_band:="$BAND"' in command
+
+
+def test_field_blackbox_keeps_raw_perception_evidence_with_disk_reserve():
+    startup = (SCRIPTS.parents[2] / "tools" /
+               "start_wheelchair_localization.sh").read_text(encoding="utf-8")
+    recorder = startup.split('echo "[7/7] black-box recorder"', 1)[1]
+
+    assert "/cloud_registered_body" in recorder
+    assert "/perception/objects_summary" in recorder
+    assert "/tf /tf_static" in recorder
+    assert "--min-space 10G" in recorder
+    assert 'BLACKBOX_MIN_FREE_MB="${BLACKBOX_MIN_FREE_MB:-12288}"' in startup

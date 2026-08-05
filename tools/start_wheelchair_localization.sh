@@ -84,6 +84,26 @@ if [ -n "$LATENCY_BAD" ]; then
   echo "ERROR: LATENCY_S must be a non-negative number, got '$LATENCY_S'" >&2
   exit 65
 fi
+# The control/status-only black box could not identify which physical returns
+# caused the 2026-08-04 false obstacles. The motion-undistorted cloud is now
+# evidence, not optional telemetry. It is large, so preserve 10 GB for the OS
+# and refuse the field stack before launch unless another 2 GB of headroom is
+# present for the recorder buffer and bag finalisation.
+BLACKBOX_DIR="${BLACKBOX_DIR:-$HOME/localization_trials}"
+BLACKBOX_MIN_FREE_MB="${BLACKBOX_MIN_FREE_MB:-12288}"
+case "$BLACKBOX_MIN_FREE_MB" in
+  *[!0-9]*|'')
+    echo "ERROR: BLACKBOX_MIN_FREE_MB must be an integer, got '$BLACKBOX_MIN_FREE_MB'" >&2
+    exit 65
+    ;;
+esac
+mkdir -p "$BLACKBOX_DIR"
+BLACKBOX_FREE_MB="$(df -Pm "$BLACKBOX_DIR" | awk 'NR==2 {print $4}')"
+if [ -z "$BLACKBOX_FREE_MB" ] || \
+        [ "$BLACKBOX_FREE_MB" -lt "$BLACKBOX_MIN_FREE_MB" ]; then
+  echo "ERROR: black-box needs ${BLACKBOX_MIN_FREE_MB} MB free in $BLACKBOX_DIR; found ${BLACKBOX_FREE_MB:-unknown}" >&2
+  exit 66
+fi
 LOG=$HOME
 
 source /opt/ros/noetic/setup.bash
@@ -365,13 +385,12 @@ setsid nohup rosrun static_livox_localization "$FOLLOWER_NODE" \
   > "$LOG/live_follower.log" 2>&1 < /dev/null &
 
 echo "[7/7] black-box recorder"
-mkdir -p "$HOME/localization_trials"
-setsid nohup rosbag record --lz4 \
-  -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
+setsid nohup rosbag record --lz4 -b 512 --min-space 10G \
+  -O "$BLACKBOX_DIR/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics /vectornav/IMU \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
-  /perception/objects_summary \
+  /perception/objects_summary /cloud_registered_body /tf /tf_static \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""
