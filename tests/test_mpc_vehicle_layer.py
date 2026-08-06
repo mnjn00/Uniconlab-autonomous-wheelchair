@@ -568,3 +568,43 @@ def test_shared_guard_path_still_stops_and_reports():
     tree = ast.parse((SCRIPTS / "waypoint_follower.py").read_text("utf-8"))
     shared = method(tree, "handled_before_driving")
     assert {"send_stop", "publish"} <= calls_in(shared)
+
+
+def test_control_loop_nodes_get_a_single_blas_thread():
+    """Measured on the NUC 2026-08-06, MPC armed and idle: mpc_follower 28
+    threads at 266 % CPU, safety_gate 267 %, obstacle_clusters 126 %, load
+    average 16.77 on eight. OpenBLAS spin-waits a core-sized pool between
+    calls, and every matrix here is far too small to want one."""
+    text = bringup()
+    assert "OPENBLAS_NUM_THREADS=1" in text and "OMP_NUM_THREADS=1" in text
+    for node in ("safety_gate.py", "obstacle_clusters.py", '"$FOLLOWER_NODE"'):
+        launch = text.index("rosrun static_livox_localization " + node)
+        assert "$SINGLE_THREAD_ENV" in text[launch - 90:launch], node
+
+
+def test_the_global_search_is_left_multi_threaded():
+    """It is the one place that genuinely parallelises - 16k hypotheses -
+    and it runs once at startup, not every cycle."""
+    text = bringup()
+    launch = text.index("moving_localization.launch")
+    assert "$SINGLE_THREAD_ENV" not in text[launch - 90:launch]
+
+
+def test_stationary_correction_is_off_by_default_and_two_literals_only():
+    """On drops the correction thresholds to zero so a parked chair can be
+    measured. It must not be the default: parked at the goal on 07-31 the
+    fix crossed its own inlier gate four times without moving."""
+    text = bringup()
+    assert 'STATIONARY_CORRECTION="${STATIONARY_CORRECTION:-off}"' in text
+    assert "STATIONARY_CORRECTION must be on or off" in text
+    assert 'min_tracking_correction_translation_m:="$MIN_CORRECTION_TRANSLATION_M"' \
+        in text
+
+
+def test_the_registration_backend_is_selected_in_the_repository():
+    """It lived only on the NUC's deploy branch, so the machine and the
+    repository disagreed about what was deployed."""
+    text = bringup()
+    assert 'REGISTRATION_BACKEND="${REGISTRATION_BACKEND:-fast_vgicp_cuda}"' \
+        in text
+    assert "REGISTRATION_BACKEND must be pcl_gicp or fast_vgicp_cuda" in text
