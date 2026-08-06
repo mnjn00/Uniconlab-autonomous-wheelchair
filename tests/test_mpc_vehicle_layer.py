@@ -608,3 +608,84 @@ def test_the_registration_backend_is_selected_in_the_repository():
     assert 'REGISTRATION_BACKEND="${REGISTRATION_BACKEND:-fast_vgicp_cuda}"' \
         in text
     assert "REGISTRATION_BACKEND must be pcl_gicp or fast_vgicp_cuda" in text
+
+
+# ------------------------------------------- the previous run has to die
+
+def _quoted(text):
+    """The single-quoted tokens of a shell list, quotes stripped.
+
+    Splitting on whitespace is wrong here: '[r]osbag record' is one pattern
+    containing a space, and a naive split turns it into two - one that
+    matches nothing and one that matches far too much.
+    """
+    return re.findall(r"'([^']*)'", text)
+
+
+def cleanup_patterns():
+    """What stage 1 sweeps, with the [b]racket guards removed."""
+    match = re.search(r"^for pattern in (.+?); do$", bringup(), re.M)
+    assert match, "cannot find the cleanup loop in the bringup"
+    return {re.sub(r"\[(.)\]", lambda m: m.group(1), token)
+            for token in _quoted(match.group(1))}
+
+
+def detached_nodes():
+    """Nodes the bringup leaves running after it returns.
+
+    Only the setsid/nohup launches qualify, and that is the point: those are
+    exactly the processes that can outlive the script and be inherited by
+    the next run. fastlio_init_health.py is called synchronously inside an
+    if and has already exited by the time the next line runs, so it neither
+    needs killing nor belongs in this set.
+
+    Derived from the script rather than listed. A hand-kept expectation here
+    would need the same edit as the list it is meant to be checking, so it
+    would have been updated in the same commit and caught nothing.
+    """
+    text = re.sub(r"\\\n", " ", bringup())
+    found = set(re.findall(
+        r"setsid\s+nohup\s+(?:env\s+\$\S+\s+)?rosrun\s+"
+        r"static_livox_localization\s+(\S+)", text))
+    found = {node for node in found if "$" not in node}
+    # The follower arrives through a variable; take both assignments.
+    found.update(re.findall(r"FOLLOWER_NODE=(\S+)", text))
+    return {node[:-3] if node.endswith(".py") else node for node in found}
+
+
+def test_the_node_scan_actually_finds_the_nodes():
+    """The scan above is a regex over a shell script, so it can silently
+    return nothing and make the check below vacuous. Two names it must
+    always contain, one reached directly and one through FOLLOWER_NODE."""
+    found = detached_nodes()
+    assert "safety_gate" in found and "mpc_follower" in found, found
+
+
+def test_every_detached_node_is_also_cleaned_up():
+    """A node the bringup starts but never kills survives into the next run.
+
+    Not a tidiness rule. On 2026-08-06 mpc_follower and obstacle_clusters
+    were missing from the sweep, so a run from 21:43 was still executing at
+    21:57 - 447% and 177% CPU between them - underneath a new bringup that
+    never reached TRACKING. Nothing reported it: the stale follower answered
+    to the same node name and still held /cmd_vel_raw as its publisher, and
+    the only visible symptom was that everything was slow. The single-thread
+    limits bound what one node costs; only this list bounds how many run.
+    """
+    missing = sorted(detached_nodes() - cleanup_patterns())
+    assert not missing, (
+        "the bringup leaves %s running but stage 1 never kills them; the "
+        "next run will come up on top of the last one" % ", ".join(missing))
+
+
+def test_the_cleanup_sweep_keeps_its_bracket_guards():
+    """pkill -f matches against every command line, including the shell
+    running the pkill. Without the [x] guard the sweep matches itself and
+    the bringup kills its own session."""
+    match = re.search(r"^for pattern in (.+?); do$", bringup(), re.M)
+    tokens = _quoted(match.group(1))
+    assert tokens, "the cleanup loop parsed to no patterns at all"
+    for token in tokens:
+        assert re.match(r"\[.\]", token), (
+            "%r has no bracket guard and will match the sweep itself"
+            % token)
