@@ -75,6 +75,7 @@ install(
     scripts/localization_policy.py
     scripts/motion_safety.py
     scripts/mpc_anchor.py
+    scripts/mpc_command.py
     scripts/mpc_core.py
     scripts/mpc_speed.py
     scripts/safety_band.py
