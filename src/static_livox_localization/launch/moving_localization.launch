@@ -4,6 +4,7 @@
   <arg name="rviz" default="false"/>
   <arg name="auto_init" default="false"/>
   <arg name="auto_init_global_only" default="false"/>
+  <arg name="registration_backend" default="pcl_gicp"/>
   <arg name="map_path" default="/home/mprp3/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd"/>
   <arg name="map_sha256" default="ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"/>
   <arg name="map_id" default="merged_0707_0725_v1"/>
@@ -26,6 +27,7 @@
         output="screen"
         required="true">
     <rosparam command="load" file="$(arg config)"/>
+    <param name="registration_backend" value="$(arg registration_backend)"/>
     <param name="map_path" value="$(arg map_path)"/>
     <param name="map_sha256" value="$(arg map_sha256)"/>
     <param name="map_id" value="$(arg map_id)"/>

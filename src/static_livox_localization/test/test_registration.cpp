@@ -3,6 +3,19 @@
 
 using static_livox_localization::RegistrationConfig;
 using static_livox_localization::register_cloud;
+using static_livox_localization::registration_backend_available;
+
+TEST(Registration, RejectsUnavailableBackendWithoutFallback) {
+  pcl::PointCloud<pcl::PointXYZI>::Ptr scan(new pcl::PointCloud<pcl::PointXYZI>);
+  pcl::PointCloud<pcl::PointXYZI>::Ptr map(new pcl::PointCloud<pcl::PointXYZI>);
+  RegistrationConfig config;
+  config.backend = "missing_backend";
+  const auto result = register_cloud(
+      scan, map, Eigen::Isometry3d::Identity(), config);
+  EXPECT_FALSE(result.converged);
+  EXPECT_EQ(result.backend, "missing_backend");
+  EXPECT_EQ(result.error, "REGISTRATION_BACKEND_UNAVAILABLE");
+}
 
 TEST(Registration, RejectsInsufficientScan) {
   auto scan = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
@@ -23,6 +36,40 @@ TEST(Registration, AlignsStructuredIdentityCloud) {
   const auto result = register_cloud(scan, map, Eigen::Isometry3d::Identity(), config);
   EXPECT_TRUE(result.converged);
   EXPECT_LT(result.fitness, 1e-4);
+}
+
+TEST(Registration, CudaBackendAlignsStructuredIdentityCloudWhenBuilt) {
+  if (!registration_backend_available("fast_vgicp_cuda")) return;
+
+  auto scan = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+  for (int x = 0; x < 20; ++x) {
+    for (int y = 0; y < 20; ++y) {
+      for (int z = 0; z < 3; ++z) {
+        pcl::PointXYZI point;
+        point.x = x * 0.25f;
+        point.y = y * 0.25f;
+        point.z = z * 0.35f + 0.01f * x;
+        point.intensity = x + y;
+        scan->push_back(point);
+      }
+    }
+  }
+  auto map = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>(*scan);
+  RegistrationConfig config;
+  config.backend = "fast_vgicp_cuda";
+  config.min_points = 300;
+  // VGICP optimizes voxel distributions rather than the point-wise GICP
+  // objective, so an identity input is not expected to reproduce PCL's
+  // near-zero score on this synthetic lattice. This is a kernel/contract
+  // smoke test; route-specific score equivalence belongs to rosbag replay.
+  config.max_fitness = 0.10;
+  const auto result = register_cloud(
+      scan, map, Eigen::Isometry3d::Identity(), config);
+  EXPECT_TRUE(result.error.empty()) << result.error;
+  EXPECT_TRUE(result.converged);
+  EXPECT_LT(result.fitness, 0.10);
+  EXPECT_EQ(result.backend, "fast_vgicp_cuda");
+  EXPECT_GT(result.elapsed_ms, 0.0);
 }
 
 TEST(Registration, UsesSparserCloudForDensityImbalancedOverlap) {

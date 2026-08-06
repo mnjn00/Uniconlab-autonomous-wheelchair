@@ -25,6 +25,11 @@ max_cloud_odom_skew_s: 0.10
 max_cloud_samples: 20
 max_submap_points: 120000
 
+# pcl_gicp is the validated CPU fallback. fast_vgicp_cuda is accepted only
+# when the workspace was built with -DENABLE_FAST_GICP_CUDA=ON; requesting it
+# from a CPU-only build terminates the node instead of silently changing the
+# localization algorithm.
+registration_backend: pcl_gicp
 voxel_resolution: 0.20
 # 8 m covered barely more than the ground immediately around the chair,
 # which on open pavement is close to featureless for a horizontal fix. At

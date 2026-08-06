@@ -182,6 +182,14 @@ class MovingIcpLocalizer {
     min_tracking_correction_rotation_rad_ =
         min_tracking_correction_yaw_deg * M_PI / 180.0;
 
+    private_nh_.param<std::string>("registration_backend",
+                                   registration_config_.backend, "pcl_gicp");
+    if (!static_livox_localization::registration_backend_available(
+            registration_config_.backend)) {
+      throw std::runtime_error(
+          "requested registration_backend is unavailable: " +
+          registration_config_.backend);
+    }
     private_nh_.param("voxel_resolution", registration_config_.voxel_resolution,
                       0.20);
     private_nh_.param("roi_radius", registration_config_.roi_radius, 20.0);
@@ -596,6 +604,12 @@ class MovingIcpLocalizer {
         key_value("fitness", std::to_string(registration.fitness)));
     status.values.push_back(
         key_value("inlier_ratio", std::to_string(registration.inlier_ratio)));
+    status.values.push_back(key_value("registration_backend",
+                                      registration.backend));
+    status.values.push_back(key_value("registration_elapsed_ms",
+                                      std::to_string(registration.elapsed_ms)));
+    status.values.push_back(key_value("registration_error",
+                                      registration.error));
     status.values.push_back(key_value(
         "prediction_translation_m",
         std::to_string(decision.prediction_translation_m)));
