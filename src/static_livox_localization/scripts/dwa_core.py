@@ -1,0 +1,221 @@
+"""Trajectory-rollout local planning with the safety band as a hard reject.
+
+The third control law, and the reason it exists is narrow: pure pursuit and
+the MPC both follow a line, and neither of them avoids anything well. What
+avoidance the stack has is take_a_way_round - a fixed +-0.6 m lateral offset
+applied to the pursuit target - and on 2026-08-04 that offset, applied from
+a standstill where the lookahead has collapsed to MIN_LOOKAHEAD_M, demanded
+atan(0.6 / 0.9) = 34 degrees and steered the chair at a wall three times in
+one evening. Rolling out candidate velocities and scoring them cannot
+produce that: every candidate is a velocity pair the chair can actually
+hold, and one that leaves the corridor is discarded rather than commanded.
+
+WHY THE BAND IS A CRITIC AND NOT A COSTMAP LAYER
+------------------------------------------------
+The obvious way to give move_base this corridor is a costmap_2d layer that
+paints outside-the-band lethal. Measured on 2026-08-06 with the 0707
+single-drive map, that does not work: the band occupies 1.15 % of a 0.20 m
+grid and is one to two cells wide where it matters, so rasterising it breaks
+the corridor into disconnected fragments and no plan exists at any inflation
+radius. The band is a continuous, station-indexed lateral limit; forcing it
+through a grid is what destroys it.
+
+A rollout critic never rasterises anything. Each candidate trajectory is a
+handful of points, each tested against the band's own geometry - the same
+containment the follower already uses. So the corridor survives intact, and
+it survives at its real width rather than at the grid's.
+
+TRAJECTORY ROLLOUT, NOT THE DYNAMIC WINDOW
+------------------------------------------
+Textbook DWA samples only velocities reachable within one control period.
+At a_max 0.18 and dt 0.1 that window is +-0.018 m/s, and the loaded base was
+measured not to move below about 0.30 m/s - so from rest every reachable
+candidate is one the wheels ignore, and the search never leaves zero. This
+is the same standstill trap the MPC node fell into (see mpc_command).
+
+So the velocity space is sampled whole, as base_local_planner's trajectory
+rollout does, and the acceleration limit is enforced downstream by the
+command ramp. Candidate speeds are drawn from {0} union [floor, max]: the
+gap is not a tuning choice, it is the part of the range the chair cannot
+execute.
+"""
+
+import math
+
+import numpy as np
+
+# The follower's constants. Kept literal rather than imported because
+# waypoint_follower pulls in rospy and this has to stay testable at a desk.
+MAX_SPEED = 0.6
+TURN_FLOOR_SPEED = 0.30
+MAX_YAW_RATE = 0.5
+
+# How far ahead a candidate is simulated. Long enough to see a corridor bend
+# arriving - 1.7 s is a metre at cruise - and short enough that a constant
+# curvature arc is still a fair description of what the chair will do. Both
+# ends matter: lengthen it and every candidate fails on a curve because no
+# single arc stays in a bending corridor; shorten it and the chair drives
+# into pinches it never looked at.
+SIM_TIME_S = 1.7
+SIM_STEP_S = 0.1
+
+SPEED_SAMPLES = 5
+YAW_SAMPLES = 21
+
+# Scoring weights. Path first: this stack's whole safety argument is that the
+# recorded line is ground a person actually drove, so deviation is a cost and
+# not merely a preference. Progress second, obstacles third - an obstacle
+# that is not in the corridor has already been excluded by the band.
+W_PATH = 3.0
+W_PROGRESS = 1.0
+W_OBSTACLE = 2.0
+
+# A candidate whose rollout passes closer than this to a tracked object is
+# discarded outright rather than scored - the same floor mpc_core keeps.
+OBSTACLE_FLOOR_M = 0.40
+
+
+def speed_samples(max_speed=MAX_SPEED, floor=TURN_FLOOR_SPEED,
+                  count=SPEED_SAMPLES):
+    """Executable speeds only: stop, or something the wheels will turn for.
+
+    The gap between them is the actuation deadband, measured on the loaded
+    chair. Sampling inside it produces candidates that score well, get
+    commanded, and do nothing.
+    """
+    if max_speed < floor:
+        return (0.0,)
+    return (0.0,) + tuple(np.linspace(floor, max_speed, max(count, 1)))
+
+
+def yaw_samples(limit=MAX_YAW_RATE, count=YAW_SAMPLES):
+    return tuple(np.linspace(-limit, limit, max(count, 3)))
+
+
+def rollout(state, v, w, sim_time_s=SIM_TIME_S, step_s=SIM_STEP_S):
+    """Where a constant (v, w) takes the chair, sampled along the way.
+
+    Returns (n, 3) of (x, y, yaw). The intermediate points are the point -
+    a candidate that ends inside the corridor having crossed out of it on
+    the way is not a candidate.
+    """
+    x, y, yaw = float(state[0]), float(state[1]), float(state[2])
+    out = []
+    steps = max(int(round(sim_time_s / step_s)), 1)
+    for _ in range(steps):
+        x += v * math.cos(yaw) * step_s
+        y += v * math.sin(yaw) * step_s
+        yaw += w * step_s
+        out.append((x, y, yaw))
+    return np.array(out, dtype=float)
+
+
+def stays_in_band(band, path, grace=0.0):
+    """Every sampled point of the rollout is inside the corridor."""
+    if len(path) == 0:
+        return True
+    return bool(np.all(band.contains_many(path[:, :2], grace=grace)))
+
+
+def obstacle_clearance(path, obstacles):
+    """Closest approach of a rollout to any obstacle, or inf when clear."""
+    if not len(obstacles) or len(path) == 0:
+        return float("inf")
+    pts = np.asarray(obstacles, dtype=float).reshape(-1, 2)
+    d = np.linalg.norm(path[:, None, :2] - pts[None, :, :], axis=2)
+    return float(d.min())
+
+
+class DwaPlanner:
+    """Scores rollouts against the recorded line, inside the band.
+
+    Every candidate is evaluated in one batch rather than one at a time.
+    That is not tidiness: scored singly, 126 candidates x a 17-step rollout
+    x a 2004-point route is four million distances per control cycle, which
+    on this NUC is seconds, not the 0.1 s it has. The band test and the
+    path distance are each a single call over the whole stack of rollouts.
+    """
+
+    def __init__(self, band, route, sim_time_s=SIM_TIME_S,
+                 grace=0.0, max_speed=MAX_SPEED):
+        from scipy.spatial import cKDTree
+        self.band = band
+        self.route = np.asarray(route, dtype=float)
+        self.tree = cKDTree(self.route)
+        self.sim_time_s = float(sim_time_s)
+        self.grace = float(grace)
+        self.max_speed = float(max_speed)
+        seg = np.linalg.norm(np.diff(self.route, axis=0), axis=1)
+        self.arc = np.concatenate([[0.0], np.cumsum(seg)])
+        self.steps = max(int(round(self.sim_time_s / SIM_STEP_S)), 1)
+
+    def arc_at(self, point):
+        return float(self.arc[int(self.tree.query(np.asarray(point))[1])])
+
+    def _rollouts(self, state, pairs):
+        """(candidates, steps, 3) for every (v, w) at once."""
+        v = np.asarray([p[0] for p in pairs], dtype=float)[:, None]
+        w = np.asarray([p[1] for p in pairs], dtype=float)[:, None]
+        k = np.arange(1, self.steps + 1)[None, :]
+        yaw = state[2] + w * k * SIM_STEP_S
+        # position by integrating the same constant-curvature arc the chair
+        # would drive, step by step, so an arc that leaves the band midway
+        # is caught rather than judged only on where it ends up
+        dx = np.cumsum(v * np.cos(yaw) * SIM_STEP_S, axis=1)
+        dy = np.cumsum(v * np.sin(yaw) * SIM_STEP_S, axis=1)
+        return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
+
+    def plan(self, state, obstacles=(), speed_cap=None):
+        """Best executable (v, w) from here, or a stop with a reason.
+
+        Returns (v, w, status). status is OK, or the reason every candidate
+        was rejected - which the operator needs: a corridor with no
+        admissible arc is a different fault from one with an object in it.
+        """
+        cap = self.max_speed if speed_cap is None else min(self.max_speed,
+                                                           float(speed_cap))
+        pairs = [(v, w) for v in speed_samples(cap) for w in yaw_samples()
+                 # Turning on the spot is not something this chair does below
+                 # its rotation floor, and it is the manoeuvre that put it at
+                 # a wall on 2026-08-04. Excluded.
+                 if not (v == 0.0 and w != 0.0)]
+        if not pairs:
+            return 0.0, 0.0, "NO_CANDIDATE"
+        paths = self._rollouts(np.asarray(state, dtype=float), pairs)
+        flat = paths[:, :, :2].reshape(-1, 2)
+        inside = self.band.contains_many(flat, grace=self.grace)
+        ok = inside.reshape(len(pairs), self.steps).all(axis=1)
+        reasons = {}
+        if not ok.any():
+            return 0.0, 0.0, "OFF_BAND"
+        reasons["OFF_BAND"] = int((~ok).sum())
+        if len(obstacles):
+            pts = np.asarray(obstacles, dtype=float).reshape(-1, 2)
+            clear = np.linalg.norm(
+                paths[:, :, None, :2] - pts[None, None, :, :],
+                axis=3).min(axis=(1, 2))
+        else:
+            clear = np.full(len(pairs), np.inf)
+        ok &= clear >= OBSTACLE_FLOOR_M
+        if not ok.any():
+            return 0.0, 0.0, "OBSTACLE"
+        d, _ = self.tree.query(flat, workers=-1)
+        path_cost = d.reshape(len(pairs), self.steps).mean(axis=1)
+        here = self.arc_at(state[:2])
+        ends = self.tree.query(paths[:, -1, :2])[1]
+        progress = self.arc[ends] - here
+        penalty = np.where(np.isfinite(clear), np.maximum(0.0, 1.0 - clear), 0.0)
+        cost = (W_PATH * path_cost - W_PROGRESS * progress
+                + W_OBSTACLE * penalty)
+        cost = np.where(ok, cost, np.inf)
+        best = int(np.argmin(cost))
+        v, w = float(pairs[best][0]), float(pairs[best][1])
+        if v == 0.0:
+            # Standing still is always admissible - the stationary rollout
+            # cannot leave a corridor it is already inside - so it wins
+            # whenever every moving candidate has been rejected. Reporting
+            # that as OK would make a blocked chair and a driving one look
+            # identical on the status topic, which is the ambiguity the raw
+            # scan guard had. Say which one it is.
+            return 0.0, 0.0, "BLOCKED"
+        return v, w, "OK"
