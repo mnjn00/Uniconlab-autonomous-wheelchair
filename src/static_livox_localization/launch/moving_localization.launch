@@ -16,6 +16,9 @@
        transient structure the map does not hold lowers a correct fix, so
        this is exposed for calibration on the route, not buried in the node. -->
   <arg name="auto_init_min_refined_score" default="0.80"/>
+  <arg name="auto_init_require_gpu" default="false"/>
+  <arg name="auto_init_gpu_lateral_radius_m" default="10.0"/>
+  <arg name="auto_init_gpu_lateral_step_m" default="1.0"/>
 
   <node pkg="static_livox_localization"
         type="moving_icp_localizer"
@@ -76,6 +79,9 @@
     <param name="body_frame_profile" value="$(arg auto_init_body_frame_profile)"/>
     <param name="min_refined_score" value="$(arg auto_init_min_refined_score)"/>
     <param name="global_only" value="$(arg auto_init_global_only)"/>
+    <param name="require_gpu" value="$(arg auto_init_require_gpu)"/>
+    <param name="gpu_lateral_radius_m" value="$(arg auto_init_gpu_lateral_radius_m)"/>
+    <param name="gpu_lateral_step_m" value="$(arg auto_init_gpu_lateral_step_m)"/>
   </node>
 </launch>
 

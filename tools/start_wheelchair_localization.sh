@@ -2,6 +2,28 @@
 # One-command field startup: driver -> FAST-LIO -> localization(+RViz) -> auto seed.
 set -eo pipefail
 
+# Keep the field workspace as the default, while allowing a reviewed branch to
+# be built and replayed in isolation before it replaces the live package.
+LOCALIZATION_WS="${LOCALIZATION_WS:-$HOME/livox_static_localization_ws}"
+[ -f "$LOCALIZATION_WS/devel/setup.bash" ] || {
+  echo "ERROR: localization workspace is not built: $LOCALIZATION_WS" >&2
+  exit 66
+}
+
+# CUDA component wheels live below the user's site-packages rather than in a
+# system linker directory.  Discover them instead of pinning a Python patch
+# version or a CUDA component list; children inherit the result.  With
+# AUTO_INIT_REQUIRE_GPU=true, auto_initial_pose still fails closed if these
+# libraries or the driver cannot execute a real kernel.
+CUDA_PY_ROOT="$HOME/.local/lib/python3.8/site-packages/nvidia"
+if [ -d "$CUDA_PY_ROOT" ]; then
+  CUDA_PY_LIBS=$(find "$CUDA_PY_ROOT" -mindepth 2 -maxdepth 2 \
+    -type d -name lib | sort | paste -sd: -)
+  if [ -n "$CUDA_PY_LIBS" ]; then
+    export LD_LIBRARY_PATH="$CUDA_PY_LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  fi
+fi
+
 # Map merged from the 07/07 + 07/25 passes. The 594 MB mergedmap.ply is the
 # immutable source; deploy_merged_map.sh verifies it and installs the pinned
 # 0.20 m runtime PCD used by both auto-init and ICP.
@@ -221,7 +243,7 @@ while : ; do
     echo "ERROR: /Odometry not publishing"; exit 3
   fi
   echo "  odometry OK - checking init health (do not move the chair)"
-  source "$HOME/livox_static_localization_ws/devel/setup.bash"
+  source "$LOCALIZATION_WS/devel/setup.bash"
   if rosrun static_livox_localization fastlio_init_health.py \
       _duration_s:="$FASTLIO_HEALTH_S" 2>&1 | sed 's/^/  health: /'; then
     echo "  FAST-LIO init OK"
@@ -239,7 +261,7 @@ done
 source "$HOME/fast_lio_ws/devel/setup.bash"
 
 echo "[4/5] localization + rviz + auto init"
-source "$HOME/livox_static_localization_ws/devel/setup.bash"
+source "$LOCALIZATION_WS/devel/setup.bash"
 rosparam set /fast_lio_icp/auto_initialization_verified false
 rosparam set /fast_lio_icp/auto_initialization_stable false
 rosparam set /fast_lio_icp/auto_initialization_source none
@@ -250,6 +272,9 @@ setsid nohup roslaunch static_livox_localization moving_localization.launch \
   auto_init_route:="$ROUTE" \
   auto_init_body_frame_profile:="$BODY_FRAME_PROFILE" \
   auto_init_min_refined_score:="${MIN_REFINED_SCORE:-0.80}" \
+  auto_init_require_gpu:="${AUTO_INIT_REQUIRE_GPU:-true}" \
+  auto_init_gpu_lateral_radius_m:="${AUTO_INIT_GPU_LATERAL_RADIUS_M:-10.0}" \
+  auto_init_gpu_lateral_step_m:="${AUTO_INIT_GPU_LATERAL_STEP_M:-1.0}" \
   > "$LOG/live_localization.log" 2>&1 < /dev/null &
 
 echo "[5/7] waiting for TRACKING (auto seed + consensus)"
@@ -312,7 +337,7 @@ done
 if ! timeout 3 rostopic echo -n1 /wheel_status >/dev/null 2>&1; then
   echo "ERROR: wheel base not responding (/wheel_status silent)"; exit 5
 fi
-source "$HOME/livox_static_localization_ws/devel/setup.bash"
+source "$LOCALIZATION_WS/devel/setup.bash"
 setsid nohup rosrun static_livox_localization safety_gate.py \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \

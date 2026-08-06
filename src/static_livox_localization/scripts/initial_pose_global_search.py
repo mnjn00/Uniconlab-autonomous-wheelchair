@@ -10,6 +10,11 @@ from scipy.spatial import cKDTree
 from initial_pose_candidates import InitializationCandidate
 
 
+GPU_LATERAL_RADIUS_M = 10.0
+GPU_LATERAL_STEP_M = 1.0
+GPU_CPU_RERANK_TOP = 256
+
+
 class BinaryPcdError(Exception):
     """A stable PCD boundary error."""
 
@@ -251,20 +256,93 @@ def score_global_candidates(
     map_points: np.ndarray,
     candidates: Sequence[Tuple[float, float, float, float]],
     inlier_radius_m: float,
+    prefer_gpu: bool = True,
+    gpu_lateral_radius_m: float = GPU_LATERAL_RADIUS_M,
+    gpu_lateral_step_m: float = GPU_LATERAL_STEP_M,
+    require_gpu: bool = False,
+    log=None,
 ) -> Tuple[InitializationCandidate, ...]:
     """Rank trajectory/yaw hypotheses by bounded nearest-map inlier fraction."""
 
-    tree = cKDTree(map_points)
+    say = log or (lambda message: None)
+    gpu = None
+    if prefer_gpu and candidates:
+        try:
+            from gpu_voxel_scorer import GpuVoxelScorer
+            gpu = GpuVoxelScorer(
+                map_points, inlier_radius_m, chunk=PLACEMENT_CHUNK, log=say)
+        except Exception as error:  # device failure must preserve CPU search
+            if require_gpu:
+                raise RuntimeError(
+                    "required GPU voxel scorer unavailable: {}: {}".format(
+                        type(error).__name__, error))
+            say("GPU voxel scorer unavailable; CPU limited search: {}: {}".format(
+                type(error).__name__, error))
+
+    coarse_candidates = tuple(candidates)
+    if gpu is not None and gpu_lateral_radius_m > 0.0:
+        offsets = _grid(gpu_lateral_radius_m, gpu_lateral_step_m)
+        expanded = []
+        for x, y, z, heading in candidates:
+            # Lateral, rather than world-axis, expansion follows a long thin
+            # route without paying for the empty rectangle around it.
+            normal_x, normal_y = -math.sin(heading), math.cos(heading)
+            for lateral in offsets:
+                expanded.append((
+                    x + lateral * normal_x,
+                    y + lateral * normal_y,
+                    z,
+                    heading,
+                ))
+        coarse_candidates = tuple(expanded)
+        say("GPU global search: {} trajectory positions expanded to {} "
+            "positions (lateral +/-{:.1f} m)".format(
+                len(candidates), len(coarse_candidates), gpu_lateral_radius_m))
+
     poses = [(x, y, z, heading + offset)
-             for x, y, z, heading in candidates
+             for x, y, z, heading in coarse_candidates
              for offset in coarse_yaw_offsets()]
     if not poses:
         return ()
-    worlds = np.empty((len(poses), len(sample), 3), np.float32)
-    for index, (x, y, z, yaw) in enumerate(poses):
-        worlds[index] = sample @ _rotation(yaw).T + np.array(
-            [x, y, z], np.float32)
-    _costs, inliers = _placement_batch(tree, worlds, inlier_radius_m)
+    if gpu is not None:
+        try:
+            inliers = gpu.score_poses(sample, poses)
+        except Exception as error:
+            if require_gpu:
+                raise RuntimeError(
+                    "required GPU voxel scoring failed: {}: {}".format(
+                        type(error).__name__, error))
+            # Rebuild the original, unexpanded candidate set: the CPU budget
+            # is deliberately bounded and must not inherit the GPU workload.
+            say("GPU voxel scoring failed; CPU limited search: {}: {}".format(
+                type(error).__name__, error))
+            poses = [(x, y, z, heading + offset)
+                     for x, y, z, heading in candidates
+                     for offset in coarse_yaw_offsets()]
+            gpu = None
+    if gpu is None:
+        tree = cKDTree(map_points)
+        worlds = np.empty((len(poses), len(sample), 3), np.float32)
+        for index, (x, y, z, yaw) in enumerate(poses):
+            worlds[index] = sample @ _rotation(yaw).T + np.array(
+                [x, y, z], np.float32)
+        _costs, inliers = _placement_batch(tree, worlds, inlier_radius_m)
+    else:
+        # Voxel support is deliberately conservative and approximate.  It may
+        # choose who reaches this gate, but it may not supply the score that
+        # decides the pose.  Re-score a generous GPU shortlist with the exact
+        # historical cKDTree metric before diversity selection/refinement.
+        top_count = min(GPU_CPU_RERANK_TOP, len(poses))
+        selected = np.argsort(-inliers, kind="stable")[:top_count]
+        poses = [poses[int(index)] for index in selected]
+        worlds = np.empty((len(poses), len(sample), 3), np.float32)
+        for index, (x, y, z, yaw) in enumerate(poses):
+            worlds[index] = sample @ _rotation(yaw).T + np.array(
+                [x, y, z], np.float32)
+        tree = cKDTree(map_points)
+        _costs, inliers = _placement_batch(
+            tree, worlds, inlier_radius_m)
+        say("CPU exact re-rank: {} GPU coarse candidates".format(top_count))
     scored = [
         InitializationCandidate(x=x, y=y, z=z, yaw_rad=yaw,
                                 score=float(inliers[index]),
