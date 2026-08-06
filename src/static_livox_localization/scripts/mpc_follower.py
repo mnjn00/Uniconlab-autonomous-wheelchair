@@ -58,6 +58,7 @@ from std_msgs.msg import String
 import mpc_core
 import mpc_speed
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
+from mpc_command import MAX_COMMAND_GAP_S, advance_command
 from waypoint_follower import (WaypointFollower, CONTROL_HZ, MAX_YAW_RATE,
                                PLAN_AHEAD_M)
 
@@ -69,7 +70,6 @@ from waypoint_follower import (WaypointFollower, CONTROL_HZ, MAX_YAW_RATE,
 # route in one direction with nothing to point at. The runbook carries the
 # procedure; set ~latency_s once there is a number.
 LATENCY_S = 0.0
-
 
 class MpcFollower(WaypointFollower):
     # Read by the inherited __init__ and published as ~control_law, which is
@@ -86,6 +86,7 @@ class MpcFollower(WaypointFollower):
             gain=float(rospy.get_param("~anchor_gain", DEFAULT_GAIN)))
         self.latency_s = float(rospy.get_param("~latency_s", LATENCY_S))
         self.warm = None
+        self.last_command_stamp = None
         self.odom_v = 0.0
         self.odom_w = 0.0
         self.mpc_status = ""
@@ -151,6 +152,10 @@ class MpcFollower(WaypointFollower):
         if self.handled_before_driving(now):
             self.anchor.reset("held")
             self.warm = None
+            # send_stop zeroes current_speed; drop the stamp too so the
+            # first cycle after a hold ramps from rest rather than crediting
+            # itself the whole length of the hold.
+            self.last_command_stamp = None
             return
 
         state = self.anchored_state(now)
@@ -166,6 +171,7 @@ class MpcFollower(WaypointFollower):
             self.publish_state("HOLD:SLOWER_THAN_FLOOR")
             self.send_stop()
             self.warm = None
+            self.last_command_stamp = None
             return
 
         _v, th_ref = mpc_core.polyline_refs(
@@ -186,18 +192,31 @@ class MpcFollower(WaypointFollower):
             self.mpc_status = status
             self.publish_state("HOLD:" + status)
             self.send_stop()
+            self.last_command_stamp = None
             return
         self.mpc_status = status
 
-        # The solver returns accelerations; the base takes velocities. One
-        # integration step at the control period is the whole conversion,
-        # and it is clamped rather than trusted: an inaccurate solve must
-        # not put a velocity on the wire that the caps forbid.
-        dt = 1.0 / CONTROL_HZ
-        speed = float(np.clip(state[3] + u0[0] * dt, 0.0,
-                              self.solver.p.v_max))
-        yaw_rate = float(np.clip(state[4] + u0[1] * dt,
-                                 -MAX_YAW_RATE, MAX_YAW_RATE))
+        # The solver returns accelerations; the base takes velocities. The
+        # conversion integrates onto the previous COMMAND over the time that
+        # actually elapsed - see advance_command for why both halves of that
+        # sentence are the fix rather than a detail - and is clamped rather
+        # than trusted: an inaccurate solve must not put a velocity on the
+        # wire that the caps forbid.
+        elapsed = 1.0 / CONTROL_HZ
+        if self.last_command_stamp is not None:
+            elapsed = (now - self.last_command_stamp).to_sec()
+        if elapsed > MAX_COMMAND_GAP_S:
+            # Long enough that the base has been running on a stale command.
+            # Re-sync to what it is measured to be doing before ramping on.
+            rospy.logwarn_throttle(
+                5.0, "control loop gap %.2f s - resyncing command to measured",
+                elapsed)
+            self.current_speed = float(state[3])
+            self.last_yaw_rate = float(state[4])
+        self.last_command_stamp = now
+        speed, yaw_rate = advance_command(
+            self.current_speed, self.last_yaw_rate, u0, elapsed,
+            self.solver.p.v_max, MAX_YAW_RATE)
         command = Twist()
         command.linear.x = speed
         command.angular.z = yaw_rate if speed > 0.02 else 0.0
