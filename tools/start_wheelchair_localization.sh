@@ -70,6 +70,35 @@ fi
 # Same two-literal rule as above, for the same reason: a typo must not pick a
 # control law. Unlike SAFETY_POLICIES the unset default is the SAFE one, so
 # an operator who has never heard of this variable gets the validated law.
+# Which registration the localizer runs. Lived only on the NUC's deploy
+# branch until now, which meant the machine and the repository disagreed
+# about what was deployed - the divergence is the hazard, not the value.
+# fast_vgicp_cuda is what the NUC has been running since 2026-08-06.
+REGISTRATION_BACKEND="${REGISTRATION_BACKEND:-fast_vgicp_cuda}"
+case "$REGISTRATION_BACKEND" in
+  pcl_gicp|fast_vgicp_cuda) ;;
+  *) echo "ERROR: REGISTRATION_BACKEND must be pcl_gicp or fast_vgicp_cuda, got '$REGISTRATION_BACKEND'" >&2
+     exit 65 ;;
+esac
+# Corrections are suppressed until the chair has moved 0.10 m or turned 2
+# deg, so a parked chair never runs registration - which also means the
+# backend cannot be measured until the chair is already driving.
+# STATIONARY_CORRECTION=on drops both thresholds to zero so a bench run can
+# read fitness, inlier ratio and elapsed time standing still.
+#
+# Off by default, and it should stay off for a drive. Those thresholds are
+# not an optimisation: parked at the goal after the 2026-07-31 runs the fix
+# degraded to inlier 0.124-0.262 and crossed its gate four times with the
+# chair motionless. Correcting continuously against that is how a good fix
+# is talked out of itself.
+STATIONARY_CORRECTION="${STATIONARY_CORRECTION:-off}"
+case "$STATIONARY_CORRECTION" in
+  on)  MIN_CORRECTION_TRANSLATION_M=0.0;  MIN_CORRECTION_YAW_DEG=0.0 ;;
+  off) MIN_CORRECTION_TRANSLATION_M=0.10; MIN_CORRECTION_YAW_DEG=2.0 ;;
+  *)   echo "ERROR: STATIONARY_CORRECTION must be on or off, got '$STATIONARY_CORRECTION'" >&2
+       exit 65 ;;
+esac
+
 PROFILE="${PROFILE:-pursuit}"
 if [ "$PROFILE" != "pursuit" ] && [ "$PROFILE" != "mpc" ]; then
   echo "ERROR: PROFILE must be pursuit or mpc, got '$PROFILE'" >&2
@@ -96,6 +125,27 @@ if [ -n "$LATENCY_BAD" ]; then
   echo "ERROR: LATENCY_S must be a non-negative number, got '$LATENCY_S'" >&2
   exit 65
 fi
+# OpenBLAS sizes its thread pool to the core count and then SPIN-WAITS
+# those threads between calls. Every numpy operation in the control-loop
+# nodes is tiny - a 25-step horizon, a few hundred band stations - so the
+# pool never does useful parallel work and the spinning is pure burn.
+# Measured on this NUC on 2026-08-06 with the MPC profile armed and IDLE:
+#
+#   mpc_follower.py    28 threads   266 % CPU
+#   safety_gate.py     17 threads   267 %
+#   obstacle_clusters  17 threads   126 %
+#   load average 16.77 on 8 threads
+#
+# ...which is why the control loop ran at a median 5.2 Hz against a nominal
+# 10 during the 2026-08-05 drive. At these matrix sizes one thread is also
+# FASTER than eight; the threading overhead dominates the arithmetic.
+#
+# Deliberately NOT applied to auto_initial_pose: its coarse search is the
+# one place here that genuinely parallelises, over 16k hypotheses, and it
+# runs once at startup rather than every cycle.
+SINGLE_THREAD_ENV="OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1"
+
 LOG=$HOME
 
 source /opt/ros/noetic/setup.bash
@@ -275,6 +325,9 @@ setsid nohup roslaunch static_livox_localization moving_localization.launch \
   auto_init_require_gpu:="${AUTO_INIT_REQUIRE_GPU:-true}" \
   auto_init_gpu_lateral_radius_m:="${AUTO_INIT_GPU_LATERAL_RADIUS_M:-10.0}" \
   auto_init_gpu_lateral_step_m:="${AUTO_INIT_GPU_LATERAL_STEP_M:-1.0}" \
+  registration_backend:="$REGISTRATION_BACKEND" \
+  min_tracking_correction_translation_m:="$MIN_CORRECTION_TRANSLATION_M" \
+  min_tracking_correction_yaw_deg:="$MIN_CORRECTION_YAW_DEG" \
   > "$LOG/live_localization.log" 2>&1 < /dev/null &
 
 echo "[5/7] waiting for TRACKING (auto seed + consensus)"
@@ -338,7 +391,8 @@ if ! timeout 3 rostopic echo -n1 /wheel_status >/dev/null 2>&1; then
   echo "ERROR: wheel base not responding (/wheel_status silent)"; exit 5
 fi
 source "$LOCALIZATION_WS/devel/setup.bash"
-setsid nohup rosrun static_livox_localization safety_gate.py \
+setsid nohup env $SINGLE_THREAD_ENV \
+  rosrun static_livox_localization safety_gate.py \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
@@ -348,7 +402,8 @@ setsid nohup rosrun static_livox_localization tip_guard.py \
 # what it reports as moving, so it starts BEFORE the follower and the follower
 # refuses to drive without it (HOLD:CLUSTERS_STALE). A missing producer must
 # not read as an empty road.
-setsid nohup rosrun static_livox_localization obstacle_clusters.py \
+setsid nohup env $SINGLE_THREAD_ENV \
+  rosrun static_livox_localization obstacle_clusters.py \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_band:="$BAND" \
   > "$LOG/live_clusters.log" 2>&1 < /dev/null &
@@ -371,7 +426,8 @@ if [ "$PROFILE" = "mpc" ]; then
   echo "  PROFILE=mpc - simulation-only control law, never driven on the chair"
   echo "  watch /waypoint_follower/status; see docs/runbooks/mpc-profile-ko.md"
 fi
-setsid nohup rosrun static_livox_localization "$FOLLOWER_NODE" \
+setsid nohup env $SINGLE_THREAD_ENV \
+  rosrun static_livox_localization "$FOLLOWER_NODE" \
   _route:="$ROUTE" _safety_band:="$BAND" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
