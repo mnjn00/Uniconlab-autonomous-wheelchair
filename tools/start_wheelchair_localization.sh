@@ -61,6 +61,9 @@ fi
 #
 # pursuit  the validated one. Two complete autonomous runs of the 0727 route
 #          on 2026-07-31. This is the default and should stay the default.
+# dwa      Trajectory rollout with the band as a hard reject. Simulated,
+#          never driven. This is the one to reach for when the run is about
+#          getting past something, not about following the line.
 # mpc      Completes the route in simulation, at a jitter measured to be
 #          harsher than the chair's own, without leaving the band. Has never
 #          driven the chair. Those are different things: it is here to be
@@ -100,15 +103,19 @@ case "$STATIONARY_CORRECTION" in
 esac
 
 PROFILE="${PROFILE:-pursuit}"
-if [ "$PROFILE" != "pursuit" ] && [ "$PROFILE" != "mpc" ]; then
-  echo "ERROR: PROFILE must be pursuit or mpc, got '$PROFILE'" >&2
-  exit 65
-fi
-if [ "$PROFILE" = "mpc" ]; then
-  FOLLOWER_NODE=mpc_follower.py
-else
-  FOLLOWER_NODE=waypoint_follower.py
-fi
+case "$PROFILE" in
+  pursuit) FOLLOWER_NODE=waypoint_follower.py ;;
+  mpc)     FOLLOWER_NODE=mpc_follower.py ;;
+  # dwa     rolls candidate velocities out and rejects the ones that leave
+  #         the safety band. The only profile that avoids an obstacle by
+  #         choosing a velocity the chair can hold, rather than by pushing
+  #         the pursuit target 0.6 m sideways - which from a standstill is a
+  #         34 degree demand and put the chair at a wall three times on
+  #         2026-08-04. Simulated, never driven.
+  dwa)     FOLLOWER_NODE=dwa_follower.py ;;
+  *) echo "ERROR: PROFILE must be pursuit, mpc or dwa, got '$PROFILE'" >&2
+     exit 65 ;;
+esac
 # Actuation delay, in seconds, for the MPC profile to plan from where the
 # chair WILL be rather than where it was. Zero until measured on this NUC -
 # a guessed lead biases every command on the route in one direction, which
@@ -422,8 +429,8 @@ for i in $(seq 1 10); do
   sleep 1
 done
 echo "  final-stage relay up - watch /tip_guard/status"
-if [ "$PROFILE" = "mpc" ]; then
-  echo "  PROFILE=mpc - simulation-only control law, never driven on the chair"
+if [ "$PROFILE" != "pursuit" ]; then
+  echo "  PROFILE=$PROFILE - simulation-only control law, never driven on the chair"
   echo "  watch /waypoint_follower/status; see docs/runbooks/mpc-profile-ko.md"
 fi
 setsid nohup env $SINGLE_THREAD_ENV \

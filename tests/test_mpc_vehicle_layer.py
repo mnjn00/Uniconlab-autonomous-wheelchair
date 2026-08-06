@@ -382,11 +382,18 @@ def test_profile_defaults_to_the_validated_control_law():
     assert 'PROFILE="${PROFILE:-pursuit}"' in bringup()
 
 
-def test_profile_rejects_anything_but_the_two_literals():
+def test_profile_rejects_anything_it_does_not_recognise():
+    """Three laws now - pursuit, mpc, dwa - and the rule is unchanged: a
+    typo must not pick a control law, so anything else exits rather than
+    falling through to a default."""
     text = bringup()
-    assert '"$PROFILE" != "pursuit" ]' in text and '"$PROFILE" != "mpc" ]' \
-        in text
-    assert "PROFILE must be pursuit or mpc" in text
+    for law, node in (("pursuit", "waypoint_follower.py"),
+                      ("mpc", "mpc_follower.py"),
+                      ("dwa", "dwa_follower.py")):
+        assert re.search(r"^\s*%s\)\s*FOLLOWER_NODE=%s"
+                         % (law, re.escape(node)), text, re.M), law
+    assert "PROFILE must be pursuit, mpc or dwa" in text
+    assert "exit 65" in text
 
 
 def test_latency_is_settable_from_the_bringup_and_defaults_to_zero():
