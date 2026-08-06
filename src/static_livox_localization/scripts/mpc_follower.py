@@ -72,6 +72,13 @@ LATENCY_S = 0.0
 
 
 class MpcFollower(WaypointFollower):
+    # Read by the inherited __init__ and published as ~control_law, which is
+    # what tools/go_mpc.sh checks before it will start a drive. Without it
+    # the two profiles are indistinguishable from outside the process: same
+    # node name, same topics, same service, and a status line that reads
+    # HOLD:PAUSED for both until the chair is already moving.
+    CONTROL_LAW = "mpc"
+
     def __init__(self):
         WaypointFollower.__init__(self)
         self.solver = mpc_core.MpcSolver(mpc_core.Reference(self.band))

@@ -311,7 +311,8 @@ echo "  build OK"
 # the chair, so leaving a stale copy behind is the same failure one step
 # further on: a run brought up on last week's settings by a script that looks
 # right.
-for script in start_wheelchair_localization.sh trial_0727.sh go.sh stop.sh; do
+for script in start_wheelchair_localization.sh trial_0727.sh go.sh go_mpc.sh \
+              stop.sh; do
   BRINGUP_SRC="$REPO/tools/$script"
   BRINGUP_DST="$HOME/$script"
   [ -f "$BRINGUP_SRC" ] || {
