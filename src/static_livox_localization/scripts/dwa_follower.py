@@ -36,8 +36,13 @@ silent both times.
 
 STATE
 -----
-Simulated, never driven. PROFILE defaults to pursuit, which drove this route
-twice on 2026-07-31 with a person in the chair.
+Driven once, on 2026-08-08, and it failed: two runs covered 44 m and 48 m of
+the 380 m route in 1009 s and 726 s. The planner's score had no heading term,
+which made it a bang-bang regulator, and standing still was a candidate that
+beat every moving arc whenever the chair sat on the line - 180 s stuck in one
+run, 77 s in the other. Both are fixed in dwa_core, whose docstrings carry the
+numbers. Not re-driven since. PROFILE still defaults to pursuit, which drove
+this route twice on 2026-07-31 with a person in the chair.
 """
 
 import math
@@ -133,7 +138,8 @@ class DwaFollower(WaypointFollower):
             return
 
         target_v, target_w, status = self.planner.plan(
-            state, self.obstacle_points(state), speed_cap=float(v_ref[0]))
+            state, self.obstacle_points(state), speed_cap=float(v_ref[0]),
+            last_yaw_rate=self.last_yaw_rate)
         if status != "OK":
             if status != self.dwa_status:
                 rospy.logwarn("DWA %s at wp %d/%d", status,

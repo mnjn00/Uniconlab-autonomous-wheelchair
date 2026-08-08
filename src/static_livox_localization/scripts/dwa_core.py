@@ -70,6 +70,22 @@ W_PATH = 3.0
 W_PROGRESS = 1.0
 W_OBSTACLE = 2.0
 
+# Where the chair is POINTED, not only where it stands. Measured from the two
+# runs on 2026-08-08: without this term the score is a position-only cost, and
+# a position-only cost driving a saturating actuator is a bang-bang regulator.
+# It picked +-MAX_YAW_RATE for half of every commanding sample, reversed sign
+# every 1.8 s (a 1.6 m wavelength), and the two runs covered 44 m and 48 m of
+# a 380 m route. Replayed against the recorded poses, this term drops
+# saturation from 9 % to 2 % and from 28 % to 3 %. Anything from 0.5 up works;
+# 2.0 sits in the middle of that plateau.
+W_HEADING = 2.0
+
+# Reversing the steer is not free. Small on its own - the heading term does
+# the real work - but it is what stops the residual chatter between adjacent
+# yaw samples. Above about 2.0 the chair starts cutting corners: at 4.0 the
+# closed-loop replay lost a third of its progress and tripled its cross-track.
+W_STEER = 1.0
+
 # A candidate whose rollout passes closer than this to a tracked object is
 # discarded outright rather than scored - the same floor mpc_core keeps.
 OBSTACLE_FLOOR_M = 0.40
@@ -148,6 +164,10 @@ class DwaPlanner:
         seg = np.linalg.norm(np.diff(self.route, axis=0), axis=1)
         self.arc = np.concatenate([[0.0], np.cumsum(seg)])
         self.steps = max(int(round(self.sim_time_s / SIM_STEP_S)), 1)
+        tangent = np.gradient(self.route, axis=0)
+        tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True),
+                              1e-9)
+        self.heading = np.arctan2(tangent[:, 1], tangent[:, 0])
 
     def arc_at(self, point):
         return float(self.arc[int(self.tree.query(np.asarray(point))[1])])
@@ -165,20 +185,28 @@ class DwaPlanner:
         dy = np.cumsum(v * np.sin(yaw) * SIM_STEP_S, axis=1)
         return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
 
-    def plan(self, state, obstacles=(), speed_cap=None):
+    def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
         was rejected - which the operator needs: a corridor with no
         admissible arc is a different fault from one with an object in it.
+
+        Standing still is not among the candidates. It used to be, and it
+        beat every moving arc for 180 s in one 2026-08-08 run and 77 s in the
+        other: a stationary rollout is a single point, so on the line its
+        path cost is exactly zero, and W_PROGRESS could not outweigh W_PATH.
+        The chair was scoring a reward for not moving. A stop is a refusal
+        here, never a choice - it is what the caller does when this returns
+        a reason instead of a command.
         """
         cap = self.max_speed if speed_cap is None else min(self.max_speed,
                                                            float(speed_cap))
-        pairs = [(v, w) for v in speed_samples(cap) for w in yaw_samples()
+        pairs = [(v, w) for v in speed_samples(cap) if v > 0.0
                  # Turning on the spot is not something this chair does below
                  # its rotation floor, and it is the manoeuvre that put it at
                  # a wall on 2026-08-04. Excluded.
-                 if not (v == 0.0 and w != 0.0)]
+                 for w in yaw_samples()]
         if not pairs:
             return 0.0, 0.0, "NO_CANDIDATE"
         paths = self._rollouts(np.asarray(state, dtype=float), pairs)
@@ -199,23 +227,21 @@ class DwaPlanner:
         ok &= clear >= OBSTACLE_FLOOR_M
         if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
-        d, _ = self.tree.query(flat, workers=-1)
+        d, idx = self.tree.query(flat, workers=-1)
         path_cost = d.reshape(len(pairs), self.steps).mean(axis=1)
         here = self.arc_at(state[:2])
         ends = self.tree.query(paths[:, -1, :2])[1]
         progress = self.arc[ends] - here
         penalty = np.where(np.isfinite(clear), np.maximum(0.0, 1.0 - clear), 0.0)
-        cost = (W_PATH * path_cost - W_PROGRESS * progress
-                + W_OBSTACLE * penalty)
+        # How far off the corridor's own direction each arc leaves the chair,
+        # averaged over the rollout. The route indices come free from the
+        # path-distance query above.
+        ref = self.heading[idx].reshape(len(pairs), self.steps)
+        aim = np.abs(np.arctan2(np.sin(paths[:, :, 2] - ref),
+                                np.cos(paths[:, :, 2] - ref))).mean(axis=1)
+        steer = np.abs(np.asarray([p[1] for p in pairs]) - float(last_yaw_rate))
+        cost = (W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
+                + W_OBSTACLE * penalty + W_STEER * steer)
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
-        v, w = float(pairs[best][0]), float(pairs[best][1])
-        if v == 0.0:
-            # Standing still is always admissible - the stationary rollout
-            # cannot leave a corridor it is already inside - so it wins
-            # whenever every moving candidate has been rejected. Reporting
-            # that as OK would make a blocked chair and a driving one look
-            # identical on the status topic, which is the ambiguity the raw
-            # scan guard had. Say which one it is.
-            return 0.0, 0.0, "BLOCKED"
-        return v, w, "OK"
+        return float(pairs[best][0]), float(pairs[best][1]), "OK"
