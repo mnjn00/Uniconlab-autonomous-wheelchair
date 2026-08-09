@@ -8,6 +8,23 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
 NAV = ROOT / "src" / "wheelchair_navigation"
+REFERENCE_TEB = ROOT / "docs" / "reference" / "nuc_teb"
+
+
+def _normalized_lf_sha256(path):
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def test_nuc_teb_reference_snapshots_match_source_hashes():
+    assert _normalized_lf_sha256(REFERENCE_TEB / "move_base.yaml") == (
+        "dec3b50729fe9c139b6e7aaead24ce33ab39862a55538aefdc710acedbf0dc3c"
+    )
+    assert _normalized_lf_sha256(REFERENCE_TEB / "teb_local_planner.yaml") == (
+        "eec4ca2a275b53eb214ece71c74fc1557856c0286e10890aa419fbd383b6905a"
+    )
+    manifest = (REFERENCE_TEB / "SHA256SUMS").read_text()
+    assert "mprp3@10.242.33.199" in manifest
+    assert "2026-08-09" in manifest
 
 
 def _text(rel):
