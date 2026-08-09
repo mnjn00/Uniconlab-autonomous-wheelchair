@@ -4,8 +4,9 @@ import json
 import math
 from pathlib import Path
 import re
-import yaml
 import xml.etree.ElementTree as ET
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 NAV = ROOT / "src" / "wheelchair_navigation"

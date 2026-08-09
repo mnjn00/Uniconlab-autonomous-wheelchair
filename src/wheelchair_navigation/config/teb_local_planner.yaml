@@ -41,7 +41,7 @@ TebLocalPlannerROS:
   complete_global_plan: True
 
   # Obstacles
-  min_obstacle_dist: 0.6 #1.0  #0.25 # This value must also include our robot radius, since footprint_model is set to "point".
+  min_obstacle_dist: 0.6 #1.0  #0.25 # Clearance outside the active polygon boundary.
   include_costmap_obstacles: True
   costmap_obstacles_behind_robot_dist: 1.0
   obstacle_poses_affected: 30 # Not used
