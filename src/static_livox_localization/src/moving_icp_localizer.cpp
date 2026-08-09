@@ -604,6 +604,12 @@ class MovingIcpLocalizer {
         key_value("fitness", std::to_string(registration.fitness)));
     status.values.push_back(
         key_value("inlier_ratio", std::to_string(registration.inlier_ratio)));
+    // Whether the optimiser met its epsilon or simply used its 64 iterations.
+    // Reported, not enforced: on 2026-08-09 the iteration-limited case was
+    // being discarded before its fitness was ever computed, which published
+    // 1e9 / 0.0 for alignments the operator could see were correct in RViz.
+    status.values.push_back(key_value(
+        "epsilon_met", registration.epsilon_met ? "true" : "false"));
     status.values.push_back(key_value("registration_backend",
                                       registration.backend));
     status.values.push_back(key_value("registration_elapsed_ms",

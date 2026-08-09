@@ -61,7 +61,24 @@ HARD_W_LIMIT = 0.6
 HALF_WIDTH_M = 0.5
 SENSOR_HEIGHT_M = 0.725
 OBSTACLE_MIN_Z = 0.15
-OBSTACLE_MAX_Z = 1.9
+# Ceiling of the obstacle window, measured from the ground. 1.35 m is the
+# top of the seated occupant (measured 2026-08-09), and this is that plus a
+# 0.15 m margin.
+#
+# It was 1.9 m, which is above anything on this chair and therefore stopped
+# it for things it cannot reach. On 2026-08-09 the gate held the chair at
+# wp 905 on TWO returns at 1.88 m - the underside of an overhanging branch
+# mass whose other 42 returns, from 1.90 to 2.42 m, the same window already
+# ignored. Nothing at all was returned between 0.15 and 1.80 m: no wall, no
+# person, nothing the chair could hit. A branch 0.53 m above the rider's
+# head is not an obstacle, and a ceiling above the vehicle cannot tell the
+# difference.
+#
+# Lowering this loses only objects that exist ABOVE 1.5 m with nothing below
+# them. A standing adult is caught by their torso at 0.8-1.6 m; a pole, a
+# bollard and a parked car all return well below. What is given up is
+# canopy, signage and awnings - which is the point.
+OBSTACLE_MAX_Z = 1.5
 ACCUMULATION_WINDOW_S = 1.0
 PIPELINE_BUDGET_S = 0.2
 MIN_BRAKE_DECEL_MPS2 = 0.5

@@ -70,10 +70,21 @@ BLOCKED = 0.0
 class Threat(object):
     """The nearest thing in the corridor, and whether it is going to move."""
 
-    def __init__(self, distance_m, motion, label=""):
+    def __init__(self, distance_m, motion, label="", lateral_m=None):
         self.distance_m = distance_m
         self.motion = motion
         self.label = label
+        # Signed offset from the corridor centreline, chair frame, left
+        # positive. None when the producer did not give a parseable box.
+        #
+        # Kept because dropping it makes every threat frontal. A planner
+        # given only a distance can do nothing but place the object dead
+        # ahead, so a wall 0.70 m away on the inside of a bend became a
+        # phantom in the middle of the corridor and killed every candidate
+        # rollout - 211 consecutive DWA_OBSTACLE holds on 2026-08-09 at a
+        # station 0.3 m wide, where passing it on the far side was the whole
+        # manoeuvre available.
+        self.lateral_m = lateral_m
 
     @property
     def parked(self):
@@ -252,7 +263,10 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
         if not blocks:
             continue
         if nearest is None or distance < nearest.distance_m:
-            nearest = Threat(distance, motion, str(item.get("class", "")))
+            box = object_box(item)
+            lateral = None if box is None else float(box[1]) - lateral_shift_m
+            nearest = Threat(distance, motion, str(item.get("class", "")),
+                             lateral_m=lateral)
     return nearest
 
 

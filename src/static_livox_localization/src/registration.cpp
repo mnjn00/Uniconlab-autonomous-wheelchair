@@ -86,7 +86,7 @@ RegistrationResult register_cloud(
       gicp.setTransformationEpsilon(1e-6);
       gicp.setEuclideanFitnessEpsilon(1e-6);
       gicp.align(*aligned, seed.matrix().cast<float>());
-      if (!gicp.hasConverged()) return finish();
+      result.epsilon_met = gicp.hasConverged();
       final_transformation = gicp.getFinalTransformation();
       result.fitness = gicp.getFitnessScore(config.max_correspondence);
     }
@@ -104,7 +104,7 @@ RegistrationResult register_cloud(
       gicp.setTransformationEpsilon(1e-6);
       gicp.setEuclideanFitnessEpsilon(1e-6);
       gicp.align(*aligned, seed.matrix().cast<float>());
-      if (!gicp.hasConverged()) return finish();
+      result.epsilon_met = gicp.hasConverged();
       final_transformation = gicp.getFinalTransformation();
       result.fitness = gicp.getFitnessScore(config.max_correspondence);
     }

@@ -194,7 +194,7 @@ def follower_at(policies, drive_mode=65, wheel_age_s=0.0):
     follower.motion = MotionEstimate(True, 100.0, 100.0, 0.4, 0.0, "")
     follower.degraded_since = None
     follower.tracking_state = "TRACKING"
-    follower.tracking_reason = ""
+    follower.tracking_reason = "OK"
     follower.reacquire_origin = None
     follower.wheel_status_stamp = Stamp(100.0 - wheel_age_s)
     follower.drive_mode = drive_mode
@@ -285,7 +285,8 @@ def old_chain(follower, now, F):
             age = None if follower.degraded_since is None else \
                 (now - follower.degraded_since).to_sec()
             reason = F.localization_hold_reason(
-                follower.tracking_state, age, F.DEGRADED_STOP_S)
+                follower.tracking_state, age, F.DEGRADED_STOP_S,
+                reason=follower.tracking_reason, reacquire_m=None)
     if reason is None and \
             (now - follower.wheel_status_stamp).to_sec() > F.BASE_STALE_S:
         reason = "BASE_STALE"
@@ -338,7 +339,7 @@ def test_with_the_policies_on_every_reachable_state_decides_as_it_used_to():
         follower.cloud_stamp = Stamp(now - v["cloud_age"])
         follower.motion = v["motion"]
         follower.tracking_state = v["track"]
-        follower.tracking_reason = ""
+        follower.tracking_reason = "OK"
         follower.reacquire_origin = None
         follower.degraded_since = None if v["degraded_age"] is None else \
             Stamp(now - v["degraded_age"])

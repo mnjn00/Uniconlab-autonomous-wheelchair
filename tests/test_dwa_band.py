@@ -18,6 +18,7 @@ SCRIPTS = ROOT / "src" / "static_livox_localization" / "scripts"
 
 sys.path.insert(0, str(SCRIPTS))
 try:
+    import cluster_guard
     import dwa_core
     from safety_band import SafetyBand
 finally:
@@ -245,3 +246,104 @@ def test_the_bringup_offers_the_profile_and_defaults_elsewhere():
     assert "dwa)     FOLLOWER_NODE=dwa_follower.py" in text
     assert 'PROFILE="${PROFILE:-pursuit}"' in text
     assert "PROFILE must be pursuit, mpc or dwa" in text
+
+
+# ------------------------------------------- keeping the middle of the band
+
+def test_the_margins_match_the_containment_they_are_taken_from(scene):
+    """One copy of the band rules. The planner's centring term reads the
+    same station lookup and normals that decide containment."""
+    band, route, planner = scene
+    pts = np.array([route[k] for k in range(50, 1500, 137)])
+    lateral, lo, hi = band.margins_many(pts)
+    inside = band.contains_many(pts)
+    assert np.array_equal(inside, (lateral >= lo - 1e-6) & (lateral <= hi + 1e-6))
+    for point, lat, low, high in zip(pts, lateral, lo, hi):
+        s_lat, s_lo, s_hi = band.lateral_limits(point)
+        assert abs(s_lat - lat) < 1e-9
+        assert abs(s_lo - low) < 1e-9 and abs(s_hi - high) < 1e-9
+
+
+def test_margins_of_nothing_is_nothing(scene):
+    band, _route, _planner = scene
+    lateral, lo, hi = band.margins_many(np.zeros((0, 2)))
+    assert len(lateral) == len(lo) == len(hi) == 0
+    assert len(band.contains_many(np.zeros((0, 2)))) == 0
+
+
+def edge_fraction(band, path):
+    lateral, lo, hi = band.margins_many(path[:, :2])
+    return np.abs(lateral - (hi + lo) / 2.0) / np.maximum((hi - lo) / 2.0, 1e-6)
+
+
+def test_the_middle_of_the_corridor_is_cheaper_than_its_edge(scene):
+    """Containment is a hard reject, so without a price on the margin the
+    middle and a hair inside the edge score identically. On 2026-08-09 the
+    chair settled at -0.12 m and a bend put it 6 mm outside 0.58 m of room."""
+    band, route, planner = scene
+    for k in (200, 700, 1400):
+        state = on_route(route, k)
+        v, w, status = planner.plan(state)
+        assert status == "OK"
+        chosen = edge_fraction(
+            band, dwa_core.rollout(state, v, w, planner.sim_time_s))
+        assert chosen.max() < 0.6
+
+
+def test_a_chair_riding_the_edge_is_steered_back_towards_the_middle(scene):
+    """Not merely kept legal - actively recentred, which is the whole point
+    of pricing the margin rather than only rejecting the excursion."""
+    band, route, planner = scene
+    k = 700
+    lateral, lo, hi = band.margins_many(route[k:k + 1])
+    normal = np.array([-(route[k + 3] - route[k])[1],
+                       (route[k + 3] - route[k])[0]])
+    normal = normal / np.linalg.norm(normal)
+    state = on_route(route, k)
+    state[:2] = route[k] + normal * (hi[0] * 0.8)      # 80 % of the way out
+    before = edge_fraction(band, state[None, :2])[0]
+    v, w, status = planner.plan(state)
+    assert status == "OK" and v > 0.0
+    after = edge_fraction(
+        band, dwa_core.rollout(state, v, w, planner.sim_time_s))
+    assert after[-1] < before
+
+
+def test_the_centring_term_is_priced_superlinearly():
+    """Linear would bias the whole drive without ever making the last few
+    centimetres unaffordable, which is the excursion that matters."""
+    src = (SCRIPTS / "dwa_core.py").read_text(encoding="utf-8")
+    assert "W_CENTRE" in src
+    assert "np.square" in src
+
+
+# ------------------------------------------ where the threat actually is
+
+def test_a_threat_beside_the_chair_is_not_placed_in_front_of_it():
+    """cluster_guard hands the follower a distance; without the lateral
+    offset the only thing it can do is put the object on the heading. On
+    2026-08-09 that turned a wall 0.70 m away at the side into a phantom in
+    the corridor and held the profile for 211 consecutive cycles."""
+    threat = cluster_guard.Threat(0.7, cluster_guard.MOVING, "wall",
+                                  lateral_m=0.6)
+    assert threat.lateral_m == 0.6
+
+    state = np.array([10.0, 5.0, 0.0, 0.0, 0.0])       # facing +x
+    heading = np.array([math.cos(state[2]), math.sin(state[2])])
+    left = np.array([-heading[1], heading[0]])
+    placed = state[:2] + heading * threat.distance_m + left * threat.lateral_m
+    assert placed[0] == pytest.approx(10.7)
+    assert placed[1] == pytest.approx(5.6)
+    # and it no longer sits on the chair's own line of travel
+    assert abs(placed[1] - state[1]) > dwa_core.OBSTACLE_FLOOR_M
+
+
+def test_an_unparseable_threat_keeps_the_conservative_frontal_placement():
+    threat = cluster_guard.Threat(0.7, cluster_guard.MOVING, "?")
+    assert threat.lateral_m is None
+
+
+def test_the_follower_uses_the_lateral_offset_it_is_given():
+    src = (SCRIPTS / "dwa_follower.py").read_text(encoding="utf-8")
+    assert "threat.lateral_m" in src
+    assert "left * lateral" in src
