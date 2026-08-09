@@ -18,6 +18,7 @@ SCRIPTS = ROOT / "src" / "static_livox_localization" / "scripts"
 
 sys.path.insert(0, str(SCRIPTS))
 try:
+    import cluster_guard
     import dwa_core
     from safety_band import SafetyBand
 finally:
@@ -314,3 +315,35 @@ def test_the_centring_term_is_priced_superlinearly():
     src = (SCRIPTS / "dwa_core.py").read_text(encoding="utf-8")
     assert "W_CENTRE" in src
     assert "np.square" in src
+
+
+# ------------------------------------------ where the threat actually is
+
+def test_a_threat_beside_the_chair_is_not_placed_in_front_of_it():
+    """cluster_guard hands the follower a distance; without the lateral
+    offset the only thing it can do is put the object on the heading. On
+    2026-08-09 that turned a wall 0.70 m away at the side into a phantom in
+    the corridor and held the profile for 211 consecutive cycles."""
+    threat = cluster_guard.Threat(0.7, cluster_guard.MOVING, "wall",
+                                  lateral_m=0.6)
+    assert threat.lateral_m == 0.6
+
+    state = np.array([10.0, 5.0, 0.0, 0.0, 0.0])       # facing +x
+    heading = np.array([math.cos(state[2]), math.sin(state[2])])
+    left = np.array([-heading[1], heading[0]])
+    placed = state[:2] + heading * threat.distance_m + left * threat.lateral_m
+    assert placed[0] == pytest.approx(10.7)
+    assert placed[1] == pytest.approx(5.6)
+    # and it no longer sits on the chair's own line of travel
+    assert abs(placed[1] - state[1]) > dwa_core.OBSTACLE_FLOOR_M
+
+
+def test_an_unparseable_threat_keeps_the_conservative_frontal_placement():
+    threat = cluster_guard.Threat(0.7, cluster_guard.MOVING, "?")
+    assert threat.lateral_m is None
+
+
+def test_the_follower_uses_the_lateral_offset_it_is_given():
+    src = (SCRIPTS / "dwa_follower.py").read_text(encoding="utf-8")
+    assert "threat.lateral_m" in src
+    assert "left * lateral" in src
