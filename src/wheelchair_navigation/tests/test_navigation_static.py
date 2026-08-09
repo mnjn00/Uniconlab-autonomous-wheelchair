@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 import re
+import yaml
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -46,6 +47,31 @@ def _boolean(text, key):
 def _assert_finite_scalars(text, keys):
     for key in keys:
         assert math.isfinite(_scalar(text, key)), f"{key} must be finite"
+
+
+def test_active_teb_preserves_nuc_tuning_except_github_footprint():
+    source = yaml.safe_load((REFERENCE_TEB / "teb_local_planner.yaml").read_text())
+    active = yaml.safe_load(_text("config/teb_local_planner.yaml"))
+    source_teb = dict(source["TebLocalPlannerROS"])
+    active_teb = dict(active["TebLocalPlannerROS"])
+    source_footprint = source_teb.pop("footprint_model")
+    active_footprint = active_teb.pop("footprint_model")
+
+    assert active_teb == source_teb
+    assert source_footprint == {
+        "type": "line",
+        "line_start": [0.45, 0.0],
+        "line_end": [-0.45, 0.0],
+    }
+
+    costmap = _text("config/costmap_common.yaml")
+    footprint_match = re.search(r"^footprint:\s*(.+)$", costmap, re.MULTILINE)
+    assert footprint_match
+    github_footprint = ast.literal_eval(footprint_match.group(1))
+    assert active_footprint == {
+        "type": "polygon",
+        "vertices": github_footprint,
+    }
 
 
 def test_navigation_launch_routes_move_base_to_raw_nav_topic_only():
