@@ -73,10 +73,35 @@ def test_turning_on_the_spot_is_never_a_candidate(scene):
     """Rotating in place below the rotation floor is the manoeuvre that put
     the chair at a wall three times on 2026-08-04."""
     band, route, planner = scene
-    state = on_route(route, 40)
-    pairs = [(v, w) for v in dwa_core.speed_samples()
-             for w in dwa_core.yaw_samples() if not (v == 0.0 and w != 0.0)]
-    assert all(w == 0.0 for v, w in pairs if v == 0.0)
+    for k in (40, 200, 900):
+        v, w, status = planner.plan(on_route(route, k))
+        assert status != "OK" or v >= dwa_core.TURN_FLOOR_SPEED
+
+
+def test_standing_still_is_a_refusal_and_never_a_candidate(scene):
+    """A stationary rollout is one point, so on the line its path cost is
+    exactly zero and it outscores every arc that actually goes somewhere.
+    On 2026-08-08 that held the chair for 180 s in one run and 77 s in the
+    other while it reported a healthy fix and an admissible corridor."""
+    band, route, planner = scene
+    for k in (40, 200, 900, 1500):
+        v, w, status = planner.plan(on_route(route, k))
+        assert status == "OK"
+        assert v > 0.0
+
+
+def test_a_chair_pointed_well_off_the_corridor_still_turns_back(scene):
+    """The 2026-08-08 deadlocks were at 51 and 76 degrees of heading error.
+    Both runs sat there until a person took the joystick."""
+    band, route, planner = scene
+    for degrees in (30, 51, 76):
+        state = on_route(route, 200)
+        state[2] += math.radians(degrees)
+        v, w, status = planner.plan(state)
+        if status == "OK":
+            assert v > 0.0
+            # turning back towards the corridor, not away from it
+            assert w < 0.0
 
 
 # ----------------------------------------------------------- the band veto
@@ -115,7 +140,7 @@ def test_a_chair_pointed_out_of_the_corridor_stops(scene):
         assert dwa_core.stays_in_band(band, path)
     else:
         assert (v, w) == (0.0, 0.0)
-        assert status in ("OFF_BAND", "OBSTACLE", "BLOCKED", "NO_CANDIDATE")
+        assert status in ("OFF_BAND", "OBSTACLE", "NO_CANDIDATE")
 
 
 # -------------------------------------------------------------- obstacles
@@ -158,9 +183,30 @@ def test_a_refusal_says_which_kind_it_was(scene):
     wall = [state[:2] + heading * d for d in np.arange(0.4, 2.0, 0.1)]
     v, w, status = planner.plan(state, obstacles=wall)
     assert (v, w) == (0.0, 0.0)
-    # Standing still clears a wall 0.4 m away, so it survives as a candidate
-    # and wins - but a stopped chair must not report OK.
-    assert status == "BLOCKED"
+    assert status == "OBSTACLE"
+
+
+# ------------------------------------------------- what the score looks at
+
+def test_the_score_reads_heading_and_not_only_position(scene):
+    """A position-only cost driving a saturating actuator is a bang-bang
+    regulator. On 2026-08-08 it commanded +-MAX_YAW_RATE for half of every
+    sample and reversed sign every 1.8 s."""
+    band, route, planner = scene
+    saturated = 0
+    for k in range(100, 1900, 60):
+        v, w, status = planner.plan(on_route(route, k))
+        saturated += status == "OK" and abs(abs(w) - dwa_core.MAX_YAW_RATE) < 1e-9
+    assert saturated == 0
+
+
+def test_reversing_the_steer_costs_something(scene):
+    """Chatter between adjacent yaw samples was free before this term."""
+    band, route, planner = scene
+    state = on_route(route, 200)
+    held = planner.plan(state, last_yaw_rate=0.0)[1]
+    against = planner.plan(state, last_yaw_rate=-dwa_core.MAX_YAW_RATE)[1]
+    assert against <= held
 
 
 # --------------------------------------------------- node wiring, as source
