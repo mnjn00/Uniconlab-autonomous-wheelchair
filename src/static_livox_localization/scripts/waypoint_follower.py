@@ -73,9 +73,11 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S, GO_ROUND,
                            nearest_threat, parse_summary)
 from cluster_tracking import MOVING
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
+from localization_policy import SUPPRESSED_WHILE_PARKED
 from localization_policy import localization_hold_reason
 from scan_accumulator import CloudAccumulator
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
+                           clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
 from safety_band import SafetyBand
 import tf.transformations as tft
@@ -174,6 +176,10 @@ class WaypointFollower:
         self.pose_pitch = 0.0
         self.pose_stamp = rospy.Time(0)
         self.tracking_state = ""
+        self.tracking_reason = ""
+        # Where the chair stood when a parked-and-blind hold began, so the
+        # creep that earns the next registration stays bounded.
+        self.reacquire_origin = None
         self.degraded_since = None
         self.drive_mode = None
         self.wheel_status_stamp = rospy.Time(0)
@@ -331,7 +337,15 @@ class WaypointFollower:
         pose[:3, 3] = (p.x, p.y, p.z)
         pose = pose @ self.pose_correction
         _, pitch, yaw = tft.euler_from_matrix(pose)
-        self.pose_xy = np.array([pose[0, 3], pose[1, 3]])
+        elapsed = None if self.pose_stamp is None else \
+            (message.header.stamp - self.pose_stamp).to_sec()
+        self.pose_xy, withheld = clamp_pose_step(
+            self.pose_xy, (pose[0, 3], pose[1, 3]), elapsed)
+        if withheld > 0.0:
+            rospy.logwarn_throttle(
+                2.0, "pose step clamped: %.2f m withheld over %.2f s - the "
+                "chair cannot move that fast, so this is the fix correcting",
+                withheld, elapsed or 0.0)
         self.pose_yaw = yaw
         self.pose_pitch = pitch
         self.pose_stamp = message.header.stamp
@@ -357,6 +371,28 @@ class WaypointFollower:
         for status in message.status:
             if status.name == "fast_lio_icp":
                 self.tracking_state = status.message
+                self.tracking_reason = ""
+                for value in status.values:
+                    if value.key == "reason":
+                        self.tracking_reason = value.value
+                if self.tracking_state == "TRACKING":
+                    self.reacquire_origin = None
+
+    def reacquire_distance(self):
+        """How far the chair has crept since a parked-and-blind hold began.
+
+        The origin is taken the first time it is asked for, which is the
+        cycle the hold would otherwise have become permanent - not when
+        DEGRADED started, since the chair is still driving through the grace
+        period and would spend the whole budget before it ever stopped.
+        """
+        if self.pose_xy is None:
+            return None
+        here = (float(self.pose_xy[0]), float(self.pose_xy[1]))
+        if self.reacquire_origin is None:
+            self.reacquire_origin = here
+        return math.hypot(here[0] - self.reacquire_origin[0],
+                          here[1] - self.reacquire_origin[1])
 
     def on_clusters(self, message):
         try:
@@ -712,7 +748,11 @@ class WaypointFollower:
         degraded_age_s = None if self.degraded_since is None else \
             (now - self.degraded_since).to_sec()
         localization_reason = localization_hold_reason(
-            self.tracking_state, degraded_age_s, DEGRADED_STOP_S)
+            self.tracking_state, degraded_age_s, DEGRADED_STOP_S,
+            reason=self.tracking_reason,
+            reacquire_m=(self.reacquire_distance()
+                         if self.tracking_reason == SUPPRESSED_WHILE_PARKED
+                         else None))
         if localization_reason:
             yield localization_reason, POLICY
         if (now - self.wheel_status_stamp).to_sec() > BASE_STALE_S:
