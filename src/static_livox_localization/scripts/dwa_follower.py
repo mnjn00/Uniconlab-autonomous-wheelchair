@@ -58,10 +58,12 @@ from std_msgs.msg import String
 
 import dwa_core
 import mpc_speed
+from cluster_guard import corridor_obstacle_points
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command
-from waypoint_follower import (WaypointFollower, CONTROL_HZ, MAX_ACCEL,
-                               MAX_DECEL, MAX_YAW_RATE, PLAN_AHEAD_M)
+from waypoint_follower import (WaypointFollower, CONTROL_HZ,
+                               CORRIDOR_HALF_WIDTH, MAX_ACCEL, MAX_DECEL,
+                               MAX_YAW_RATE, PLAN_AHEAD_M)
 
 # The solver returns a velocity target, not an acceleration, so the ramp is
 # fed the acceleration that would close the gap in one period - clamped to
@@ -99,19 +101,42 @@ class DwaFollower(WaypointFollower):
         self.odom_w = float(message.twist.twist.angular.z)
 
     def obstacle_points(self, state):
-        """The tracked threat ahead, as a point the rollouts must clear.
+        """The corridor obstacles ahead, where the producer measured them.
 
-        Only the nearest is passed. The corridor is about a metre wide, so a
-        second object behind the first constrains no candidate the first
-        does not already kill.
+        Rolled out against their own returns rather than against one point
+        on the chair's heading axis. Collapsing an object to its distance
+        and then re-inflating it dead ahead throws away the only thing a
+        rollout critic can act on - which side the thing is on - and on
+        2026-08-09 that turned a passable obstruction into a permanent hold
+        at wp 905. A parked van whose nearest corridor return sat 0.5 m to
+        the RIGHT was handed to the planner as a point 0.55 m straight
+        ahead. The minimum turning radius here is TURN_FLOOR_SPEED /
+        MAX_YAW_RATE = 0.6 m, and no arc off a 0.6 m radius clears 0.40 m of
+        a point 0.55 m ahead - the best any candidate achieves is 0.20 m -
+        so every candidate was rejected. Nothing recovers from that: a stop
+        is not a candidate, there is no reverse, and the van was static, so
+        the threat that rejected everything never changed. Meanwhile the
+        chair had 0.55 m of empty band to its left and was asking for full
+        left yaw. The distance was right; only the bearing was invented.
+
+        Which objects count is corridor_obstacle_points' business and is
+        unchanged - what the corridor test already calls blocking, nothing
+        more, so this cannot start stopping for the walls it drives past.
+        Their full extent is passed, not only the slices inside the
+        corridor: going round something means clearing the part of it that
+        sticks out where the chair is headed.
         """
         if not self.clusters_enabled:
             return ()
-        threat = self.corridor_threat(0.0)
-        if threat is None or threat.distance_m > PLAN_AHEAD_M:
+        points = corridor_obstacle_points(
+            self.cluster_summary, CORRIDOR_HALF_WIDTH,
+            max_distance_m=PLAN_AHEAD_M)
+        if not points:
             return ()
-        heading = np.array([math.cos(state[2]), math.sin(state[2])])
-        return (state[:2] + heading * threat.distance_m,)
+        yaw = float(state[2])
+        rotation = np.array([[math.cos(yaw), -math.sin(yaw)],
+                             [math.sin(yaw), math.cos(yaw)]])
+        return np.asarray(points, dtype=float) @ rotation.T + state[:2]
 
     def step(self):
         now = rospy.Time.now()

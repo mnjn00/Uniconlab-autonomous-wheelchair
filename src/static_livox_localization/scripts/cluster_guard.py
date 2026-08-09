@@ -236,6 +236,95 @@ def corridor_reach(item, lateral_shift_m, half_width_m):
     return True, distance, motion
 
 
+def profile_points(profile):
+    """(x, y) of each lateral slice's nearest return, or None if unreadable.
+
+    The slice at `index` spans [y0 + index * bin_m, y0 + (index + 1) * bin_m)
+    - the same arithmetic profile_reach selects with - so its return is
+    placed at the slice centre. Half a bin of lateral uncertainty is what
+    the producer's own quantisation already carries.
+    """
+    if not isinstance(profile, dict):
+        return None
+    try:
+        bin_m = float(profile["bin_m"])
+        y0 = float(profile["y0"])
+        slices = profile["min_x"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not isinstance(slices, list) or not slices or \
+            not math.isfinite(bin_m) or bin_m <= 0.0 or not math.isfinite(y0):
+        return None
+    points = []
+    for index, value in enumerate(slices):
+        if value is None:
+            continue
+        try:
+            x = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(x):
+            return None
+        points.append((max(0.0, x), y0 + (index + 0.5) * bin_m))
+    return points or None
+
+
+def object_points(item):
+    """Where one object is, as (x, y) in the chair's frame.
+
+    The same measurement corridor_reach already trusts for distance, kept
+    two-dimensional instead of collapsed to one number. A planner choosing
+    between arcs has to know which SIDE the thing is on, and a scalar
+    distance cannot say - dwa_follower.obstacle_points carries what that
+    cost on 2026-08-09.
+
+    Falls back to the near face of the box, sampled across its width rather
+    than at the single corner object_reach measures, where the producer
+    publishes no profile. Anything unreadable returns the chair's own
+    position, which rejects every arc - the same fail-closed answer
+    corridor_reach gives by reporting BLOCKED.
+    """
+    here = [(0.0, 0.0)]
+    profile = item.get("profile")
+    if profile is not None:
+        return profile_points(profile) or here
+    box = object_box(item)
+    if box is None:
+        return here
+    x, y, half_x, half_y = box
+    near = max(0.0, x - half_x)
+    return [(near, y - half_y), (near, y), (near, y + half_y)]
+
+
+def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
+                             max_distance_m=None):
+    """Every corridor obstacle's own returns, in the chair's frame.
+
+    WHICH objects count is unchanged - exactly what corridor_reach calls
+    blocking - so a wall alongside that the guard ignores today is still
+    ignored here, and a planner reading this cannot be stopped by something
+    the corridor test never minded. What changes is that each of them
+    arrives as geometry instead of as a distance.
+
+    An unusable summary reports one point at the chair itself. That rejects
+    every rollout, which is what the follower already did with a threat
+    reported at zero distance, and it keeps a crashed producer from reading
+    as clear road here as everywhere else.
+    """
+    if summary is None or not summary.usable:
+        return [(0.0, 0.0)]
+    points = []
+    for item in summary.objects:
+        blocks, distance, _motion = corridor_reach(
+            item, lateral_shift_m, half_width_m)
+        if not blocks:
+            continue
+        if max_distance_m is not None and distance > max_distance_m:
+            continue
+        points.extend(object_points(item))
+    return points
+
+
 def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
     """The nearest object overlapping the corridor, or None.
 

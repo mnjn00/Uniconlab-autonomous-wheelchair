@@ -9,7 +9,12 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).parents[1] / "scripts"
 
 
-def load_follower_module():
+def load_script_module(script, alias):
+    """Import one scripts/ module with the ROS packages stubbed out.
+
+    Parameterised because the DWA profile needs the same stubs and
+    a second copy of them is a second thing to keep in step.
+    """
     dummy = type("Dummy", (), {})
     rospy = types.ModuleType("rospy")
     rospy.loginfo = lambda *args, **kwargs: None
@@ -52,7 +57,7 @@ def load_follower_module():
     sys.path.insert(0, str(SCRIPT_DIR))
     try:
         spec = importlib.util.spec_from_file_location(
-            "waypoint_follower_geometry_test", SCRIPT_DIR / "waypoint_follower.py")
+            alias, SCRIPT_DIR / ("%s.py" % script))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
     finally:
@@ -63,6 +68,11 @@ def load_follower_module():
             else:
                 sys.modules[name] = prior
     return module
+
+
+def load_follower_module():
+    return load_script_module("waypoint_follower",
+                              "waypoint_follower_geometry_test")
 
 
 class DistanceBand:
