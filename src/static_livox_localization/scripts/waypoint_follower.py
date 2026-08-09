@@ -77,6 +77,7 @@ from localization_policy import SUPPRESSED_WHILE_PARKED
 from localization_policy import localization_hold_reason
 from scan_accumulator import CloudAccumulator
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
+                           clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
 from safety_band import SafetyBand
 import tf.transformations as tft
@@ -336,7 +337,15 @@ class WaypointFollower:
         pose[:3, 3] = (p.x, p.y, p.z)
         pose = pose @ self.pose_correction
         _, pitch, yaw = tft.euler_from_matrix(pose)
-        self.pose_xy = np.array([pose[0, 3], pose[1, 3]])
+        elapsed = None if self.pose_stamp is None else \
+            (message.header.stamp - self.pose_stamp).to_sec()
+        self.pose_xy, withheld = clamp_pose_step(
+            self.pose_xy, (pose[0, 3], pose[1, 3]), elapsed)
+        if withheld > 0.0:
+            rospy.logwarn_throttle(
+                2.0, "pose step clamped: %.2f m withheld over %.2f s - the "
+                "chair cannot move that fast, so this is the fix correcting",
+                withheld, elapsed or 0.0)
         self.pose_yaw = yaw
         self.pose_pitch = pitch
         self.pose_stamp = message.header.stamp

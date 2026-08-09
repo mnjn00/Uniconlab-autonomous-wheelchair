@@ -94,7 +94,22 @@ W_STEER = 1.0
 # free and the last few centimetres nearly unaffordable, or a term that is
 # cheap at the edge just biases the whole drive without ever stopping the
 # excursion that matters.
-W_CENTRE = 4.0
+#
+# Held at 2.0 rather than the 4.0 first fitted. A term that pulls hard
+# towards the middle also pulls hard towards a middle that moved for the
+# wrong reason: on 2026-08-09 a 0.5 m swing in the map correction put the
+# chair at the edge as far as the planner could tell, and the recovery it
+# demanded was a real steering excursion on a chair that had not moved.
+# clamp_pose_step now bounds how fast that input can move; this bounds what
+# the planner does with what gets through.
+#
+# Not lower. Measured from 80 % of the way to the edge at three stations,
+# 1.0 commands +0.00 and the rollout ends FURTHER out - it prices the
+# margin without ever paying to fix it. 2.0 asks -0.20 and closes 0.80 to
+# 0.47; 4.0 asks -0.40. The closed-loop figures that first suggested 1.0
+# were measured on a chair that never leaves the middle, where the term has
+# nothing to do, and they said nothing about the case it exists for.
+W_CENTRE = 2.0
 
 # A candidate whose rollout passes closer than this to a tracked object is
 # discarded outright rather than scored - the same floor mpc_core keeps.

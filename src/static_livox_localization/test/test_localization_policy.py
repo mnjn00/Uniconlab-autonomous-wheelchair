@@ -77,3 +77,46 @@ def test_the_grace_still_comes_first():
     episodes cleared there on their own."""
     assert POLICY.localization_hold_reason(
         "DEGRADED", 1.0, 3.0, reason=SUPPRESSED, reacquire_m=9.0) is None
+
+
+# --------------------------------------- a pose that moved faster than the chair
+
+import importlib.util as _ilu
+from pathlib import Path as _P
+_MS = _P(__file__).parents[1] / "scripts" / "motion_safety.py"
+_S = _ilu.spec_from_file_location("motion_safety", _MS)
+MOTION = _ilu.module_from_spec(_S)
+_S.loader.exec_module(MOTION)
+
+
+def test_a_believable_step_is_passed_through_untouched():
+    xy, withheld = MOTION.clamp_pose_step((0.0, 0.0), (0.05, 0.0), 0.1)
+    assert withheld == 0.0
+    assert tuple(xy) == (0.05, 0.0)
+
+
+def test_a_step_the_chair_could_not_have_made_is_clamped_not_dropped():
+    """On 2026-08-09 the map correction swung 0.52 m in one sample - an
+    apparent 2.64 m/s on a chair limited to 0.6. Clamped rather than
+    rejected, so a genuine re-seed still converges within a few cycles."""
+    xy, withheld = MOTION.clamp_pose_step((0.0, 0.0), (0.52, 0.0), 0.1)
+    assert withheld > 0.0
+    assert 0.0 < xy[0] < 0.52
+    assert abs(xy[0] - MOTION.POSE_STEP_LIMIT_MPS * 0.1) < 1e-9
+
+
+def test_the_clamp_keeps_the_direction_it_was_given():
+    xy, _ = MOTION.clamp_pose_step((1.0, 1.0), (1.0, 5.0), 0.1)
+    assert xy[0] == 1.0 and 1.0 < xy[1] < 5.0
+
+
+def test_the_first_pose_and_a_zero_interval_are_believed():
+    xy, withheld = MOTION.clamp_pose_step(None, (9.0, 9.0), 0.1)
+    assert withheld == 0.0 and tuple(xy) == (9.0, 9.0)
+    xy, withheld = MOTION.clamp_pose_step((0.0, 0.0), (9.0, 9.0), 0.0)
+    assert withheld == 0.0 and tuple(xy) == (9.0, 9.0)
+
+
+def test_jitter_below_the_floor_is_not_argued_with():
+    xy, withheld = MOTION.clamp_pose_step((0.0, 0.0), (0.04, 0.0), 0.001)
+    assert withheld == 0.0

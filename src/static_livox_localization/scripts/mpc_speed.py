@@ -102,8 +102,28 @@ TURN_FLOOR_SPEED = 0.30
 # is infeasible, 0.4 m/s solves. The ramp below puts the chair at the floor
 # there, with the numbers chosen so the whole v4 route completes at 2 cm
 # jitter across seeds.
-CORRIDOR_TIGHT_M = 0.25
-CORRIDOR_FULL_M = 0.60
+#
+# Recalibrated for the v5 band on 2026-08-09. Those numbers came from v4 and
+# on v5 they never bind: the corridor there runs 0.52 to 1.44 m total, all
+# of it above the old 0.60 m full-speed point, so the ramp sat at full ratio
+# everywhere and returned 0.52-0.60 m/s through a pinch leaving the chair's
+# CENTRE 0.26 m either side. It even rose as the corridor closed, because
+# the 15 m lookahead reads the widening beyond a pinch the chair is still
+# inside.
+#
+# Width here is the total, so these are twice the room the chair's centre
+# gets: the floor from 0.275 m per side, full speed from 0.325 m. That looks
+# a hair's breadth apart and is: the v5 corridor is either roomy or it is
+# not, and the lookahead does the smoothing. Chosen against the band's own
+# distribution rather than by feel - 60 % of stations still reach full speed
+# and the pinch drops to 0.33 m/s. Widening the ramp to 0.70 m costs 7
+# points of that 60 % for 0.01 m/s in the pinch, which is the wrong trade:
+# a policy that slows everywhere is just a slower chair, and
+# test_corridor_shaping_leaves_open_road_alone exists to say so.
+#
+# v4's 0.13 m still lands on the floor, which is what that measurement asked.
+CORRIDOR_TIGHT_M = 0.55
+CORRIDOR_FULL_M = 0.65
 # Deliberately far longer than braking needs - 0.6 to 0.3 takes under a
 # metre. The horizon is what has to be feasible, not just the wheels, so
 # the chair should already be slow when the pinch enters the horizon, not

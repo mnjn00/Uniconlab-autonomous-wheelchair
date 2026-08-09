@@ -17,6 +17,49 @@ class MotionEstimate(NamedTuple):
     reason: str
 
 
+# The loaded chair was measured not to exceed 0.6 m/s. A pose that moves
+# faster than this is the localizer correcting itself, not the chair
+# driving, and the planner has no way to tell the two apart.
+POSE_STEP_LIMIT_MPS = 1.2
+# Below this, arguing with the fix costs more than believing it.
+POSE_STEP_FLOOR_M = 0.05
+
+
+def clamp_pose_step(previous_xy, candidate_xy, elapsed_s,
+                    limit_mps=POSE_STEP_LIMIT_MPS,
+                    floor_m=POSE_STEP_FLOOR_M):
+    """Let the reported pose move no faster than the chair itself can.
+
+    On 2026-08-09 the map correction swung 0.35 m one way and 0.52 m back
+    inside four seconds, twice, giving an apparent speed of 2.64 m/s on a
+    chair whose limit is 0.6. Over the whole excursion the correction
+    returned to within 0.074 m of where it started, so nothing had actually
+    moved - but the follower saw the chair jump to the edge of a narrowing
+    corridor and steered hard to recover, which is the one input that turns
+    a localization glitch into a real excursion.
+
+    Clamped rather than frozen, and rather than rejected. Freezing stops
+    tracking the motion that IS real; rejecting outright cannot converge if
+    the localizer has legitimately re-seeded. Clamping keeps following the
+    chair at the fastest rate the chair could be moving, so a genuine
+    re-seed is absorbed over a few cycles instead of arriving in one, and
+    nothing has to decide which kind of jump it was.
+
+    Returns ``(xy, withheld_m)`` - the second is how much of the step was
+    not believed, which is worth reporting rather than swallowing.
+    """
+    candidate = np.asarray(candidate_xy, dtype=float)
+    if previous_xy is None or not elapsed_s or float(elapsed_s) <= 0.0:
+        return candidate, 0.0
+    previous = np.asarray(previous_xy, dtype=float)
+    delta = candidate - previous
+    step = float(np.hypot(delta[0], delta[1]))
+    allowed = max(float(floor_m), float(limit_mps) * float(elapsed_s))
+    if step <= allowed:
+        return candidate, 0.0
+    return previous + delta * (allowed / step), step - allowed
+
+
 class StoppingEnvelope(NamedTuple):
     speed_mps: float
     yaw_rate_rps: float
