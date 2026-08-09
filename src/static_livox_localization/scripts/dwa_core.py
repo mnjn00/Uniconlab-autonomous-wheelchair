@@ -86,6 +86,16 @@ W_HEADING = 2.0
 # closed-loop replay lost a third of its progress and tripled its cross-track.
 W_STEER = 1.0
 
+# How dearly the corridor's edge is bought. Containment is a hard reject, so
+# without this the middle of the band and a hair inside its edge score the
+# same and the chair has no reason to prefer either. On 2026-08-09 it settled
+# at a steady -0.12 m and a bend put it 6 mm outside a corridor with 0.58 m
+# of room each way. Squared rather than linear: the centre has to be nearly
+# free and the last few centimetres nearly unaffordable, or a term that is
+# cheap at the edge just biases the whole drive without ever stopping the
+# excursion that matters.
+W_CENTRE = 4.0
+
 # A candidate whose rollout passes closer than this to a tracked object is
 # discarded outright rather than scored - the same floor mpc_core keeps.
 OBSTACLE_FLOOR_M = 0.40
@@ -240,8 +250,18 @@ class DwaPlanner:
         aim = np.abs(np.arctan2(np.sin(paths[:, :, 2] - ref),
                                 np.cos(paths[:, :, 2] - ref))).mean(axis=1)
         steer = np.abs(np.asarray([p[1] for p in pairs]) - float(last_yaw_rate))
+        # Where the rollout sits between the corridor's two edges: 0 in the
+        # middle, 1 against either edge. Taken from the band's own geometry
+        # rather than from distance to the recorded line, because the line is
+        # not always the middle - where the band is asymmetric the clearance
+        # that matters is the smaller side, not the deviation.
+        lateral, lo, hi = self.band.margins_many(flat)
+        half = np.maximum((hi - lo) / 2.0, 1e-6)
+        edge = np.abs(lateral - (hi + lo) / 2.0) / half
+        centre = np.square(np.minimum(edge, 1.0)).reshape(
+            len(pairs), self.steps).mean(axis=1)
         cost = (W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
-                + W_OBSTACLE * penalty + W_STEER * steer)
+                + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre)
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
         return float(pairs[best][0]), float(pairs[best][1]), "OK"
