@@ -192,7 +192,20 @@ else
 fi
 
 echo "[1/5] cleaning old processes"
-for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower'; do
+# Every node this script starts has to appear here. A node left out does not
+# fail loudly - it keeps running, keeps its ROS name, and keeps publishing,
+# and the next run comes up on top of it. On 2026-08-06 an mpc_follower and
+# an obstacle_clusters from a run 14 minutes earlier were still alive at
+# 447% and 177% CPU while a new bringup sat in WAITING_INITIALIZATION:
+# system CPU 68.1%, idle 3.7%. Killing those two orphans took idle to 85.3%.
+# The stale follower also still held /cmd_vel_raw as its publisher, which is
+# the part that matters most. The single-thread limits above bound what one
+# node costs; nothing but this list bounds how many of them there are.
+# test_every_detached_node_is_also_cleaned_up keeps it honest - and did:
+# dwa_follower was added by the DWA profile in the same window this sweep was
+# written in, on a branch that did not have it, so the two merged clean and
+# the derived list caught what neither side could see alone.
+for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters'; do
   pkill -f "$pattern" 2>/dev/null || true
 done
 sleep 2

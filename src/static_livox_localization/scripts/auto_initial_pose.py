@@ -480,6 +480,15 @@ def main():
             map_points,
             candidates,
             args.inlier_radius,
+            # The CPU profile must leave the device alone. score_global_
+            # candidates defaults prefer_gpu=True, so without this a run
+            # launched with AUTO_INIT_REQUIRE_GPU=false still built the
+            # voxel map on the RTX 2060 and held its memory - in the one
+            # profile whose purpose is that nothing else is competing for
+            # the card. require_gpu is the operator's statement of which
+            # profile this is, so it is also the right answer to whether
+            # the device should be touched at all.
+            prefer_gpu=bool(args.require_gpu),
             gpu_lateral_radius_m=args.gpu_lateral_radius,
             gpu_lateral_step_m=args.gpu_lateral_step,
             require_gpu=args.require_gpu,
