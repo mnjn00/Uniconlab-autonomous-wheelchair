@@ -61,6 +61,7 @@ catkin_install_python(
     scripts/dwa_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
+    scripts/dwa_run_report.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(
