@@ -109,6 +109,31 @@ TEST(Registration, UsesSparserCloudForDensityImbalancedOverlap) {
   EXPECT_GT(result.inlier_ratio, 0.95);
 }
 
+TEST(Registration, AnIterationLimitedAlignmentIsStillMeasured) {
+  // hasConverged() false means the optimiser used its whole iteration budget
+  // without the transform settling under transformationEpsilon 1e-6 - not
+  // that the alignment is wrong. Returning early on it published fitness 1e9
+  // and inlier 0.0 for alignments that were correct, and the follower read
+  // that as a lost fix: 53 NOT_CONVERGED events in one 1413 s run, and a
+  // 150 s stop with the map visibly aligned in RViz. One iteration cannot
+  // meet a 1e-6 epsilon, so this exercises exactly that path.
+  auto scan = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
+  for (int x = 0; x < 20; ++x) for (int y = 0; y < 20; ++y) for (int z = 0; z < 3; ++z) {
+    pcl::PointXYZI p; p.x = x * 0.25f; p.y = y * 0.25f;
+    p.z = z * 0.35f + 0.01f * x; p.intensity = x + y;
+    scan->push_back(p);
+  }
+  auto map = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>(*scan);
+  RegistrationConfig config;
+  config.min_points = 300;
+  config.max_iterations = 1;
+  const auto result = register_cloud(
+      scan, map, Eigen::Isometry3d::Identity(), config);
+  EXPECT_LT(result.fitness, 1e8) << "fitness was never computed";
+  EXPECT_GT(result.inlier_ratio, 0.0) << "inlier ratio was never computed";
+  EXPECT_GT(result.source_points, 0);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

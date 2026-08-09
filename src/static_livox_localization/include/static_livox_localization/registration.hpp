@@ -25,6 +25,11 @@ struct RegistrationResult {
   double fitness = 1e9;
   double inlier_ratio = 0.0;
   bool converged = false;
+  // The optimiser met its transformation epsilon rather than running out of
+  // iterations. Recorded for observability; it is NOT the pass/fail test.
+  // See register_cloud for why an alignment that used its whole budget is
+  // still worth measuring.
+  bool epsilon_met = false;
   int source_points = 0;
   int target_points = 0;
   double elapsed_ms = 0.0;

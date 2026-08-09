@@ -111,7 +111,15 @@ class DwaFollower(WaypointFollower):
         if threat is None or threat.distance_m > PLAN_AHEAD_M:
             return ()
         heading = np.array([math.cos(state[2]), math.sin(state[2])])
-        return (state[:2] + heading * threat.distance_m,)
+        left = np.array([-heading[1], heading[0]])
+        # Where the object actually is, not straight ahead. Placing every
+        # threat on the heading is what turned a wall beside the chair into
+        # one in front of it; with the corridor 0.3 m wide at that station,
+        # nothing could clear OBSTACLE_FLOOR_M and the profile held for
+        # 211 cycles. A threat whose box did not parse keeps the frontal
+        # placement, which is the conservative reading of not knowing.
+        lateral = 0.0 if threat.lateral_m is None else float(threat.lateral_m)
+        return (state[:2] + heading * threat.distance_m + left * lateral,)
 
     def step(self):
         now = rospy.Time.now()
