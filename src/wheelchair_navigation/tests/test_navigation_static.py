@@ -125,7 +125,7 @@ def test_navigation_launch_binds_exactly_one_current_hanyang_map_server():
 def test_move_base_uses_ros1_navigation_stack_components():
     text = _text("config/move_base.yaml")
     assert "base_global_planner: navfn/NavfnROS" in text
-    assert "base_local_planner: dwa_local_planner/DWAPlannerROS" in text
+    assert "base_local_planner: teb_local_planner/TebLocalPlannerROS" in text
     assert "controller_frequency: 10.0" in text
     launch = ET.parse(NAV / "launch" / "navigation.launch").getroot()
     namespaces = {
@@ -137,7 +137,8 @@ def test_move_base_uses_ros1_navigation_stack_components():
     assert namespaces["recovery_behaviors.yaml"] == "move_base"
     assert namespaces["global_costmap.yaml"] == "move_base"
     assert namespaces["local_costmap.yaml"] == "move_base"
-    assert namespaces["dwa_local_planner.yaml"] == "move_base"
+    assert namespaces["teb_local_planner.yaml"] == "move_base"
+    assert "dwa_local_planner.yaml" not in namespaces
     common_namespaces = [
         item.attrib.get("ns")
         for item in launch.findall("rosparam")
@@ -172,6 +173,18 @@ def test_move_base_uses_ros1_navigation_stack_components():
     forbidden = ["Nav2", "nav2_", "ros2_control", "launch_testing", "ros_gz", "gz_ros2_control"]
     for token in forbidden:
         assert token not in text
+
+
+def test_teb_runtime_dependencies_and_launch_graph_are_explicit():
+    package = (NAV / "package.xml").read_text()
+    assert "<exec_depend>teb_local_planner</exec_depend>" in package
+    assert "<exec_depend>costmap_converter</exec_depend>" in package
+
+    launch_text = _text("launch/navigation.launch")
+    assert "config/teb_local_planner.yaml" in launch_text
+    assert "config/dwa_local_planner.yaml" not in launch_text
+    for forbidden in ("waypoint_follower.py", "pure_pursuit", "s_curve", "wheel_cmd.py", "uart.py"):
+        assert forbidden not in launch_text
 
 
 def test_wheelchair_footprint_padding_and_obstacle_cloud_contract():

@@ -12,7 +12,7 @@
   <rosparam command="load" file="$(find wheelchair_navigation)/config/costmap_common.yaml" ns="move_base/local_costmap"/>
   <rosparam command="load" file="$(find wheelchair_navigation)/config/global_costmap.yaml" ns="move_base"/>
   <rosparam command="load" file="$(find wheelchair_navigation)/config/local_costmap.yaml" ns="move_base"/>
-  <rosparam command="load" file="$(find wheelchair_navigation)/config/dwa_local_planner.yaml" ns="move_base"/>
+  <rosparam command="load" file="$(find wheelchair_navigation)/config/teb_local_planner.yaml" ns="move_base"/>
   <rosparam command="load" file="$(find wheelchair_navigation)/config/geofence_sidewalk.yaml" ns="safety/geofence"/>
 
   <node pkg="map_server" type="map_server" name="map_server" args="$(arg map_yaml)" output="screen" required="true"/>
