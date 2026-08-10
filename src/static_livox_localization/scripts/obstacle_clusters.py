@@ -432,8 +432,8 @@ class ObstacleClusters:
         rel = merged[:, 2] + SENSOR_HEIGHT_M
         keep = (merged[:, 0] > ROI_X[0]) & (merged[:, 0] < ROI_X[1]) & \
                (merged[:, 1] > ROI_Y[0]) & (merged[:, 1] < ROI_Y[1]) & \
-               (rel > COLLISION_MIN_HEIGHT_M) & \
-               (rel < COLLISION_MAX_HEIGHT_M)
+               (rel >= COLLISION_MIN_HEIGHT_M) & \
+               (rel <= COLLISION_MAX_HEIGHT_M)
         # forward FOV cone
         azimuth = np.abs(np.degrees(np.arctan2(merged[:, 1], merged[:, 0])))
         keep &= azimuth < FORWARD_FOV_HALF_DEG

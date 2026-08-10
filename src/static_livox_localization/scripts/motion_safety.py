@@ -245,8 +245,8 @@ def filter_obstacle_points(
                    (np.abs(points[:, 1] - self_y_centre_m)
                     <= self_half_width_m))
     keep = (finite & ~self_return &
-            (relative_height > min_height_m) &
-            (relative_height < max_height_m))
+            (relative_height >= min_height_m) &
+            (relative_height <= max_height_m))
     return points[keep, :2]
 
 
