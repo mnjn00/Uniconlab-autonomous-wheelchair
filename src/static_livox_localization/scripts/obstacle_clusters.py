@@ -46,6 +46,7 @@ import sensor_msgs.point_cloud2 as pc2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
                         lidar_extrinsics, lidar_to_body)
+from cloud_points import points_xyzi
 from cluster_tracking import UNKNOWN, Tracker
 from safety_band import SafetyBand
 import tf.transformations as tft
@@ -61,6 +62,14 @@ ROI_X = (0.50, 12.0)
 ROI_Y = (-6.0, 6.0)
 REL_Z = (0.15, 2.4)
 FORWARD_FOV_HALF_DEG = 50.0
+# Retroreflector blooming: traffic signs and reflective surfaces saturate
+# the Livox detector, producing a halo of points around the real (thin) sign
+# that reads as a solid obstacle.  Livox reflectivity is 0-255; anything at
+# or near 255 is a retroreflector.  Dropping these points removes the halo
+# while leaving the thin pole the sign sits on — its metal has ordinary
+# reflectivity and survives the cut.  See:
+#   https://www.robosense.ai/en/tech-show-55
+RETROREFLECTOR_INTENSITY = 200.0
 # Rider self-exclusion box in the lidar frame. The MID360 sees the
 # rider's torso, legs, and feet at close range; without this mask the
 # rider is the largest "obstacle" in every scan.
@@ -254,9 +263,7 @@ class Accumulator:
         return self.odoms[k][1]
 
     def add_cloud(self, message):
-        pts = np.array(list(pc2.read_points(
-            message, field_names=("x", "y", "z"), skip_nans=True)),
-            dtype=np.float32)
+        pts = points_xyzi(message)
         stamp = message.header.stamp.to_sec()
         if not math.isfinite(stamp) or stamp <= 0.0 or not len(pts) or \
                 (self.scans and stamp <= self.scans[-1][0]):
@@ -283,11 +290,25 @@ class Accumulator:
             if T is None:
                 continue
             M = (inv_ref @ T).astype(np.float32)
-            parts.append(pts @ M[:3, :3].T + M[:3, 3])
+            # Motion-compensate xyz (columns 0-2); carry intensity
+            # (column 3) through unchanged.
+            xyz = pts[:, :3] @ M[:3, :3].T + M[:3, 3]
+            if pts.shape[1] >= 4:
+                parts.append(np.concatenate(
+                    [xyz, pts[:, 3:4]], axis=1))
+            else:
+                parts.append(np.concatenate(
+                    [xyz, np.zeros((len(xyz), 1), dtype=np.float32)],
+                    axis=1))
         if not parts:
             return None
-        return body_to_lidar(np.vstack(parts), self.lidar_in_body,
-                             self.lidar_to_body_rotation)
+        merged = np.vstack(parts)
+        # body_to_lidar transforms xyz; intensity is frame-independent.
+        xyz_lidar = body_to_lidar(merged[:, :3], self.lidar_in_body,
+                                  self.lidar_to_body_rotation)
+        return np.concatenate(
+            [xyz_lidar, merged[:, 3:4].astype(np.float32, copy=False)],
+            axis=1)
 
 
 def cluster_grid(points):
@@ -354,6 +375,7 @@ class ObstacleClusters:
             raise rospy.ROSInitException(
                 "~object_band_grace must be a finite non-negative distance")
         self.map_poses = MapPoseBuffer()
+        self._last_bloom_removed = 0
         self.marker_pub = rospy.Publisher(
             "/perception/objects", MarkerArray, queue_size=1)
         self.summary_pub = rospy.Publisher(
@@ -422,7 +444,21 @@ class ObstacleClusters:
                 (merged[:, 2] > RIDER_EXCLUDE_Z[0]) & \
                 (merged[:, 2] < RIDER_EXCLUDE_Z[1])
         keep &= ~rider
-        points = merged[keep]
+        # retroreflector blooming: drop points whose intensity is at or
+        # near detector saturation.  These are traffic signs, reflective
+        # stickers, and mirror surfaces — all of which produce a point-cloud
+        # halo larger than the physical object.  The sign's thin metal pole
+        # has ordinary reflectivity and survives.
+        bloom_removed = 0
+        if merged.shape[1] >= 4:
+            bloom = merged[:, 3] >= RETROREFLECTOR_INTENSITY
+            bloom_removed = int(np.count_nonzero(bloom & keep))
+            keep &= ~bloom
+        points = merged[keep][:, :3]
+        # Observability: report how many points the intensity filter took,
+        # so a field run that stops for nothing can be distinguished from
+        # one that stopped for a ghost the filter missed.
+        self._last_bloom_removed = bloom_removed
         clusters = cluster_grid(points) if len(points) else []
         clusters = sorted(clusters, key=len, reverse=True)[:MAX_CLUSTERS]
 
@@ -507,6 +543,7 @@ class ObstacleClusters:
             # markers above are drawn in, which is the IMU frame and sits
             # 0.14 m forward of it.
             "frame": "lidar",
+            "bloom_filtered": self._last_bloom_removed,
             "counts": {
                 label: sum(1 for o in objects if o["class"] == label)
                 for label in CLASS_COLORS},

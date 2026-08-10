@@ -38,6 +38,7 @@ import numpy as np
 FLOAT32 = 7
 
 _warned = False
+_warned_xyzi = False
 
 
 def point_dtype(message):
@@ -117,3 +118,88 @@ def points_xyz(message, read_points=None):
     points = np.stack((records["x"], records["y"], records["z"]),
                       axis=-1).astype(np.float32, copy=False)
     return points[~np.isnan(points).any(axis=1)]
+
+
+def point_dtype_xyzi(message):
+    """A structured dtype over one point carrying x, y, z, intensity.
+
+    Like point_dtype but also locates a FLOAT32 ``intensity`` field.
+    Returns None when x, y, z are not all FLOAT32 or when intensity is
+    absent — the caller falls back to the xyz-only path in that case.
+    """
+    offsets = {}
+    for field in message.fields:
+        if field.name in ("x", "y", "z", "intensity"):
+            if field.datatype != FLOAT32 or field.count != 1:
+                if field.name in ("x", "y", "z"):
+                    return None
+                continue
+            offsets[field.name] = field.offset
+    if len({k: v for k, v in offsets.items() if k in ("x", "y", "z")}) != 3:
+        return None
+    if "intensity" not in offsets:
+        return None
+    if max(offsets.values()) + 4 > message.point_step:
+        return None
+    order = ">f4" if message.is_bigendian else "<f4"
+    return np.dtype({
+        "names": ["x", "y", "z", "intensity"],
+        "formats": [order] * 4,
+        "offsets": [offsets["x"], offsets["y"], offsets["z"],
+                    offsets["intensity"]],
+        "itemsize": message.point_step,
+    })
+
+
+def _fallback_xyzi(message, read_points, why):
+    global _warned_xyzi
+    if not _warned_xyzi:
+        _warned_xyzi = True
+        try:
+            import rospy
+            rospy.logwarn(
+                "cloud_points: reading intensity the slow path (%s). "
+                "This costs whole cores; see cloud_points.py", why)
+        except Exception:
+            pass
+    if read_points is None:
+        import sensor_msgs.point_cloud2 as pc2
+        read_points = pc2.read_points
+    pts = np.array(list(read_points(
+        message, field_names=("x", "y", "z", "intensity"),
+        skip_nans=True)), dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] < 4:
+        return np.zeros((0, 4), dtype=np.float32)
+    return pts[:, :4]
+
+
+def points_xyzi(message, read_points=None):
+    """(N, 4) float32 of x, y, z, intensity — finite coordinates only.
+
+    Falls back to points_xyz with a zero intensity column when the cloud
+    does not carry a FLOAT32 intensity field.  This keeps the caller's
+    shape contract (N, 4) without silently dropping points that a
+    non-intensity-publishing source still produces.
+    """
+    dtype = point_dtype_xyzi(message)
+    if dtype is None:
+        xyz = points_xyz(message, read_points)
+        out = np.zeros((len(xyz), 4), dtype=np.float32)
+        out[:, :3] = xyz
+        return out
+
+    width, height = int(message.width), int(message.height)
+    point_step, row_step = int(message.point_step), int(message.row_step)
+    packed = width * point_step
+    if row_step < packed or len(message.data) < height * row_step:
+        return _fallback_xyzi(message, read_points, "row stride does not fit")
+    if width == 0 or height == 0:
+        return np.zeros((0, 4), dtype=np.float32)
+
+    raw = np.frombuffer(message.data, dtype=np.uint8, count=height * row_step)
+    rows = raw.reshape(height, row_step)[:, :packed]
+    records = np.ascontiguousarray(rows).view(dtype).reshape(-1)
+    points = np.stack(
+        (records["x"], records["y"], records["z"], records["intensity"]),
+        axis=-1).astype(np.float32, copy=False)
+    return points[~np.isnan(points[:, :3]).any(axis=1)]
