@@ -25,16 +25,20 @@
 - Modify: `src/static_livox_localization/scripts/safety_gate.py`
 - Modify: `src/static_livox_localization/scripts/obstacle_clusters.py`
 - Test: `src/static_livox_localization/test/test_cluster_pipeline.py`
-- Test: `src/static_livox_localization/test/test_waypoint_follower_surface.py`
+- Test: `src/static_livox_localization/test/test_motion_safety.py`
 
 **Interfaces:**
 - Produces: `cloud_points.COLLISION_MIN_HEIGHT_M: float`
 - Produces: `cloud_points.COLLISION_MAX_HEIGHT_M: float`
 - Consumes: both safety consumers import the two constants instead of defining independent collision-height bounds.
 
-- [ ] **Step 1: Add failing contract tests for one shared height source**
+- [ ] **Step 1: Add a failing safety-gate boundary test**
 
-Add assertions that `cloud_points.py` defines `COLLISION_MIN_HEIGHT_M = 0.15` and `COLLISION_MAX_HEIGHT_M = 1.5`, and that both `safety_gate.py` and `obstacle_clusters.py` import and use those names rather than independent numeric ceilings.
+Feed `filter_obstacle_points()` an overhead-only point set whose
+ground-relative heights are between 1.60 m and 1.90 m and a mixed point set
+with returns on both sides of 1.50 m. Use the collision bounds exported by
+`cloud_points.py`; assert that the overhead-only set is empty and that only
+the collision-relevant lower returns survive in the mixed set.
 
 - [ ] **Step 2: Add a failing pipeline test for overhead-only returns**
 
@@ -51,10 +55,12 @@ Run:
 ```bash
 python3 -m pytest \
   src/static_livox_localization/test/test_cluster_pipeline.py \
-  src/static_livox_localization/test/test_waypoint_follower_surface.py -q
+  src/static_livox_localization/test/test_motion_safety.py -q
 ```
 
-Expected: the shared-constant contract and overhead-only pipeline tests fail because `obstacle_clusters.py` still uses `REL_Z = (0.15, 2.4)`.
+Expected: the tests fail because `cloud_points.py` does not export shared
+collision bounds and `obstacle_clusters.py` still accepts points through
+2.40 m.
 
 - [ ] **Step 5: Implement the shared constants and consumer imports**
 
