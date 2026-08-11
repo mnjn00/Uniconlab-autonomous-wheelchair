@@ -432,6 +432,12 @@ class MovingIcpLocalizer {
               min_tracking_correction_translation_m_,
               min_tracking_correction_rotation_rad_)) {
         last_correction_stamp_s_ = stamp.toSec();
+        // No registration is attempted here, so the tracking state is not
+        // being measured rather than measured badly. Tell the state machine
+        // so its LOST clock does not run through the wait; leaving it to run
+        // made a long hold end in LOST on the first imperfect registration
+        // after the chair moved again (2026-08-09).
+        state_machine_.note_unobserved(stamp.toSec());
         publish_diagnostic_locked("STATIONARY_CORRECTION_SUPPRESSED",
                                   RegistrationResult(), CorrectionDecision());
         return;

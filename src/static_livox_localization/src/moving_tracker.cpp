@@ -138,7 +138,22 @@ void TrackingStateMachine::initialize(double stamp_s) {
   recovery_confirmations_ = 0;
 }
 
+void TrackingStateMachine::note_unobserved(double stamp_s) {
+  if (unobserved_since_s_ < 0.0) unobserved_since_s_ = stamp_s;
+}
+
 TrackingState TrackingStateMachine::observe(bool accepted, double stamp_s) {
+  // Corrections are suppressed while the chair is parked, so no registration
+  // runs and observe is not called at all. The LOST test measures elapsed
+  // time since the last ACCEPTED correction, which keeps running on the wall
+  // clock throughout - so a chair held for five minutes declares LOST on the
+  // first imperfect registration after it moves again, having been given no
+  // chance to prove otherwise. Discount the interval nobody looked at.
+  if (unobserved_since_s_ >= 0.0) {
+    const double unobserved = stamp_s - unobserved_since_s_;
+    if (unobserved > 0.0) last_accepted_stamp_s_ += unobserved;
+    unobserved_since_s_ = -1.0;
+  }
   if (!initialized_) {
     if (accepted) initialize(stamp_s);
     return state_;
