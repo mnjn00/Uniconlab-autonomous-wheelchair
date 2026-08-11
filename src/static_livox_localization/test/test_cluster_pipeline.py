@@ -165,6 +165,16 @@ def wall_of_points(start_x=3.0, end_x=5.0, centre_y=0.0, height=1.2):
                     dtype=np.float32)
 
 
+def points_at_ground_heights(ground_heights, centre_x=4.0, centre_y=0.0):
+    """A dense object whose z values are stated relative to the ground."""
+    xs = np.arange(centre_x - 0.25, centre_x + 0.25, 0.05)
+    ys = np.arange(centre_y - 0.25, centre_y + 0.25, 0.05)
+    return np.array([
+        (x, y, height - 0.725)
+        for x in xs for y in ys for height in ground_heights
+    ], dtype=np.float32)
+
+
 class ConstantBand(object):
     def __init__(self, contained):
         self.contained = contained
@@ -216,6 +226,32 @@ def test_the_producer_writes_what_the_consumer_reads():
     assert threat is not None
     # Near face of a 0.5 m box centred at 4 m, seen through the extrinsic.
     assert threat.distance_m == pytest.approx(3.75, abs=0.25)
+
+
+def test_overhead_only_returns_cannot_become_a_control_object():
+    """Raising the cluster ceiling above the gate's 1.50 m limit must fail."""
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    overhead = points_at_ground_heights(np.arange(1.60, 1.91, 0.10))
+
+    summary = run(node, module, overhead, now_s, 0.0, 100.0)
+
+    assert summary.usable
+    assert summary.objects == []
+
+
+def test_mixed_height_object_keeps_its_collision_relevant_lower_returns():
+    """Filtering overhead must not discard an object that extends below it."""
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    mixed = points_at_ground_heights(
+        np.concatenate((np.arange(1.10, 1.41, 0.10),
+                        np.arange(1.60, 1.91, 0.10))))
+
+    summary = run(node, module, mixed, now_s, 0.0, 100.0)
+
+    assert summary.objects, "the lower collision-relevant returns disappeared"
+    assert max(item["size"][2] for item in summary.objects) <= 0.31
 
 
 def test_a_first_sighting_is_not_reported_as_parked():

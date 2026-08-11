@@ -37,6 +37,14 @@ import numpy as np
 # publishes them.
 FLOAT32 = 7
 
+# One collision-height contract for every control-plane cloud consumer.
+# The loaded chair and seated occupant reach 1.35 m above ground; the upper
+# bound includes the measured 0.15 m clearance margin. Points above it may be
+# recorded or visualised, but must not re-enter motion control through a
+# different perception path.
+COLLISION_MIN_HEIGHT_M = 0.15
+COLLISION_MAX_HEIGHT_M = 1.50
+
 _warned = False
 _warned_xyzi = False
 

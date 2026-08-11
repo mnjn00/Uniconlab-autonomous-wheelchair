@@ -38,6 +38,8 @@ import sensor_msgs.point_cloud2 as pc2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from body_frame import CHAIR_CENTRE_IN_BODY_XYZ, lidar_extrinsics
+from cloud_points import (COLLISION_MAX_HEIGHT_M,
+                          COLLISION_MIN_HEIGHT_M)
 from drive_policy import announce
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            filter_obstacle_points, motion_hold_reason,
@@ -60,7 +62,6 @@ HARD_V_LIMIT = 1.4
 HARD_W_LIMIT = 0.6
 HALF_WIDTH_M = 0.5
 SENSOR_HEIGHT_M = 0.725
-OBSTACLE_MIN_Z = 0.15
 # Ceiling of the obstacle window, measured from the ground. 1.35 m is the
 # top of the seated occupant (measured 2026-08-09), and this is that plus a
 # 0.15 m margin.
@@ -78,7 +79,6 @@ OBSTACLE_MIN_Z = 0.15
 # them. A standing adult is caught by their torso at 0.8-1.6 m; a pole, a
 # bollard and a parked car all return well below. What is given up is
 # canopy, signage and awnings - which is the point.
-OBSTACLE_MAX_Z = 1.5
 ACCUMULATION_WINDOW_S = 1.0
 PIPELINE_BUDGET_S = 0.2
 MIN_BRAKE_DECEL_MPS2 = 0.5
@@ -180,8 +180,8 @@ class SafetyGate:
         obstacles = filter_obstacle_points(
             self.cloud,
             sensor_height_m=SENSOR_HEIGHT_M,
-            min_height_m=OBSTACLE_MIN_Z,
-            max_height_m=OBSTACLE_MAX_Z,
+            min_height_m=COLLISION_MIN_HEIGHT_M,
+            max_height_m=COLLISION_MAX_HEIGHT_M,
             self_x_min_m=RIDER_EXCLUDE_X_MIN_M,
             self_x_max_m=RIDER_EXCLUDE_X_MAX_M,
             self_half_width_m=RIDER_EXCLUDE_HALF_WIDTH_M,
