@@ -12,6 +12,7 @@
 #include <string>
 
 #include <diagnostic_msgs/DiagnosticArray.h>
+#include <visualization_msgs/MarkerArray.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
 #include <diagnostic_msgs/KeyValue.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -138,6 +139,9 @@ class MovingIcpLocalizer {
                               &MovingIcpLocalizer::seed_callback, this);
     odom_sub_ = nh_.subscribe(odom_topic_, 100,
                               &MovingIcpLocalizer::odom_callback, this);
+    dynamic_sub_ = nh_.subscribe(
+        "/perception/dynamic_boxes", 1,
+        &MovingIcpLocalizer::dynamic_boxes_callback, this);
     cloud_sub_ = nh_.subscribe(cloud_topic_, 10,
                                &MovingIcpLocalizer::cloud_callback, this);
 
@@ -210,6 +214,10 @@ class MovingIcpLocalizer {
         registration_rotation_deg * M_PI / 180.0;
 
     private_nh_.param("max_fitness", tracking_config_.max_fitness, 0.20);
+    private_nh_.param("dynamic_box_max_age_s", dynamic_box_max_age_s_, 0.5);
+    private_nh_.param("dynamic_box_margin_m", dynamic_box_margin_m_, 0.15);
+    private_nh_.param("dynamic_box_max_fraction",
+                      dynamic_box_max_fraction_, 0.25);
     private_nh_.param("min_inlier_ratio", tracking_config_.min_inlier_ratio,
                       0.35);
     tracking_config_.min_source_points = registration_config_.min_points;
@@ -387,11 +395,51 @@ class MovingIcpLocalizer {
     return true;
   }
 
+  void dynamic_boxes_callback(
+      const visualization_msgs::MarkerArray::ConstPtr& message) {
+    std::vector<static_livox_localization::DynamicBox> boxes;
+    ros::Time newest(0.0);
+    for (const auto& marker : message->markers) {
+      if (marker.action != visualization_msgs::Marker::ADD) continue;
+      if (marker.type != visualization_msgs::Marker::CUBE) continue;
+      static_livox_localization::DynamicBox box;
+      box.centre = Eigen::Vector3d(marker.pose.position.x,
+                                   marker.pose.position.y,
+                                   marker.pose.position.z);
+      box.half_extent = Eigen::Vector3d(marker.scale.x, marker.scale.y,
+                                        marker.scale.z) * 0.5;
+      boxes.push_back(box);
+      if (marker.header.stamp > newest) newest = marker.header.stamp;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    dynamic_boxes_ = std::move(boxes);
+    dynamic_boxes_stamp_ = newest;
+  }
+
   void cloud_callback(const sensor_msgs::PointCloud2ConstPtr& message) {
     const ros::Time stamp = message->header.stamp.isZero() ? ros::Time::now()
                                                            : message->header.stamp;
     Cloud::Ptr cloud(new Cloud);
     pcl::fromROSMsg(*message, *cloud);
+
+    // A pedestrian's returns are not in the map, so there is nothing correct
+    // for the registration to match them to - and it will not complain while
+    // being pulled by them. Take them out before the submap accumulates a
+    // trail of them. Stale boxes are ignored rather than trusted: deleting
+    // structure on the strength of where somebody was a second ago is the
+    // same mistake in the other direction.
+    std::size_t dropped = 0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double age = (stamp - dynamic_boxes_stamp_).toSec();
+      if (!dynamic_boxes_.empty() && dynamic_boxes_stamp_ > ros::Time(0.0) &&
+          age >= 0.0 && age <= dynamic_box_max_age_s_) {
+        dropped = static_livox_localization::filter_dynamic_returns(
+            *cloud, dynamic_boxes_, dynamic_box_margin_m_,
+            dynamic_box_max_fraction_);
+      }
+    }
+    last_dynamic_dropped_ = dropped;
 
     OdomSample odom;
     Cloud::Ptr submap;
@@ -432,6 +480,12 @@ class MovingIcpLocalizer {
               min_tracking_correction_translation_m_,
               min_tracking_correction_rotation_rad_)) {
         last_correction_stamp_s_ = stamp.toSec();
+        // No registration is attempted here, so the tracking state is not
+        // being measured rather than measured badly. Tell the state machine
+        // so its LOST clock does not run through the wait; leaving it to run
+        // made a long hold end in LOST on the first imperfect registration
+        // after the chair moved again (2026-08-09).
+        state_machine_.note_unobserved(stamp.toSec());
         publish_diagnostic_locked("STATIONARY_CORRECTION_SUPPRESSED",
                                   RegistrationResult(), CorrectionDecision());
         return;
@@ -610,6 +664,11 @@ class MovingIcpLocalizer {
     // 1e9 / 0.0 for alignments the operator could see were correct in RViz.
     status.values.push_back(key_value(
         "epsilon_met", registration.epsilon_met ? "true" : "false"));
+    // How many returns the dynamic filter took out of the last scan. A run
+    // that drifts past a crowd and one that drifts past nothing look the
+    // same without this.
+    status.values.push_back(key_value(
+        "dynamic_returns_dropped", std::to_string(last_dynamic_dropped_)));
     status.values.push_back(key_value("registration_backend",
                                       registration.backend));
     status.values.push_back(key_value("registration_elapsed_ms",
@@ -654,6 +713,13 @@ class MovingIcpLocalizer {
   static_livox_localization::RollingSubmapConfig rolling_config_;
   static_livox_localization::AlignmentConfig alignment_config_;
   static_livox_localization::RollingSubmap rolling_submap_;
+  ros::Subscriber dynamic_sub_;
+  std::vector<static_livox_localization::DynamicBox> dynamic_boxes_;
+  ros::Time dynamic_boxes_stamp_{0.0};
+  std::size_t last_dynamic_dropped_ = 0;
+  double dynamic_box_max_age_s_ = 0.5;
+  double dynamic_box_margin_m_ = 0.15;
+  double dynamic_box_max_fraction_ = 0.25;
   static_livox_localization::TrackingStateMachine state_machine_;
   static_livox_localization::AssistedAlignmentController alignment_controller_;
 

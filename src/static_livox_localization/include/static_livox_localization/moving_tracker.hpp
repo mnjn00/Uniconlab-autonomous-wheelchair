@@ -64,6 +64,11 @@ class TrackingStateMachine {
 
   void initialize(double stamp_s);
   TrackingState observe(bool accepted, double stamp_s);
+  // Time in which no registration was attempted at all. LOST is declared on
+  // how long it has been since the last accepted correction, and a parked
+  // chair runs no registration by design - so without this, time spent
+  // refusing to look counts as evidence of being lost.
+  void note_unobserved(double stamp_s);
   TrackingState state() const { return state_; }
   int consecutive_failures() const { return consecutive_failures_; }
 
@@ -72,6 +77,7 @@ class TrackingStateMachine {
   TrackingState state_ = TrackingState::WAITING_INITIALIZATION;
   bool initialized_ = false;
   double last_accepted_stamp_s_ = 0.0;
+  double unobserved_since_s_ = -1.0;
   int consecutive_failures_ = 0;
   int recovery_confirmations_ = 0;
 };

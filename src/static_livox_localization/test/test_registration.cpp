@@ -72,7 +72,7 @@ TEST(Registration, CudaBackendAlignsStructuredIdentityCloudWhenBuilt) {
   EXPECT_GT(result.elapsed_ms, 0.0);
 }
 
-TEST(Registration, UsesSparserCloudForDensityImbalancedOverlap) {
+TEST(Registration, ScoresTheScanAgainstTheMapWhateverTheDensities) {
   auto sparse_map = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
   auto dense_scan = boost::make_shared<pcl::PointCloud<pcl::PointXYZI>>();
   for (int x = 0; x < 56; ++x) {
@@ -106,7 +106,23 @@ TEST(Registration, UsesSparserCloudForDensityImbalancedOverlap) {
   const auto result = register_cloud(
       dense_scan, sparse_map, Eigen::Isometry3d::Identity(), config);
 
-  EXPECT_GT(result.inlier_ratio, 0.95);
+  // The ratio answers "how much of what I see is mapped", always in that
+  // direction. defd0d2 fixed it there deliberately: scoring whichever cloud
+  // happened to be sparser flipped the question as the clouds changed size,
+  // and only this direction measures localization - the other one falls with
+  // occlusion and with how richly the map was built.
+  //
+  // So the honest expectation for a 0.40 m map, a 0.08 m scan and a 0.12 m
+  // correspondence radius is the fraction of scan points lying near a
+  // lattice node, about (0.24/0.40)^2 = 0.36 - not the 0.95 this asserted
+  // while it was still named for the behaviour defd0d2 removed. Perfectly
+  // aligned, a sparse map simply cannot explain most of a dense scan.
+  EXPECT_GT(result.inlier_ratio, 0.30);
+  EXPECT_LT(result.inlier_ratio, 0.45);
+  // Not asserting fitness against config.max_fitness here: a 0.40 m map
+  // cannot put a neighbour close to every point of a 0.08 m scan, so the
+  // mean squared correspondence distance sits above that limit (0.025)
+  // however well the clouds are aligned. Density, not misalignment.
 }
 
 TEST(Registration, AnIterationLimitedAlignmentIsStillMeasured) {

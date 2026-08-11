@@ -125,6 +125,63 @@ TEST(RollingSubmap, BoundsSamplesAndStoredPoints) {
   EXPECT_LE(submap.stored_point_count(), 15u);
 }
 
+
+namespace {
+pcl::PointCloud<pcl::PointXYZI> grid_cloud(int n) {
+  pcl::PointCloud<pcl::PointXYZI> c;
+  for (int i = 0; i < n; ++i) {
+    pcl::PointXYZI p;
+    p.x = 0.1f * i; p.y = 0.0f; p.z = 0.0f; p.intensity = 1.0f;
+    c.push_back(p);
+  }
+  return c;
+}
+}  // namespace
+
+TEST(RollingSubmap, DropsReturnsInsideAMovingBox) {
+  auto cloud = grid_cloud(100);            // x = 0.0 .. 9.9
+  static_livox_localization::DynamicBox box;
+  box.centre = Eigen::Vector3d(2.0, 0.0, 0.0);
+  box.half_extent = Eigen::Vector3d(0.5, 0.5, 0.5);
+  const std::size_t dropped =
+      static_livox_localization::filter_dynamic_returns(cloud, {box}, 0.0, 0.5);
+  EXPECT_GT(dropped, 0u);
+  EXPECT_EQ(cloud.size(), 100u - dropped);
+  for (const auto& p : cloud.points) {
+    EXPECT_FALSE(std::abs(p.x - 2.0) <= 0.5 && std::abs(p.y) <= 0.5);
+  }
+}
+
+TEST(RollingSubmap, TakingTooMuchOfTheScanIsRefusedNotClamped) {
+  // A box that would swallow the scan is likelier to be wrong than the scan
+  // is, and removing that much structure is its own way to lose the fix.
+  auto cloud = grid_cloud(100);
+  static_livox_localization::DynamicBox box;
+  box.centre = Eigen::Vector3d(5.0, 0.0, 0.0);
+  box.half_extent = Eigen::Vector3d(9.0, 1.0, 1.0);
+  const std::size_t dropped =
+      static_livox_localization::filter_dynamic_returns(cloud, {box}, 0.0, 0.25);
+  EXPECT_EQ(dropped, 0u);
+  EXPECT_EQ(cloud.size(), 100u);
+}
+
+TEST(RollingSubmap, NoBoxesLeavesTheScanExactlyAsItWas) {
+  auto cloud = grid_cloud(50);
+  EXPECT_EQ(static_livox_localization::filter_dynamic_returns(cloud, {}, 0.2, 0.25), 0u);
+  EXPECT_EQ(cloud.size(), 50u);
+}
+
+TEST(RollingSubmap, TheMarginWidensTheBox) {
+  auto a = grid_cloud(100);
+  auto b = grid_cloud(100);
+  static_livox_localization::DynamicBox box;
+  box.centre = Eigen::Vector3d(2.0, 0.0, 0.0);
+  box.half_extent = Eigen::Vector3d(0.2, 0.5, 0.5);
+  const std::size_t tight = static_livox_localization::filter_dynamic_returns(a, {box}, 0.0, 0.9);
+  const std::size_t wide = static_livox_localization::filter_dynamic_returns(b, {box}, 0.5, 0.9);
+  EXPECT_GT(wide, tight);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

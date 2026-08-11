@@ -156,6 +156,41 @@ TEST(MovingTracker, DoesNotUseSpeedAsCorrectionGate) {
   EXPECT_TRUE(decision.accepted);
 }
 
+TEST(MovingTracker, TimeNobodyLookedAtIsNotEvidenceOfBeingLost) {
+  // Corrections are suppressed while the chair is parked, so no registration
+  // runs and observe() is never called. LOST is declared on elapsed time
+  // since the last ACCEPTED correction, and lost_after_s is 8 s - so any
+  // hold longer than that used to end in LOST on the first imperfect
+  // registration after the chair moved again, with no chance to prove
+  // otherwise. On 2026-08-09 holds of 36, 46, 137 and 266 s all qualified.
+  TrackingConfig config;
+  config.degraded_after_failures = 1;
+  config.lost_after_s = 8.0;
+  TrackingStateMachine machine(config);
+  machine.initialize(0.0);
+  EXPECT_EQ(machine.observe(true, 1.0), TrackingState::TRACKING);
+
+  for (double t = 1.5; t < 60.0; t += 0.5) machine.note_unobserved(t);
+
+  // One failure after a 59 s parked stretch is a failure, not a loss.
+  EXPECT_EQ(machine.observe(false, 60.0), TrackingState::DEGRADED);
+  // And the clock still works: genuine unobserved-free time does lose it.
+  EXPECT_EQ(machine.observe(false, 70.0), TrackingState::LOST);
+}
+
+TEST(MovingTracker, DiscountingUnobservedTimeDoesNotResetTheFailureCount) {
+  TrackingConfig config;
+  config.degraded_after_failures = 2;
+  config.lost_after_s = 100.0;
+  TrackingStateMachine machine(config);
+  machine.initialize(0.0);
+  machine.observe(true, 1.0);
+  EXPECT_EQ(machine.observe(false, 2.0), TrackingState::TRACKING);
+  machine.note_unobserved(3.0);
+  // The parked stretch says nothing about the failure that preceded it.
+  EXPECT_EQ(machine.observe(false, 30.0), TrackingState::DEGRADED);
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
