@@ -9,6 +9,8 @@ import pytest
 SCRIPT_DIR = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 try:
+    from cloud_points import (COLLISION_MAX_HEIGHT_M,
+                              COLLISION_MIN_HEIGHT_M)
     from motion_safety import (PoseMotionEstimator, filter_obstacle_points,
                                motion_hold_reason, stopping_envelope,
                                swept_footprint_collision)
@@ -185,3 +187,24 @@ def test_rider_returns_are_removed_but_external_side_obstacles_remain():
 
     assert len(obstacles) == 5
     assert np.all(obstacles[:, 1] > 0.5)
+
+
+def test_shared_collision_height_bounds_are_inclusive():
+    sensor_height_m = 0.30
+    cloud = np.array([
+        [2.0, 0.0, COLLISION_MIN_HEIGHT_M - sensor_height_m],
+        [3.0, 0.0, COLLISION_MAX_HEIGHT_M - sensor_height_m],
+        [4.0, 0.0, COLLISION_MIN_HEIGHT_M - sensor_height_m - 0.01],
+        [5.0, 0.0, COLLISION_MAX_HEIGHT_M - sensor_height_m + 0.01],
+    ])
+
+    obstacles = filter_obstacle_points(
+        cloud,
+        sensor_height_m=sensor_height_m,
+        min_height_m=COLLISION_MIN_HEIGHT_M,
+        max_height_m=COLLISION_MAX_HEIGHT_M,
+        self_x_min_m=-1.0,
+        self_x_max_m=0.55,
+        self_half_width_m=0.40)
+
+    assert obstacles[:, 0].tolist() == [2.0, 3.0]
