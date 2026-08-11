@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
                         lidar_extrinsics, lidar_to_body)
 from cloud_points import points_xyzi
-from cluster_tracking import UNKNOWN, Tracker
+from cluster_tracking import MOVING, UNKNOWN, Tracker
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -378,6 +378,13 @@ class ObstacleClusters:
         self._last_bloom_removed = 0
         self.marker_pub = rospy.Publisher(
             "/perception/objects", MarkerArray, queue_size=1)
+        # Boxes the localizer must not register against. Separate from the
+        # RViz markers above: those are for a person to look at and carry
+        # every class, these are consumed by moving_icp_localizer and carry
+        # only what is confirmed moving. Body frame, because that is the
+        # frame the rolling submap accumulates in.
+        self.dynamic_pub = rospy.Publisher(
+            "/perception/dynamic_boxes", MarkerArray, queue_size=1)
         self.summary_pub = rospy.Publisher(
             "/perception/objects_summary", String, queue_size=1)
         rospy.Subscriber("/cloud_registered_body", PointCloud2,
@@ -484,9 +491,11 @@ class ObstacleClusters:
         tracks = self.track(boxes)
 
         markers, objects = MarkerArray(), []
+        dynamic = MarkerArray()
         wipe = Marker()
         wipe.action = Marker.DELETEALL
         markers.markers.append(wipe)
+        dynamic.markers.append(wipe)
         for i, ((label, center, size, points), context) in enumerate(
                 zip(boxes, band_context)):
             raw_label, band_relation, inside_fraction, profile = context
@@ -518,6 +527,30 @@ class ObstacleClusters:
                 "age_s": 0.0 if track is None else
                          round(float(track.age_s(stamp.to_sec())), 1),
             })
+            # Only what the tracker has watched move. STATIC is either in the
+            # map or is a real obstacle, and UNKNOWN has not been watched long
+            # enough to say - deleting either from the registration input
+            # would remove structure the fix depends on.
+            if track is not None and track.motion(stamp.to_sec()) == MOVING:
+                in_body = lidar_to_body(
+                    np.asarray([center], dtype=np.float64),
+                    self.lidar_in_body, self.lidar_to_body_rotation)[0]
+                box = Marker()
+                box.header.stamp = stamp
+                box.header.frame_id = "body"
+                box.ns = "dynamic"
+                box.id = i
+                box.type = Marker.CUBE
+                box.action = Marker.ADD
+                box.pose.position.x = float(in_body[0])
+                box.pose.position.y = float(in_body[1])
+                box.pose.position.z = float(in_body[2])
+                box.pose.orientation.w = 1.0
+                box.scale.x = float(size[0])
+                box.scale.y = float(size[1])
+                box.scale.z = float(size[2])
+                box.color.r, box.color.a = 1.0, 0.3
+                dynamic.markers.append(box)
             m = Marker()
             m.header.frame_id = "body"
             m.header.stamp = stamp
@@ -533,6 +566,7 @@ class ObstacleClusters:
             m.lifetime = rospy.Duration(1.0 / PROCESS_HZ * 3.0)
             markers.markers.append(m)
         self.marker_pub.publish(markers)
+        self.dynamic_pub.publish(dynamic)
         self.summary_pub.publish(String(data=json.dumps({
             "stamp": stamp.to_sec(),
             "status": "OK",

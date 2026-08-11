@@ -9,6 +9,41 @@
 
 namespace static_livox_localization {
 
+std::size_t filter_dynamic_returns(
+    pcl::PointCloud<pcl::PointXYZI>& cloud,
+    const std::vector<DynamicBox>& boxes,
+    double margin_m,
+    double max_dropped_fraction) {
+  if (boxes.empty() || cloud.empty()) return 0;
+  std::vector<char> drop(cloud.size(), 0);
+  std::size_t dropped = 0;
+  for (std::size_t i = 0; i < cloud.size(); ++i) {
+    const auto& p = cloud.points[i];
+    for (const auto& box : boxes) {
+      if (std::abs(p.x - box.centre.x()) <= box.half_extent.x() + margin_m &&
+          std::abs(p.y - box.centre.y()) <= box.half_extent.y() + margin_m &&
+          std::abs(p.z - box.centre.z()) <= box.half_extent.z() + margin_m) {
+        drop[i] = 1;
+        ++dropped;
+        break;
+      }
+    }
+  }
+  if (dropped == 0) return 0;
+  const double fraction =
+      static_cast<double>(dropped) / static_cast<double>(cloud.size());
+  if (fraction > max_dropped_fraction) return 0;
+  pcl::PointCloud<pcl::PointXYZI> kept;
+  kept.reserve(cloud.size() - dropped);
+  for (std::size_t i = 0; i < cloud.size(); ++i) {
+    if (!drop[i]) kept.push_back(cloud.points[i]);
+  }
+  kept.header = cloud.header;
+  kept.is_dense = cloud.is_dense;
+  cloud.swap(kept);
+  return dropped;
+}
+
 RollingSubmap::RollingSubmap(const RollingSubmapConfig& config)
     : config_(config) {}
 

@@ -201,6 +201,7 @@ def producer_at(now_s):
     node.band_grace_m = module.OBJECT_BAND_GRACE_M
     node.map_poses = module.MapPoseBuffer()
     node.marker_pub = Capture()
+    node.dynamic_pub = Capture()
     node.summary_pub = Capture()
     node._last_bloom_removed = 0
     return module, node
