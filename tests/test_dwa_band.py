@@ -367,3 +367,55 @@ def test_the_follower_places_every_return_where_it_is():
     assert all(lateral > 0.0 for _forward, lateral in points)
     assert max(f for f, _ in points) - min(f for f, _ in points) \
         <= 1e-9, "a box's near face is one distance across its width"
+
+
+# ------------------------------------------- what the cycle spends itself on
+
+def test_the_band_geometry_is_walked_once_per_plan(scene):
+    """The control period is 100 ms and one pass over the band cost 24.4 ms
+    of it on the target NUC, for 1,785 rollout points against 802 stations.
+    plan() needs the same margins twice - to reject the arcs that leave the
+    corridor, and to score how near its edge the rest of them run - and it
+    used to ask for them twice, which was 96 % of the cycle computing one
+    answer two ways.
+
+    Counted rather than timed: a timing assertion on a loaded NUC is a flaky
+    test, and the property that matters is not how fast the search is but
+    how many times it is run.
+    """
+    band, route, planner = scene
+    calls = []
+    real = band.margins_many
+
+    def counting(points):
+        calls.append(len(points))
+        return real(points)
+
+    band.margins_many = counting
+    try:
+        v, w, status = planner.plan(on_route(route, 400))
+    finally:
+        band.margins_many = real
+
+    assert status == "OK" and v > 0.0
+    assert len(calls) == 1, \
+        "the band was searched %d times for one command" % len(calls)
+
+
+def test_the_shared_verdict_is_the_same_one_contains_many_gives(scene):
+    """contained() is the threshold contains_many applies, lifted out so a
+    caller that also wants the margins does not pay for them twice. If the
+    two ever disagree, the planner is rejecting arcs on a different rule
+    from the one perception and the follower use."""
+    band, route, _planner = scene
+    points = np.array([
+        band.xy[k] + band.normals[k] * offset
+        for k in range(0, len(band.xy), 7)
+        for offset in (-3.0, -0.5, -0.05, 0.0, 0.05, 0.5, 3.0)])
+
+    for grace in (0.0, 0.10, 0.5):
+        shared = band.contained(*band.margins_many(points), grace=grace)
+        assert np.array_equal(shared, band.contains_many(points, grace=grace))
+    # and it really is discriminating, not vacuously all-True
+    verdict = band.contains_many(points)
+    assert verdict.any() and not verdict.all()
