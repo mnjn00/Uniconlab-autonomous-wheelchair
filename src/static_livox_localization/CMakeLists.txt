@@ -52,6 +52,7 @@ catkin_install_python(
     scripts/report_static_trial.py
     scripts/report_moving_trial.py
     scripts/replay_metrics.py
+    scripts/route_mask.py
     scripts/reference_marker.py
     scripts/localization_state_marker.py
     scripts/auto_initial_pose.py
@@ -75,7 +76,8 @@ install(
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py
     scripts/cluster_guard.py
-    scripts/cluster_tracking.py
+  scripts/cluster_tracking.py
+  scripts/fixed_map_filter.py
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py

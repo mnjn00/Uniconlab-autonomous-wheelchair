@@ -173,6 +173,7 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.waypoints = np.column_stack(
         [np.arange(0.0, 40.0, 0.2), np.zeros(200)])
     follower.current_speed = 0.0
+    follower.latency_s = 0.30
     follower.odom_v = 0.0
     follower.odom_w = 0.0
     follower.last_yaw_rate = 0.0

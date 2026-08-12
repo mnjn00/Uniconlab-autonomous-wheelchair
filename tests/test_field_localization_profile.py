@@ -15,8 +15,8 @@ RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
 # The shipped pair is chair-centred. A sensor-referenced route applies every
 # clearance about a point 0.2 m left of the chair, which under-protects the
 # right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
-ROUTE_NAME = "20260803_route_v5_waypoints.json"
-BAND_NAME = "20260803_route_v5_safety_band.json"
+ROUTE_NAME = "20260812_route_v6_v8_waypoints.json"
+BAND_NAME = "20260812_route_v6_v8_safety_band.json"
 # Superseded pairs. Deployment naming one of these while the bringup launches
 # the other is how a record ends up describing a drive that did not happen,
 # and the old files staying on disk is what lets it pass unnoticed.
@@ -122,6 +122,7 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_shipped_route():
     band = json.loads((ROOT / "routes" / BAND_NAME).read_text(encoding="utf-8"))
 
     assert shell_default(startup, "VN_IMU") == "0"
+    assert shell_default(startup, "MIN_REFINED_SCORE") == "0.78"
     assert shell_default(startup, "ROUTE").endswith("/" + ROUTE_NAME)
     assert shell_default(startup, "BAND").endswith("/" + BAND_NAME)
     assert route["frame"] == band["frame"] == "map"
@@ -154,12 +155,30 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_shipped_route():
     assert 'rostopic echo -n1 /livox/imu/header' in startup
 
 
-def test_field_speed_is_capped_at_point_six_metres_per_second():
+def test_field_speed_is_capped_at_one_metre_per_second():
     follower = (PACKAGE / "scripts" / "waypoint_follower.py").read_text(
         encoding="utf-8"
     )
 
-    assert re.search(r"^MAX_SPEED\s*=\s*0\.6$", follower, flags=re.MULTILINE)
+    assert re.search(r"^MAX_SPEED\s*=\s*1\.0$", follower, flags=re.MULTILINE)
+
+
+def test_localizer_reports_every_registration_filter_stage():
+    source = (PACKAGE / "src" / "moving_icp_localizer.cpp").read_text(
+        encoding="utf-8"
+    )
+    for key in (
+        "raw_scan_points",
+        "dynamic_returns_dropped",
+        "post_box_points",
+        "map_filtered",
+        "post_map_points",
+        "rolling_submap_points",
+    ):
+        assert '"%s"' % key in source
+    assert "if (has_map_T_odom_ && map_voxel_grid_" in source
+    assert "marker.header.frame_id != rolling_config_.expected_cloud_frame" \
+        in source
 
 
 def test_initializer_is_packaged_and_field_startup_selects_global_only():

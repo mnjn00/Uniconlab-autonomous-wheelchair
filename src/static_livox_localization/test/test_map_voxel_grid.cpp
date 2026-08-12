@@ -85,9 +85,8 @@ TEST(MapVoxelGrid, FilterRemovesPersonKeepsWall) {
   std::size_t dropped = grid.filter_dynamic(*scan, 0.40, 0.50);
   EXPECT_GT(dropped, 0u);
   EXPECT_LT(scan->size(), before);
-  // Remaining points should all be near the wall (y close to 0)
   for (const auto& p : scan->points) {
-    EXPECT_NEAR(p.y, 0.0f, 0.5f);
+    EXPECT_FLOAT_EQ(p.intensity, 1.0f);
   }
 }
 
@@ -103,13 +102,40 @@ TEST(MapVoxelGrid, EmptyMapIsNoop) {
   EXPECT_EQ(scan.size(), 1u);
 }
 
-TEST(MapVoxelGrid, MaxDroppedFractionPreventsOverFiltering) {
-  auto map = make_map_with_wall();
+TEST(MapVoxelGrid, MappedStaticReturnAcrossVoxelBoundaryIsKept) {
+  Cloud::Ptr map(new Cloud);
+  pcl::PointXYZI mapped;
+  mapped.x = 0.19f;
+  mapped.y = mapped.z = 0.0f;
+  map->push_back(mapped);
   static_livox_localization::MapVoxelGrid grid(map, 0.20);
-  auto scan = make_scan_with_person();
-  // Set max_dropped_fraction to 0.01 — almost nothing can be dropped
-  std::size_t dropped = grid.filter_dynamic(*scan, 0.40, 0.01);
-  EXPECT_EQ(dropped, 0u);
+  EXPECT_TRUE(grid.is_likely_static(0.21f, 0.0f, 0.0f, 0.40));
+}
+
+TEST(MapVoxelGrid, CrowdDominatedScanStillKeepsMapAndDropsPeople) {
+  Cloud::Ptr map(new Cloud);
+  pcl::PointXYZI wall;
+  wall.x = wall.y = wall.z = 0.0f;
+  wall.intensity = 1.0f;
+  map->push_back(wall);
+  Cloud scan;
+  for (int i = 0; i < 40; ++i) {
+    scan.push_back(wall);
+  }
+  for (int i = 0; i < 60; ++i) {
+    pcl::PointXYZI person;
+    person.x = 0.0f;
+    person.y = 0.21f;
+    person.z = 0.0f;
+    person.intensity = 2.0f;
+    scan.push_back(person);
+  }
+  static_livox_localization::MapVoxelGrid grid(map, 0.20);
+  EXPECT_EQ(grid.filter_dynamic(scan, 0.40, 0.50), 60u);
+  ASSERT_EQ(scan.size(), 40u);
+  for (const auto& point : scan.points) {
+    EXPECT_FLOAT_EQ(point.intensity, 1.0f);
+  }
 }
 
 int main(int argc, char** argv) {

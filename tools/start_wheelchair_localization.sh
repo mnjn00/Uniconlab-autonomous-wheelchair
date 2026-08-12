@@ -5,6 +5,7 @@ set -eo pipefail
 # Keep the field workspace as the default, while allowing a reviewed branch to
 # be built and replayed in isolation before it replaces the live package.
 LOCALIZATION_WS="${LOCALIZATION_WS:-$HOME/livox_static_localization_ws}"
+MIN_REFINED_SCORE="${MIN_REFINED_SCORE:-0.78}"
 [ -f "$LOCALIZATION_WS/devel/setup.bash" ] || {
   echo "ERROR: localization workspace is not built: $LOCALIZATION_WS" >&2
   exit 66
@@ -42,8 +43,9 @@ MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
 MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
 TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260803_route_v5_waypoints.json}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260803_route_v5_safety_band.json}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_waypoints.json}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_safety_band.json}"
+DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v8.yaml}"
 RVIZ="${RVIZ:-true}"
 # SAFETY_POLICIES=false drives with every discretionary guard switched off,
 # leaving the joystick override as the failsafe. It exists to measure one
@@ -341,7 +343,7 @@ setsid nohup roslaunch static_livox_localization moving_localization.launch \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
   auto_init_route:="$ROUTE" \
   auto_init_body_frame_profile:="$BODY_FRAME_PROFILE" \
-  auto_init_min_refined_score:="${MIN_REFINED_SCORE:-0.80}" \
+  auto_init_min_refined_score:="${MIN_REFINED_SCORE:-0.78}" \
   auto_init_require_gpu:="${AUTO_INIT_REQUIRE_GPU:-true}" \
   auto_init_gpu_lateral_radius_m:="${AUTO_INIT_GPU_LATERAL_RADIUS_M:-10.0}" \
   auto_init_gpu_lateral_step_m:="${AUTO_INIT_GPU_LATERAL_STEP_M:-1.0}" \
@@ -426,6 +428,8 @@ setsid nohup env $SINGLE_THREAD_ENV \
   rosrun static_livox_localization obstacle_clusters.py \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_band:="$BAND" \
+  _map_path:="$MAP" \
+  _map_sha256:="$MAP_SHA256" \
   > "$LOG/live_clusters.log" 2>&1 < /dev/null &
 for i in $(seq 1 15); do
   timeout 2 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1 && break
@@ -449,6 +453,7 @@ fi
 setsid nohup env $SINGLE_THREAD_ENV \
   rosrun static_livox_localization "$FOLLOWER_NODE" \
   _route:="$ROUTE" _safety_band:="$BAND" \
+  _drivable_mask:="$DRIVABLE_MASK" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
   _latency_s:="$LATENCY_S" \
@@ -461,7 +466,7 @@ setsid nohup rosbag record --lz4 \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics /vectornav/IMU \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
-  /perception/objects_summary \
+  /perception/objects_summary /perception/dynamic_boxes /perception/objects \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

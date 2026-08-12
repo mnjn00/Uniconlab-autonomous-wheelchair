@@ -41,10 +41,10 @@ struct DynamicBox {
 // over a 2 s window, so by the time it is built a walker at 1.4 m/s has laid
 // a 2.8 m trail through it and the current box no longer covers the returns.
 //
-// max_dropped_fraction is a refusal, not a clamp. If the boxes would take
-// more of the scan than that, they are more likely to be wrong than the scan
-// is, and removing that much structure is its own way to lose the fix - so
-// nothing is dropped and the caller is told.
+// max_dropped_fraction is retained in the API for diagnostics/config
+// compatibility. Validated map-novel boxes are always excluded: restoring a
+// crowd merely because it dominates a scan is the failure this filter exists
+// to prevent.
 std::size_t filter_dynamic_returns(
     pcl::PointCloud<pcl::PointXYZI>& cloud,
     const std::vector<DynamicBox>& boxes,

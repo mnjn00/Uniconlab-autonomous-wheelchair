@@ -63,7 +63,9 @@ class Loose(object):
     DELETEALL = 3
 
     def __init__(self, *args, **kwargs):
-        if args:
+        if len(args) == 3:
+            self.x, self.y, self.z = args
+        elif args:
             self.value = args[0]
 
     def __getattr__(self, name):
@@ -191,21 +193,27 @@ def producer_at(now_s):
     node.lidar_in_body = lidar_in_body
     node.lidar_to_body_rotation = rotation
     node.tracker = ct.Tracker()
+    node.fixed_map_filter = FixedMapFilter(None)
     node.band = None
     node.band_grace_m = module.OBJECT_BAND_GRACE_M
     node.map_poses = module.MapPoseBuffer()
+    node._last_processed_stamp = None
     node.marker_pub = Capture()
     node.dynamic_pub = Capture()
     node.summary_pub = Capture()
     return module, node
 
 
-def run(node, module, cloud, now_s, pose_x, stamp):
+def run(node, module, cloud, now_s, pose_x, stamp, map_pose=True):
     """One producer cycle with the chair at pose_x and the given cloud."""
     T = np.eye(4)
     T[:3, 3] = (pose_x, 0.0, 0.0)
     node.accumulator.scans = [(stamp, cloud)]
     node.accumulator.odoms = [(stamp, T)]
+    if map_pose:
+        map_T_body = np.eye(4)
+        map_T_body[:3, 3] = (pose_x, 0.0, 0.0)
+        node.map_poses.add(stamp, map_T_body)
     now_s[0] = stamp
     node.step()
     return cg.parse_summary(node.summary_pub.last.data)
@@ -352,18 +360,105 @@ def test_an_object_inside_the_band_keeps_its_semantic_class():
     assert item["band_relation"] == "inside"
 
 
-def test_missing_map_pose_never_hides_the_original_detection():
+class FixedMapFilter(object):
+    """Test double for map subtraction at the producer boundary."""
+
+    def __init__(self, novel_points):
+        self.novel_points = (
+            None if novel_points is None else np.asarray(novel_points))
+        self.calls = []
+
+    def retain_novel(self, points, map_T_lidar):
+        self.calls.append((points.copy(), map_T_lidar.copy()))
+        return (
+            points.copy() if self.novel_points is None
+            else self.novel_points.copy())
+
+
+def test_mapped_wall_is_not_published_as_an_obstacle():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    wall = wall_of_points()
+    node.fixed_map_filter = FixedMapFilter(np.empty((0, 4)))
+    node.map_poses.add(100.0, np.eye(4))
+
+    summary = run(node, module, wall, now_s, 0.0, 100.0)
+
+    assert summary.objects == []
+    assert len(node.fixed_map_filter.calls) == 1
+
+
+def test_novel_person_is_published_with_valid_box():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    person = box_of_points(2.0, 0.0, half=0.22, height=1.75)
+    node.fixed_map_filter = FixedMapFilter(person)
+    node.map_poses.add(100.0, np.eye(4))
+
+    summary = run(node, module, person, now_s, 0.0, 100.0)
+
+    assert len(summary.objects) == 1
+    size = np.asarray(summary.objects[0]["size"], dtype=float)
+    assert np.isfinite(size).all()
+    assert (size > 0.0).all()
+
+
+def test_no_new_cloud_cannot_publish_fresh_ok_summary():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    run(node, module, box_of_points(4.0, 0.0), now_s, 0.0, 100.0)
+
+    now_s[0] = 110.0
+    node.step()
+
+    payload = json.loads(node.summary_pub.last.data)
+    assert payload["status"] == "NO_CLOUD"
+    assert payload["stamp"] == 100.0
+    assert not [
+        marker for marker in node.dynamic_pub.last.markers
+        if marker.action == 0
+    ]
+
+
+def test_published_body_box_encloses_every_transformed_point():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    wall = wall_of_points(3.0, 5.0, 0.2)
+    node.map_poses.add(100.0, np.eye(4))
+    run(node, module, wall, now_s, 0.0, 100.0)
+
+    body_box = next(
+        marker for marker in node.marker_pub.last.markers
+        if marker.action == 0
+    )
+    centre = np.array([
+        body_box.pose.position.x,
+        body_box.pose.position.y,
+        body_box.pose.position.z,
+    ])
+    half_size = np.array([
+        body_box.scale.x,
+        body_box.scale.y,
+        body_box.scale.z,
+    ]) / 2.0
+    clustered_points = node.fixed_map_filter.calls[0][0]
+    body_points = module.lidar_to_body(
+        clustered_points, node.lidar_in_body,
+        node.lidar_to_body_rotation)
+    assert np.all(np.abs(body_points - centre) <= half_size + 1e-6)
+
+
+def test_missing_map_pose_fails_closed_instead_of_guessing():
     now_s = [100.0]
     module, node = producer_at(now_s)
     node.band = ConstantBand(False)
 
-    summary = run(node, module, wall_of_points(), now_s, 0.0, 100.0)
-    item = max(summary.objects, key=lambda value: value["points"])
+    summary = run(
+        node, module, wall_of_points(), now_s, 0.0, 100.0,
+        map_pose=False)
 
-    assert item["class"] == "vehicle"
-    assert item["band_relation"] == "unavailable"
-    assert json.loads(node.summary_pub.last.data)["band_status"] == \
-        "NO_MAP_POSE"
+    assert summary.status == "NO_MAP_POSE"
+    assert summary.objects == []
 
 
 def test_field_startup_passes_the_same_band_as_the_follower():
@@ -372,3 +467,9 @@ def test_field_startup_passes_the_same_band_as_the_follower():
     command = startup.split("obstacle_clusters.py", 1)[1].split(
         "> \"$LOG/live_clusters.log\"", 1)[0]
     assert '_safety_band:="$BAND"' in command
+    assert '_map_path:="$MAP"' in command
+    assert '_map_sha256:="$MAP_SHA256"' in command
+    recorder = startup.split("rosbag record --lz4", 1)[1]
+    assert "/perception/objects_summary" in recorder
+    assert "/perception/dynamic_boxes" in recorder
+    assert "/perception/objects" in recorder

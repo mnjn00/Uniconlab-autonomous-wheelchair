@@ -406,6 +406,17 @@ class MovingIcpLocalizer {
     for (const auto& marker : message->markers) {
       if (marker.action != visualization_msgs::Marker::ADD) continue;
       if (marker.type != visualization_msgs::Marker::CUBE) continue;
+      if (marker.header.frame_id != rolling_config_.expected_cloud_frame)
+        continue;
+      const double values[] = {
+          marker.pose.position.x, marker.pose.position.y,
+          marker.pose.position.z, marker.scale.x, marker.scale.y,
+          marker.scale.z};
+      bool valid = true;
+      for (double value : values) valid = valid && std::isfinite(value);
+      if (!valid || marker.scale.x <= 0.0 || marker.scale.y <= 0.0 ||
+          marker.scale.z <= 0.0)
+        continue;
       static_livox_localization::DynamicBox box;
       box.centre = Eigen::Vector3d(marker.pose.position.x,
                                    marker.pose.position.y,
@@ -425,6 +436,7 @@ class MovingIcpLocalizer {
                                                            : message->header.stamp;
     Cloud::Ptr cloud(new Cloud);
     pcl::fromROSMsg(*message, *cloud);
+    const std::size_t raw_points = cloud->size();
 
     // A pedestrian's returns are not in the map, so there is nothing correct
     // for the registration to match them to - and it will not complain while
@@ -444,9 +456,11 @@ class MovingIcpLocalizer {
       }
     }
     last_dynamic_dropped_ = dropped;
+    last_post_box_points_ = cloud->size();
 
     std::size_t map_dropped = 0;
-    if (map_voxel_grid_ && map_voxel_grid_->voxel_count() > 0) {
+    if (has_map_T_odom_ && map_voxel_grid_ &&
+        map_voxel_grid_->voxel_count() > 0) {
       OdomSample odom_for_filter;
       bool have_odom = false;
       {
@@ -468,6 +482,8 @@ class MovingIcpLocalizer {
       }
     }
     last_map_filtered_ = map_dropped;
+    last_raw_points_ = raw_points;
+    last_post_map_points_ = cloud->size();
 
     OdomSample odom;
     Cloud::Ptr submap;
@@ -727,6 +743,15 @@ class MovingIcpLocalizer {
         "dynamic_returns_dropped", std::to_string(last_dynamic_dropped_)));
     status.values.push_back(key_value(
         "map_filtered", std::to_string(last_map_filtered_)));
+    status.values.push_back(
+        key_value("raw_scan_points", std::to_string(last_raw_points_)));
+    status.values.push_back(key_value(
+        "post_box_points", std::to_string(last_post_box_points_)));
+    status.values.push_back(key_value(
+        "post_map_points", std::to_string(last_post_map_points_)));
+    status.values.push_back(key_value(
+        "rolling_submap_points",
+        std::to_string(rolling_submap_.stored_point_count())));
     status.values.push_back(key_value("registration_backend",
                                       registration.backend));
     status.values.push_back(key_value("registration_elapsed_ms",
@@ -777,6 +802,9 @@ class MovingIcpLocalizer {
   ros::Time dynamic_boxes_stamp_{0.0};
   std::size_t last_dynamic_dropped_ = 0;
   std::size_t last_map_filtered_ = 0;
+  std::size_t last_raw_points_ = 0;
+  std::size_t last_post_box_points_ = 0;
+  std::size_t last_post_map_points_ = 0;
   double dynamic_box_max_age_s_ = 0.5;
   double dynamic_box_margin_m_ = 0.15;
   double dynamic_box_max_fraction_ = 0.50;

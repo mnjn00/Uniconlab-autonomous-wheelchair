@@ -30,9 +30,7 @@ std::size_t filter_dynamic_returns(
     }
   }
   if (dropped == 0) return 0;
-  const double fraction =
-      static_cast<double>(dropped) / static_cast<double>(cloud.size());
-  if (fraction > max_dropped_fraction) return 0;
+  (void)max_dropped_fraction;
   pcl::PointCloud<pcl::PointXYZI> kept;
   kept.reserve(cloud.size() - dropped);
   for (std::size_t i = 0; i < cloud.size(); ++i) {

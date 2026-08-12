@@ -152,17 +152,17 @@ TEST(RollingSubmap, DropsReturnsInsideAMovingBox) {
   }
 }
 
-TEST(RollingSubmap, TakingTooMuchOfTheScanIsRefusedNotClamped) {
-  // A box that would swallow the scan is likelier to be wrong than the scan
-  // is, and removing that much structure is its own way to lose the fix.
+TEST(RollingSubmap, CrowdDominatedScanIsStillExcluded) {
+  // A validated map-novel box is never registration structure. Restoring it
+  // because the crowd happens to dominate the scan recreates the field bug.
   auto cloud = grid_cloud(100);
   static_livox_localization::DynamicBox box;
   box.centre = Eigen::Vector3d(5.0, 0.0, 0.0);
   box.half_extent = Eigen::Vector3d(9.0, 1.0, 1.0);
   const std::size_t dropped =
       static_livox_localization::filter_dynamic_returns(cloud, {box}, 0.0, 0.25);
-  EXPECT_EQ(dropped, 0u);
-  EXPECT_EQ(cloud.size(), 100u);
+  EXPECT_EQ(dropped, 100u);
+  EXPECT_TRUE(cloud.empty());
 }
 
 TEST(RollingSubmap, NoBoxesLeavesTheScanExactlyAsItWas) {
