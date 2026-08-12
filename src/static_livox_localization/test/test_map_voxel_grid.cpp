@@ -34,8 +34,9 @@ Cloud::Ptr make_scan_with_person() {
     p.intensity = 1.0f;
     scan->push_back(p);
   }
-  // Person at y=2.0 — not in the map
-  for (float py = 1.8f; py < 2.2f; py += 0.05f) {
+  // Person at y=0.3 — in mapped empty space, within 0.40 m of the
+  // wall at y=0 but not on the wall itself.
+  for (float py = 0.25f; py < 0.45f; py += 0.05f) {
     for (float pz = 0.2f; pz < 1.8f; pz += 0.1f) {
       pcl::PointXYZI p;
       p.x = 2.0f;
@@ -60,11 +61,10 @@ TEST(MapVoxelGrid, PointInMapIsStatic) {
 TEST(MapVoxelGrid, PointInMappedEmptySpaceIsDynamic) {
   auto map = make_map_with_wall();
   static_livox_localization::MapVoxelGrid grid(map, 0.20);
-  // Point at y=2.0 — the wall is at y=0, so 2.0 m away
-  // With search_radius 0.40, no occupied voxel is near -> unmapped, not dynamic
-  EXPECT_FALSE(grid.is_likely_static(2.0f, 2.0f, 0.5f, 0.40));
-  // But at y=0.3 — within 0.40 of the wall — should be static
-  EXPECT_TRUE(grid.is_likely_static(2.0f, 0.3f, 0.5f, 0.40));
+  // Point at y=0.3 — within 0.40 of the wall at y=0, in mapped empty space
+  EXPECT_FALSE(grid.is_likely_static(2.0f, 0.3f, 0.5f, 0.40));
+  // Point at y=2.0 — far from wall, in unmapped space — kept
+  EXPECT_TRUE(grid.is_likely_static(2.0f, 2.0f, 0.5f, 0.40));
 }
 
 TEST(MapVoxelGrid, PointInUnmappedSpaceIsKept) {
