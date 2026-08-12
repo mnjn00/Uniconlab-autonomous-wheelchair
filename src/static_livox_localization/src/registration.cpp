@@ -85,6 +85,11 @@ RegistrationResult register_cloud(
       gicp.setMaximumIterations(config.max_iterations);
       gicp.setTransformationEpsilon(1e-6);
       gicp.setEuclideanFitnessEpsilon(1e-6);
+      // Reciprocal correspondences: a match is kept only if each point is
+      // the other's nearest neighbour. This rejects one-way matches
+      // typical of dynamic objects, which are near map structure but not
+      // reciprocally near.
+      gicp.setUseReciprocalCorrespondences(true);
       gicp.align(*aligned, seed.matrix().cast<float>());
       result.epsilon_met = gicp.hasConverged();
       final_transformation = gicp.getFinalTransformation();

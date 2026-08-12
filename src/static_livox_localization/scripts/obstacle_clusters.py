@@ -48,7 +48,7 @@ from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
                         lidar_extrinsics, lidar_to_body)
 from cloud_points import (COLLISION_MAX_HEIGHT_M,
                           COLLISION_MIN_HEIGHT_M, points_xyzi)
-from cluster_tracking import MOVING, UNKNOWN, Tracker
+from cluster_tracking import MOVING, STATIC, UNKNOWN, Tracker
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -528,11 +528,15 @@ class ObstacleClusters:
                 "age_s": 0.0 if track is None else
                          round(float(track.age_s(stamp.to_sec())), 1),
             })
-            # Only what the tracker has watched move. STATIC is either in the
-            # map or is a real obstacle, and UNKNOWN has not been watched long
-            # enough to say - deleting either from the registration input
-            # would remove structure the fix depends on.
-            if track is not None and track.motion(stamp.to_sec()) == MOVING:
+            # MOVING and UNKNOWN both go to the dynamic box. STATIC is
+            # either in the map or is a real obstacle, so only that is kept
+            # in the registration input. UNKNOWN is what a track looks like
+            # before it has been watched long enough to confirm, and on a
+            # 1.5 s confirmation window a walker at 1.4 m/s has already
+            # moved 2.1 m — the box filter and the map voxel grid are the two
+            # things that can reach those returns before the submap
+            # accumulates a 2.8 m trail through them.
+            if track is not None and track.motion(stamp.to_sec()) != STATIC:
                 in_body = lidar_to_body(
                     np.asarray([center], dtype=np.float64),
                     self.lidar_in_body, self.lidar_to_body_rotation)[0]
