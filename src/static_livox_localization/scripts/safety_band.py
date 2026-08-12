@@ -253,6 +253,26 @@ class SafetyBand:
         hi = np.min(self.left[order], axis=1)
         return lateral, lo, hi
 
+    @staticmethod
+    def contained(lateral, lo, hi, grace=0.0):
+        """The containment verdict, from margins already computed.
+
+        Split out of contains_many so a caller that needs BOTH the verdict
+        and the margins pays for the geometry once. dwa_core scores how near
+        the corridor's edge each rollout runs as well as rejecting the ones
+        that leave it, and asking contains_many and then margins_many ran the
+        802-station nearest-neighbour search twice over the same 1,785
+        points: 24.4 ms each on the target NUC against a 100 ms control
+        period, so 96 % of the DWA cycle was one answer computed twice.
+
+        The threshold lives here rather than at that caller for the reason
+        margins_many exists at all - a consumer that writes out its own
+        comparison is a second copy of the band rules, and the tolerance and
+        the sign convention are part of those rules.
+        """
+        return ((lateral >= lo - grace - 1e-6) &
+                (lateral <= hi + grace + 1e-6))
+
     def contains_many(self, points, grace=0.0):
         """Vectorised containment for map-frame ``(x, y)`` points.
 
@@ -266,8 +286,7 @@ class SafetyBand:
         lateral, lo, hi = self.margins_many(points)
         if not len(lateral):
             return np.zeros(0, dtype=bool)
-        return ((lateral >= lo - grace - 1e-6) &
-                (lateral <= hi + grace + 1e-6))
+        return self.contained(lateral, lo, hi, grace)
 
     def hazard_clearance(self, point):
         """Distance from the nearest WHEEL to the nearest fall hazard.
