@@ -66,12 +66,40 @@ max_prediction_translation_m: 1.5
 max_prediction_yaw_deg: 20.0
 max_correction_translation_m: 0.20
 max_correction_yaw_deg: 2.0
-degraded_after_failures: 1
-lost_after_s: 8.0
-recovery_confirmations: 2
+# Relaxed 2026-08-12 after four field runs in which these, and not the
+# quality gates above, were what held the chair. The gates were never close:
+# the worst SUCCESSFUL registration of the day scored fitness 0.034 against
+# the 0.28 ceiling, and the moment localization was declared lost the inlier
+# ratio was 0.40 against the 0.20 floor. Both passed. So none of max_fitness
+# or min_inlier_ratio is touched here - loosening a gate that is not binding
+# buys nothing and spends real margin.
+#
+# degraded_after_failures 1 -> 3. A single non-converged registration used to
+# declare DEGRADED. 15 % of attempts fail to converge on this route, and 21 of
+# 30 DEGRADED episodes cleared inside the follower's 3 s grace on their own -
+# so most of what this fired on was noise. Cost: a genuine loss is now
+# declared about two registrations (~2 s) later.
+degraded_after_failures: 3
+# 8 s was short enough that any hold longer than it left the state machine
+# primed to declare LOST on the first imperfect registration afterwards.
+# note_unobserved now discounts parked time, but the margin was still thin.
+# Cost is bounded by the follower, which holds on DEGRADED after 3 s and
+# therefore stops the chair long before this expires.
+lost_after_s: 20.0
+# One good registration returns to TRACKING instead of two. Cost: a single
+# lucky match can restore tracking, which is why degraded_after_failures
+# above went up rather than down - the pair is meant to be asymmetric.
+recovery_confirmations: 1
 
 auto_correction_on_start: false
 required_consistent_candidates: 3
-candidate_translation_tolerance_m: 0.30
+# 0.30 -> 0.50. This is the one that actually blocked re-acquisition at
+# wp 836 on 2026-08-12: the localizer had a fix every cycle but consecutive
+# candidates scattered further than 0.30 m, so three never agreed and it sat
+# in VERIFYING / CANDIDATE_INCONSISTENT until it went LOST. This is the most
+# consequential relaxation here - a re-acquired fix may now settle up to
+# 0.5 m from where a tighter consensus would have put it - and it is the
+# first thing to put back if a run comes up in the wrong place.
+candidate_translation_tolerance_m: 0.50
 candidate_yaw_tolerance_deg: 3.0
 
