@@ -46,7 +46,7 @@ import numpy as np
 
 # The follower's constants. Kept literal rather than imported because
 # waypoint_follower pulls in rospy and this has to stay testable at a desk.
-MAX_SPEED = 0.6
+MAX_SPEED = 1.0
 TURN_FLOOR_SPEED = 0.30
 MAX_YAW_RATE = 0.5
 

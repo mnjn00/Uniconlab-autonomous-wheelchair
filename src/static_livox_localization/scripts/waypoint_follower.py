@@ -87,7 +87,7 @@ import tf.transformations as tft
 # /fast_lio_icp/pose, spin-in-place bookends trimmed): median 0.96 m/s,
 # p75 1.00, p90 1.21, p95 1.58. The operator directed 0.6 m/s for the
 # 0727 field run; the measured p90 remains the upper reference.
-MAX_SPEED = 0.6
+MAX_SPEED = 1.0
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5

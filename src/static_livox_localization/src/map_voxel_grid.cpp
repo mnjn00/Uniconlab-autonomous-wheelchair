@@ -39,11 +39,19 @@ bool MapVoxelGrid::any_occupied_near(const CellKey& center, int half_range) cons
 bool MapVoxelGrid::is_likely_static(float x, float y, float z,
                                     double search_radius_m) const {
   CellKey k = key_for(x, y, z);
+  // Point lands directly on map structure — keep it.
   if (occupied_.find(k) != occupied_.end()) return true;
   int half = static_cast<int>(std::ceil(search_radius_m * inv_voxel_size_));
   if (half < 1) half = 1;
-  if (any_occupied_near(k, half)) return true;
-  return false;
+  // Point is in an empty voxel but map structure exists nearby — this is
+  // "mapped empty space". The map says nothing should be here, so the
+  // return is from a pedestrian, a parked car that was not there when the
+  // map was built, or any other dynamic object. Remove it.
+  if (any_occupied_near(k, half)) return false;
+  // Point is far from any map structure — "unmapped space". We cannot tell
+  // whether it is a new static feature or a dynamic object, so we keep it
+  // to avoid deleting structure the registration depends on.
+  return true;
 }
 
 std::size_t MapVoxelGrid::filter_dynamic(
