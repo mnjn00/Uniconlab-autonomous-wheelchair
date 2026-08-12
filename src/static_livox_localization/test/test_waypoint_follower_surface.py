@@ -119,11 +119,14 @@ def test_follower_delegates_localization_states_to_fail_closed_policy():
     assert "reason = localization_hold_reason(" in text
 
 
-def test_pure_pursuit_resyncs_after_a_localization_position_jump():
+def test_follower_holds_before_resyncing_after_a_localization_position_jump():
     text = follower_text()
-    assert "NEAREST_RESYNC_M = 2.0" in text
-    assert "global_index = int(np.argmin(d))" in text
-    assert "self.nearest_index = global_index" in text
+    motion = (ROOT / "scripts" / "motion_safety.py").read_text(
+        encoding="utf-8")
+    assert "POSE_JUMP_HOLD_M = 0.30" in motion
+    assert "pose_jump_requires_hold" in text
+    assert 'yield "LOCALIZATION_JUMP", OVERRIDE' in text
+    assert "self.pose_jump_withheld_m" in text
 
 
 def test_follower_checks_the_complete_chord_and_holds_if_none_is_safe():

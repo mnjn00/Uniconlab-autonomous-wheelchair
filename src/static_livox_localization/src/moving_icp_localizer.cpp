@@ -223,7 +223,7 @@ class MovingIcpLocalizer {
     tracking_config_.min_source_points = registration_config_.min_points;
     tracking_config_.min_target_points = registration_config_.min_points;
     private_nh_.param("max_prediction_translation_m",
-                      tracking_config_.max_prediction_translation_m, 1.0);
+                      tracking_config_.max_prediction_translation_m, 0.75);
     double prediction_yaw_deg = 20.0;
     private_nh_.param("max_prediction_yaw_deg", prediction_yaw_deg, 20.0);
     tracking_config_.max_prediction_rotation_rad =
@@ -429,6 +429,7 @@ class MovingIcpLocalizer {
     // structure on the strength of where somebody was a second ago is the
     // same mistake in the other direction.
     std::size_t dropped = 0;
+    bool dynamic_filter_refused = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const double age = (stamp - dynamic_boxes_stamp_).toSec();
@@ -436,10 +437,18 @@ class MovingIcpLocalizer {
           age >= 0.0 && age <= dynamic_box_max_age_s_) {
         dropped = static_livox_localization::filter_dynamic_returns(
             *cloud, dynamic_boxes_, dynamic_box_margin_m_,
-            dynamic_box_max_fraction_);
+            dynamic_box_max_fraction_, &dynamic_filter_refused);
       }
     }
     last_dynamic_dropped_ = dropped;
+    last_dynamic_filter_refused_ = dynamic_filter_refused;
+    if (dynamic_filter_refused) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      state_machine_.observe(false, stamp.toSec());
+      publish_diagnostic_locked("DYNAMIC_FILTER_OVERLOADED",
+                                RegistrationResult(), CorrectionDecision());
+      return;
+    }
 
     OdomSample odom;
     Cloud::Ptr submap;
@@ -697,6 +706,9 @@ class MovingIcpLocalizer {
     // same without this.
     status.values.push_back(key_value(
         "dynamic_returns_dropped", std::to_string(last_dynamic_dropped_)));
+    status.values.push_back(key_value(
+        "dynamic_filter_refused", last_dynamic_filter_refused_ ? "true"
+                                                                 : "false"));
     status.values.push_back(key_value("registration_backend",
                                       registration.backend));
     status.values.push_back(key_value("registration_elapsed_ms",
@@ -745,6 +757,7 @@ class MovingIcpLocalizer {
   std::vector<static_livox_localization::DynamicBox> dynamic_boxes_;
   ros::Time dynamic_boxes_stamp_{0.0};
   std::size_t last_dynamic_dropped_ = 0;
+  bool last_dynamic_filter_refused_ = false;
   double dynamic_box_max_age_s_ = 0.5;
   double dynamic_box_margin_m_ = 0.15;
   double dynamic_box_max_fraction_ = 0.25;

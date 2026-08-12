@@ -228,6 +228,17 @@ def test_the_producer_writes_what_the_consumer_reads():
     assert threat.distance_m == pytest.approx(3.75, abs=0.25)
 
 
+def test_people_are_excluded_from_registration_before_motion_confirmation():
+    module, _node = producer_at([100.0])
+
+    assert module.is_dynamic_for_localization("person", ct.STATIC)
+    assert module.is_dynamic_for_localization("person", ct.UNKNOWN)
+    assert module.is_dynamic_for_localization("person", ct.MOVING)
+    assert not module.is_dynamic_for_localization("vehicle", ct.STATIC)
+    assert module.is_dynamic_for_localization("vehicle", ct.UNKNOWN)
+    assert module.is_dynamic_for_localization("obstacle", ct.MOVING)
+
+
 def test_overhead_only_returns_cannot_become_a_control_object():
     """Raising the cluster ceiling above the gate's 1.50 m limit must fail."""
     now_s = [100.0]

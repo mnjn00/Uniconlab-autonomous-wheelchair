@@ -43,13 +43,15 @@ struct DynamicBox {
 //
 // max_dropped_fraction is a refusal, not a clamp. If the boxes would take
 // more of the scan than that, they are more likely to be wrong than the scan
-// is, and removing that much structure is its own way to lose the fix - so
-// nothing is dropped and the caller is told.
+// is, and removing that much structure is its own way to lose the fix. The
+// optional refused flag lets the caller fail closed instead of silently
+// registering the unfiltered dynamic scan.
 std::size_t filter_dynamic_returns(
     pcl::PointCloud<pcl::PointXYZI>& cloud,
     const std::vector<DynamicBox>& boxes,
     double margin_m,
-    double max_dropped_fraction);
+    double max_dropped_fraction,
+    bool* refused = nullptr);
 
 class RollingSubmap {
  public:
@@ -83,4 +85,3 @@ class RollingSubmap {
 };
 
 }  // namespace static_livox_localization
-

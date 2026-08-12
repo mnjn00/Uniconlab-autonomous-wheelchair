@@ -35,6 +35,15 @@ def test_degraded_keeps_bounded_grace_then_holds():
         "LOCALIZATION_DEGRADED_TIMEOUT"
 
 
+def test_pose_jump_and_dynamic_filter_overload_hold_immediately():
+    for reason, expected in (
+            ("PREDICTION_TRANSLATION_JUMP", "LOCALIZATION_JUMP"),
+            ("PREDICTION_ROTATION_JUMP", "LOCALIZATION_JUMP"),
+            ("DYNAMIC_FILTER_OVERLOADED", "LOCALIZATION_DYNAMIC_FILTER")):
+        assert POLICY.localization_hold_reason(
+            "DEGRADED", 0.0, 3.0, reason=reason) == expected
+
+
 # ------------------------------------- the hold that could not clear itself
 
 SUPPRESSED = "STATIONARY_CORRECTION_SUPPRESSED"
@@ -103,6 +112,11 @@ def test_a_step_the_chair_could_not_have_made_is_clamped_not_dropped():
     assert withheld > 0.0
     assert 0.0 < xy[0] < 0.52
     assert abs(xy[0] - MOTION.POSE_STEP_LIMIT_MPS * 0.1) < 1e-9
+
+
+def test_a_large_withheld_step_requires_an_operator_hold():
+    assert MOTION.pose_jump_requires_hold(0.30)
+    assert not MOTION.pose_jump_requires_hold(0.299)
 
 
 def test_the_clamp_keeps_the_direction_it_was_given():

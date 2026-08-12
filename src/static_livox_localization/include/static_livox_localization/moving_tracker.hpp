@@ -20,7 +20,10 @@ struct TrackingConfig {
   double min_inlier_ratio = 0.35;
   int min_source_points = 500;
   int min_target_points = 500;
-  double max_prediction_translation_m = 1.0;
+  // A correction over this distance is not physically plausible for the
+  // moving chair and is rejected before map->odom is updated. Initialization
+  // uses its separate, wider seed gate.
+  double max_prediction_translation_m = 0.75;
   double max_prediction_rotation_rad = 0.3490658503988659;
   double max_correction_translation_m = 0.30;
   double max_correction_rotation_rad = 0.08726646259971647;
@@ -83,4 +86,3 @@ class TrackingStateMachine {
 };
 
 }  // namespace static_livox_localization
-

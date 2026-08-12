@@ -62,10 +62,16 @@ min_points: 500
 max_fitness: 0.28
 min_inlier_ratio: 0.20
 
-max_prediction_translation_m: 1.5
+# A 1.0+ m correction in one moving-localization cycle was observed when a
+# person entered the scan. Keep the initial global seed permissive, but reject
+# this size of correction once tracking is active.
+max_prediction_translation_m: 0.75
 max_prediction_yaw_deg: 20.0
 max_correction_translation_m: 0.20
 max_correction_yaw_deg: 2.0
+dynamic_box_max_age_s: 0.5
+dynamic_box_margin_m: 0.15
+dynamic_box_max_fraction: 0.25
 degraded_after_failures: 1
 lost_after_s: 8.0
 recovery_confirmations: 2

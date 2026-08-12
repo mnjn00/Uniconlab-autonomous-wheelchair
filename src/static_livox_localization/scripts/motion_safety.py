@@ -23,6 +23,19 @@ class MotionEstimate(NamedTuple):
 POSE_STEP_LIMIT_MPS = 1.2
 # Below this, arguing with the fix costs more than believing it.
 POSE_STEP_FLOOR_M = 0.05
+# A small correction is clamped so a legitimate estimate can be followed.
+# Once this much of a sample is withheld, continuing to steer from the
+# clamped pose can turn a localization glitch into a real route excursion.
+POSE_JUMP_HOLD_M = 0.30
+
+
+def pose_jump_requires_hold(withheld_m, threshold_m=POSE_JUMP_HOLD_M):
+    """Whether a pose correction is too large to follow automatically."""
+    try:
+        return math.isfinite(float(withheld_m)) and \
+            float(withheld_m) >= float(threshold_m)
+    except (TypeError, ValueError):
+        return True
 
 
 def clamp_pose_step(previous_xy, candidate_xy, elapsed_s,

@@ -159,9 +159,12 @@ TEST(RollingSubmap, TakingTooMuchOfTheScanIsRefusedNotClamped) {
   static_livox_localization::DynamicBox box;
   box.centre = Eigen::Vector3d(5.0, 0.0, 0.0);
   box.half_extent = Eigen::Vector3d(9.0, 1.0, 1.0);
+  bool refused = false;
   const std::size_t dropped =
-      static_livox_localization::filter_dynamic_returns(cloud, {box}, 0.0, 0.25);
+      static_livox_localization::filter_dynamic_returns(
+          cloud, {box}, 0.0, 0.25, &refused);
   EXPECT_EQ(dropped, 0u);
+  EXPECT_TRUE(refused);
   EXPECT_EQ(cloud.size(), 100u);
 }
 

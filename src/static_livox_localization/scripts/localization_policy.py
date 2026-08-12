@@ -4,6 +4,16 @@
 # the chair has not moved far enough to earn a correction.
 SUPPRESSED_WHILE_PARKED = "STATIONARY_CORRECTION_SUPPRESSED"
 
+# These are not ordinary transient registration failures. The chair has
+# evidence that the map pose itself jumped or that the scan was dominated by
+# returns we could not safely mask, so the follower must stop immediately
+# rather than spend its degraded grace period steering from a bad pose.
+IMMEDIATE_HOLD_REASONS = frozenset((
+    "PREDICTION_TRANSLATION_JUMP",
+    "PREDICTION_ROTATION_JUMP",
+    "DYNAMIC_FILTER_OVERLOADED",
+))
+
 # How far the chair may creep to earn one before the hold becomes final.
 REACQUIRE_LIMIT_M = 0.5
 
@@ -44,6 +54,9 @@ def localization_hold_reason(state, degraded_age_s, degraded_stop_s,
     if state == "TRACKING":
         return None
     if state == "DEGRADED":
+        if reason in IMMEDIATE_HOLD_REASONS:
+            return "LOCALIZATION_JUMP" if reason != \
+                "DYNAMIC_FILTER_OVERLOADED" else "LOCALIZATION_DYNAMIC_FILTER"
         if degraded_age_s is None or degraded_age_s <= degraded_stop_s:
             return None
         if reason == SUPPRESSED_WHILE_PARKED:

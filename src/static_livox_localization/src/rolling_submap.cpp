@@ -13,7 +13,9 @@ std::size_t filter_dynamic_returns(
     pcl::PointCloud<pcl::PointXYZI>& cloud,
     const std::vector<DynamicBox>& boxes,
     double margin_m,
-    double max_dropped_fraction) {
+    double max_dropped_fraction,
+    bool* refused) {
+  if (refused) *refused = false;
   if (boxes.empty() || cloud.empty()) return 0;
   std::vector<char> drop(cloud.size(), 0);
   std::size_t dropped = 0;
@@ -32,7 +34,10 @@ std::size_t filter_dynamic_returns(
   if (dropped == 0) return 0;
   const double fraction =
       static_cast<double>(dropped) / static_cast<double>(cloud.size());
-  if (fraction > max_dropped_fraction) return 0;
+  if (fraction > max_dropped_fraction) {
+    if (refused) *refused = true;
+    return 0;
+  }
   pcl::PointCloud<pcl::PointXYZI> kept;
   kept.reserve(cloud.size() - dropped);
   for (std::size_t i = 0; i < cloud.size(); ++i) {
@@ -141,4 +146,3 @@ void RollingSubmap::trim(double newest_stamp_s) {
 }
 
 }  // namespace static_livox_localization
-

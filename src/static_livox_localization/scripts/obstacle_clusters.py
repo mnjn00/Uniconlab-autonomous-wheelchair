@@ -48,7 +48,7 @@ from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
                         lidar_extrinsics, lidar_to_body)
 from cloud_points import (COLLISION_MAX_HEIGHT_M,
                           COLLISION_MIN_HEIGHT_M, points_xyzi)
-from cluster_tracking import MOVING, UNKNOWN, Tracker
+from cluster_tracking import STATIC, UNKNOWN, Tracker
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -105,6 +105,21 @@ MAX_BAND_SAMPLE_POINTS = 96
 OUTSIDE_MAX_INSIDE_FRACTION = 0.05
 INSIDE_MIN_INSIDE_FRACTION = 0.95
 OUTSIDE_BAND = "outside_band"
+
+# Registration and collision policy have different questions. The follower
+# may decide that a parked object is safe to go around, but a person is still
+# not part of the immutable map and must never become a GICP feature merely
+# because they stood still for long enough to be called STATIC. Vehicles and
+# generic obstacles retain the motion-based rule: only a confirmed-moving or
+# not-yet-confirmed track is excluded from registration.
+LOCALIZATION_ALWAYS_DYNAMIC = frozenset(("person",))
+
+
+def is_dynamic_for_localization(raw_label, motion):
+    """Return whether a cluster's returns must be masked before GICP."""
+    if raw_label in LOCALIZATION_ALWAYS_DYNAMIC:
+        return True
+    return motion != STATIC
 
 # Lateral slices of a cluster's OWN returns, so a consumer can ask how far
 # this object actually is inside a corridor of its choosing. A box cannot
@@ -501,6 +516,10 @@ class ObstacleClusters:
                 zip(boxes, band_context)):
             raw_label, band_relation, inside_fraction, profile = context
             track = tracks[i] if tracks else None
+            motion = UNKNOWN if track is None else \
+                track.motion(stamp.to_sec())
+            localization_dynamic = is_dynamic_for_localization(
+                raw_label, motion)
             objects.append({
                 "class": label,
                 "raw_class": raw_label,
@@ -521,18 +540,19 @@ class ObstacleClusters:
                 # pose there is no frame to judge motion in, and the honest
                 # answer is UNKNOWN, which every consumer handles as moving.
                 "id": 0 if track is None else int(track.id),
-                "motion": UNKNOWN if track is None else
-                          track.motion(stamp.to_sec()),
+                "motion": motion,
                 "speed_mps": 0.0 if track is None else
                              round(float(track.speed_mps()), 2),
                 "age_s": 0.0 if track is None else
-                         round(float(track.age_s(stamp.to_sec())), 1),
+                             round(float(track.age_s(stamp.to_sec())), 1),
+                "localization_dynamic": localization_dynamic,
             })
-            # Only what the tracker has watched move. STATIC is either in the
-            # map or is a real obstacle, and UNKNOWN has not been watched long
-            # enough to say - deleting either from the registration input
-            # would remove structure the fix depends on.
-            if track is not None and track.motion(stamp.to_sec()) == MOVING:
+            # Registration policy is deliberately not the collision policy:
+            # people are excluded even when STATIC/UNKNOWN, while vehicles
+            # and generic obstacles are excluded while MOVING/UNKNOWN. The
+            # safety-band relation is not consulted here; an object outside
+            # the corridor can still pull the map alignment sideways.
+            if localization_dynamic:
                 in_body = lidar_to_body(
                     np.asarray([center], dtype=np.float64),
                     self.lidar_in_body, self.lidar_to_body_rotation)[0]

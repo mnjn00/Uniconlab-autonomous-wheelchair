@@ -78,7 +78,8 @@ from localization_policy import localization_hold_reason
 from scan_accumulator import CloudAccumulator
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            clamp_pose_step,
-                           motion_hold_reason, stopping_envelope)
+                           motion_hold_reason, pose_jump_requires_hold,
+                           stopping_envelope)
 from safety_band import SafetyBand
 import tf.transformations as tft
 
@@ -175,6 +176,7 @@ class WaypointFollower:
         self.pose_yaw = 0.0
         self.pose_pitch = 0.0
         self.pose_stamp = rospy.Time(0)
+        self.pose_jump_withheld_m = 0.0
         self.tracking_state = ""
         self.tracking_reason = ""
         # Where the chair stood when a parked-and-blind hold began, so the
@@ -346,6 +348,14 @@ class WaypointFollower:
                 2.0, "pose step clamped: %.2f m withheld over %.2f s - the "
                 "chair cannot move that fast, so this is the fix correcting",
                 withheld, elapsed or 0.0)
+        if pose_jump_requires_hold(withheld):
+            self.pose_jump_withheld_m = max(
+                self.pose_jump_withheld_m, float(withheld))
+            rospy.logerr_throttle(
+                2.0,
+                "localization pose jump %.2f m withheld; holding until "
+                "the operator re-localizes",
+                self.pose_jump_withheld_m)
         self.pose_yaw = yaw
         self.pose_pitch = pitch
         self.pose_stamp = message.header.stamp
@@ -413,6 +423,11 @@ class WaypointFollower:
     def on_start(self, request):
         self.enabled = request.data
         if not request.data:
+            # An explicit stop/start is the operator acknowledgement after
+            # re-localization. Do not clear this latch merely because the
+            # next pose sample looks quiet: that would resume on the clamped
+            # pose which caused the hold.
+            self.pose_jump_withheld_m = 0.0
             self.send_stop()
         rospy.loginfo("follower %s", "ENABLED" if self.enabled else "PAUSED")
         return SetBoolResponse(success=True,
@@ -770,6 +785,9 @@ class WaypointFollower:
             return
         if (now - self.cloud_stamp).to_sec() > 1.0:
             yield "NO_CLOUD", POLICY
+        if self.pose_jump_withheld_m >= 0.30:
+            yield "LOCALIZATION_JUMP", OVERRIDE
+            return
         motion_reason = motion_hold_reason(
             self.motion, now.to_sec(), ODOM_STALE_S)
         if motion_reason:
