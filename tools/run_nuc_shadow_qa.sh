@@ -17,10 +17,10 @@ fi
   exit 64
 }
 
-REPO="${REPO:-$HOME/unicon-wheelchair}"
+REPO="${REPO:-$HOME/wheelchair_localization_src}"
 WS="${WS:-$HOME/livox_static_localization_ws}"
-MAP="${MAP:-$HOME/maps/merged_0707_0725_v1/field_localization_map.pcd}"
-MAP_SHA256="${MAP_SHA256:-$HOME/maps/merged_0707_0725_v1/field_localization_map.sha256}"
+MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd}"
+MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
 BAND="${BAND:-$REPO/routes/20260812_route_v6_v8_safety_band.json}"
 OUT="${OUT:-/tmp/ulw-evidence}"
 TIMEOUT_S="${TIMEOUT_S:-45}"
@@ -123,12 +123,11 @@ if ! rostopic list | grep -qx '/fast_lio_icp/pose'; then
 fi
 
 if ! rostopic list | grep -qx '/perception/objects_summary'; then
-  EXPECTED_MAP_SHA="$(awk '{print $1}' "$MAP_SHA256")"
   setsid rosrun static_livox_localization obstacle_clusters.py \
     _body_frame_profile:=vn100 \
     _safety_band:="$BAND" \
     _map_path:="$MAP" \
-    _map_sha256:="$EXPECTED_MAP_SHA" \
+    _map_sha256:="$MAP_SHA256" \
     _shadow_qa:=true \
     > "$OUT/shadow-clusters.log" 2>&1 &
   LAUNCHED_PIDS+=("$!")

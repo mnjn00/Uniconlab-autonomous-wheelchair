@@ -153,6 +153,9 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert "rosrun static_livox_localization safety_gate.py" not in runner
     assert 'SHADOW_QA=1 "$REPO/tools/start_wheelchair_localization.sh"' \
         in runner
+    assert 'REPO="${REPO:-$HOME/wheelchair_localization_src}"' in runner
+    assert 'MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"' \
+        in runner
     assert "cleanup || status=90" in runner
     loop = runner[runner.index("for attempt in"):runner.index(
         'cp "$OUT/nuc-shadow-qa.txt"')]
