@@ -5,6 +5,7 @@ these run against the band's own geometry - there is no grid here to be
 wrong about, which is the point of the design.
 """
 
+import json
 import math
 import re
 import sys
@@ -343,7 +344,26 @@ def test_an_unparseable_threat_keeps_the_conservative_frontal_placement():
     assert threat.lateral_m is None
 
 
-def test_the_follower_uses_the_lateral_offset_it_is_given():
+def test_the_follower_places_every_return_where_it_is():
+    """The 2026-08-09 fix, now taken from the profile rather than the box.
+
+    It used to read threat.lateral_m - one object, one place. cluster_guard
+    publishes the lateral slice each return falls in, so the follower places
+    all of them, and a wall beside the chair arrives beside the chair along
+    its whole length instead of at one point on it.
+    """
     src = (SCRIPTS / "dwa_follower.py").read_text(encoding="utf-8")
-    assert "threat.lateral_m" in src
-    assert "left * lateral" in src
+    assert "corridor_obstacle_points(" in src
+    assert "heading * forward + left * lateral" in src
+
+    wall = {"class": "obstacle", "x": 1.0, "y": 0.9, "size": [2.0, 1.0, 1.2],
+            "points": 80, "motion": cluster_guard.STATIC}
+    summary = cluster_guard.parse_summary(json.dumps(
+        {"stamp": 100.0, "status": "OK", "objects": [wall]}))
+    blocks, points = cluster_guard.corridor_obstacle_points(summary, 1.0)
+
+    assert blocks and len(points) > 1
+    # Beside the chair, not on its line of travel, and along its length.
+    assert all(lateral > 0.0 for _forward, lateral in points)
+    assert max(f for f, _ in points) - min(f for f, _ in points) \
+        <= 1e-9, "a box's near face is one distance across its width"

@@ -57,6 +57,7 @@ from std_msgs.msg import String
 
 import mpc_core
 import mpc_speed
+from cluster_guard import GO_ROUND, WAIT
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command
 from waypoint_follower import (WaypointFollower, CONTROL_HZ, MAX_YAW_RATE,
@@ -121,17 +122,24 @@ class MpcFollower(WaypointFollower):
 
     # ---- obstacles --------------------------------------------------
 
-    def mpc_obstacles(self, state):
-        """The tracked threat ahead, as a half-plane the solver may bend for.
+    def mpc_obstacles(self, state, threat):
+        """The threat ahead, as a half-plane the solver may bend for.
 
         The side is chosen by mpc_core from the band's own limits, so an
         obstacle can never authorise ground the band says breaks. Only the
         nearest one is passed: the corridor is a metre wide, so a second
         obstacle behind the first constrains nothing the first does not.
+
+        The caller decides whether there is anything to bend for at all -
+        bending round something is a bypass, and only avoidance_for may
+        authorise one. Passing a threat here that the tracker has not
+        watched stand still is what this profile did until 2026-08-11.
+
+        Placement is still frontal, which the DWA profile stopped doing on
+        2026-08-09 after a wall beside the chair became one in front of it.
+        A half-plane is not a point and takes a different fix than
+        obstacle_points did; it is an open defect and not an oversight.
         """
-        if not self.clusters_enabled:
-            return ()
-        threat = self.corridor_threat(0.0)
         if threat is None or threat.distance_m > PLAN_AHEAD_M:
             return ()
         heading = np.array([math.cos(state[2]), math.sin(state[2])])
@@ -174,11 +182,28 @@ class MpcFollower(WaypointFollower):
             self.last_command_stamp = None
             return
 
+        # Parked or moving, before the solver is asked to bend for anything.
+        # Same policy, same clock, same module as the pursuit profile - see
+        # WaypointFollower.avoidance_for for why it is not restated here.
+        threat = self.corridor_threat(0.0) if self.clusters_enabled else None
+        decision = self.avoidance_for(
+            now, threat,
+            threat is not None and threat.distance_m < self.stop_radius())
+        if decision == WAIT:
+            self.publish_state("HOLD:MPC_WAIT")
+            self.mpc_status = "WAIT"
+            self.send_stop()
+            self.warm = None
+            self.last_command_stamp = None
+            return
+
         _v, th_ref = mpc_core.polyline_refs(
             self.band, state[:2], self.solver.p.horizon, self.solver.p.dt,
             float(v_ref[0]))
         u0, status, info = self.solver.solve_cycle(
-            state, v_ref, th_ref, self.mpc_obstacles(state), self.warm)
+            state, v_ref, th_ref,
+            self.mpc_obstacles(state, threat if decision == GO_ROUND else None),
+            self.warm)
         if status in (mpc_core.STATUS_OK, mpc_core.STATUS_REUSED):
             self.warm = (info["xbar"], info["ubar"]) if "xbar" in info \
                 else self.warm

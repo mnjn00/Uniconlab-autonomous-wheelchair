@@ -139,14 +139,23 @@ def rollout(state, v, w, sim_time_s=SIM_TIME_S, step_s=SIM_STEP_S):
     Returns (n, 3) of (x, y, yaw). The intermediate points are the point -
     a candidate that ends inside the corridor having crossed out of it on
     the way is not a candidate.
+
+    The step rotates and THEN translates, which is what DwaPlanner._rollouts
+    does in one batch. It used to translate first, so the two disagreed by a
+    single step of rotation - a whole heading step at the sample spacing.
+    That matters because this function is how tests check the planner's own
+    output: stays_in_band(rollout(state, *planner.plan(...))) was measuring a
+    trajectory the planner never scored, in exactly the direction that hides
+    a candidate leaving the band on the first step.
     """
-    x, y, yaw = float(state[0]), float(state[1]), float(state[2])
+    x, y = float(state[0]), float(state[1])
+    yaw0 = float(state[2])
     out = []
     steps = max(int(round(sim_time_s / step_s)), 1)
-    for _ in range(steps):
+    for step in range(1, steps + 1):
+        yaw = yaw0 + w * step * step_s
         x += v * math.cos(yaw) * step_s
         y += v * math.sin(yaw) * step_s
-        yaw += w * step_s
         out.append((x, y, yaw))
     return np.array(out, dtype=float)
 

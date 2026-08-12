@@ -119,3 +119,49 @@ Worst-case cross-track over the full route improves 0.26 m -> 0.13 m.
   on the prefix that fits its own braking distance, rather than a flat 1.7 s,
   changed nothing once the two defects above were fixed. It would have
   relaxed a safety criterion for no gain, so the band veto is untouched.
+
+## Addendum, 2026-08-11: two more defects, found by reading the code
+
+Neither is a new measurement. The chair has not been driven since 08-08 and
+everything above stands as recorded.
+
+**The profile never asked whether the obstacle was moving.** `DwaFollower`
+replaces `step()` whole, and the parked-or-moving decision lived in the body
+of the pursuit `step()` rather than beside the guards that were extracted for
+exactly this reason. So the profile handed its planner the nearest threat
+whatever the tracker said about it, and a rollout scorer given a walking
+person picks the arc that clears them by `OBSTACLE_FLOOR_M` and drives past -
+where the pursuit profile stands and waits. The `mpc` profile had it too.
+Both now call `WaypointFollower.avoidance_for`, and a `WAIT` never reaches
+the planner at all.
+
+**The obstacle reached the planner as one point.** Measuring an object's
+distance from its own returns instead of its bounding box was the 07-31 fix;
+the shape was the half left behind. A wall spanning the corridor arrived as a
+single point, and an arc clearing that point by 0.41 m was admitted while
+passing through the rest of the wall. `cluster_guard.object_points` publishes
+every lateral slice the object occupies - the same measurement
+`profile_reach` takes the minimum of - for the nearest few objects rather
+than only the nearest one, because the single-object argument holds for a
+distance and fails for a shape.
+
+**And the tests were checking a trajectory the planner never scored.**
+`dwa_core.rollout` translated then rotated; `DwaPlanner._rollouts` rotates
+then translates. They disagreed by one full heading step at the sample
+spacing, and `stays_in_band(rollout(state, *planner.plan(...)))` is how
+`tests/test_dwa_band.py` verifies containment - so the check leaned in the
+direction that hides a candidate leaving the band on its first step. Both now
+take the same step. No node calls `rollout`, so nothing the chair runs
+changed; what changed is that the test means what it says.
+
+### What is still not fixed
+
+`OFF_BAND` remains a stop only a person can clear, and the entry above is
+right that no scoring change reaches it - wrong only in implying nothing
+does. It is not a scoring problem: every rollout point is tested, so a chair
+a centimetre outside the corridor has no admissible candidate at all,
+because driving back in starts outside. A bounded recovery for it is written
+and tested and deliberately **not** merged. It is the only change in this
+stack that turns a stop into motion, and it is waiting on one complete run of
+the route to be worth its risk. That run is what this profile needs before
+anything else.

@@ -546,6 +546,35 @@ class WaypointFollower:
             return None
         return self.cluster_threat(lateral_shift)
 
+    def avoidance_for(self, now, threat, blocking):
+        """Parked or moving, and the blocked-for clock that backs the answer.
+
+        Here rather than in step() for the reason handled_before_driving is:
+        a second control law has to be put behind the SAME policy, not
+        behind a copy of it. dwa_follower and mpc_follower replace step()
+        entirely, and until 2026-08-11 neither of them asked this question
+        at all - they handed the nearest threat to their solver whatever it
+        was doing, so the DWA profile would pick an arc around a walking
+        person at OBSTACLE_FLOOR_M while the pursuit profile stood and
+        waited for the same person. That is the drift a copied guard makes,
+        arrived at by omission instead, and it went the way copied guards
+        always go: toward the follower that does not stop.
+
+        blocked_since lives here too, because the time rule reads it and a
+        second copy of the clock is a second answer to how long something
+        has been in the way.
+        """
+        if blocking:
+            if self.blocked_since is None:
+                self.blocked_since = now
+        else:
+            self.blocked_since = None
+        return avoidance_decision(
+            threat, blocking,
+            None if self.blocked_since is None
+            else (now - self.blocked_since).to_sec(),
+            PLAN_AHEAD_M, BYPASS_AFTER_S)
+
     def take_a_way_round(self, clear_for_m):
         """Offset far enough to clear the corridor without leaving the band.
 
@@ -859,17 +888,10 @@ class WaypointFollower:
                 allowed = min(allowed,
                               CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
 
-        if blocking == "OBSTACLE" and self.blocked_since is None:
-            self.blocked_since = now
-        decision = avoidance_decision(
-            threat, blocking == "OBSTACLE",
-            None if self.blocked_since is None
-            else (now - self.blocked_since).to_sec(),
-            PLAN_AHEAD_M, BYPASS_AFTER_S)
+        decision = self.avoidance_for(now, threat, blocking == "OBSTACLE")
         if decision == GO_ROUND and abs(self.lateral_offset) < 0.01:
             self.take_a_way_round(max(guard_slow, PLAN_AHEAD_M))
         if blocking is None:
-            self.blocked_since = None
             if abs(self.lateral_offset) > 0.01:
                 back = self.corridor_threat(0.0)
                 if back is None or back.distance_m > guard_slow:
