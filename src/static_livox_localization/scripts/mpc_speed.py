@@ -81,7 +81,17 @@ import numpy as np
 # The pursuit follower's constants, transcribed rather than re-tuned. Kept
 # literal because waypoint_follower pulls in rospy and this must stay
 # importable at a desk.
-MAX_SPEED = 0.6
+# Raised 0.6 -> 1.0 on 2026-08-12 by operator direction, after the chair
+# completed the full route at 0.6. This is the value that actually binds:
+# shaped_reference clamps to it and the follower passes the result to the
+# planner as speed_cap, so the caps in waypoint_follower and dwa_core do
+# nothing on their own - raising those two alone left every station at 0.60.
+#
+# It is a CEILING, not a cruise. horizon_speed walks the band's own stations
+# 15 m ahead and takes the minimum, so the pinches that made up 19 % of the
+# route still come out at the 0.30 floor; what changes is the 81 % that was
+# being held at 0.6 for no reason the geometry gave.
+MAX_SPEED = 1.0
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 SLACK_FULL_SPEED_M = 0.8
@@ -290,6 +300,21 @@ def shaped_reference(band, point, horizon, pitch_rad=0.0, degraded=False,
     """
     limit = horizon_speed(band, point, pitch_rad=pitch_rad, degraded=degraded,
                           obstacle_speed=obstacle_speed)
+    # The geometric curvature estimate is deliberately cheap, but the QP
+    # follows the heading samples produced by polyline_refs. Close that last
+    # model gap directly: shrink the flat reference until consecutive
+    # headings demand no more than the solver's physical yaw-rate cap.
+    import mpc_core
+    params = mpc_core.MpcParams()
+    for _ in range(8):
+        _speed, heading = mpc_core.polyline_refs(
+            band, point, int(horizon), params.dt, limit)
+        demand = (
+            float(np.abs(np.diff(heading)).max()) / params.dt
+            if len(heading) > 1 else 0.0)
+        if demand <= params.w_max + 1e-9:
+            break
+        limit *= params.w_max / demand
     if limit < TURN_FLOOR_SPEED:
         return np.zeros(int(horizon)), STOP
     return np.full(int(horizon), limit), None

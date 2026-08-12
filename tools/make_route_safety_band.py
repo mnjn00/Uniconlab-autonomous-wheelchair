@@ -13,10 +13,12 @@ Outputs <out-prefix>.json (stations with left/right limits) and
 """
 
 import json
+import math
 import sys
 
 import numpy as np
 from PIL import Image, ImageDraw
+from scipy.spatial import cKDTree
 
 BIN = 0.3
 MAX_LAT = 6.0
@@ -25,7 +27,7 @@ STEP = 0.07
 # lip it rides over. Kept here so the recorded edge kind and the consumer's
 # clearance policy cannot drift apart.
 DROP_SEVERE_M = 0.12
-STATION_SPACING = 1.0
+STATION_SPACING = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
 # Sub-bin refinement of the edge found by the coarse walk. BIN has to stay
 # wide enough that its 15th percentile is a stable ground estimate, but the
 # edge itself can then be located far more precisely inside it.
@@ -50,6 +52,7 @@ with open(pcd_path, "rb") as f:
         header += f.read(1)
     cloud = np.frombuffer(f.read(), dtype=np.float32).reshape(-1, 4)[:, :3]
 cloud = cloud[np.isfinite(cloud).all(axis=1)]
+cloud_xy_tree = cKDTree(cloud[:, :2])
 
 route = json.load(open(route_path))
 wp = np.array([[w["x"], w["y"]] for w in route["waypoints"]])
@@ -76,23 +79,26 @@ station_z = np.array(station_z)
 bands = []
 n_bins = int(2 * MAX_LAT / BIN)
 for k in range(len(stations)):
-    center = stations[k]
+    center = stations[k].copy()
     nxt = stations[min(k + 1, len(stations) - 1)]
     prv = stations[max(k - 1, 0)]
-    d = nxt - prv
+    d = np.subtract(nxt, prv, dtype=float)
     norm = np.linalg.norm(d)
     if norm < 1e-6:
         continue
-    d = d / norm
+    d = np.divide(d, norm)
     normal = np.array([-d[1], d[0]])
-    rel = cloud[:, :2] - center
-    along = rel @ d
-    lat = rel @ normal
+    nearby = cloud_xy_tree.query_ball_point(
+        center, math.hypot(MAX_LAT, 0.5))
+    local_cloud = cloud[np.asarray(nearby, dtype=np.int64)]
+    rel = np.subtract(local_cloud[:, :2], center)
+    along = np.einsum("ij,j->i", rel, d)
+    lat = np.einsum("ij,j->i", rel, normal)
     here_z = station_z[k]
     m = (np.abs(along) < 0.5) & (np.abs(lat) < MAX_LAT) & \
-        (cloud[:, 2] > here_z - GROUND_BELOW) & \
-        (cloud[:, 2] < here_z + GROUND_ABOVE)
-    ls, zs2 = lat[m], cloud[m, 2]
+        (local_cloud[:, 2] > here_z - GROUND_BELOW) & \
+        (local_cloud[:, 2] < here_z + GROUND_ABOVE)
+    ls, zs2 = lat[m], local_cloud[m, 2]
     bins = np.floor((ls + MAX_LAT) / BIN).astype(int)
     prof = {}
     for b in range(n_bins):
