@@ -151,11 +151,23 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert "rosrun static_livox_localization dwa_follower.py" not in runner
     assert "rosrun static_livox_localization mpc_follower.py" not in runner
     assert "rosrun static_livox_localization safety_gate.py" not in runner
-    assert 'SHADOW_QA=1 "$REPO/tools/start_wheelchair_localization.sh"' \
-        in runner
+    assert 'SHADOW_QA=1 LOCALIZATION_WS="$WS"' in runner
+    assert '"$REPO/tools/start_wheelchair_localization.sh"' in runner
     assert 'REPO="${REPO:-$HOME/wheelchair_localization_src}"' in runner
     assert 'MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"' \
         in runner
+    assert 'ROUTE="${ROUTE:-$REPO/routes/20260812_route_v6_v8_waypoints.json}"' \
+        in runner
+    assert 'DRIVABLE_MASK="${DRIVABLE_MASK:-$REPO/routes/route_2d_map_v8.yaml}"' \
+        in runner
+    startup = runner[runner.index("STARTED_STACK=1"):runner.index(
+        "if ! rostopic list | grep -qx '/cloud_registered_body';")]
+    for variable in (
+        "LOCALIZATION_WS", "MAP", "MAP_SHA256", "MAP_ID", "TRAJ",
+        "ROUTE", "BAND", "DRIVABLE_MASK",
+    ):
+        assert f'{variable}="${variable if variable != "LOCALIZATION_WS" else "WS"}"' \
+            in startup
     assert "cleanup || status=90" in runner
     loop = runner[runner.index("for attempt in"):runner.index(
         'cp "$OUT/nuc-shadow-qa.txt"')]

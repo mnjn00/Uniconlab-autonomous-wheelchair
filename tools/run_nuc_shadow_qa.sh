@@ -21,7 +21,11 @@ REPO="${REPO:-$HOME/wheelchair_localization_src}"
 WS="${WS:-$HOME/livox_static_localization_ws}"
 MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd}"
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
+MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
+TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
+ROUTE="${ROUTE:-$REPO/routes/20260812_route_v6_v8_waypoints.json}"
 BAND="${BAND:-$REPO/routes/20260812_route_v6_v8_safety_band.json}"
+DRIVABLE_MASK="${DRIVABLE_MASK:-$REPO/routes/route_2d_map_v8.yaml}"
 OUT="${OUT:-/tmp/ulw-evidence}"
 TIMEOUT_S="${TIMEOUT_S:-45}"
 mkdir -p "$OUT"
@@ -109,7 +113,10 @@ python3 "$REPO/tools/check_shadow_ros_graph.py" \
 if ! rostopic list | grep -qx '/cloud_registered_body' ||
     ! rostopic list | grep -qx '/fast_lio_icp/pose'; then
   STARTED_STACK=1
-  SHADOW_QA=1 "$REPO/tools/start_wheelchair_localization.sh" \
+  SHADOW_QA=1 LOCALIZATION_WS="$WS" \
+    MAP="$MAP" MAP_SHA256="$MAP_SHA256" MAP_ID="$MAP_ID" TRAJ="$TRAJ" \
+    ROUTE="$ROUTE" BAND="$BAND" DRIVABLE_MASK="$DRIVABLE_MASK" \
+    "$REPO/tools/start_wheelchair_localization.sh" \
     > "$OUT/shadow-stack.log" 2>&1
 fi
 
