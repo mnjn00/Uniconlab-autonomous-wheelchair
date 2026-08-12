@@ -66,6 +66,24 @@ STALE_S = 1.5
 
 BLOCKED = 0.0
 
+# A profile that is present but unreadable. Distinct from None, which is an
+# object that never carried one, because the two have opposite answers: no
+# profile falls back to the box, a broken profile blocks.
+BROKEN = object()
+
+# Spacing at which a box's near face is sampled when the producer published
+# no profile. obstacle_clusters.PROFILE_BIN_M, so the fallback has the same
+# resolution as the measurement it stands in for - test_object_profile pins
+# the pair, and a fallback finer than the real thing would only be inventing
+# detail the box never had.
+BOX_SAMPLE_M = 0.2
+
+# Objects handed to a planner as geometry, nearest first. A corridor this
+# width does not hold many, and the rollout scoring is O(candidates x steps
+# x points) inside a 0.1 s control period - the producer's forty-cluster
+# ceiling arriving whole would be a different node.
+MAX_OBSTACLE_OBJECTS = 4
+
 
 class Threat(object):
     """The nearest thing in the corridor, and whether it is going to move."""
@@ -175,6 +193,56 @@ def object_reach(item, lateral_shift_m):
             object_motion(item))
 
 
+def parsed_profile(item):
+    """(bin_m, y0, slices) for a present, structurally sound profile.
+
+    None when the object carries no profile at all - that is the fallback
+    to its box. BROKEN when a profile is present but its envelope does not
+    parse, which is NOT a fallback: a producer emitting a broken profile is
+    one whose box is no more trustworthy.
+
+    Individual slice values are left unread here on purpose. profile_reach
+    never looked at a slice outside the corridor it was asked about, so a
+    broken value out there has never blocked, and parsing eagerly to share
+    this would quietly make it start.
+    """
+    profile = item.get("profile")
+    if profile is None:
+        return None
+    if not isinstance(profile, dict):
+        return BROKEN
+    try:
+        bin_m = float(profile["bin_m"])
+        y0 = float(profile["y0"])
+        slices = profile["min_x"]
+    except (KeyError, TypeError, ValueError):
+        return BROKEN
+    if not isinstance(slices, list) or not slices or \
+            not math.isfinite(bin_m) or bin_m <= 0.0 or not math.isfinite(y0):
+        return BROKEN
+    return bin_m, y0, slices
+
+
+def slices_in(profile, low, high):
+    """(lateral centre, forward distance) per slice overlapping [low, high].
+
+    Raises ValueError for a slice the producer wrote unreadably, which every
+    caller turns into a block at zero. A slice counts when it overlaps the
+    window at all, so a return sitting just inside a slice that straddles
+    the corridor edge is never missed.
+    """
+    bin_m, y0, slices = profile
+    for index, value in enumerate(slices):
+        if value is None:
+            continue
+        if y0 + (index + 1) * bin_m <= low or y0 + index * bin_m >= high:
+            continue
+        x = float(value)
+        if not math.isfinite(x):
+            raise ValueError("profile slice %d is not finite" % index)
+        yield y0 + (index + 0.5) * bin_m, max(0.0, x)
+
+
 def profile_reach(item, lateral_shift_m, half_width_m):
     """(blocks, distance) from the object's own returns, or None.
 
@@ -187,40 +255,68 @@ def profile_reach(item, lateral_shift_m, half_width_m):
     A slice counts when it overlaps the corridor at all, so a return sitting
     just inside a slice that straddles the corridor edge is never missed.
     """
-    profile = item.get("profile")
-    if profile is None:
-        return None
-    if not isinstance(profile, dict):
-        return True, BLOCKED
+    profile = parsed_profile(item)
+    if profile is None or profile is BROKEN:
+        return None if profile is None else (True, BLOCKED)
     try:
-        bin_m = float(profile["bin_m"])
-        y0 = float(profile["y0"])
-        slices = profile["min_x"]
-    except (KeyError, TypeError, ValueError):
+        reach = [x for _, x in slices_in(
+            profile, lateral_shift_m - half_width_m,
+            lateral_shift_m + half_width_m)]
+    except (TypeError, ValueError):
         return True, BLOCKED
-    if not isinstance(slices, list) or not slices or \
-            not math.isfinite(bin_m) or bin_m <= 0.0 or not math.isfinite(y0):
-        return True, BLOCKED
+    if not reach:
+        return False, None
+    return True, min(reach)
+
+
+def object_points(item, lateral_shift_m, half_width_m):
+    """(blocks, points) for one object: where its returns actually are.
+
+    points are ``(forward, left)`` in the chair frame, one per lateral slice
+    the object occupies - the same measurement profile_reach takes the
+    minimum of, handed over whole instead. Absolute chair-frame offsets, not
+    the corridor-relative ``Threat.lateral_m`` beside them, because a
+    consumer placing them in the map needs where they are and not where they
+    are relative to a lane.
+
+    A planner given one distance can only put the object dead ahead, and a
+    planner given one point can only put it at one place. Neither is what a
+    wall is. On 2026-07-31 a wall crossing the scan diagonally spanned the
+    corridor for metres while its box reported a single near face 0.69 m
+    away that had no returns behind it; measuring from the returns fixed the
+    distance, and this fixes the shape, which is the half that was left. An
+    arc scored against one point can pass 0.41 m from it and be admitted
+    while driving through the rest of the wall.
+
+    Fails closed exactly as corridor_reach does: an object whose box does not
+    parse, or whose profile is present but unreadable, blocks at zero range
+    on the centreline - a point no candidate can clear - rather than being
+    skipped. Where there is no profile the box's near face is sampled across
+    its own width, which is everything the box actually asserts.
+    """
+    box = object_box(item)
+    if box is None:
+        return True, [(BLOCKED, lateral_shift_m)]
     low = lateral_shift_m - half_width_m
     high = lateral_shift_m + half_width_m
-    nearest = None
-    for index, value in enumerate(slices):
-        if value is None:
-            continue
-        if y0 + (index + 1) * bin_m <= low or y0 + index * bin_m >= high:
-            continue
+    profile = parsed_profile(item)
+    if profile is BROKEN:
+        return True, [(BLOCKED, lateral_shift_m)]
+    if profile is not None:
         try:
-            x = float(value)
+            points = [(x, y) for y, x in slices_in(profile, low, high)]
         except (TypeError, ValueError):
-            return True, BLOCKED
-        if not math.isfinite(x):
-            return True, BLOCKED
-        x = max(0.0, x)
-        if nearest is None or x < nearest:
-            nearest = x
-    if nearest is None:
-        return False, None
-    return True, nearest
+            return True, [(BLOCKED, lateral_shift_m)]
+        return (True, points) if points else (False, [])
+    x, y, half_x, half_y = box
+    if abs(y - lateral_shift_m) - half_y > half_width_m:
+        return False, []
+    near = max(0.0, x - half_x)
+    edges = (max(y - half_y, low), min(y + half_y, high))
+    span = edges[1] - edges[0]
+    count = max(int(math.ceil(span / BOX_SAMPLE_M)), 1)
+    return True, [(near, edges[0] + span * (k + 0.5) / count)
+                  for k in range(count)]
 
 
 def corridor_reach(item, lateral_shift_m, half_width_m):
@@ -268,6 +364,49 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
             nearest = Threat(distance, motion, str(item.get("class", "")),
                              lateral_m=lateral)
     return nearest
+
+
+def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
+                             max_distance_m=None,
+                             max_objects=MAX_OBSTACLE_OBJECTS):
+    """(blocks, points) for everything in the way, as geometry.
+
+    The planner-facing companion to nearest_threat. That one answers "is
+    there something and how far", which is what a stopping radius needs;
+    this answers "and what shape is it", which is what a planner choosing
+    between arcs around it needs, and the two are not the same question.
+
+    Several objects, not just the nearest. The single-object argument holds
+    for a distance - a second object behind the first constrains no
+    candidate the first already kills - and stops holding for a shape: an
+    object off to one side kills the arcs on that side only, and what
+    forbids the other side is a different object the nearest one never
+    covered.
+
+    Never more than max_objects of them, nearest first. Scoring is O(
+    candidates x steps x points) in a 0.1 s period, and the producer will
+    publish up to forty clusters.
+
+    An unusable summary blocks at zero on the centreline, so a caller that
+    treats an empty point list as clear road is right to.
+    """
+    if not summary.usable:
+        return True, [(BLOCKED, lateral_shift_m)]
+    found = []
+    for item in summary.objects:
+        blocks, points = object_points(item, lateral_shift_m, half_width_m)
+        if not blocks or not points:
+            continue
+        nearest = min(x for x, _ in points)
+        if max_distance_m is not None and nearest > float(max_distance_m):
+            continue
+        found.append((nearest, points))
+    found.sort(key=lambda entry: entry[0])
+    if max_objects is not None:
+        found = found[:int(max_objects)]
+    if not found:
+        return False, []
+    return True, [point for _, points in found for point in points]
 
 
 GO_ROUND = "go_round"

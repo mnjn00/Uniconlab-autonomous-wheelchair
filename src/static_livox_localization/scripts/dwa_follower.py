@@ -4,10 +4,19 @@
 Third profile, same contract as the other two. It subclasses
 WaypointFollower and replaces only the part that turns a pose into a Twist;
 the hold ladder, geofence, band containment, localisation health, cluster
-liveness failsafe, manual-mode override and stop-on-shutdown are inherited
-and run unmodified. Nothing safety-bearing is restated here - a copied guard
-drifts from the original silently, and always toward the follower that does
-not stop.
+liveness failsafe, manual-mode override, the parked-or-moving decision and
+stop-on-shutdown are inherited and run unmodified. Nothing safety-bearing is
+restated here - a copied guard drifts from the original silently, and always
+toward the follower that does not stop.
+
+The parked-or-moving decision was on that list by intention and not in fact
+until 2026-08-11. Replacing step() dropped it, because it lived in the body
+of the method rather than beside the guards that were carefully extracted,
+and no copy drifted - the profile simply never asked. The planner was handed
+the nearest threat whatever the tracker said about it, so where the pursuit
+profile stands and waits for someone walking, this one picked an arc round
+them at OBSTACLE_FLOOR_M. It is WaypointFollower.avoidance_for now, asked by
+every profile.
 
 WHAT THIS ONE IS FOR
 --------------------
@@ -43,6 +52,20 @@ beat every moving arc whenever the chair sat on the line - 180 s stuck in one
 run, 77 s in the other. Both are fixed in dwa_core, whose docstrings carry the
 numbers. Not re-driven since. PROFILE still defaults to pursuit, which drove
 this route twice on 2026-07-31 with a person in the chair.
+
+Two further changes on 2026-08-11, neither of them driven either, and both
+found by reading rather than by a run: the parked-or-moving decision above,
+and the object's shape instead of its nearest point (obstacle_points). Each
+is written against a defect visible in the code and in the recorded data,
+and neither is field evidence.
+
+`OFF_BAND` is still a stop only a person can clear - every rollout point is
+tested, so a chair a centimetre outside the corridor has no admissible
+candidate at all, and the 08-08 analysis measured that at 23 %. A bounded
+recovery for it is written and tested but deliberately NOT merged: it is the
+only change in this stack that turns a stop into motion, and it is waiting
+on one run of the route to be worth its risk. That run is what this profile
+needs before anything else.
 """
 
 import math
@@ -58,10 +81,12 @@ from std_msgs.msg import String
 
 import dwa_core
 import mpc_speed
+from cluster_guard import GO_ROUND, WAIT, corridor_obstacle_points
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command
-from waypoint_follower import (WaypointFollower, CONTROL_HZ, MAX_ACCEL,
-                               MAX_DECEL, MAX_YAW_RATE, PLAN_AHEAD_M)
+from waypoint_follower import (WaypointFollower, CONTROL_HZ, CREEP_SPEED,
+                               GUARD_SLOW_EXTRA_M, MAX_ACCEL, MAX_DECEL,
+                               MAX_SPEED, MAX_YAW_RATE, PLAN_AHEAD_M)
 
 # The solver returns a velocity target, not an acceleration, so the ramp is
 # fed the acceleration that would close the gap in one period - clamped to
@@ -69,6 +94,15 @@ from waypoint_follower import (WaypointFollower, CONTROL_HZ, MAX_ACCEL,
 # acceleration for the same reason the pursuit follower allows it: stopping
 # sooner is never the unsafe direction.
 YAW_SLEW_RPS2 = 1.5
+
+# How wide a slice of each object the planner is shown, either side of the
+# centreline. Wider than the follower's CORRIDOR_HALF_WIDTH 0.45, which is
+# the width the parked/moving DECISION is taken over: a rollout is free to
+# step aside anywhere the band allows, so the geometry it is scored against
+# has to cover where it may go and not only where the route runs. Bounded
+# because every extra slice is another point in an O(candidates x steps x
+# points) batch inside a 0.1 s period.
+OBSTACLE_HALF_WIDTH_M = 1.0
 
 
 class DwaFollower(WaypointFollower):
@@ -99,27 +133,33 @@ class DwaFollower(WaypointFollower):
         self.odom_w = float(message.twist.twist.angular.z)
 
     def obstacle_points(self, state):
-        """The tracked threat ahead, as a point the rollouts must clear.
+        """The objects ahead, as the returns the rollouts must clear.
 
-        Only the nearest is passed. The corridor is about a metre wide, so a
-        second object behind the first constrains no candidate the first
-        does not already kill.
+        Where they actually are, not straight ahead: placing every threat on
+        the heading is what turned a wall beside the chair into one in front
+        of it, and with the corridor 0.3 m wide at that station nothing could
+        clear OBSTACLE_FLOOR_M and the profile held for 211 cycles on
+        2026-08-09.
+
+        And the whole of them, not one point. The nearest return of an object
+        is where a stopping radius is measured from, and it was the only
+        thing passed here until 2026-08-11 - so a wall spanning the corridor
+        became a single point, and an arc could be admitted for clearing that
+        one point by 0.41 m while driving through the metres of wall either
+        side of it. cluster_guard.object_points publishes each lateral slice
+        the object occupies, which is the same measurement, ungeneralised.
         """
-        if not self.clusters_enabled:
+        if not self.clusters_enabled or self.cluster_summary is None:
             return ()
-        threat = self.corridor_threat(0.0)
-        if threat is None or threat.distance_m > PLAN_AHEAD_M:
+        blocks, points = corridor_obstacle_points(
+            self.cluster_summary, OBSTACLE_HALF_WIDTH_M,
+            max_distance_m=PLAN_AHEAD_M)
+        if not blocks or not points:
             return ()
         heading = np.array([math.cos(state[2]), math.sin(state[2])])
         left = np.array([-heading[1], heading[0]])
-        # Where the object actually is, not straight ahead. Placing every
-        # threat on the heading is what turned a wall beside the chair into
-        # one in front of it; with the corridor 0.3 m wide at that station,
-        # nothing could clear OBSTACLE_FLOOR_M and the profile held for
-        # 211 cycles. A threat whose box did not parse keeps the frontal
-        # placement, which is the conservative reading of not knowing.
-        lateral = 0.0 if threat.lateral_m is None else float(threat.lateral_m)
-        return (state[:2] + heading * threat.distance_m + left * lateral,)
+        return [state[:2] + heading * forward + left * lateral
+                for forward, lateral in points]
 
     def step(self):
         now = rospy.Time.now()
@@ -145,8 +185,41 @@ class DwaFollower(WaypointFollower):
             self.last_command_stamp = None
             return
 
+        # Parked or moving, answered before the planner is asked anything.
+        # Rolling velocities out and scoring them is a way of GOING ROUND
+        # something, and going round is only ever the answer for an object
+        # the tracker has watched stand still. Anything moving, or not yet
+        # watched long enough to say, is waited out where it stands - a
+        # sidestep is a manoeuvre into where they are about to be. Until
+        # 2026-08-11 this profile never asked: it handed the nearest threat
+        # to the planner whichever it was, and the planner would clear a
+        # walking person by OBSTACLE_FLOOR_M and drive past.
+        threat = self.corridor_threat(0.0)
+        stop_m = self.stop_radius()
+        decision = self.avoidance_for(
+            now, threat,
+            threat is not None and threat.distance_m < stop_m)
+        if decision == WAIT:
+            self.publish_state("HOLD:DWA_WAIT", "HOLD:DWA_WAIT")
+            self.dwa_status = "WAIT"
+            self.send_stop()
+            self.last_command_stamp = None
+            return
+
+        # Approach at the pursuit profile's pace, whatever the decision. A
+        # planner that only knows stop-or-cruise arrives at what it is about
+        # to wait for at full speed and stops there.
+        cap = float(v_ref[0])
+        if threat is not None and threat.distance_m < stop_m + \
+                GUARD_SLOW_EXTRA_M:
+            ratio = max(0.0, (threat.distance_m - stop_m) / GUARD_SLOW_EXTRA_M)
+            cap = min(cap, CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
+
+        # Geometry only when going round it. Handing the planner an object it
+        # is not allowed to go round would let it sidestep anyway.
+        obstacles = self.obstacle_points(state) if decision == GO_ROUND else ()
         target_v, target_w, status = self.planner.plan(
-            state, self.obstacle_points(state), speed_cap=float(v_ref[0]),
+            state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate)
         if status != "OK":
             if status != self.dwa_status:

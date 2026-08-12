@@ -278,3 +278,143 @@ def test_the_profiler_never_publishes_more_than_the_cap():
 def test_the_profiler_survives_a_cluster_with_no_finite_returns():
     assert lateral_profile(np.full((4, 3), np.nan)) is None
     assert lateral_profile(np.zeros((0, 3))) is None
+
+
+# ------------------------------------------------- the shape, not the point
+
+# What the DWA profile hands its planner. Wider than the corridor the parked
+# or moving DECISION is taken over, because a rollout may step aside anywhere
+# the band allows and has to be scored against the object where it goes.
+PLANNER_HALF_WIDTH = 1.0            # dwa_follower.OBSTACLE_HALF_WIDTH_M
+OBSTACLE_FLOOR_M = 0.40             # dwa_core
+
+
+def test_the_wall_reaches_the_planner_as_a_wall():
+    """One object, many slices. Measuring the distance from the returns was
+    half the 2026-07-31 fix; this is the half that was left, because a
+    planner given one number can only put the wall in one place."""
+    blocks, points = cg.object_points(wall_object(), 0.0, PLANNER_HALF_WIDTH)
+    assert blocks
+    # 2.0 m of planner slice at the producer's own 0.2 m resolution.
+    assert len(points) >= 10, "a 2.36 m wide wall arrived as one or two points"
+    assert cg.BOX_SAMPLE_M == _producer["PROFILE_BIN_M"], \
+        "the box fallback must not invent detail the profile does not have"
+    # The diagonal: further left is nearer, and it is monotone.
+    ordered = sorted(points, key=lambda p: p[1])
+    forward = [x for x, _ in ordered]
+    assert forward == sorted(forward), "the slices do not trace the diagonal"
+
+
+def test_one_point_admits_an_arc_that_drives_through_the_rest_of_it():
+    """The defect, stated as the geometry that produces it.
+
+    The nearest return is at the wall's left end. A rollout crossing the
+    wall four metres down its length clears that one point by metres and is
+    admitted - and every sampled point of it is inside the wall.
+    """
+    item = wall_object()
+    threat = cg.nearest_threat(summary([item]), CORRIDOR_HALF_WIDTH)
+    single = np.array([threat.distance_m, threat.lateral_m])
+    _blocks, points = cg.object_points(item, 0.0, PLANNER_HALF_WIDTH)
+
+    far = max(points, key=lambda p: p[0])
+    on_the_wall = np.array(far)
+    assert np.linalg.norm(on_the_wall - single) > OBSTACLE_FLOOR_M, \
+        "this test needs a part of the wall the near point does not cover"
+    assert min(np.linalg.norm(on_the_wall - np.array(p)) for p in points) \
+        < OBSTACLE_FLOOR_M, "the shape has to reject what the point admits"
+
+
+def test_an_object_outside_the_planner_slice_contributes_nothing():
+    blocks, points = cg.object_points(
+        {"class": "obstacle", "x": 4.0, "y": 3.0, "size": [0.6, 0.6, 1.2],
+         "points": 40, "motion": ct.STATIC}, 0.0, PLANNER_HALF_WIDTH)
+    assert not blocks and points == []
+
+
+def test_a_box_with_no_profile_is_sampled_across_its_own_width():
+    """The fallback still has to be a shape. A 1.4 m wide van reduced to its
+    near-face centre leaves a metre of van no candidate is scored against."""
+    blocks, points = cg.object_points(
+        {"class": "vehicle", "x": 4.0, "y": 0.0, "size": [2.0, 1.4, 1.5],
+         "points": 200, "motion": ct.STATIC}, 0.0, PLANNER_HALF_WIDTH)
+    assert blocks
+    assert len(points) >= 7
+    assert all(x == pytest.approx(3.0) for x, _ in points)
+    lateral = [y for _, y in points]
+    # Slice centres, so the outermost sample sits half a bin inside the
+    # 1.4 m box rather than on its corner.
+    assert max(lateral) - min(lateral) >= 1.4 - cg.BOX_SAMPLE_M
+
+
+def test_an_unreadable_object_blocks_at_zero_rather_than_vanishing():
+    """Same failure direction as corridor_reach: a producer bug can neither
+    hide an obstacle nor be skipped into clear road."""
+    for item in ({"class": "obstacle", "x": "nope", "y": 0.0,
+                  "size": [0.6, 0.6, 1.2], "motion": ct.STATIC},
+                 {"class": "obstacle", "x": 4.0, "y": 0.0,
+                  "size": [0.6, 0.6, 1.2], "motion": ct.STATIC,
+                  "profile": {"bin_m": 0.2, "y0": -0.4, "min_x": ["x"]}},
+                 {"class": "obstacle", "x": 4.0, "y": 0.0,
+                  "size": [0.6, 0.6, 1.2], "motion": ct.STATIC,
+                  "profile": "not a profile"}):
+        blocks, points = cg.object_points(item, 0.0, PLANNER_HALF_WIDTH)
+        assert blocks and points == [(0.0, 0.0)]
+
+
+def test_a_broken_slice_outside_the_corridor_still_does_not_block():
+    """Pre-existing behaviour of profile_reach, kept when the parser moved:
+    a slice that is never read cannot be the reason the chair stops."""
+    item = {"class": "obstacle", "x": 4.0, "y": 0.0, "size": [0.6, 0.6, 1.2],
+            "motion": ct.STATIC,
+            "profile": {"bin_m": 0.2, "y0": 8.0, "min_x": ["x", None]}}
+    assert cg.profile_reach(item, 0.0, CORRIDOR_HALF_WIDTH) == (False, None)
+    assert cg.object_points(item, 0.0, PLANNER_HALF_WIDTH) == (False, [])
+
+
+def test_the_planner_is_given_every_object_in_the_way_not_only_the_nearest():
+    """The single-object argument holds for a distance and fails for a
+    shape: the nearest object kills the arcs on its own side only."""
+    left = {"class": "obstacle", "x": 3.0, "y": 0.7, "size": [0.4, 0.4, 1.2],
+            "points": 40, "motion": ct.STATIC}
+    right = {"class": "obstacle", "x": 4.0, "y": -0.7, "size": [0.4, 0.4, 1.2],
+             "points": 40, "motion": ct.STATIC}
+    blocks, points = cg.corridor_obstacle_points(
+        summary([left, right]), PLANNER_HALF_WIDTH)
+    assert blocks
+    assert min(y for _, y in points) < 0.0 < max(y for _, y in points)
+
+
+def test_the_point_set_is_capped_however_many_objects_arrive():
+    crowd = [{"class": "obstacle", "x": 2.0 + 0.1 * k, "y": 0.0,
+              "size": [0.4, 0.4, 1.2], "points": 40, "motion": ct.STATIC}
+             for k in range(40)]
+    blocks, points = cg.corridor_obstacle_points(
+        summary(crowd), PLANNER_HALF_WIDTH)
+    assert blocks
+    assert len(points) <= cg.MAX_OBSTACLE_OBJECTS * 20
+
+
+def test_the_nearest_objects_are_the_ones_kept():
+    near = {"class": "obstacle", "x": 2.0, "y": 0.0, "size": [0.4, 0.4, 1.2],
+            "points": 40, "motion": ct.STATIC}
+    far = [{"class": "obstacle", "x": 8.0 + k, "y": 0.0,
+            "size": [0.4, 0.4, 1.2], "points": 40, "motion": ct.STATIC}
+           for k in range(6)]
+    _blocks, points = cg.corridor_obstacle_points(
+        summary(far + [near]), PLANNER_HALF_WIDTH)
+    assert min(x for x, _ in points) == pytest.approx(1.8)
+
+
+def test_an_unusable_summary_blocks_at_zero_for_the_planner_too():
+    unusable = cg.parse_summary(json.dumps(
+        {"stamp": 100.0, "status": "NO_CLOUD", "objects": []}))
+    assert cg.corridor_obstacle_points(unusable, PLANNER_HALF_WIDTH) == \
+        (True, [(0.0, 0.0)])
+
+
+def test_beyond_the_planning_distance_nothing_is_passed():
+    far = {"class": "obstacle", "x": 20.0, "y": 0.0, "size": [0.6, 0.6, 1.2],
+           "points": 40, "motion": ct.STATIC}
+    assert cg.corridor_obstacle_points(
+        summary([far]), PLANNER_HALF_WIDTH, max_distance_m=5.0) == (False, [])
