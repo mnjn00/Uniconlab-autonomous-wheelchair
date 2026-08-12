@@ -21,6 +21,7 @@
 #include <nav_msgs/Odometry.h>
 #include <nav_msgs/Path.h>
 #include <pcl/common/point_tests.h>
+#include <pcl/common/transforms.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <ros/ros.h>
@@ -29,6 +30,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 
 #include "static_livox_localization/assisted_alignment.hpp"
+#include "static_livox_localization/map_voxel_grid.hpp"
 #include "static_livox_localization/moving_tracker.hpp"
 #include "static_livox_localization/registration.hpp"
 #include "static_livox_localization/rolling_submap.hpp"
@@ -217,7 +219,7 @@ class MovingIcpLocalizer {
     private_nh_.param("dynamic_box_max_age_s", dynamic_box_max_age_s_, 0.5);
     private_nh_.param("dynamic_box_margin_m", dynamic_box_margin_m_, 0.15);
     private_nh_.param("dynamic_box_max_fraction",
-                      dynamic_box_max_fraction_, 0.25);
+                      dynamic_box_max_fraction_, 0.50);
     private_nh_.param("min_inlier_ratio", tracking_config_.min_inlier_ratio,
                       0.35);
     tracking_config_.min_source_points = registration_config_.min_points;
@@ -279,6 +281,8 @@ class MovingIcpLocalizer {
     if (pcl::io::loadPCDFile(map_path_, *map_) != 0 || map_->empty()) {
       throw std::runtime_error("failed to load non-empty XYZI PCD map");
     }
+    map_voxel_grid_.reset(
+        new static_livox_localization::MapVoxelGrid(map_, 0.20));
   }
 
   bool set_auto_correction(std_srvs::SetBool::Request& request,
@@ -440,6 +444,30 @@ class MovingIcpLocalizer {
       }
     }
     last_dynamic_dropped_ = dropped;
+
+    std::size_t map_dropped = 0;
+    if (map_voxel_grid_ && map_voxel_grid_->voxel_count() > 0) {
+      OdomSample odom_for_filter;
+      bool have_odom = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        have_odom = nearest_odom_locked(stamp, &odom_for_filter);
+      }
+      if (have_odom) {
+        const Eigen::Isometry3d map_T_base =
+            map_T_odom_ * odom_for_filter.odom_T_base;
+        Cloud::Ptr in_map(new Cloud);
+        pcl::transformPointCloud(*cloud, *in_map,
+                                 map_T_base.cast<float>());
+        map_dropped = map_voxel_grid_->filter_dynamic(
+            *in_map, 0.40, dynamic_box_max_fraction_);
+        if (map_dropped > 0) {
+          pcl::transformPointCloud(*in_map, *cloud,
+                                   map_T_base.inverse().cast<float>());
+        }
+      }
+    }
+    last_map_filtered_ = map_dropped;
 
     OdomSample odom;
     Cloud::Ptr submap;
@@ -697,6 +725,9 @@ class MovingIcpLocalizer {
     // same without this.
     status.values.push_back(key_value(
         "dynamic_returns_dropped", std::to_string(last_dynamic_dropped_)));
+    values.push_back(diagnostic_msgs::KeyValue());
+    values.back().key = "map_filtered";
+    values.back().value = std::to_string(last_map_filtered_);
     status.values.push_back(key_value("registration_backend",
                                       registration.backend));
     status.values.push_back(key_value("registration_elapsed_ms",
@@ -736,6 +767,7 @@ class MovingIcpLocalizer {
   tf2_ros::TransformBroadcaster tf_broadcaster_;
 
   Cloud::Ptr map_;
+  std::unique_ptr<static_livox_localization::MapVoxelGrid> map_voxel_grid_;
   static_livox_localization::RegistrationConfig registration_config_;
   static_livox_localization::TrackingConfig tracking_config_;
   static_livox_localization::RollingSubmapConfig rolling_config_;
@@ -745,9 +777,10 @@ class MovingIcpLocalizer {
   std::vector<static_livox_localization::DynamicBox> dynamic_boxes_;
   ros::Time dynamic_boxes_stamp_{0.0};
   std::size_t last_dynamic_dropped_ = 0;
+  std::size_t last_map_filtered_ = 0;
   double dynamic_box_max_age_s_ = 0.5;
   double dynamic_box_margin_m_ = 0.15;
-  double dynamic_box_max_fraction_ = 0.25;
+  double dynamic_box_max_fraction_ = 0.50;
   static_livox_localization::TrackingStateMachine state_machine_;
   static_livox_localization::AssistedAlignmentController alignment_controller_;
 
