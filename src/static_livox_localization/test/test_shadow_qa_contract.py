@@ -101,3 +101,16 @@ def test_ros_yaml_parsers_preserve_topic_contracts():
 
     evidence = validate_snapshot(summary, boxes, parsed_diagnostics)
     assert evidence["object_count"] == 1
+
+
+def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
+    runner = (
+        Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'catkin_make > "$OUT/catkin-build.txt"' in runner
+    assert "rosrun static_livox_localization obstacle_clusters.py" in runner
+    assert "rosrun static_livox_localization waypoint_follower.py" not in runner
+    assert "rosrun static_livox_localization dwa_follower.py" not in runner
+    assert "rosrun static_livox_localization mpc_follower.py" not in runner
+    assert "rosrun static_livox_localization safety_gate.py" not in runner

@@ -42,6 +42,7 @@ source /opt/ros/noetic/setup.bash
 source "$WS/devel/setup.bash"
 set -u
 
+catkin_make > "$OUT/catkin-build.txt" 2>&1
 catkin_make run_tests_static_livox_localization \
   > "$OUT/catkin-tests.txt" 2>&1
 catkin_test_results build/static_livox_localization \
@@ -75,10 +76,6 @@ setsid rosrun static_livox_localization obstacle_clusters.py \
   > "$OUT/shadow-clusters.log" 2>&1 &
 LAUNCHED_PIDS+=("$!")
 
-timeout "$TIMEOUT_S" rostopic echo -n 1 /perception/objects_summary \
-  > "$OUT/objects-summary.yaml"
-timeout "$TIMEOUT_S" rostopic echo -n 1 /perception/dynamic_boxes \
-  > "$OUT/dynamic-boxes.yaml"
 timeout "$TIMEOUT_S" rostopic echo -n 1 /fast_lio_icp/localization_diagnostics \
   > "$OUT/localization-diagnostics.yaml"
 
@@ -87,9 +84,21 @@ pgrep -af "$AUTONOMOUS_RE" > "$OUT/autonomous-after.txt" && {
   exit 23
 }
 
-python3 "$REPO/tools/validate_nuc_shadow_snapshot.py" \
-  --summary "$OUT/objects-summary.yaml" \
-  --boxes "$OUT/dynamic-boxes.yaml" \
-  --diagnostics "$OUT/localization-diagnostics.yaml" \
-  > "$OUT/nuc-shadow-qa.txt"
+for attempt in $(seq 1 10); do
+  timeout "$TIMEOUT_S" rostopic echo -n 1 /perception/objects_summary \
+    > "$OUT/objects-summary.yaml"
+  timeout "$TIMEOUT_S" rostopic echo -n 1 /perception/dynamic_boxes \
+    > "$OUT/dynamic-boxes.yaml"
+  if python3 "$REPO/tools/validate_nuc_shadow_snapshot.py" \
+      --summary "$OUT/objects-summary.yaml" \
+      --boxes "$OUT/dynamic-boxes.yaml" \
+      --diagnostics "$OUT/localization-diagnostics.yaml" \
+      > "$OUT/nuc-shadow-qa.txt" 2> "$OUT/validator-last-error.txt"; then
+    break
+  fi
+  if [ "$attempt" -eq 10 ]; then
+    cat "$OUT/validator-last-error.txt" >&2
+    exit 24
+  fi
+done
 cp "$OUT/nuc-shadow-qa.txt" "$OUT/integration-green.txt"
