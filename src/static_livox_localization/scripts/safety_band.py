@@ -195,6 +195,29 @@ class SafetyBand:
         self.severe_right = np.array(sev_right)
         self.corridor_yielded = np.array(corridor_yielded)
 
+    def route_centre_clearance_violations(
+            self, required_side_m=CHAIR_HALF_WIDTH + BAND_MARGIN,
+            endpoint_guard=2):
+        start = min(endpoint_guard, len(self.xy))
+        end = max(start, len(self.xy) - endpoint_guard)
+        bad = np.logical_or(
+            self.edge_left[start:end] < required_side_m,
+            self.edge_right[start:end] < required_side_m)
+        return (np.nonzero(bad)[0] + start).tolist()
+
+    def route_centre_chord_violations(
+            self, endpoint_guard=2, spacing=0.1):
+        start = min(endpoint_guard, max(0, len(self.xy) - 1))
+        end = max(start, len(self.xy) - endpoint_guard - 1)
+        return [
+            index
+            for index in range(start, end)
+            if not self.chord_is_contained(
+                self.xy[index],
+                self.xy[index + 1],
+                spacing=spacing)
+        ]
+
     def lateral_limits(self, point):
         """Signed cross-track offset and the limits that bracket it.
 

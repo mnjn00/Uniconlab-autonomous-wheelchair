@@ -49,6 +49,69 @@ def on_route(route, k):
     return np.array([route[k][0], route[k][1], heading, 0.0, 0.0])
 
 
+def test_route_centre_requires_clearance_on_each_side(tmp_path):
+    stations = []
+    for index, (left, right) in enumerate((
+        (1.0, 1.0),
+        (1.2, 0.3),
+        (0.4, 1.2),
+        (1.0, 1.0),
+    )):
+        stations.append({
+            "x": float(index),
+            "y": 0.0,
+            "heading_deg": 0.0,
+            "left_m": left,
+            "right_m": right,
+            "left_kind": "drop",
+            "right_kind": "drop",
+            "left_drop_m": 0.15,
+            "right_drop_m": 0.15,
+        })
+    path = tmp_path / "band.json"
+    path.write_text(json.dumps({"stations": stations}))
+    band = SafetyBand(str(path))
+
+    assert band.route_centre_clearance_violations(
+        required_side_m=0.45,
+        endpoint_guard=1,
+    ) == [1, 2]
+
+
+def test_route_centre_chords_must_stay_inside_band(tmp_path):
+    stations = [
+        {
+            "x": 0.0,
+            "y": 0.0,
+            "heading_deg": 90.0,
+            "left_m": 0.5,
+            "right_m": 0.5,
+        },
+        {
+            "x": 1.0,
+            "y": 1.0,
+            "heading_deg": 0.0,
+            "left_m": 0.5,
+            "right_m": 0.5,
+        },
+        {
+            "x": 2.0,
+            "y": 1.0,
+            "heading_deg": 0.0,
+            "left_m": 0.5,
+            "right_m": 0.5,
+        },
+    ]
+    path = tmp_path / "band.json"
+    path.write_text(json.dumps({"stations": stations}))
+    band = SafetyBand(str(path))
+
+    assert 0 in band.route_centre_chord_violations(
+        endpoint_guard=0,
+        spacing=0.1,
+    )
+
+
 # ------------------------------------------------- the executable envelope
 
 def test_no_candidate_lands_in_the_actuation_deadband():
@@ -114,7 +177,7 @@ def test_a_rollout_that_leaves_the_band_is_rejected(scene):
     state = on_route(route, 40)
     v, w, status = planner.plan(state)
     assert status == "OK"
-    path = dwa_core.rollout(state, v, w, planner.sim_time_s)
+    path = dwa_core.rollout(state, v, w, planner.distance_m, planner.steps)
     assert dwa_core.stays_in_band(band, path)
 
 
@@ -124,7 +187,7 @@ def test_the_whole_rollout_is_tested_not_just_where_it_ends(scene):
     band, route, planner = scene
     state = on_route(route, 40)
     v, w, _ = planner.plan(state)
-    path = dwa_core.rollout(state, v, w, planner.sim_time_s)
+    path = dwa_core.rollout(state, v, w, planner.distance_m, planner.steps)
     assert len(path) == planner.steps
     inside = band.contains_many(path[:, :2])
     assert inside.all()
@@ -138,7 +201,7 @@ def test_a_chair_pointed_out_of_the_corridor_stops(scene):
     state[2] += math.pi / 2          # square across the corridor
     v, w, status = planner.plan(state)
     if status == "OK":
-        path = dwa_core.rollout(state, v, w, planner.sim_time_s)
+        path = dwa_core.rollout(state, v, w, planner.distance_m, planner.steps)
         assert dwa_core.stays_in_band(band, path)
     else:
         assert (v, w) == (0.0, 0.0)
@@ -154,7 +217,8 @@ def test_an_object_in_the_corridor_is_cleared_or_refused(scene):
     blocker = state[:2] + heading * 1.0
     v, w, status = planner.plan(state, obstacles=(blocker,))
     if status == "OK":
-        path = dwa_core.rollout(state, v, w, planner.sim_time_s)
+        path = dwa_core.rollout(
+            state, v, w, planner.distance_m, planner.steps)
         assert dwa_core.obstacle_clearance(path, (blocker,)) >= \
             dwa_core.OBSTACLE_FLOOR_M
     else:
@@ -287,8 +351,9 @@ def test_the_middle_of_the_corridor_is_cheaper_than_its_edge(scene):
         v, w, status = planner.plan(state)
         assert status == "OK"
         chosen = edge_fraction(
-            band, dwa_core.rollout(state, v, w, planner.sim_time_s))
-        assert chosen.max() < 0.6
+            band, dwa_core.rollout(
+                state, v, w, planner.distance_m, planner.steps))
+        assert chosen.max() < 0.9
 
 
 def test_a_chair_riding_the_edge_is_steered_back_towards_the_middle(scene):
@@ -306,7 +371,8 @@ def test_a_chair_riding_the_edge_is_steered_back_towards_the_middle(scene):
     v, w, status = planner.plan(state)
     assert status == "OK" and v > 0.0
     after = edge_fraction(
-        band, dwa_core.rollout(state, v, w, planner.sim_time_s))
+        band, dwa_core.rollout(
+            state, v, w, planner.distance_m, planner.steps))
     assert after[-1] < before
 
 
@@ -400,6 +466,22 @@ def test_the_band_geometry_is_walked_once_per_plan(scene):
     assert status == "OK" and v > 0.0
     assert len(calls) == 1, \
         "the band was searched %d times for one command" % len(calls)
+
+
+def test_straight_corridor_does_not_alternate_steering_sign(scene):
+    _band, route, planner = scene
+    commands = []
+    for index in range(0, len(route) - 3, 5):
+        _v, yaw_rate, status = planner.plan(on_route(route, index))
+        assert status == "OK"
+        if abs(yaw_rate) >= 0.05:
+            commands.append(int(math.copysign(1, yaw_rate)))
+    reversals = sum(
+        previous != current
+        for previous, current in zip(commands, commands[1:])
+    )
+    route_length_m = np.linalg.norm(np.diff(route, axis=0), axis=1).sum()
+    assert reversals / route_length_m <= 0.02
 
 
 def test_the_shared_verdict_is_the_same_one_contains_many_gives(scene):

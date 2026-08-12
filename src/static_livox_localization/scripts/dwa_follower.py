@@ -84,6 +84,7 @@ import mpc_speed
 from cluster_guard import GO_ROUND, WAIT, corridor_obstacle_points
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command
+from route_mask import RouteMask
 from waypoint_follower import (WaypointFollower, CONTROL_HZ, CREEP_SPEED,
                                GUARD_SLOW_EXTRA_M, MAX_ACCEL, MAX_DECEL,
                                MAX_SPEED, MAX_YAW_RATE, PLAN_AHEAD_M)
@@ -94,6 +95,11 @@ from waypoint_follower import (WaypointFollower, CONTROL_HZ, CREEP_SPEED,
 # acceleration for the same reason the pursuit follower allows it: stopping
 # sooner is never the unsafe direction.
 YAW_SLEW_RPS2 = 1.5
+
+# Actuation lag, measured 2026-08-11 (see led_state). Overridable with
+# ~latency_s for a vehicle this has not been measured on; at 0.0 the lead is
+# the identity and the profile behaves exactly as it did before.
+LATENCY_S = 0.55
 
 # How wide a slice of each object the planner is shown, either side of the
 # centreline. Wider than the follower's CORRIDOR_HALF_WIDTH 0.45, which is
@@ -110,11 +116,13 @@ class DwaFollower(WaypointFollower):
 
     def __init__(self):
         WaypointFollower.__init__(self)
+        self.latency_s = float(rospy.get_param("~latency_s", LATENCY_S))
         self.planner = dwa_core.DwaPlanner(
             self.band, self.waypoints,
-            sim_time_s=float(rospy.get_param("~sim_time_s",
-                                             dwa_core.SIM_TIME_S)),
-            grace=float(rospy.get_param("~band_grace", 0.0)))
+            distance_m=float(rospy.get_param("~sim_distance_m",
+                                              dwa_core.SIM_DISTANCE_M)),
+            grace=float(rospy.get_param("~band_grace", 0.0)),
+            route_mask=RouteMask(rospy.get_param("~drivable_mask")))
         self.anchor = StateAnchor(
             gain=float(rospy.get_param("~anchor_gain", DEFAULT_GAIN)))
         self.last_command_stamp = None
@@ -122,8 +130,8 @@ class DwaFollower(WaypointFollower):
         self.odom_w = 0.0
         self.dwa_status = ""
         rospy.loginfo(
-            "DWA profile: sim %.2f s, %d speeds x %d yaw rates, band as a "
-            "hard reject", self.planner.sim_time_s,
+            "DWA profile: sim %.2f m, %d speeds x %d yaw rates, band and "
+            "drivable mask as hard rejects", self.planner.distance_m,
             len(dwa_core.speed_samples()), len(dwa_core.yaw_samples()))
 
     def on_odom(self, message):
@@ -160,6 +168,24 @@ class DwaFollower(WaypointFollower):
         left = np.array([-heading[1], heading[0]])
         return [state[:2] + heading * forward + left * lateral
                 for forward, lateral in points]
+
+    def led_state(self, state):
+        """The state advanced by the actuation lag, along the arc it is on.
+
+        Only the pose is led; the speed and yaw rate stay as measured,
+        because those are what the ramp integrates from. A lead longer than
+        the real lag over-steers exactly as badly as no lead under-steers,
+        so this is a measured number and not a tuning knob - and at zero it
+        is the identity, which is what an unmeasured vehicle should use.
+        """
+        lead = self.latency_s
+        if lead <= 0.0:
+            return state
+        led = np.array(state, dtype=float)
+        led[0] += state[3] * math.cos(state[2]) * lead
+        led[1] += state[3] * math.sin(state[2]) * lead
+        led[2] += state[4] * lead
+        return led
 
     def step(self):
         now = rospy.Time.now()
@@ -218,6 +244,15 @@ class DwaFollower(WaypointFollower):
         # Geometry only when going round it. Handing the planner an object it
         # is not allowed to go round would let it sidestep anyway.
         obstacles = self.obstacle_points(state) if decision == GO_ROUND else ()
+        # Plan from where the chair will be when the command lands, not from
+        # where it is. The gap was measured on 2026-08-11 by cross-correlating
+        # commanded angular.z against the yaw rate differentiated from
+        # /fast_lio_icp/pose: the correlation peaks at 0.55 s with gain 1.03
+        # and R^2 0.90, and the identical figure comes off /Odometry, so it is
+        # upstream of the ICP correction. Unfixed, that lag costs 0.33 m of
+        # travel at 0.6 m/s and 0.55 m at 1.0 - the planner correcting for
+        # where the chair no longer is, which is what lateral hunting is.
+        state = self.led_state(state)
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate)

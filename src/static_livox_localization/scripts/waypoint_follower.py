@@ -129,11 +129,17 @@ SLOPE_PITCH_RAD = math.radians(3.0)
 # out, and driving resumes the moment the corridor is clear again.
 BYPASS_AFTER_S = 3.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
-# How far ahead a confirmed-parked object is stepped around. At 0.6 m/s this
-# is eight seconds of warning, which is what turns "stop, wait 3 s, then edge
-# sideways" into one continuous drift past the thing. Not longer: past this
-# the object is often not even on the stretch the chair will drive.
-PLAN_AHEAD_M = 5.0
+# How far ahead a confirmed-parked object is stepped around. The number that
+# matters is the WARNING TIME it buys, which is what turns "stop, wait 3 s,
+# then edge sideways" into one continuous drift past the thing: 5.0 m was
+# eight seconds at the 0.6 m/s cap it was chosen under. At the 1.0 m/s cap
+# the same 5.0 m is five seconds, and the full stopping envelope at that
+# speed is 3.20 m of the 5.0 - so 8.0 m restores the warning time rather
+# than quietly spending it. Still bounded for the reason it always was:
+# past this the object is often not even on the stretch the chair will
+# drive, and stepping around something that is not in the way is its own
+# hazard.
+PLAN_AHEAD_M = 8.0
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
@@ -411,6 +417,18 @@ class WaypointFollower:
             self.drive_mode = message.data[1]
 
     def on_start(self, request):
+        if request.data:
+            unsafe = self.band.route_centre_clearance_violations()
+            unsafe_chords = self.band.route_centre_chord_violations()
+            if unsafe or unsafe_chords:
+                self.enabled = False
+                self.send_stop()
+                message = (
+                    "REFUSED: route centre lacks bilateral wheel clearance "
+                    "at stations %s or leaves the band on chords %s"
+                    % (unsafe[:20], unsafe_chords[:20]))
+                rospy.logerr(message)
+                return SetBoolResponse(success=False, message=message)
         self.enabled = request.data
         if not request.data:
             self.send_stop()
