@@ -447,6 +447,13 @@ class MovingIcpLocalizer {
     bool initializing = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      // These two do NOT mark the interval unobserved, and the distinction
+      // is the point: below, a registration is not being attempted because
+      // the stack decided not to attempt one, and a fix nobody questioned is
+      // not a lost fix. Here it cannot be attempted because the input is
+      // wrong, and a fix that is not being updated while the odometry or the
+      // cloud is unusable is exactly what LOST is for. Pose staleness in the
+      // follower is the faster guard on these, at 1 s against 8 s.
       if (!nearest_odom_locked(stamp, &odom)) {
         publish_diagnostic_locked("CLOUD_ODOMETRY_TIME_MISMATCH",
                                   RegistrationResult(), CorrectionDecision());
@@ -461,6 +468,15 @@ class MovingIcpLocalizer {
       }
       if (!has_seed_ || !has_seed_map_T_odom_guess_ ||
           !alignment_controller_.auto_correction_enabled()) {
+        // Same reason as the stationary suppression below: no registration
+        // is attempted, so this is time nobody looked and not time the fix
+        // spent failing. Auto-correction is a service anyone may switch off
+        // mid-run, and the interval is the operator's to choose, so without
+        // this the first registration after switching it back on can declare
+        // LOST on a fix that was never asked a question.
+        //
+        // Silent - no diagnostic - which is why the branch was easy to miss.
+        state_machine_.note_unobserved(stamp.toSec());
         return;
       }
       initializing =
@@ -472,6 +488,12 @@ class MovingIcpLocalizer {
       const double reference_stamp =
           first_verification ? initialization_start_stamp_s_
                              : last_correction_stamp_s_;
+      // Deliberately NOT note_unobserved. This is the rate limiter, and the
+      // interval it skips is exactly the interval between two registrations
+      // - discount it and last_accepted_stamp_s_ advances by nearly the
+      // whole period every cycle, so the LOST clock never accumulates and
+      // the state is unreachable. The branches that do mark are the ones
+      // that can persist for as long as an operator or a start-up takes.
       if (correction_in_progress_ ||
           stamp.toSec() - reference_stamp < required_period) return;
       if (!initializing && has_tracking_correction_reference_ &&
@@ -493,6 +515,12 @@ class MovingIcpLocalizer {
       submap = rolling_submap_.build_in_base_frame(odom.odom_T_base);
       if (!submap ||
           static_cast<int>(submap->size()) < registration_config_.min_points) {
+        // Waiting for the window to fill, not failing to align against it.
+        // Clouds are still arriving - a stall in those is CLOUD_REJECTED
+        // above, or no callback at all - so this is the submap accumulating
+        // after a start or a reset, and the fix is not being asked anything
+        // while it does.
+        state_machine_.note_unobserved(stamp.toSec());
         publish_diagnostic_locked("INSUFFICIENT_ROLLING_SUBMAP",
                                   RegistrationResult(), CorrectionDecision());
         return;
