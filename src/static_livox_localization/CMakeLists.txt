@@ -87,6 +87,7 @@ install(
     scripts/mpc_speed.py
     scripts/safety_band.py
     scripts/scan_accumulator.py
+    scripts/shadow_qa_contract.py
     scripts/tip_guard_policy.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
