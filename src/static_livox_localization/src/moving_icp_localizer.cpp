@@ -725,9 +725,8 @@ class MovingIcpLocalizer {
     // same without this.
     status.values.push_back(key_value(
         "dynamic_returns_dropped", std::to_string(last_dynamic_dropped_)));
-    values.push_back(diagnostic_msgs::KeyValue());
-    values.back().key = "map_filtered";
-    values.back().value = std::to_string(last_map_filtered_);
+    status.values.push_back(key_value(
+        "map_filtered", std::to_string(last_map_filtered_)));
     status.values.push_back(key_value("registration_backend",
                                       registration.backend));
     status.values.push_back(key_value("registration_elapsed_ms",
