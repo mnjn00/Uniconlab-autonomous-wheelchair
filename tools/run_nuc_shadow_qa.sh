@@ -33,6 +33,7 @@ mkdir -p "$OUT"
 AUTONOMOUS_RE='wheel_cmd|waypoint_follower|dwa_follower|mpc_follower|safety_gate'
 LAUNCHED_PIDS=()
 STARTED_STACK=0
+SHADOW_RE='[r]oslaunch livox_ros_driver2|[r]oslaunch base_model vectornav|[f]astlio_mapping|[m]oving_icp_localizer|[m]ap_preview_publisher|[o]bstacle_clusters|[a]uto_initial_pose'
 
 cleanup() {
   local pid
@@ -42,21 +43,25 @@ cleanup() {
   pkill -f 'obstacle_clusters.py.*_shadow_qa:=true' 2>/dev/null || true
   if [ "$STARTED_STACK" = "1" ]; then
     for pattern in \
-        '[r]oslaunch livox_ros_driver2' '[f]astlio_mapping' \
-        '[m]oving_icp_localizer' '[m]ap_preview_publisher' \
-        '[o]bstacle_clusters' '[a]uto_initial_pose'; do
+        '[r]oslaunch livox_ros_driver2' '[r]oslaunch base_model vectornav' \
+        '[f]astlio_mapping' '[m]oving_icp_localizer' \
+        '[m]ap_preview_publisher' '[o]bstacle_clusters' \
+        '[a]uto_initial_pose'; do
       pkill -f "$pattern" 2>/dev/null || true
     done
   fi
   cleanup_failed=0
   for _ in $(seq 1 30); do
-    if ! pgrep -af 'obstacle_clusters.py.*_shadow_qa:=true' >/dev/null &&
+    if ! pgrep -af "$SHADOW_RE" >/dev/null &&
        ! pgrep -af "$AUTONOMOUS_RE" >/dev/null; then
       break
     fi
     sleep 0.2
   done
-  if pgrep -af 'obstacle_clusters.py.*_shadow_qa:=true' >/dev/null ||
+  for pid in "${LAUNCHED_PIDS[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+  if pgrep -af "$SHADOW_RE" >/dev/null ||
       pgrep -af "$AUTONOMOUS_RE" >/dev/null; then
     cleanup_failed=1
   fi
@@ -66,7 +71,7 @@ cleanup() {
     echo "remaining_autonomous_processes:"
     pgrep -af "$AUTONOMOUS_RE" || true
     echo "remaining_shadow_processes:"
-    pgrep -af 'obstacle_clusters.py.*_shadow_qa:=true' || true
+    pgrep -af "$SHADOW_RE" || true
   } > "$OUT/cleanup-receipt.txt"
   return "$cleanup_failed"
 }

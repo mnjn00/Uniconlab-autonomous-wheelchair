@@ -169,6 +169,9 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
         assert f'{variable}="${variable if variable != "LOCALIZATION_WS" else "WS"}"' \
             in startup
     assert "cleanup || status=90" in runner
+    assert "'[r]oslaunch base_model vectornav'" in runner
+    assert 'pgrep -af "$SHADOW_RE"' in runner
+    assert 'wait "$pid"' in runner
     loop = runner[runner.index("for attempt in"):runner.index(
         'cp "$OUT/nuc-shadow-qa.txt"')]
     assert loop.index("objects_summary") < loop.index("dynamic_boxes")
