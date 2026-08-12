@@ -25,14 +25,17 @@ Cloud::Ptr make_map_with_wall() {
 
 Cloud::Ptr make_scan_with_person() {
   Cloud::Ptr scan(new Cloud);
-  // Static points on the wall
-  for (float x = 1.0f; x < 3.0f; x += 0.1f) {
-    pcl::PointXYZI p;
-    p.x = x;
-    p.y = 0.0f;
-    p.z = 0.5f;
-    p.intensity = 1.0f;
-    scan->push_back(p);
+  // Static points on the wall — in a real scan the wall produces
+  // far more returns than a pedestrian, so we generate a dense wall.
+  for (float x = 0.5f; x < 4.5f; x += 0.05f) {
+    for (float z = 0.0f; z < 2.0f; z += 0.1f) {
+      pcl::PointXYZI p;
+      p.x = x;
+      p.y = 0.0f;
+      p.z = z;
+      p.intensity = 1.0f;
+      scan->push_back(p);
+    }
   }
   // Person at y=0.3 — in mapped empty space, within 0.40 m of the
   // wall at y=0 but not on the wall itself.
