@@ -310,8 +310,17 @@ def main() -> int:
         ],
         dtype=int,
     )
+    route_id = (
+        "v6-v8:"
+        + _sha256(args.preferred_yaml.parent / "route_2d_map_v6.pgm")[:12]
+        + ":"
+        + _sha256(args.drivable_yaml.parent / "route_2d_map_v8.pgm")[:12]
+    )
     band_doc = {
         "frame": "map",
+        "route_id": route_id,
+        "drivable_mask_sha256": _sha256(
+            args.drivable_yaml.parent / "route_2d_map_v8.pgm"),
         "station_spacing_m": BAND_STEP_M,
         "stations": build_mask_band_stations(
             band_rc, drivable, resolution_m, origin_xy
@@ -328,8 +337,16 @@ def main() -> int:
             "status": "operator-drawn drivable boundary; outside is a hard reject",
         },
     }
-    args.out_route.write_text(json.dumps(route_doc, indent=1), encoding="utf-8")
     args.out_band.write_text(json.dumps(band_doc, indent=1), encoding="utf-8")
+    route_doc["asset_binding"] = {
+        "route_id": route_id,
+        "preferred_mask_sha256": _sha256(
+            args.preferred_yaml.parent / "route_2d_map_v6.pgm"),
+        "drivable_mask_sha256": _sha256(
+            args.drivable_yaml.parent / "route_2d_map_v8.pgm"),
+        "safety_band_sha256": _sha256(args.out_band),
+    }
+    args.out_route.write_text(json.dumps(route_doc, indent=1), encoding="utf-8")
     print(
         f"route: {len(dense_xy)} waypoints, {length_m:.3f} m; "
         f"band: {len(band_rc)} stations"

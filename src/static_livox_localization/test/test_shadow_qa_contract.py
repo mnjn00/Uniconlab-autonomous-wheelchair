@@ -26,9 +26,18 @@ def diagnostics():
     }
 
 
+def box(object_id=1, stamp=100.0):
+    return {
+        "id": object_id,
+        "size": [0.5, 0.6, 1.7],
+        "position": [1.0, 0.0, 0.5],
+        "stamp": stamp,
+    }
+
+
 def test_wall_only_scene_is_clear_and_topics_agree():
     evidence = validate_snapshot(
-        {"status": "OK", "objects": []},
+        {"status": "OK", "stamp": 100.0, "objects": []},
         [],
         diagnostics(),
     )
@@ -41,7 +50,7 @@ def test_wall_only_scene_is_clear_and_topics_agree():
 def test_summary_and_box_count_must_agree():
     with pytest.raises(ValueError, match="object/box count mismatch"):
         validate_snapshot(
-            {"status": "OK", "objects": [{"id": 1}]},
+            {"status": "OK", "stamp": 100.0, "objects": [{"id": 1}]},
             [],
             diagnostics(),
         )
@@ -50,8 +59,8 @@ def test_summary_and_box_count_must_agree():
 def test_invalid_box_and_missing_filter_diagnostics_fail_closed():
     with pytest.raises(ValueError, match="positive finite"):
         validate_snapshot(
-            {"status": "OK", "objects": [{"id": 1}]},
-            [{"size": [1.0, 0.0, 2.0]}],
+            {"status": "OK", "stamp": 100.0, "objects": [{"id": 1}]},
+            [{**box(), "size": [1.0, 0.0, 2.0]}],
             diagnostics(),
         )
 
@@ -59,7 +68,7 @@ def test_invalid_box_and_missing_filter_diagnostics_fail_closed():
     incomplete.pop("post_map_points")
     with pytest.raises(ValueError, match="missing diagnostics"):
         validate_snapshot(
-            {"status": "OK", "objects": []},
+            {"status": "OK", "stamp": 100.0, "objects": []},
             [],
             incomplete,
         )
@@ -77,14 +86,21 @@ def load_validator():
 def test_ros_yaml_parsers_preserve_topic_contracts():
     validator = load_validator()
     summary = validator.parse_summary({
-        "data": '{"status":"OK","objects":[{"id":7}]}'
+        "data": '{"status":"OK","stamp":100.0,"objects":[{"id":7}]}'
     })
     boxes = validator.parse_boxes({
         "markers": [
             {"action": 3},
             {
                 "action": 0,
-                "header": {"frame_id": "body"},
+                "id": 7,
+                "header": {
+                    "frame_id": "body",
+                    "stamp": {"secs": 100, "nsecs": 0},
+                },
+                "pose": {
+                    "position": {"x": 1.0, "y": 0.0, "z": 0.5}
+                },
                 "scale": {"x": 0.5, "y": 0.6, "z": 1.7},
             },
         ]
@@ -93,14 +109,35 @@ def test_ros_yaml_parsers_preserve_topic_contracts():
         "status": [{
             "name": "moving localization",
             "values": [
-                {"key": key, "value": value}
+                {"key": ("raw_state" if key == "tracking_state" else key),
+                 "value": value}
                 for key, value in diagnostics().items()
             ],
-        }]
+        }],
+        "header": {"stamp": {"secs": 100, "nsecs": 0}},
     })
 
-    evidence = validate_snapshot(summary, boxes, parsed_diagnostics)
+    stamp = parsed_diagnostics.pop("_stamp")
+    evidence = validate_snapshot(
+        summary, boxes, parsed_diagnostics, diagnostics_stamp=stamp)
     assert evidence["object_count"] == 1
+
+
+def test_lost_or_incoherent_snapshot_never_passes():
+    lost = diagnostics()
+    lost["tracking_state"] = "LOST"
+    with pytest.raises(ValueError, match="not TRACKING"):
+        validate_snapshot(
+            {"status": "OK", "stamp": 100.0, "objects": []},
+            [],
+            lost,
+        )
+    with pytest.raises(ValueError, match="stamps do not agree"):
+        validate_snapshot(
+            {"status": "OK", "stamp": 100.0, "objects": [{"id": 1}]},
+            [box(stamp=110.0)],
+            diagnostics(),
+        )
 
 
 def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
@@ -114,3 +151,38 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert "rosrun static_livox_localization dwa_follower.py" not in runner
     assert "rosrun static_livox_localization mpc_follower.py" not in runner
     assert "rosrun static_livox_localization safety_gate.py" not in runner
+    assert 'SHADOW_QA=1 "$REPO/tools/start_wheelchair_localization.sh"' \
+        in runner
+    assert "cleanup || status=90" in runner
+    loop = runner[runner.index("for attempt in"):runner.index(
+        'cp "$OUT/nuc-shadow-qa.txt"')]
+    assert loop.index("objects_summary") < loop.index("dynamic_boxes")
+    assert loop.index("dynamic_boxes") < loop.index(
+        "localization_diagnostics")
+
+
+def test_motion_graph_detection_checks_nodes_and_command_topics():
+    from shadow_qa_contract import motion_surface_violations
+
+    assert motion_surface_violations(
+        {"/cmd_vel": ["/rogue"]}, {}
+    ) == ["publisher /cmd_vel: /rogue"]
+    violations = motion_surface_violations(
+        {}, {"/cloud_registered_body": ["/wheel_driver"]}
+    )
+    assert violations == ["subscriber node: /wheel_driver"]
+
+
+def test_field_startup_has_sensor_only_shadow_exit_before_wheel_launch():
+    startup = (
+        Path(__file__).parents[3]
+        / "tools"
+        / "start_wheelchair_localization.sh"
+    ).read_text(encoding="utf-8")
+
+    shadow_exit = startup.index('if [ "$SHADOW_QA" = "1" ]')
+    wheel_launch = startup.index("roslaunch base_model wheel.launch")
+    assert shadow_exit < wheel_launch
+    shadow_block = startup[shadow_exit:wheel_launch]
+    assert "start_object_tracking" in shadow_block
+    assert "SHADOW_QA_READY" in shadow_block

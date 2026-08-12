@@ -533,6 +533,8 @@ class ObstacleClusters:
         markers, objects = MarkerArray(), []
         dynamic = MarkerArray()
         wipe = Marker()
+        wipe.header.frame_id = "body"
+        wipe.header.stamp = rospy.Time.from_sec(newest_stamp)
         wipe.action = Marker.DELETEALL
         markers.markers.append(wipe)
         dynamic.markers.append(wipe)
@@ -545,6 +547,7 @@ class ObstacleClusters:
                 np.abs(np.asarray(self.lidar_to_body_rotation)) @ size)
             raw_label, band_relation, inside_fraction, profile = context
             track = tracks[i] if tracks else None
+            object_id = i if track is None else int(track.id)
             objects.append({
                 "class": label,
                 "raw_class": raw_label,
@@ -564,7 +567,7 @@ class ObstacleClusters:
                 # needs to know when nothing said it. Without a reference
                 # pose there is no frame to judge motion in, and the honest
                 # answer is UNKNOWN, which every consumer handles as moving.
-                "id": 0 if track is None else int(track.id),
+                "id": object_id,
                 "motion": UNKNOWN if track is None else
                           track.motion(stamp.to_sec()),
                 "speed_mps": 0.0 if track is None else
@@ -576,10 +579,10 @@ class ObstacleClusters:
             # only controls avoidance policy; a stationary person or parked
             # vehicle is still absent from the immutable localization map.
             box = Marker()
-            box.header.stamp = stamp
+            box.header.stamp = rospy.Time.from_sec(newest_stamp)
             box.header.frame_id = "body"
             box.ns = "dynamic"
-            box.id = i
+            box.id = object_id
             box.type = Marker.CUBE
             box.action = Marker.ADD
             box.pose.position.x = float(body_center[0])
@@ -593,9 +596,9 @@ class ObstacleClusters:
             dynamic.markers.append(box)
             m = Marker()
             m.header.frame_id = "body"
-            m.header.stamp = stamp
+            m.header.stamp = rospy.Time.from_sec(newest_stamp)
             m.ns = label
-            m.id = i
+            m.id = object_id
             m.type = Marker.CUBE
             m.action = Marker.ADD
             m.pose.position = Point(*[float(v) for v in body_center])

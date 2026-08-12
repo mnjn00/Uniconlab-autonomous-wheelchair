@@ -74,7 +74,7 @@ contract strings.
 
 ## 4. Model
 
-Unicycle kinematics, the honest model for this chair at <= 0.6 m/s:
+Unicycle kinematics, the current model for this chair at <= 1.0 m/s:
 
 ```
 X' = v cos(th)     Y' = v sin(th)     th' = w     v' = a     w' = al
@@ -86,8 +86,8 @@ Parameters are the follower's existing constants, not new ones:
 | Parameter | Value | Source |
 |---|---|---|
 | `dt` | 0.1 s | CONTROL_HZ = 10 |
-| `N` | 25 (2.5 s, ~1.5 m at v_max) | section 5 budget |
-| `v_max` | 0.6 m/s | MAX_SPEED |
+| `N` | 25 (2.5 s, ~2.5 m at v_max) | section 5 budget |
+| `v_max` | 1.0 m/s | MAX_SPEED |
 | `a` range | [-0.6, +0.18] m/s^2 | MAX_DECEL / MAX_ACCEL |
 | `|w|` | <= 0.5 rad/s | MAX_YAW_RATE |
 | `|al|` | <= 1.5 rad/s^2 | follower yaw slew 1.5/CONTROL_HZ per tick |

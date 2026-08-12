@@ -42,7 +42,7 @@ def test_follower_keeps_wheelchair_inside_map_safety_band():
 
 def test_follower_speed_policy_is_bounded():
     text = follower_text()
-    assert "MAX_SPEED = 0.6" in text
+    assert "MAX_SPEED = 1.0" in text
     assert "SLOPE_SPEED = 0.3" in text
     assert "MAX_ACCEL" in text and "MAX_DECEL" in text
 

@@ -26,7 +26,7 @@ Per control cycle:
     because a source with no identity was authorising bypass manoeuvres.
     safety_gate.py keeps its own raw check and can still stop the chair
   - slope guard and bounded DEGRADED-localization grace
-  - speed policy: 0.6 m/s cap (operator-directed), curvature slowdown,
+  - speed policy: 1.0 m/s cap (operator-directed), curvature slowdown,
     accel/yaw-rate limiting
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST or sustained DEGRADED localization, manual
@@ -80,13 +80,14 @@ from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
 from safety_band import SafetyBand
+from route_assets import validate_asset_binding
 import tf.transformations as tft
 
 # Matched to how the route is actually driven. Measured over the
 # 2026-07-27 manual run of this route (full_debug_20260727_214306.bag,
 # /fast_lio_icp/pose, spin-in-place bookends trimmed): median 0.96 m/s,
-# p75 1.00, p90 1.21, p95 1.58. The operator directed 0.6 m/s for the
-# 0727 field run; the measured p90 remains the upper reference.
+# p75 1.00, p90 1.21, p95 1.58. The operator raised the current cap to
+# 1.0 m/s on 2026-08-12; the measured p90 remains the upper reference.
 MAX_SPEED = 1.0
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
@@ -166,11 +167,20 @@ class WaypointFollower:
 
     def __init__(self):
         rospy.init_node("waypoint_follower")
-        with open(rospy.get_param("~route")) as f:
+        route_path = rospy.get_param("~route")
+        band_path = rospy.get_param("~safety_band")
+        with open(route_path) as f:
             route = json.load(f)
+        try:
+            self.asset_binding = validate_asset_binding(
+                route_path, band_path,
+                rospy.get_param("~drivable_mask", None),
+            )
+        except ValueError as error:
+            raise rospy.ROSInitException(str(error))
         self.waypoints = np.array(
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
-        self.band = SafetyBand(rospy.get_param("~safety_band"))
+        self.band = SafetyBand(band_path)
         self.sensor_height = rospy.get_param("~sensor_height", 0.725)
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))

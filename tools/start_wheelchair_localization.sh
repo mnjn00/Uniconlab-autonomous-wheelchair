@@ -2,6 +2,21 @@
 # One-command field startup: driver -> FAST-LIO -> localization(+RViz) -> auto seed.
 set -eo pipefail
 
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  cat <<'EOF'
+Usage: start_wheelchair_localization.sh
+
+Environment: SHADOW_QA=1 starts sensors, perception, and localization only.
+PROFILE=pursuit|mpc|dwa selects the controller for a normal field startup.
+No command-line arguments other than --help are accepted.
+EOF
+  exit 0
+fi
+[ "$#" -eq 0 ] || {
+  echo "ERROR: unexpected arguments; use --help" >&2
+  exit 64
+}
+
 # Keep the field workspace as the default, while allowing a reviewed branch to
 # be built and replayed in isolation before it replaces the live package.
 LOCALIZATION_WS="${LOCALIZATION_WS:-$HOME/livox_static_localization_ws}"
@@ -105,6 +120,11 @@ case "$STATIONARY_CORRECTION" in
 esac
 
 PROFILE="${PROFILE:-pursuit}"
+SHADOW_QA="${SHADOW_QA:-0}"
+case "$SHADOW_QA" in
+  0|1) ;;
+  *) echo "ERROR: SHADOW_QA must be 0 or 1" >&2; exit 64 ;;
+esac
 case "$PROFILE" in
   pursuit) FOLLOWER_NODE=waypoint_follower.py ;;
   mpc)     FOLLOWER_NODE=mpc_follower.py ;;
@@ -207,7 +227,7 @@ echo "[1/5] cleaning old processes"
 # dwa_follower was added by the DWA profile in the same window this sweep was
 # written in, on a branch that did not have it, so the two merged clean and
 # the derived list caught what neither side could see alone.
-for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters'; do
+for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters' '[r]oute_identity_publisher'; do
   pkill -f "$pattern" 2>/dev/null || true
 done
 sleep 2
@@ -401,6 +421,41 @@ if [ "$LOCALIZED" != "1" ]; then
 fi
 echo "LOCALIZED"
 
+start_object_tracking() {
+  source "$LOCALIZATION_WS/devel/setup.bash"
+  setsid nohup env $SINGLE_THREAD_ENV \
+    rosrun static_livox_localization obstacle_clusters.py \
+    _body_frame_profile:="$BODY_FRAME_PROFILE" \
+    _safety_band:="$BAND" \
+    _map_path:="$MAP" \
+    _map_sha256:="$MAP_SHA256" \
+    _shadow_qa:="$SHADOW_QA" \
+    > "$LOG/live_clusters.log" 2>&1 < /dev/null &
+  for i in $(seq 1 15); do
+    timeout 2 rostopic echo -n1 /perception/objects_summary \
+      >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! timeout 3 rostopic echo -n1 /perception/objects_summary \
+      >/dev/null 2>&1; then
+    echo "ERROR: object clustering silent (/perception/objects_summary)" >&2
+    echo "       see $LOG/live_clusters.log" >&2
+    return 1
+  fi
+  echo "  object tracking up - watch /perception/objects_summary"
+}
+
+if [ "$SHADOW_QA" = "1" ]; then
+  start_object_tracking
+  if pgrep -af 'wheel_cmd|waypoint_follower|dwa_follower|mpc_follower|safety_gate' \
+      >/dev/null; then
+    echo "ERROR: motion process present during SHADOW_QA" >&2
+    exit 20
+  fi
+  echo "SHADOW_QA_READY: sensor + perception + localization only"
+  exit 0
+fi
+
 echo "[6/7] wheel base + safety gate + follower (paused)"
 source "$HOME/catkin_ws/devel/setup.bash"
 setsid nohup roslaunch base_model wheel.launch \
@@ -424,23 +479,7 @@ setsid nohup rosrun static_livox_localization tip_guard.py \
 # what it reports as moving, so it starts BEFORE the follower and the follower
 # refuses to drive without it (HOLD:CLUSTERS_STALE). A missing producer must
 # not read as an empty road.
-setsid nohup env $SINGLE_THREAD_ENV \
-  rosrun static_livox_localization obstacle_clusters.py \
-  _body_frame_profile:="$BODY_FRAME_PROFILE" \
-  _safety_band:="$BAND" \
-  _map_path:="$MAP" \
-  _map_sha256:="$MAP_SHA256" \
-  > "$LOG/live_clusters.log" 2>&1 < /dev/null &
-for i in $(seq 1 15); do
-  timeout 2 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1 && break
-  sleep 1
-done
-if ! timeout 3 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1; then
-  echo "ERROR: object clustering silent (/perception/objects_summary)" >&2
-  echo "       the follower will hold on CLUSTERS_STALE; see $LOG/live_clusters.log" >&2
-  exit 6
-fi
-echo "  object tracking up - watch /perception/objects_summary"
+start_object_tracking
 for i in $(seq 1 10); do
   timeout 2 rostopic echo -n1 /tip_guard/status >/dev/null 2>&1 && break
   sleep 1
@@ -461,12 +500,17 @@ setsid nohup env $SINGLE_THREAD_ENV \
 
 echo "[7/7] black-box recorder"
 mkdir -p "$HOME/localization_trials"
+setsid nohup rosrun static_livox_localization route_identity_publisher.py \
+  _route:="$ROUTE" _safety_band:="$BAND" \
+  _drivable_mask:="$DRIVABLE_MASK" \
+  > "$LOG/live_route_identity.log" 2>&1 < /dev/null &
 setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics /vectornav/IMU \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
   /perception/objects_summary /perception/dynamic_boxes /perception/objects \
+  /waypoint_follower/route_identity \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

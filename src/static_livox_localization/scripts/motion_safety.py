@@ -17,9 +17,9 @@ class MotionEstimate(NamedTuple):
     reason: str
 
 
-# The loaded chair was measured not to exceed 0.6 m/s. A pose that moves
-# faster than this is the localizer correcting itself, not the chair
-# driving, and the planner has no way to tell the two apart.
+# The current 1.0 m/s command cap stays below this 1.2 m/s plausibility
+# ceiling. A reported step above it is a localization correction, not chair
+# motion, and the planner has no way to tell the two apart.
 POSE_STEP_LIMIT_MPS = 1.2
 # Below this, arguing with the fix costs more than believing it.
 POSE_STEP_FLOOR_M = 0.05

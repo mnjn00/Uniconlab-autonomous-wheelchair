@@ -98,7 +98,10 @@ def load_producer(now_s):
     rospy.Rate = lambda hz: None
     rospy.is_shutdown = lambda: True
     rospy.loginfo = rospy.logwarn = lambda *a, **k: None
-    rospy.Time = types.SimpleNamespace(now=lambda: Stamp(now_s[0]))
+    rospy.Time = types.SimpleNamespace(
+        now=lambda: Stamp(now_s[0]),
+        from_sec=lambda seconds: Stamp(seconds),
+    )
 
     modules = {"rospy": rospy}
     for package, names in {

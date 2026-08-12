@@ -220,6 +220,11 @@ class MovingIcpLocalizer {
     private_nh_.param("dynamic_box_margin_m", dynamic_box_margin_m_, 0.15);
     private_nh_.param("dynamic_box_max_fraction",
                       dynamic_box_max_fraction_, 0.50);
+    private_nh_.param("dynamic_box_max_count", dynamic_box_max_count_, 128);
+    private_nh_.param("dynamic_box_max_dimension_m",
+                      dynamic_box_max_dimension_m_, 8.0);
+    private_nh_.param("dynamic_box_max_range_m",
+                      dynamic_box_max_range_m_, 30.0);
     private_nh_.param("min_inlier_ratio", tracking_config_.min_inlier_ratio,
                       0.35);
     tracking_config_.min_source_points = registration_config_.min_points;
@@ -408,23 +413,19 @@ class MovingIcpLocalizer {
       if (marker.type != visualization_msgs::Marker::CUBE) continue;
       if (marker.header.frame_id != rolling_config_.expected_cloud_frame)
         continue;
-      const double values[] = {
-          marker.pose.position.x, marker.pose.position.y,
-          marker.pose.position.z, marker.scale.x, marker.scale.y,
-          marker.scale.z};
-      bool valid = true;
-      for (double value : values) valid = valid && std::isfinite(value);
-      if (!valid || marker.scale.x <= 0.0 || marker.scale.y <= 0.0 ||
-          marker.scale.z <= 0.0)
-        continue;
       static_livox_localization::DynamicBox box;
       box.centre = Eigen::Vector3d(marker.pose.position.x,
                                    marker.pose.position.y,
                                    marker.pose.position.z);
       box.half_extent = Eigen::Vector3d(marker.scale.x, marker.scale.y,
                                         marker.scale.z) * 0.5;
+      if (!static_livox_localization::dynamic_box_within_limits(
+              box, dynamic_box_max_dimension_m_,
+              dynamic_box_max_range_m_))
+        continue;
       boxes.push_back(box);
       if (marker.header.stamp > newest) newest = marker.header.stamp;
+      if (boxes.size() >= dynamic_box_max_count_) break;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     dynamic_boxes_ = std::move(boxes);
@@ -459,17 +460,21 @@ class MovingIcpLocalizer {
     last_post_box_points_ = cloud->size();
 
     std::size_t map_dropped = 0;
-    if (has_map_T_odom_ && map_voxel_grid_ &&
-        map_voxel_grid_->voxel_count() > 0) {
-      OdomSample odom_for_filter;
-      bool have_odom = false;
+    if (map_voxel_grid_ && map_voxel_grid_->voxel_count() > 0) {
+      Eigen::Isometry3d map_T_base = Eigen::Isometry3d::Identity();
+      bool filter_from_verified_pose = false;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        have_odom = nearest_odom_locked(stamp, &odom_for_filter);
+        OdomSample odom_for_filter;
+        filter_from_verified_pose =
+            has_map_T_odom_ &&
+            state_machine_.state() == TrackingState::TRACKING &&
+            nearest_odom_locked(stamp, &odom_for_filter);
+        if (filter_from_verified_pose) {
+          map_T_base = map_T_odom_ * odom_for_filter.odom_T_base;
+        }
       }
-      if (have_odom) {
-        const Eigen::Isometry3d map_T_base =
-            map_T_odom_ * odom_for_filter.odom_T_base;
+      if (filter_from_verified_pose) {
         Cloud::Ptr in_map(new Cloud);
         pcl::transformPointCloud(*cloud, *in_map,
                                  map_T_base.cast<float>());
@@ -808,6 +813,9 @@ class MovingIcpLocalizer {
   double dynamic_box_max_age_s_ = 0.5;
   double dynamic_box_margin_m_ = 0.15;
   double dynamic_box_max_fraction_ = 0.50;
+  std::size_t dynamic_box_max_count_ = 128;
+  double dynamic_box_max_dimension_m_ = 8.0;
+  double dynamic_box_max_range_m_ = 30.0;
   static_livox_localization::TrackingStateMachine state_machine_;
   static_livox_localization::AssistedAlignmentController alignment_controller_;
 

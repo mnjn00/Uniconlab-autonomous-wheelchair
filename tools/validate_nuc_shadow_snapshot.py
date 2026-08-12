@@ -47,8 +47,18 @@ def parse_boxes(document):
         if header.get("frame_id") != "body":
             raise ValueError("dynamic box is not in body frame")
         scale = marker.get("scale", {})
+        position = marker.get("pose", {}).get("position", {})
+        stamp = header.get("stamp", {})
         boxes.append({
-            "size": [scale.get("x"), scale.get("y"), scale.get("z")]
+            "id": marker.get("id"),
+            "size": [scale.get("x"), scale.get("y"), scale.get("z")],
+            "position": [
+                position.get("x"), position.get("y"), position.get("z")
+            ],
+            "stamp": (
+                float(stamp.get("secs", 0))
+                + float(stamp.get("nsecs", 0)) * 1e-9
+            ),
         })
     return boxes
 
@@ -66,11 +76,20 @@ def parse_diagnostics(document):
         statuses[0],
     )
     values = selected.get("values", [])
-    return {
+    parsed = {
         str(item.get("key")): str(item.get("value"))
         for item in values
         if item.get("key") is not None
     }
+    if "tracking_state" not in parsed and "raw_state" in parsed:
+        parsed["tracking_state"] = parsed["raw_state"]
+    header = document.get("header", {})
+    stamp = header.get("stamp", {})
+    parsed["_stamp"] = (
+        float(stamp.get("secs", 0))
+        + float(stamp.get("nsecs", 0)) * 1e-9
+    )
+    return parsed
 
 
 def main():
@@ -83,7 +102,11 @@ def main():
     summary = parse_summary(load_yaml(args.summary))
     boxes = parse_boxes(load_yaml(args.boxes))
     diagnostics = parse_diagnostics(load_yaml(args.diagnostics))
-    evidence = validate_snapshot(summary, boxes, diagnostics)
+    diagnostics_stamp = diagnostics.pop("_stamp", None)
+    evidence = validate_snapshot(
+        summary, boxes, diagnostics,
+        diagnostics_stamp=diagnostics_stamp,
+    )
     print(json.dumps({"status": "PASS", **evidence}, sort_keys=True))
 
 

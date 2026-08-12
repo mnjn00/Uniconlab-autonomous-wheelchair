@@ -25,16 +25,22 @@ ROUTE_NAME="20260812_route_v6_v8_waypoints.json"
 BAND_NAME="20260812_route_v6_v8_safety_band.json"
 
 usage() {
-  echo "usage: deploy_merged_map.sh [--verify-only] <map-directory>" >&2
-  exit 64
+  echo "Usage: deploy_merged_map.sh [--verify-only] <map-directory>"
 }
 
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage
+  exit 0
+fi
 VERIFY_ONLY=0
 if [ "${1:-}" = "--verify-only" ]; then
   VERIFY_ONLY=1
   shift
 fi
-[ "$#" -eq 1 ] || usage
+[ "$#" -eq 1 ] || {
+  usage >&2
+  exit 64
+}
 
 SRC_DIR="$(cd "$1" && pwd -P)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -97,7 +103,7 @@ echo "runtime_size_bytes=$runtime_bytes"
 echo "route=$ROUTE_NAME"
 echo "safety_band=$BAND_NAME"
 echo "imu=builtin"
-echo "speed_mps=0.6"
+echo "speed_mps=1.0"
 
 if [ "$VERIFY_ONLY" = "1" ]; then
   exit 0

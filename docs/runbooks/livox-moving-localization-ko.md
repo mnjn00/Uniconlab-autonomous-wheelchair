@@ -4,9 +4,9 @@
 
 - 정본 지도: `mergedmap.ply`
 - 주행용 지도: `merged_0707_0725_0p20m_xyzi.pcd`
-- 경로: `20260727_chair_centred_waypoints.json` (차체 중심 기준, 주행 궤적 1,446점)
+- 경로: `20260812_route_v6_v8_waypoints.json` (v6 선호, v8 주행가능 hard mask)
 - 기본 IMU: Livox MID-360 내장 IMU
-- 최고 주행 속도: 0.6 m/s
+- 최고 주행 속도: 1.0 m/s (2026-08-12 운영자 지시)
 
 `mergedmap.ply`는 원본 보관과 해시 검증에 사용한다. 실제 ICP와 자동
 초기화 fallback은 동일한 0.20 m PCD를 사용한다. RViz에서 빨간 지도와

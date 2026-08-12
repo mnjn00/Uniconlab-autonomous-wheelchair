@@ -27,6 +27,10 @@ struct DynamicBox {
   Eigen::Vector3d half_extent = Eigen::Vector3d::Zero();
 };
 
+bool dynamic_box_within_limits(const DynamicBox& box,
+                               double max_dimension_m,
+                               double max_range_m);
+
 // Drop returns that came off something moving, before they reach the submap.
 //
 // A pedestrian is not in the map, so GICP has nothing correct to match those

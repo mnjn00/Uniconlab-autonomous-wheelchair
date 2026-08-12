@@ -176,7 +176,8 @@ def test_localizer_reports_every_registration_filter_stage():
         "rolling_submap_points",
     ):
         assert '"%s"' % key in source
-    assert "if (has_map_T_odom_ && map_voxel_grid_" in source
+    assert "state_machine_.state() == TrackingState::TRACKING" in source
+    assert "filter_from_verified_pose" in source
     assert "marker.header.frame_id != rolling_config_.expected_cloud_frame" \
         in source
 

@@ -200,9 +200,18 @@ class SafetyBand:
             endpoint_guard=2):
         start = min(endpoint_guard, len(self.xy))
         end = max(start, len(self.xy) - endpoint_guard)
+        # This preflight protects against a mapped fall/step reaching the
+        # planned wheel line. An "open" v8 mask boundary is a soft planning
+        # limit, not a physical drop; treating it as one made the shipped
+        # route impossible to arm at 17 otherwise-valid stations. Runtime
+        # mask containment still hard-rejects leaving v8.
         bad = np.logical_or(
-            self.edge_left[start:end] < required_side_m,
-            self.edge_right[start:end] < required_side_m)
+            np.logical_and(
+                self.severe_left[start:end],
+                self.edge_left[start:end] < required_side_m),
+            np.logical_and(
+                self.severe_right[start:end],
+                self.edge_right[start:end] < required_side_m))
         return (np.nonzero(bad)[0] + start).tolist()
 
     def route_centre_chord_violations(

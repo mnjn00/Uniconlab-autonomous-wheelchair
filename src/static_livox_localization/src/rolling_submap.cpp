@@ -9,6 +9,15 @@
 
 namespace static_livox_localization {
 
+bool dynamic_box_within_limits(const DynamicBox& box,
+                               double max_dimension_m,
+                               double max_range_m) {
+  return box.centre.allFinite() && box.half_extent.allFinite() &&
+         (box.half_extent.array() > 0.0).all() &&
+         (box.half_extent.array() * 2.0 <= max_dimension_m).all() &&
+         box.centre.norm() <= max_range_m;
+}
+
 std::size_t filter_dynamic_returns(
     pcl::PointCloud<pcl::PointXYZI>& cloud,
     const std::vector<DynamicBox>& boxes,
