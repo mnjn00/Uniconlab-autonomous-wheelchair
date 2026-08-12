@@ -4,17 +4,6 @@
 
 #include "static_livox_localization/moving_tracker.hpp"
 
-TEST(MovingTracker, MapVoxelRegressionRemainsAPeerGate) {
-  // This test intentionally anchors the moving-localizer gate beside the
-  // MapVoxelGrid regression in the root objective CTest surface. The actual
-  // synthetic wall/crowd classification assertions live in
-  // test_map_voxel_grid.cpp; both binaries must remain green together.
-  EXPECT_STREQ(
-      static_livox_localization::tracking_state_name(
-          static_livox_localization::TrackingState::TRACKING),
-      "TRACKING");
-}
-
 namespace {
 
 Eigen::Isometry3d pose(double x, double y, double yaw) {
