@@ -115,6 +115,62 @@ W_CENTRE = 2.0
 # discarded outright rather than scored - the same floor mpc_core keeps.
 OBSTACLE_FLOOR_M = 0.40
 
+# RECOVERY: what to do when no arc at all survives containment
+# -----------------------------------------------------------
+# Without this the answer is a permanent stop. Every rollout point is tested,
+# so the moment the chair sits even a centimetre outside the corridor the
+# first sampled point of every candidate is already out and nothing is
+# admissible - the chair cannot drive back in because driving back in starts
+# outside. The 2026-08-08 analysis recorded 23 % OFF_BAND persisting under
+# replay and called it a starting-state problem that no scoring change
+# reaches. It is that, and this is the state machine it needs rather than a
+# weight.
+#
+# NOT the braking-horizon relaxation that was tried and dropped after
+# 2026-08-08. That one admitted EVERY candidate on the prefix it could brake
+# within, in place of the flat 1.7 s, and it bought nothing once the heading
+# and standstill defects were fixed - a relaxed safety criterion for no gain.
+# This runs only when the alternative is a stop that needs a person to clear,
+# which is the one case that replay never entered.
+#
+# Two hard rules, and they are what makes this a recovery rather than a
+# wider band:
+#   - no rollout point may sit further outside than the chair ALREADY is, so
+#     from inside the corridor this is strict containment at a shorter
+#     lookahead and nothing else;
+#   - from outside it, the arc must end measurably further in than it began.
+# An arc that merely holds an excursion is not recovery, and an arc that
+# grows one is the excursion.
+RECOVER_SIM_TIME_S = 0.6
+# Long enough to stop inside what it looked at: 0.30 m/s against the 0.5
+# m/s^2 the safety gate is willing to assume is 0.6 s and 0.09 m, so the
+# shortened horizon still covers the chair's own braking distance. Anything
+# shorter drives into a pinch it never sampled, which is the failure the
+# 1.7 s horizon exists to prevent.
+RECOVER_SPEED_MPS = TURN_FLOOR_SPEED
+# The slowest speed the loaded wheels honour. Recovery does not sample a
+# range: there is no version of this manoeuvre that wants to be quick.
+
+# How far outside the corridor a recovery may be attempted at all. Deliberately
+# the follower's own OFF_BAND_GRACE: past that the hold ladder stops the chair
+# and asks for a person, and a planner that kept creeping there would be
+# quietly overruling it.
+RECOVER_GRACE_M = 0.10
+# An arc has to close the gap by at least this much to count as returning.
+# Below it, sensor noise on the pose alone would qualify.
+RECOVER_CLOSE_M = 0.01
+
+# Recovery scoring. NOT field-measured - unlike the weights above, no run has
+# exercised these. They are sized so that the two regimes each have a term
+# that separates them: the excursion term ranges over 0 - 0.10 m and at 20.0
+# spans 2.0, the same order as a saturated heading term, and it is the only
+# thing that distinguishes candidates while the chair is out; the centre term
+# takes over once every candidate is back inside, at four times its cruising
+# weight because during a recovery the middle of the corridor is the
+# objective and not a preference.
+W_RECOVER_RETURN = 20.0
+W_RECOVER_CENTRE = 8.0
+
 
 def speed_samples(max_speed=MAX_SPEED, floor=TURN_FLOOR_SPEED,
                   count=SPEED_SAMPLES):
@@ -198,6 +254,8 @@ class DwaPlanner:
         seg = np.linalg.norm(np.diff(self.route, axis=0), axis=1)
         self.arc = np.concatenate([[0.0], np.cumsum(seg)])
         self.steps = max(int(round(self.sim_time_s / SIM_STEP_S)), 1)
+        self.recover_steps = max(
+            int(round(RECOVER_SIM_TIME_S / SIM_STEP_S)), 1)
         tangent = np.gradient(self.route, axis=0)
         tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True),
                               1e-9)
@@ -206,11 +264,12 @@ class DwaPlanner:
     def arc_at(self, point):
         return float(self.arc[int(self.tree.query(np.asarray(point))[1])])
 
-    def _rollouts(self, state, pairs):
+    def _rollouts(self, state, pairs, steps=None):
         """(candidates, steps, 3) for every (v, w) at once."""
+        steps = self.steps if steps is None else max(int(steps), 1)
         v = np.asarray([p[0] for p in pairs], dtype=float)[:, None]
         w = np.asarray([p[1] for p in pairs], dtype=float)[:, None]
-        k = np.arange(1, self.steps + 1)[None, :]
+        k = np.arange(1, steps + 1)[None, :]
         yaw = state[2] + w * k * SIM_STEP_S
         # position by integrating the same constant-curvature arc the chair
         # would drive, step by step, so an arc that leaves the band midway
@@ -219,12 +278,38 @@ class DwaPlanner:
         dy = np.cumsum(v * np.sin(yaw) * SIM_STEP_S, axis=1)
         return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
 
+    @staticmethod
+    def _excursion(lateral, lo, hi):
+        """How far outside the corridor each point sits; 0.0 inside it.
+
+        The same geometry contains_many thresholds, kept as a distance. A
+        recovery has to compare two ways of being outside, and a boolean
+        cannot say which of them is closer to being back in.
+
+        Takes margins rather than points, for the reason plan() does: one
+        walk of the band per cycle. It used to take points and call
+        margins_many itself, so the recovery searched 802 stations twice -
+        the same defect the ordinary pass had, in the path that runs when
+        the ordinary pass has already failed.
+        """
+        return np.maximum(np.maximum(lo - lateral, lateral - hi), 0.0)
+
+    def _clearance(self, paths, obstacles):
+        """Closest approach of every rollout to any obstacle point."""
+        if not len(obstacles):
+            return np.full(len(paths), np.inf)
+        pts = np.asarray(obstacles, dtype=float).reshape(-1, 2)
+        return np.linalg.norm(
+            paths[:, :, None, :2] - pts[None, None, :, :],
+            axis=3).min(axis=(1, 2))
+
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0):
         """Best executable (v, w) from here, or a stop with a reason.
 
-        Returns (v, w, status). status is OK, or the reason every candidate
-        was rejected - which the operator needs: a corridor with no
-        admissible arc is a different fault from one with an object in it.
+        Returns (v, w, status). status is OK, RECOVER when the command comes
+        from the bounded recovery below, or the reason every candidate was
+        rejected - which the operator needs: a corridor with no admissible
+        arc is a different fault from one with an object in it.
 
         Standing still is not among the candidates. It used to be, and it
         beat every moving arc for 180 s in one 2026-08-08 run and 77 s in the
@@ -255,14 +340,12 @@ class DwaPlanner:
         inside = self.band.contained(lateral, lo, hi, self.grace)
         ok = inside.reshape(len(pairs), self.steps).all(axis=1)
         if not ok.any():
-            return 0.0, 0.0, "OFF_BAND"
-        if len(obstacles):
-            pts = np.asarray(obstacles, dtype=float).reshape(-1, 2)
-            clear = np.linalg.norm(
-                paths[:, :, None, :2] - pts[None, None, :, :],
-                axis=3).min(axis=(1, 2))
-        else:
-            clear = np.full(len(pairs), np.inf)
+            # Nothing survives a full-length arc. Before reporting a stop
+            # that only a person can clear, ask the recovery whether a
+            # shorter one gets back to a corridor this pass can use.
+            return self.recover(state, obstacles=obstacles,
+                                speed_cap=cap, last_yaw_rate=last_yaw_rate)
+        clear = self._clearance(paths, obstacles)
         ok &= clear >= OBSTACLE_FLOOR_M
         if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
@@ -294,3 +377,90 @@ class DwaPlanner:
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
         return float(pairs[best][0]), float(pairs[best][1]), "OK"
+
+    def recover(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0):
+        """The slowest short arc that gets back to a corridor plan() can use.
+
+        Returns the same (v, w, status) triple. RECOVER on success, and
+        otherwise the reason the ordinary pass would have given, so a caller
+        that does not care about the distinction is unaffected.
+
+        Three things this deliberately does not do:
+
+        - It does not widen the band. Every rollout point is still measured
+          against the same geometry; what changes is that a point is allowed
+          to be as far outside as the chair ALREADY is, and no further. From
+          inside the corridor that is exactly strict containment, and the
+          only relaxation left is the lookahead.
+        - It does not lower the obstacle floor. A recovery into something is
+          not a recovery, and the follower's hold ladder is upstream of this
+          in any case.
+        - It does not outlast the follower's own judgement. Past
+          RECOVER_GRACE_M outside, hold_candidates yields OFF_BAND and stops
+          the chair to ask for a person; creeping there would be this
+          planner quietly overruling that, so it refuses instead.
+
+        Progress is scored, not required. An arc that recovers by heading
+        back down the route is worse than one that recovers facing forward,
+        but it is not forbidden - making it a hard reject reinstates the
+        deadlock for a chair that has been turned around, which is the state
+        this exists to leave.
+
+        Measured against the raw band, not against ~band_grace. The grace is
+        a tuning knob for the ordinary pass; compounding it with the only
+        other place the corridor is allowed to give would be two relaxations
+        multiplying in the one situation where the chair is already out.
+        Where a grace is configured this is therefore the stricter of the
+        two, which is the direction it should err in.
+        """
+        cap = self.max_speed if speed_cap is None else min(self.max_speed,
+                                                           float(speed_cap))
+        if cap < RECOVER_SPEED_MPS:
+            # The speed policy is already asking for less than the wheels
+            # execute. That is a stop, and the follower reports it as one.
+            return 0.0, 0.0, "OFF_BAND"
+        start = np.asarray(state, dtype=float)
+        allow = float(self._excursion(*self.band.margins_many(start[None, :2]))[0])
+        if allow > RECOVER_GRACE_M:
+            return 0.0, 0.0, "OFF_BAND"
+
+        pairs = [(RECOVER_SPEED_MPS, w) for w in yaw_samples()]
+        paths = self._rollouts(start, pairs, steps=self.recover_steps)
+        flat = paths[:, :, :2].reshape(-1, 2)
+        # One walk of the band for the whole pass, as plan() does above: the
+        # excursion rule and the centre score are two readings of the same
+        # margins, not two reasons to search 802 stations.
+        lateral, lo, hi = self.band.margins_many(flat)
+        out = self._excursion(lateral, lo, hi).reshape(
+            len(pairs), self.recover_steps)
+        # Never further out than the chair already is, and - when it is out
+        # at all - measurably further in by the end than it started.
+        ok = out.max(axis=1) <= allow + 1e-6
+        if allow > 0.0:
+            ok &= out[:, -1] <= allow - RECOVER_CLOSE_M
+        if not ok.any():
+            return 0.0, 0.0, "OFF_BAND"
+        clear = self._clearance(paths, obstacles)
+        ok &= clear >= OBSTACLE_FLOOR_M
+        if not ok.any():
+            return 0.0, 0.0, "OBSTACLE"
+
+        d, idx = self.tree.query(flat, workers=-1)
+        ref = self.heading[idx].reshape(len(pairs), self.recover_steps)
+        aim = np.abs(np.arctan2(np.sin(paths[:, :, 2] - ref),
+                                np.cos(paths[:, :, 2] - ref))).mean(axis=1)
+        steer = np.abs(np.asarray([p[1] for p in pairs]) - float(last_yaw_rate))
+        here = self.arc_at(start[:2])
+        progress = self.arc[self.tree.query(paths[:, -1, :2])[1]] - here
+        half = np.maximum((hi - lo) / 2.0, 1e-6)
+        # Unclipped, unlike the cruising term: min(edge, 1.0) saturates at
+        # the corridor edge, which is the whole range a recovery works in.
+        edge = np.abs(lateral - (hi + lo) / 2.0) / half
+        centre = np.square(edge).reshape(
+            len(pairs), self.recover_steps).mean(axis=1)
+        cost = (W_RECOVER_RETURN * out.mean(axis=1)
+                + W_RECOVER_CENTRE * centre + W_HEADING * aim
+                + W_STEER * steer - W_PROGRESS * progress)
+        cost = np.where(ok, cost, np.inf)
+        best = int(np.argmin(cost))
+        return float(pairs[best][0]), float(pairs[best][1]), "RECOVER"

@@ -53,19 +53,19 @@ run, 77 s in the other. Both are fixed in dwa_core, whose docstrings carry the
 numbers. Not re-driven since. PROFILE still defaults to pursuit, which drove
 this route twice on 2026-07-31 with a person in the chair.
 
-Two further changes on 2026-08-11, neither of them driven either, and both
-found by reading rather than by a run: the parked-or-moving decision above,
-and the object's shape instead of its nearest point (obstacle_points). Each
-is written against a defect visible in the code and in the recorded data,
-and neither is field evidence.
+Three further changes on 2026-08-11, none of them driven either, and all
+three found by reading rather than by a run: the parked-or-moving decision
+above, the object's shape instead of its nearest point (obstacle_points),
+and dwa_core's bounded recovery for the OFF_BAND stop that the 08-08
+analysis recorded at 23 % and could not reach by scoring. Each is written
+against a defect that is visible in the code and the recorded data, and none
+of them is field evidence.
 
-`OFF_BAND` is still a stop only a person can clear - every rollout point is
-tested, so a chair a centimetre outside the corridor has no admissible
-candidate at all, and the 08-08 analysis measured that at 23 %. A bounded
-recovery for it is written and tested but deliberately NOT merged: it is the
-only change in this stack that turns a stop into motion, and it is waiting
-on one run of the route to be worth its risk. That run is what this profile
-needs before anything else.
+The first two shipped; the recovery is the one still held back, and this
+docstring is on the branch that carries it. It is the only change in this
+stack that turns a stop into motion - everything else here fails closed -
+and it is waiting on one complete run of the route, which is what this
+profile needs before anything else.
 """
 
 import math
@@ -221,7 +221,7 @@ class DwaFollower(WaypointFollower):
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate)
-        if status != "OK":
+        if status not in ("OK", "RECOVER"):
             if status != self.dwa_status:
                 rospy.logwarn("DWA %s at wp %d/%d", status,
                               self.nearest_index, len(self.waypoints))
@@ -230,6 +230,10 @@ class DwaFollower(WaypointFollower):
             self.send_stop()
             self.last_command_stamp = None
             return
+        if status == "RECOVER" and status != self.dwa_status:
+            rospy.logwarn(
+                "DWA recovering toward the corridor at wp %d/%d",
+                self.nearest_index, len(self.waypoints))
         self.dwa_status = status
 
         elapsed = 1.0 / CONTROL_HZ
@@ -258,11 +262,16 @@ class DwaFollower(WaypointFollower):
         self.cmd_pub.publish(command)
         self.current_speed = speed
         self.last_yaw_rate = yaw_rate
+        # RECOVER goes on the topic the black box records, not only into a
+        # log: a run where the chair spent a third of its time creeping back
+        # to the corridor drove, and a report that reads it as ordinary
+        # driving hides the thing worth measuring.
         self.publish_state(
-            "DWA wp=%d/%d v=%.2f w=%+.2f target %.2f/%+.2f%s" % (
+            "DWA%s wp=%d/%d v=%.2f w=%+.2f target %.2f/%+.2f%s" % (
+                "" if status == "OK" else ":" + status,
                 self.nearest_index, len(self.waypoints), speed, yaw_rate,
                 target_v, target_w,
-                "" if self.policies else " POLICIES_OFF"), "DWA:OK")
+                "" if self.policies else " POLICIES_OFF"), "DWA:" + status)
 
     def publish_state(self, text, state=None):
         """Publish every cycle, log only on a change of state.
