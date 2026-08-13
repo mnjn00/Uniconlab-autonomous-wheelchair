@@ -94,9 +94,16 @@ source /opt/ros/noetic/setup.bash
 source "$WS/devel/setup.bash"
 set -u
 
-catkin_make > "$OUT/catkin-build.txt" 2>&1
-catkin_make run_tests_static_livox_localization \
-  > "$OUT/catkin-tests.txt" 2>&1
+if [ -d "$WS/.catkin_tools" ]; then
+  catkin build static_livox_localization \
+    > "$OUT/catkin-build.txt" 2>&1
+  catkin run_tests static_livox_localization \
+    > "$OUT/catkin-tests.txt" 2>&1
+else
+  catkin_make > "$OUT/catkin-build.txt" 2>&1
+  catkin_make run_tests_static_livox_localization \
+    > "$OUT/catkin-tests.txt" 2>&1
+fi
 catkin_test_results build/static_livox_localization \
   > "$OUT/catkin-test-results.txt" 2>&1
 

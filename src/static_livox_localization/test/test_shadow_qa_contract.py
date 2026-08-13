@@ -145,6 +145,9 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
         Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
     ).read_text(encoding="utf-8")
 
+    assert 'if [ -d "$WS/.catkin_tools" ]; then' in runner
+    assert "catkin build static_livox_localization" in runner
+    assert "catkin run_tests static_livox_localization" in runner
     assert 'catkin_make > "$OUT/catkin-build.txt"' in runner
     assert "rosrun static_livox_localization obstacle_clusters.py" in runner
     assert "rosrun static_livox_localization waypoint_follower.py" not in runner
