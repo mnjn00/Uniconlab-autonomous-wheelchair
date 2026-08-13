@@ -65,3 +65,14 @@ def test_segment_containment_catches_forbidden_cell_between_endpoints(tmp_path):
     assert mask.contains(end)
     assert not mask.segment_is_contained(start, end)
     assert not mask.paths_are_contained([[start, end]])[0]
+
+
+def test_segment_containment_catches_short_corner_clip(tmp_path):
+    image = np.full((5, 5), 254, dtype=np.uint8)
+    image[2, 2] = 0
+    mask = RouteMask(str(write_mask(tmp_path, image)))
+    start = np.array([0.0, 0.2504])
+    end = np.array([0.4, 0.1496])
+    assert mask.contains(start)
+    assert mask.contains(end)
+    assert not mask.segment_is_contained(start, end)

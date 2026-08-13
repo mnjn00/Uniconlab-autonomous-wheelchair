@@ -52,10 +52,36 @@ class RouteMask:
         """Check every raster cell crossed by a chair-centre segment."""
         start = np.asarray(start, dtype=float)
         end = np.asarray(end, dtype=float)
-        distance = float(np.linalg.norm(end - start))
-        count = max(2, int(np.ceil(distance / (self.resolution * 0.5))) + 1)
-        t = np.linspace(0.0, 1.0, count)[:, None]
-        return bool(self.contains_many(start + (end - start) * t).all())
+        start_grid = np.array([
+            (start[0] - self.origin[0]) / self.resolution,
+            self.free.shape[0] - 1
+            - (start[1] - self.origin[1]) / self.resolution,
+        ])
+        end_grid = np.array([
+            (end[0] - self.origin[0]) / self.resolution,
+            self.free.shape[0] - 1
+            - (end[1] - self.origin[1]) / self.resolution,
+        ])
+        delta = end_grid - start_grid
+        crossings = [0.0, 1.0]
+        for axis in range(2):
+            if abs(delta[axis]) < 1e-12:
+                continue
+            low, high = sorted((start_grid[axis], end_grid[axis]))
+            first = int(np.floor(low - 0.5)) + 1
+            last = int(np.ceil(high - 0.5))
+            for cell in range(first, last + 1):
+                boundary = cell + 0.5
+                t = (boundary - start_grid[axis]) / delta[axis]
+                if 0.0 < t < 1.0:
+                    crossings.append(float(t))
+        crossings = np.unique(np.asarray(crossings))
+        probes = np.concatenate((
+            crossings,
+            (crossings[:-1] + crossings[1:]) * 0.5,
+        ))
+        points = start + probes[:, None] * (end - start)
+        return bool(self.contains_many(points).all())
 
     def paths_are_contained(self, paths):
         paths = np.asarray(paths, dtype=float)
