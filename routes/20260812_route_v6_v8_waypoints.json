@@ -11426,6 +11426,6 @@
   "route_id": "v6-v8:3b176c77709f:3d183e8320f6",
   "preferred_mask_sha256": "3b176c77709f4020a9a2fe82c6edf96d2ea579da7719772733cf16d8e0d07c83",
   "drivable_mask_sha256": "3d183e8320f68c5deafd72c8f45a5780dade29ff43ca323664f27f4e3ed2eaa8",
-  "safety_band_sha256": "7699540e3d13d613b5da7a0a8ec8b41d4c896b303bb1b22d71c42d734db0040a"
+  "safety_band_sha256": "c570909f716df800f5a760e583c7732e08b597fdae4df95e8d3caee2e0e607dc"
  }
 }

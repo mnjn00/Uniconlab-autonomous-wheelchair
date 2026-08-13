@@ -86,6 +86,33 @@ def test_runtime_band_uses_the_same_hard_mask_boundary():
     assert all("left_corridor_m" not in station for station in stations)
 
 
+def test_runtime_band_preserves_nearest_seed_edge_semantics():
+    path_rc = np.asarray([[2, 2], [2, 3], [2, 4]], dtype=int)
+    drivable = np.ones((7, 7), dtype=bool)
+    seed = [
+        {
+            "x": 2.0, "y": 4.0,
+            "left_kind": "narrow", "right_kind": "open",
+            "left_drop_m": 0.2, "right_drop_m": 0.0,
+            "left_rise_m": 0.0, "right_rise_m": 0.1,
+        },
+        {
+            "x": 4.0, "y": 4.0,
+            "left_kind": "open", "right_kind": "narrow",
+            "left_drop_m": 0.0, "right_drop_m": 0.3,
+            "left_rise_m": 0.1, "right_rise_m": 0.0,
+        },
+    ]
+
+    stations = route_builder.build_mask_band_stations(
+        path_rc, drivable, 1.0, (0.0, 0.0), seed)
+
+    assert stations[0]["left_kind"] == "narrow"
+    assert stations[0]["left_drop_m"] == 0.2
+    assert stations[-1]["right_kind"] == "narrow"
+    assert stations[-1]["right_drop_m"] == 0.3
+
+
 def test_smooth_path_stays_in_the_hard_mask():
     drivable = np.zeros((40, 60), dtype=bool)
     drivable[2:38, 2:58] = True

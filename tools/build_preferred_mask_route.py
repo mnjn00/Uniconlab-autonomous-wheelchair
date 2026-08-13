@@ -113,6 +113,7 @@ def build_mask_band_stations(
     drivable: np.ndarray,
     resolution_m: float,
     origin_xy: tuple[float, float],
+    seed_stations: list[dict[str, float | str]] | None = None,
 ) -> list[dict[str, float | str]]:
     """Measure left/right reaches from a path to the hard-mask boundary."""
     height, width = drivable.shape
@@ -142,6 +143,24 @@ def build_mask_band_stations(
             reaches.append(max(reach, resolution_m / 2.0))
         x = origin_xy[0] + col * resolution_m
         y = origin_xy[1] + (height - 1 - row) * resolution_m
+        semantics: dict[str, float | str] = {
+            "left_drop_m": 0.0,
+            "right_drop_m": 0.0,
+            "left_kind": "unknown",
+            "right_kind": "unknown",
+            "left_rise_m": 0.0,
+            "right_rise_m": 0.0,
+        }
+        if seed_stations:
+            nearest = min(
+                seed_stations,
+                key=lambda station: (
+                    (float(station["x"]) - x) ** 2
+                    + (float(station["y"]) - y) ** 2
+                ),
+            )
+            for key in semantics:
+                semantics[key] = nearest[key]
         stations.append(
             {
                 "x": round(float(x), 3),
@@ -149,12 +168,7 @@ def build_mask_band_stations(
                 "heading_deg": round(math.degrees(heading), 3),
                 "left_m": round(reaches[0], 3),
                 "right_m": round(reaches[1], 3),
-                "left_drop_m": 0.0,
-                "right_drop_m": 0.0,
-                "left_kind": "open",
-                "right_kind": "open",
-                "left_rise_m": 0.0,
-                "right_rise_m": 0.0,
+                **semantics,
             }
         )
     return stations
@@ -240,6 +254,7 @@ def main() -> int:
     parser.add_argument("--preferred-yaml", type=Path, required=True)
     parser.add_argument("--drivable-yaml", type=Path, required=True)
     parser.add_argument("--seed-route", type=Path, required=True)
+    parser.add_argument("--seed-band", type=Path, required=True)
     parser.add_argument("--out-route", type=Path, required=True)
     parser.add_argument("--out-band", type=Path, required=True)
     args = parser.parse_args()
@@ -254,6 +269,7 @@ def main() -> int:
     ):
         raise RuntimeError("preferred and drivable maps do not share one grid")
     seed = json.loads(args.seed_route.read_text(encoding="utf-8"))
+    seed_band = json.loads(args.seed_band.read_text(encoding="utf-8"))
     seed_xy = np.asarray([[w["x"], w["y"]] for w in seed["waypoints"]])
     start = _world_to_rc(seed_xy[0], drivable.shape, resolution_m, origin_xy)
     goal = _world_to_rc(seed_xy[-1], drivable.shape, resolution_m, origin_xy)
@@ -323,7 +339,11 @@ def main() -> int:
             args.drivable_yaml.parent / "route_2d_map_v8.pgm"),
         "station_spacing_m": BAND_STEP_M,
         "stations": build_mask_band_stations(
-            band_rc, drivable, resolution_m, origin_xy
+            band_rc,
+            drivable,
+            resolution_m,
+            origin_xy,
+            seed_band["stations"],
         ),
         "corridor": {
             "source": args.drivable_yaml.name,
@@ -333,8 +353,8 @@ def main() -> int:
             "stations_total": len(band_rc),
         },
         "physical_edge_semantics": {
-            "source": args.drivable_yaml.name,
-            "status": "operator-drawn drivable boundary; outside is a hard reject",
+            "source": args.seed_band.name,
+            "status": "nearest v6 measured semantics over v8 hard boundary",
         },
     }
     args.out_band.write_text(json.dumps(band_doc, indent=1), encoding="utf-8")

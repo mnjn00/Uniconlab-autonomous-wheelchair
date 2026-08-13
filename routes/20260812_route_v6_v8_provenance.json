@@ -1,6 +1,6 @@
 {
  "generator": "tools/build_preferred_mask_route.py",
- "invocation": "python3 tools/build_preferred_mask_route.py --preferred-yaml routes/route_2d_map_v6.yaml --drivable-yaml routes/route_2d_map_v8.yaml --seed-route routes/20260812_route_v6_waypoints.json --out-route routes/20260812_route_v6_v8_waypoints.json --out-band routes/20260812_route_v6_v8_safety_band.json",
+ "invocation": "python3 tools/build_preferred_mask_route.py --preferred-yaml routes/route_2d_map_v6.yaml --drivable-yaml routes/route_2d_map_v8.yaml --seed-route routes/20260812_route_v6_waypoints.json --seed-band routes/20260812_route_v6_safety_band.json --out-route routes/20260812_route_v6_v8_waypoints.json --out-band routes/20260812_route_v6_v8_safety_band.json",
  "source_sha256": {
   "operator_v6_zip": "88e3451f7dcbcc1b956999f11b05fe1446c80ac2e6201ac34fd3f18a2ea0a709",
   "preferred_v6_pgm": "3b176c77709f4020a9a2fe82c6edf96d2ea579da7719772733cf16d8e0d07c83",
