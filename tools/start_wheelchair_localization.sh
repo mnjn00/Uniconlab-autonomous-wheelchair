@@ -65,6 +65,7 @@ if [ "$ACTUAL_TRAJ_SHA256" != "$TRAJ_SHA256" ]; then
   exit 2
 fi
 ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_waypoints.json}"
+AUTO_INIT_ROUTE="${AUTO_INIT_ROUTE:-$ROUTE}"
 BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_safety_band.json}"
 DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v8.yaml}"
 RVIZ="${RVIZ:-true}"
@@ -184,7 +185,13 @@ NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1"
 LOG=$HOME
 
 source /opt/ros/noetic/setup.bash
-export ROS_MASTER_URI=http://127.0.0.1:11311
+if [ "$SHADOW_QA" = "1" ]; then
+  : "${ROS_MASTER_URI:?shadow QA requires its isolated ROS master}"
+  DETACH=""
+else
+  export ROS_MASTER_URI=http://127.0.0.1:11311
+  DETACH="setsid nohup"
+fi
 export DISPLAY="${DISPLAY:-:0}"
 
 echo "[0/5] display"
@@ -240,14 +247,14 @@ done
 sleep 2
 fi
 if ! pgrep -f '[r]osmaster' >/dev/null; then
-  setsid nohup roscore > "$LOG/live_roscore.log" 2>&1 < /dev/null &
+  $DETACH roscore > "$LOG/live_roscore.log" 2>&1 < /dev/null &
   sleep 4
 fi
 rosparam set /use_sim_time false
 
 echo "[2/5] livox driver"
 source "$HOME/ws_livox/devel/setup.bash"
-setsid nohup roslaunch livox_ros_driver2 msg_MID360.launch \
+$DETACH roslaunch livox_ros_driver2 msg_MID360.launch \
   > "$LOG/live_livox.log" 2>&1 < /dev/null &
 for i in $(seq 1 30); do
   timeout 3 rostopic echo -n1 /livox/lidar/header >/dev/null 2>&1 && break
@@ -278,7 +285,7 @@ if [ "$VN_IMU" = "1" ]; then
     echo "           stale stream. Expected next to this script or in \$HOME."
   fi
   source "$HOME/catkin_ws/devel/setup.bash"
-  setsid nohup roslaunch base_model vectornav.launch \
+    $DETACH roslaunch base_model vectornav.launch \
     > "$LOG/live_vectornav.log" 2>&1 < /dev/null &
   for i in $(seq 1 20); do
     timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1 && break
@@ -312,14 +319,16 @@ start_fastlio() {
   # Kill the roslaunch wrapper as well as the node: left running it keeps the
   # laserMapping name registered, and the replacement would evict the old node
   # through a name conflict instead of starting cleanly.
-  pkill -f '[r]oslaunch fast_lio' 2>/dev/null || true
-  pkill -f '[f]astlio_mapping' 2>/dev/null || true
-  for _ in $(seq 1 10); do
-    pgrep -f '[f]astlio_mapping' >/dev/null 2>&1 || break
-    sleep 1
-  done
-  sleep 2
-  setsid nohup roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
+  if [ "$SHADOW_QA" != "1" ]; then
+    pkill -f '[r]oslaunch fast_lio' 2>/dev/null || true
+    pkill -f '[f]astlio_mapping' 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      pgrep -f '[f]astlio_mapping' >/dev/null 2>&1 || break
+      sleep 1
+    done
+    sleep 2
+  fi
+  $DETACH roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
     > "$LOG/live_fastlio.log" 2>&1 < /dev/null &
   for _ in $(seq 1 20); do
     timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1 && return 0
@@ -365,11 +374,11 @@ source "$LOCALIZATION_WS/devel/setup.bash"
 rosparam set /fast_lio_icp/auto_initialization_verified false
 rosparam set /fast_lio_icp/auto_initialization_stable false
 rosparam set /fast_lio_icp/auto_initialization_source none
-setsid nohup roslaunch static_livox_localization moving_localization.launch \
+$DETACH roslaunch static_livox_localization moving_localization.launch \
   rviz:="$RVIZ" auto_init:=true auto_init_global_only:=true \
   map_path:="$MAP" map_sha256:="$MAP_SHA256" map_id:="$MAP_ID" \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
-  auto_init_route:="$ROUTE" \
+  auto_init_route:="$AUTO_INIT_ROUTE" \
   auto_init_body_frame_profile:="$BODY_FRAME_PROFILE" \
   auto_init_min_refined_score:="${MIN_REFINED_SCORE:-0.78}" \
   auto_init_require_gpu:="${AUTO_INIT_REQUIRE_GPU:-true}" \
@@ -431,7 +440,7 @@ echo "LOCALIZED"
 
 start_object_tracking() {
   source "$LOCALIZATION_WS/devel/setup.bash"
-  setsid nohup env $SINGLE_THREAD_ENV \
+  $DETACH env $SINGLE_THREAD_ENV \
     rosrun static_livox_localization obstacle_clusters.py \
     _body_frame_profile:="$BODY_FRAME_PROFILE" \
     _safety_band:="$BAND" \

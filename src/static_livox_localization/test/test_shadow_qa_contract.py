@@ -181,7 +181,8 @@ def test_capture_tool_subscribes_before_selecting_a_shared_cycle():
     localizer = (
         Path(__file__).parents[1] / "src" / "moving_icp_localizer.cpp"
     ).read_text(encoding="utf-8")
-    assert "dynamic_boxes_stamp_.isZero() ? stamp : dynamic_boxes_stamp_" \
+    assert "source_boxes_stamp = dynamic_boxes_stamp_" in localizer
+    assert "source_boxes_stamp.isZero() ? stamp : source_boxes_stamp" \
         in localizer
     assert "message_yaml(" in capture
 
@@ -195,7 +196,12 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert "catkin build static_livox_localization" in runner
     assert "catkin run_tests static_livox_localization" in runner
     assert 'catkin_make > "$OUT/catkin-build.txt"' in runner
-    assert "rosrun static_livox_localization obstacle_clusters.py" in runner
+    startup = (
+        Path(__file__).parents[3]
+        / "tools"
+        / "start_wheelchair_localization.sh"
+    ).read_text(encoding="utf-8")
+    assert "rosrun static_livox_localization obstacle_clusters.py" in startup
     assert "rosrun static_livox_localization waypoint_follower.py" not in runner
     assert "rosrun static_livox_localization dwa_follower.py" not in runner
     assert "rosrun static_livox_localization mpc_follower.py" not in runner
@@ -209,8 +215,8 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
         in runner
     assert 'DRIVABLE_MASK="${DRIVABLE_MASK:-$REPO/routes/route_2d_map_v8.yaml}"' \
         in runner
-    startup = runner[runner.index("STARTED_STACK=1"):runner.index(
-        "if ! rostopic list | grep -qx '/cloud_registered_body';")]
+    startup = runner[runner.index("setsid env SHADOW_QA=1"):runner.index(
+        "wait \"$STACK_PID\"")]
     for variable in (
         "LOCALIZATION_WS", "MAP", "MAP_SHA256", "MAP_ID", "TRAJ",
         "ROUTE", "BAND", "DRIVABLE_MASK",
@@ -221,7 +227,7 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert "status=90" in runner
     assert "[r]oslaunch base_model vectornav" in runner
     assert "matching_pids" in runner
-    assert 'wait "$pid"' in runner
+    assert 'wait "$STACK_PID"' in runner
     loop_start = runner.index("for attempt in")
     loop = runner[loop_start:runner.index(
         'if [ -e "$GRAPH_UNSAFE" ] ||', loop_start)]
@@ -231,7 +237,7 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
 
 def test_motion_graph_detection_checks_nodes_and_command_topics():
     from shadow_qa_contract import (
-        baseline_node_violations,
+        baseline_graph_violations,
         motion_surface_violations,
     )
 
@@ -242,14 +248,25 @@ def test_motion_graph_detection_checks_nodes_and_command_topics():
         {}, {"/cloud_registered_body": ["/wheel_driver"]}
     )
     assert violations == ["subscriber node: /wheel_driver"]
-    assert baseline_node_violations(
-        ["/rosout", "/shadow"],
-        {"nodes": ["/rosout"]},
-    ) == ["unexpected node: /shadow"]
-    assert baseline_node_violations(
-        ["/rosout"],
-        {"nodes": ["/rosout", "/field_sensor"]},
-    ) == ["missing baseline node: /field_sensor"]
+    graph = {
+        "publishers": {"/clock": ["/shadow"]},
+        "subscribers": {},
+        "services": {"/shadow/get_loggers": ["/shadow"]},
+    }
+    assert baseline_graph_violations(
+        graph,
+        {"publishers": {}, "subscribers": {}, "services": {}},
+    ) == [
+        "unexpected publisher edge: /clock <- /shadow",
+        "unexpected service edge: /shadow/get_loggers <- /shadow",
+    ]
+    assert baseline_graph_violations(
+        {"publishers": {}, "subscribers": {}, "services": {}},
+        graph,
+    ) == [
+        "missing publisher edge: /clock <- /shadow",
+        "missing service edge: /shadow/get_loggers <- /shadow",
+    ]
 
 
 def test_graph_checker_is_atomic_and_fails_closed():
@@ -260,13 +277,13 @@ def test_graph_checker_is_atomic_and_fails_closed():
     assert "rostopic" not in checker
     assert '"status": "ERROR"' in checker
     assert 'parser.add_argument("--baseline")' in checker
-    assert "baseline_node_violations(nodes, baseline)" in checker
+    assert "baseline_graph_violations(graph, baseline)" in checker
     runner = (
         Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
     ).read_text(encoding="utf-8")
     assert "ros-graph-monitor.jsonl" in runner
     assert "ros-graph-final.json" in runner
-    assert 'touch "$GRAPH_UNSAFE"' in runner
+    assert 'touch "$3"' in runner
 
 
 def test_cleanup_restores_process_and_ros_graph_baselines():
@@ -286,9 +303,13 @@ def test_cleanup_restores_process_and_ros_graph_baselines():
     assert '--baseline "$OUT/ros-graph-baseline.json"' in runner
     assert 'OWN_ROSCORE_PID=""' in runner
     assert 'LAUNCHED_PIDS+=("$OWN_ROSCORE_PID")' not in runner
+    assert 'trap finish EXIT HUP INT TERM' in runner
+    assert 'ROS_MASTER_URI="http://127.0.0.1:$ROS_MASTER_PORT"' in runner
+    assert 'setsid env SHADOW_QA=1' in runner
+    assert 'OWNED_PGIDS+=("$STACK_PID")' in runner
     assert 'rm -f "$OUT/integration-green.txt"' in runner
     finish = runner[runner.index("finish() {"):runner.index(
-        "trap finish EXIT INT TERM")]
+        "trap finish EXIT HUP INT TERM")]
     assert 'cp "$OUT/nuc-shadow-qa.txt" "$OUT/integration-green.txt"' in finish
 
 
@@ -296,11 +317,16 @@ def test_shadow_refuses_old_stack_and_monitors_before_startup():
     runner = (
         Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
     ).read_text(encoding="utf-8")
-    assert "pre-existing sensor/localization stack" in runner
+    assert "field or autonomous stack present" in runner
     monitor = runner.index("ros-graph-monitor.jsonl")
     startup = runner.index('SHADOW_QA=1 LOCALIZATION_WS="$WS"')
     assert monitor < startup
-    assert "_body_frame_profile:=builtin" in runner
+    startup_text = (
+        Path(__file__).parents[3]
+        / "tools"
+        / "start_wheelchair_localization.sh"
+    ).read_text(encoding="utf-8")
+    assert 'BODY_FRAME_PROFILE="builtin"' in startup_text
     assert "_body_frame_profile:=vn100" not in runner
 
 

@@ -196,7 +196,7 @@ def test_initializer_is_packaged_and_field_startup_selects_global_only():
     )
     cmake = (PACKAGE / "CMakeLists.txt").read_text(encoding="utf-8")
 
-    assert 'auto_init_route:="$ROUTE"' in startup
+    assert 'auto_init_route:="$AUTO_INIT_ROUTE"' in startup
     assert 'auto_init_body_frame_profile:="$BODY_FRAME_PROFILE"' in startup
     assert 'auto_init_global_only:=true' in startup
     assert '<param name="route" value="$(arg auto_init_route)"/>' in launch
@@ -262,8 +262,11 @@ def test_map_deployer_rejects_symlink_targets_and_uses_unique_temp_files():
 
 def test_dedicated_0727_trial_pins_its_route_and_band():
     trial = (ROOT / "tools" / "trial_0727.sh").read_text(encoding="utf-8")
-    assert "20260727_chair_centred_waypoints.json" in trial
-    assert "20260727_chair_centred_safety_band.json" in trial
+    assert (
+        'AUTO_INIT_ROUTE="$HOME/wheelchair_localization_src/routes/'
+        '20260727_chair_centred_waypoints.json"'
+    ) in trial
+    assert "20260727_chair_centred_safety_band.json" not in trial
 
 
 def test_direct_launch_defaults_match_field_route_profile():

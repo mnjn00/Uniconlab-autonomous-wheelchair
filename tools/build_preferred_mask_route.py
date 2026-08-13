@@ -195,6 +195,56 @@ def _world_to_rc(
     return row, col
 
 
+def _segment_is_drivable(
+    start_xy: np.ndarray,
+    end_xy: np.ndarray,
+    drivable: np.ndarray,
+    resolution_m: float,
+    origin_xy: tuple[float, float],
+) -> bool:
+    """Conservatively inspect every raster interval crossed by a segment."""
+    start = np.asarray(start_xy, dtype=float)
+    end = np.asarray(end_xy, dtype=float)
+    start_grid = np.array([
+        (start[0] - origin_xy[0]) / resolution_m,
+        drivable.shape[0] - 1
+        - (start[1] - origin_xy[1]) / resolution_m,
+    ])
+    end_grid = np.array([
+        (end[0] - origin_xy[0]) / resolution_m,
+        drivable.shape[0] - 1
+        - (end[1] - origin_xy[1]) / resolution_m,
+    ])
+    delta = end_grid - start_grid
+    crossings = [0.0, 1.0]
+    for axis in range(2):
+        if abs(delta[axis]) < 1e-12:
+            continue
+        low, high = sorted((start_grid[axis], end_grid[axis]))
+        first = int(np.floor(low - 0.5)) + 1
+        last = int(np.ceil(high - 0.5))
+        for cell in range(first, last + 1):
+            t = (cell + 0.5 - start_grid[axis]) / delta[axis]
+            if 0.0 < t < 1.0:
+                crossings.append(float(t))
+    crossings = np.unique(np.asarray(crossings))
+    probes = np.concatenate((
+        crossings,
+        (crossings[:-1] + crossings[1:]) * 0.5,
+    ))
+    for point in start + probes[:, None] * (end - start):
+        row, col = _world_to_rc(
+            point, drivable.shape, resolution_m, origin_xy
+        )
+        if not (
+            0 <= row < drivable.shape[0]
+            and 0 <= col < drivable.shape[1]
+            and drivable[row, col]
+        ):
+            return False
+    return True
+
+
 def _resample(points: np.ndarray, step_m: float) -> np.ndarray:
     legs = np.linalg.norm(np.diff(points, axis=0), axis=1)
     arc = np.concatenate(([0.0], np.cumsum(legs)))
@@ -287,19 +337,12 @@ def main() -> int:
     path_xy = smooth_path(path_xy, drivable, resolution_m, origin_xy)
     dense_xy = _resample(path_xy, PATH_STEP_M)
     dense_xy = smooth_path(dense_xy, drivable, resolution_m, origin_xy)
-    validation_xy = _resample(dense_xy, resolution_m * 0.5)
-    validation_rc = np.array([
-        _world_to_rc(point, drivable.shape, resolution_m, origin_xy)
-        for point in validation_xy
-    ])
-    in_bounds = (
-        (validation_rc[:, 0] >= 0)
-        & (validation_rc[:, 0] < drivable.shape[0])
-        & (validation_rc[:, 1] >= 0)
-        & (validation_rc[:, 1] < drivable.shape[1])
-    )
-    if not in_bounds.all() or not drivable[
-            validation_rc[:, 0], validation_rc[:, 1]].all():
+    if not all(
+        _segment_is_drivable(
+            start, end, drivable, resolution_m, origin_xy
+        )
+        for start, end in zip(dense_xy[:-1], dense_xy[1:])
+    ):
         raise ValueError("smoothed route segment leaves drivable mask")
     tangent = np.gradient(dense_xy, axis=0)
     yaw = np.degrees(np.arctan2(tangent[:, 1], tangent[:, 0]))

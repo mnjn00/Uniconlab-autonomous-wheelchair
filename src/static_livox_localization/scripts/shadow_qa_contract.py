@@ -62,17 +62,34 @@ def motion_surface_violations(publishers, subscribers):
     return sorted(set(violations))
 
 
-def baseline_node_violations(nodes, baseline):
-    """Require cleanup to restore the exact pre-shadow ROS node set."""
-    expected = set(baseline.get("nodes", []))
-    observed = set(nodes)
-    return (
-        ["unexpected node: %s" % node for node in sorted(observed - expected)]
-        + [
-            "missing baseline node: %s" % node
-            for node in sorted(expected - observed)
-        ]
-    )
+def baseline_graph_violations(graph, baseline):
+    """Require cleanup to restore every ROS publisher/subscriber/service edge."""
+    violations = []
+    labels = {
+        "publishers": "publisher",
+        "subscribers": "subscriber",
+        "services": "service",
+    }
+    for section, label in labels.items():
+        observed = {
+            (name, node)
+            for name, nodes in graph.get(section, {}).items()
+            for node in nodes
+        }
+        expected = {
+            (name, node)
+            for name, nodes in baseline.get(section, {}).items()
+            for node in nodes
+        }
+        violations.extend(
+            "unexpected %s edge: %s <- %s" % (label, name, node)
+            for name, node in sorted(observed - expected)
+        )
+        violations.extend(
+            "missing %s edge: %s <- %s" % (label, name, node)
+            for name, node in sorted(expected - observed)
+        )
+    return violations
 
 
 def validate_snapshot(summary, dynamic_boxes, diagnostics,

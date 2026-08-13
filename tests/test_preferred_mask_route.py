@@ -158,3 +158,15 @@ def test_smoothed_route_removes_raster_heading_stairs():
     heading_step_deg = np.degrees(np.abs(np.diff(heading)))
     assert heading_step_deg.max() <= 10.0
     assert np.percentile(heading_step_deg, 99) <= 6.0
+
+
+def test_generator_rejects_short_forbidden_corner_clip():
+    drivable = np.ones((5, 5), dtype=bool)
+    drivable[2, 2] = False
+    assert not route_builder._segment_is_drivable(
+        np.array([0.0, 0.2504]),
+        np.array([0.4, 0.1496]),
+        drivable,
+        0.1,
+        (0.0, 0.0),
+    )

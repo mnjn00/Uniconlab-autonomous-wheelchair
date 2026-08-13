@@ -32,8 +32,7 @@ TIMEOUT_S="${TIMEOUT_S:-45}"
 mkdir -p "$OUT"
 
 AUTONOMOUS_RE='wheel_cmd|waypoint_follower|dwa_follower|mpc_follower|safety_gate'
-LAUNCHED_PIDS=()
-STARTED_STACK=0
+OWNED_PGIDS=()
 OWN_ROSCORE_PID=""
 GRAPH_UNSAFE="$OUT/ros-graph-unsafe"
 SHADOW_RE='[r]oslaunch livox_ros_driver2|[r]oslaunch base_model vectornav|[r]oslaunch static_livox_localization moving_localization|[f]astlio_mapping|[m]oving_icp_localizer|[b]ounded_cloud_preview|[m]ap_preview_publisher|[r]eference_marker|[l]ocalization_state_marker|[o]bstacle_clusters|[a]uto_initial_pose'
@@ -46,20 +45,10 @@ matching_pids() {
 matching_pids > "$OUT/process-baseline.txt"
 
 cleanup() {
-  local pid
-  for pid in "${LAUNCHED_PIDS[@]}"; do
-    kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+  local pgid
+  for pgid in "${OWNED_PGIDS[@]}"; do
+    kill -TERM -- "-$pgid" 2>/dev/null || true
   done
-  if [ "$STARTED_STACK" = "1" ]; then
-    baseline="$(cat "$OUT/process-baseline.txt")"
-    for pid in $(matching_pids); do
-      if ! grep -qx "$pid" <<< "$baseline"; then
-        pgid="$(ps -o pgid= -p "$pid" | tr -d ' ')"
-        [ -n "$pgid" ] &&
-          kill -TERM -- "-$pgid" 2>/dev/null || true
-      fi
-    done
-  fi
   cleanup_failed=0
   for _ in $(seq 1 30); do
     if diff -u "$OUT/process-baseline.txt" <(matching_pids) \
@@ -67,9 +56,6 @@ cleanup() {
       break
     fi
     sleep 0.2
-  done
-  for pid in "${LAUNCHED_PIDS[@]}"; do
-    wait "$pid" 2>/dev/null || true
   done
   matching_pids > "$OUT/process-after.txt"
   if ! diff -u "$OUT/process-baseline.txt" "$OUT/process-after.txt" \
@@ -99,7 +85,7 @@ cleanup() {
 }
 finish() {
   local status=$?
-  trap - EXIT INT TERM
+  trap - EXIT HUP INT TERM
   if cleanup; then
     if [ "$status" = "0" ]; then
       cp "$OUT/nuc-shadow-qa.txt" "$OUT/integration-green.txt"
@@ -112,11 +98,13 @@ finish() {
   fi
   exit "$status"
 }
-trap finish EXIT INT TERM
+trap finish EXIT HUP INT TERM
 rm -f "$OUT/integration-green.txt"
+rm -f "$GRAPH_UNSAFE"
 
-if pgrep -af "$AUTONOMOUS_RE" > "$OUT/autonomous-before.txt"; then
-  echo "ERROR: autonomous process present; refusing shadow QA" >&2
+if pgrep -af "$AUTONOMOUS_RE|$SHADOW_RE" \
+    > "$OUT/autonomous-before.txt"; then
+  echo "ERROR: field or autonomous stack present; refusing shadow QA" >&2
   cat "$OUT/autonomous-before.txt" >&2
   exit 20
 fi
@@ -139,14 +127,22 @@ fi
 catkin_test_results build/static_livox_localization \
   > "$OUT/catkin-test-results.txt" 2>&1
 
-if ! rostopic list >/dev/null 2>&1; then
-  setsid roscore > "$OUT/roscore.log" 2>&1 &
-  OWN_ROSCORE_PID="$!"
-  for _ in $(seq 1 30); do
-    rostopic list >/dev/null 2>&1 && break
-    sleep 0.2
-  done
-fi
+ROS_MASTER_PORT="$(
+  python3 - <<'PY'
+import socket
+with socket.socket() as server:
+    server.bind(("127.0.0.1", 0))
+    print(server.getsockname()[1])
+PY
+)"
+export ROS_MASTER_URI="http://127.0.0.1:$ROS_MASTER_PORT"
+export ROS_IP=127.0.0.1
+setsid roscore -p "$ROS_MASTER_PORT" > "$OUT/roscore.log" 2>&1 &
+OWN_ROSCORE_PID="$!"
+for _ in $(seq 1 30); do
+  rostopic list >/dev/null 2>&1 && break
+  sleep 0.2
+done
 python3 "$REPO/tools/check_shadow_ros_graph.py" \
   > "$OUT/ros-graph-baseline.json" || {
   echo "ERROR: ROS motion surface present; refusing shadow QA" >&2
@@ -154,31 +150,28 @@ python3 "$REPO/tools/check_shadow_ros_graph.py" \
   exit 25
 }
 
-if rostopic list | grep -Eq \
-    '^/(cloud_registered_body|fast_lio_icp/pose|perception/objects_summary)$'; then
-  echo "ERROR: pre-existing sensor/localization stack is not the reviewed commit" >&2
-  exit 29
-fi
-
-(
+setsid bash -c '
   while true; do
-    python3 "$REPO/tools/check_shadow_ros_graph.py" \
-      >> "$OUT/ros-graph-monitor.jsonl" 2>&1 || {
-      touch "$GRAPH_UNSAFE"
+    python3 "$1/tools/check_shadow_ros_graph.py" \
+      >> "$2/ros-graph-monitor.jsonl" 2>&1 || {
+      touch "$3"
       exit 1
     }
     sleep 0.2
   done
-) &
-LAUNCHED_PIDS+=("$!")
+' _ "$REPO" "$OUT" "$GRAPH_UNSAFE" &
+MONITOR_PID="$!"
+OWNED_PGIDS+=("$MONITOR_PID")
 
-STARTED_STACK=1
-SHADOW_QA=1 LOCALIZATION_WS="$WS" \
+setsid env SHADOW_QA=1 LOCALIZATION_WS="$WS" \
   MAP="$MAP" MAP_SHA256="$MAP_SHA256" MAP_ID="$MAP_ID" \
   TRAJ="$TRAJ" TRAJ_SHA256="$TRAJ_SHA256" \
   ROUTE="$ROUTE" BAND="$BAND" DRIVABLE_MASK="$DRIVABLE_MASK" \
   "$REPO/tools/start_wheelchair_localization.sh" \
-  > "$OUT/shadow-stack.log" 2>&1
+  > "$OUT/shadow-stack.log" 2>&1 &
+STACK_PID="$!"
+OWNED_PGIDS+=("$STACK_PID")
+wait "$STACK_PID"
 
 if ! rostopic list | grep -qx '/cloud_registered_body'; then
   echo "ERROR: /cloud_registered_body is absent after shadow startup" >&2
@@ -190,14 +183,8 @@ if ! rostopic list | grep -qx '/fast_lio_icp/pose'; then
 fi
 
 if ! rostopic list | grep -qx '/perception/objects_summary'; then
-  setsid rosrun static_livox_localization obstacle_clusters.py \
-    _body_frame_profile:=builtin \
-    _safety_band:="$BAND" \
-    _map_path:="$MAP" \
-    _map_sha256:="$MAP_SHA256" \
-    _shadow_qa:=true \
-    > "$OUT/shadow-clusters.log" 2>&1 &
-  LAUNCHED_PIDS+=("$!")
+  echo "ERROR: reviewed shadow perception node is absent" >&2
+  exit 23
 fi
 
 pgrep -af "$AUTONOMOUS_RE" > "$OUT/autonomous-after.txt" && {

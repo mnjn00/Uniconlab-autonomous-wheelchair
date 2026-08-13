@@ -449,8 +449,10 @@ class MovingIcpLocalizer {
     // structure on the strength of where somebody was a second ago is the
     // same mistake in the other direction.
     std::size_t dropped = 0;
+    ros::Time source_boxes_stamp;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      source_boxes_stamp = dynamic_boxes_stamp_;
       const double age = (stamp - dynamic_boxes_stamp_).toSec();
       if (!dynamic_boxes_.empty() && dynamic_boxes_stamp_ > ros::Time(0.0) &&
           age >= 0.0 && age <= dynamic_box_max_age_s_) {
@@ -499,6 +501,8 @@ class MovingIcpLocalizer {
     bool initializing = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      diagnostic_source_stamp_ =
+          source_boxes_stamp.isZero() ? stamp : source_boxes_stamp;
       // These two do NOT mark the interval unobserved, and the distinction
       // is the point: below, a registration is not being attempted because
       // the stack decided not to attempt one, and a fix nobody questioned is
@@ -596,8 +600,6 @@ class MovingIcpLocalizer {
             registration, predicted_map_T_base, decision_config);
 
     std::lock_guard<std::mutex> lock(mutex_);
-    diagnostic_source_stamp_ =
-        dynamic_boxes_stamp_.isZero() ? stamp : dynamic_boxes_stamp_;
     correction_in_progress_ = false;
     if (!alignment_controller_.auto_correction_enabled()) return;
     if (decision.accepted) {
