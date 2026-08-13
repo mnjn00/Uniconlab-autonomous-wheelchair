@@ -462,8 +462,7 @@ class MovingIcpLocalizer {
             dynamic_box_max_fraction_);
       }
     }
-    last_dynamic_dropped_ = dropped;
-    last_post_box_points_ = cloud->size();
+    const std::size_t post_box_points = cloud->size();
 
     std::size_t map_dropped = 0;
     if (map_voxel_grid_ && map_voxel_grid_->voxel_count() > 0) {
@@ -492,9 +491,7 @@ class MovingIcpLocalizer {
         }
       }
     }
-    last_map_filtered_ = map_dropped;
-    last_raw_points_ = raw_points;
-    last_post_map_points_ = cloud->size();
+    const std::size_t post_map_points = cloud->size();
 
     OdomSample odom;
     Cloud::Ptr submap;
@@ -504,6 +501,11 @@ class MovingIcpLocalizer {
       std::lock_guard<std::mutex> lock(mutex_);
       diagnostic_source_stamp_ =
           source_boxes_stamp.isZero() ? stamp : source_boxes_stamp;
+      last_dynamic_dropped_ = dropped;
+      last_map_filtered_ = map_dropped;
+      last_raw_points_ = raw_points;
+      last_post_box_points_ = post_box_points;
+      last_post_map_points_ = post_map_points;
       // These two do NOT mark the interval unobserved, and the distinction
       // is the point: below, a registration is not being attempted because
       // the stack decided not to attempt one, and a fix nobody questioned is

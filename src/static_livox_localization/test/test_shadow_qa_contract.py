@@ -189,6 +189,18 @@ def test_capture_tool_subscribes_before_selecting_a_shared_cycle():
         "std::lock_guard<std::mutex> cloud_lock(cloud_callback_mutex_)"
         in localizer
     )
+    commit = localizer.index("diagnostic_source_stamp_ =")
+    publish = localizer.index(
+        'publish_diagnostic_locked("CLOUD_ODOMETRY_TIME_MISMATCH"'
+    )
+    for counter in (
+        "last_dynamic_dropped_ = dropped",
+        "last_map_filtered_ = map_dropped",
+        "last_raw_points_ = raw_points",
+        "last_post_box_points_ = post_box_points",
+        "last_post_map_points_ = post_map_points",
+    ):
+        assert commit < localizer.index(counter) < publish
     assert "message_yaml(" in capture
 
 
