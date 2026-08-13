@@ -242,6 +242,23 @@ def _segment_is_drivable(
             and drivable[row, col]
         ):
             return False
+    for t in crossings[1:-1]:
+        grid = start_grid + t * delta
+        on_x = abs(grid[0] - (round(grid[0] - 0.5) + 0.5)) < 1e-10
+        on_y = abs(grid[1] - (round(grid[1] - 0.5) + 0.5)) < 1e-10
+        if on_x and on_y:
+            rows = [int(np.floor(grid[1])), int(np.ceil(grid[1]))]
+            cols = [int(np.floor(grid[0])), int(np.ceil(grid[0]))]
+            if any(
+                not (
+                    0 <= row < drivable.shape[0]
+                    and 0 <= col < drivable.shape[1]
+                    and drivable[row, col]
+                )
+                for row in rows
+                for col in cols
+            ):
+                return False
     return True
 
 

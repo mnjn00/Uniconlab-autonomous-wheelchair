@@ -184,6 +184,11 @@ def test_capture_tool_subscribes_before_selecting_a_shared_cycle():
     assert "source_boxes_stamp = dynamic_boxes_stamp_" in localizer
     assert "source_boxes_stamp.isZero() ? stamp : source_boxes_stamp" \
         in localizer
+    assert "cloud_callback_mutex_" in localizer
+    assert (
+        "std::lock_guard<std::mutex> cloud_lock(cloud_callback_mutex_)"
+        in localizer
+    )
     assert "message_yaml(" in capture
 
 

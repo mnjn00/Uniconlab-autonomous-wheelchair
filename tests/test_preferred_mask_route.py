@@ -170,3 +170,15 @@ def test_generator_rejects_short_forbidden_corner_clip():
         0.1,
         (0.0, 0.0),
     )
+
+
+def test_generator_rejects_forbidden_corner_touch():
+    drivable = np.ones((5, 5), dtype=bool)
+    drivable[1, 2] = False
+    assert not route_builder._segment_is_drivable(
+        np.array([0.1, 0.1]),
+        np.array([0.3, 0.3]),
+        drivable,
+        0.1,
+        (0.0, 0.0),
+    )

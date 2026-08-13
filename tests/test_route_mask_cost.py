@@ -76,3 +76,10 @@ def test_segment_containment_catches_short_corner_clip(tmp_path):
     assert mask.contains(start)
     assert mask.contains(end)
     assert not mask.segment_is_contained(start, end)
+
+
+def test_segment_containment_rejects_forbidden_corner_touch(tmp_path):
+    image = np.full((5, 5), 254, dtype=np.uint8)
+    image[1, 2] = 0
+    mask = RouteMask(str(write_mask(tmp_path, image)))
+    assert not mask.segment_is_contained([0.1, 0.1], [0.3, 0.3])

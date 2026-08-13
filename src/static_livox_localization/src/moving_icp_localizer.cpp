@@ -436,6 +436,7 @@ class MovingIcpLocalizer {
   }
 
   void cloud_callback(const sensor_msgs::PointCloud2ConstPtr& message) {
+    std::lock_guard<std::mutex> cloud_lock(cloud_callback_mutex_);
     const ros::Time stamp = message->header.stamp.isZero() ? ros::Time::now()
                                                            : message->header.stamp;
     Cloud::Ptr cloud(new Cloud);
@@ -830,6 +831,7 @@ class MovingIcpLocalizer {
   static_livox_localization::AssistedAlignmentController alignment_controller_;
 
   std::mutex mutex_;
+  std::mutex cloud_callback_mutex_;
   std::deque<OdomSample> odom_history_;
   OdomSample latest_odom_;
   nav_msgs::Path path_;

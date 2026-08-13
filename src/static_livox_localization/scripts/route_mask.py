@@ -81,7 +81,35 @@ class RouteMask:
             (crossings[:-1] + crossings[1:]) * 0.5,
         ))
         points = start + probes[:, None] * (end - start)
-        return bool(self.contains_many(points).all())
+        if not self.contains_many(points).all():
+            return False
+        # A segment exactly through a raster corner touches both orthogonal
+        # cells. Rounding sees only one diagonal cell; the supercover must
+        # reject either forbidden neighbour as well.
+        for t in crossings[1:-1]:
+            grid = start_grid + t * delta
+            on_x = abs(grid[0] - (round(grid[0] - 0.5) + 0.5)) < 1e-10
+            on_y = abs(grid[1] - (round(grid[1] - 0.5) + 0.5)) < 1e-10
+            if on_x and on_y:
+                rows = [
+                    int(np.floor(grid[1])),
+                    int(np.ceil(grid[1])),
+                ]
+                cols = [
+                    int(np.floor(grid[0])),
+                    int(np.ceil(grid[0])),
+                ]
+                if any(
+                    not (
+                        0 <= row < self.free.shape[0]
+                        and 0 <= col < self.free.shape[1]
+                        and self.free[row, col]
+                    )
+                    for row in rows
+                    for col in cols
+                ):
+                    return False
+        return True
 
     def paths_are_contained(self, paths):
         paths = np.asarray(paths, dtype=float)
