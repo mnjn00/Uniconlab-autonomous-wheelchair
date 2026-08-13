@@ -31,6 +31,13 @@ def validate_asset_binding(route_path, band_path, mask_yaml=None):
     if band.get("route_id") != binding.get("route_id"):
         raise ValueError("route/safety-band identity mismatch")
     if mask_yaml is not None:
+        yaml_sha = sha256(mask_yaml)
+        if binding.get("drivable_mask_yaml_sha256") != yaml_sha:
+            raise ValueError("route/drivable-mask metadata SHA-256 mismatch")
+        if band.get("drivable_mask_yaml_sha256") != yaml_sha:
+            raise ValueError(
+                "safety-band/drivable-mask metadata SHA-256 mismatch"
+            )
         image_sha = sha256(mask_image_path(mask_yaml))
         if binding.get("drivable_mask_sha256") != image_sha:
             raise ValueError("route/drivable-mask SHA-256 mismatch")

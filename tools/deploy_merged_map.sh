@@ -67,6 +67,7 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
+TRAJECTORY_SHA256="$(sha256_file "$TRAJ_PATH")"
 
 require_equal() {
   if [ "$2" != "$3" ]; then
@@ -174,6 +175,8 @@ manifest="$DEST_DIR/localization-map-manifest.json"
   printf '  "runtime_name": "%s",\n' "$RUNTIME_NAME"
   printf '  "runtime_sha256": "%s",\n' "$RUNTIME_SHA256"
   printf '  "runtime_points": %s,\n' "$RUNTIME_POINTS"
+  printf '  "trajectory_name": "traj_lidar.txt",\n'
+  printf '  "trajectory_sha256": "%s",\n' "$TRAJECTORY_SHA256"
   printf '  "voxel_resolution_m": 0.20\n'
   printf '}\n'
 } > "$manifest_tmp"

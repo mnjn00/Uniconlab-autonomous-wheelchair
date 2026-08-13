@@ -246,3 +246,10 @@ def test_map_deployer_rejects_symlink_targets_and_uses_unique_temp_files():
     assert ".localization-map-manifest.json.tmp" not in deploy
     assert 'canonical_dest="$DEST_DIR/$CANONICAL_NAME"' in deploy
     assert 'cp -f "$CANONICAL_PATH"' in deploy
+    assert '"trajectory_sha256"' in deploy
+    startup = (
+        ROOT / "tools" / "start_wheelchair_localization.sh"
+    ).read_text(encoding="utf-8")
+    assert 'EXPECTED_TRAJ_SHA256=' in startup
+    assert 'ACTUAL_TRAJ_SHA256=' in startup
+    assert "trajectory SHA-256 mismatch" in startup

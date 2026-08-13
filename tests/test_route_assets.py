@@ -47,6 +47,24 @@ def test_band_mismatch_fails_closed(tmp_path):
         ASSETS.validate_asset_binding(route, changed)
 
 
+def test_mask_geometry_metadata_mismatch_fails_closed(tmp_path):
+    route = ROOT / "routes" / "20260812_route_v6_v8_waypoints.json"
+    band = ROOT / "routes" / "20260812_route_v6_v8_safety_band.json"
+    source = ROOT / "routes" / "route_2d_map_v8.yaml"
+    changed = tmp_path / "route_2d_map_v8.yaml"
+    changed.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "resolution: 0.05", "resolution: 0.10"
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "route_2d_map_v8.pgm").write_bytes(
+        (ROOT / "routes" / "route_2d_map_v8.pgm").read_bytes()
+    )
+    with pytest.raises(ValueError, match="metadata SHA-256 mismatch"):
+        ASSETS.validate_asset_binding(route, band, changed)
+
+
 def test_provenance_binds_rebuild_inputs():
     provenance = json.loads(
         (ROOT / "routes" / "20260812_route_v6_v8_provenance.json")

@@ -337,6 +337,7 @@ def main() -> int:
         "route_id": route_id,
         "drivable_mask_sha256": _sha256(
             args.drivable_yaml.parent / "route_2d_map_v8.pgm"),
+        "drivable_mask_yaml_sha256": _sha256(args.drivable_yaml),
         "station_spacing_m": BAND_STEP_M,
         "stations": build_mask_band_stations(
             band_rc,
@@ -364,6 +365,7 @@ def main() -> int:
             args.preferred_yaml.parent / "route_2d_map_v6.pgm"),
         "drivable_mask_sha256": _sha256(
             args.drivable_yaml.parent / "route_2d_map_v8.pgm"),
+        "drivable_mask_yaml_sha256": _sha256(args.drivable_yaml),
         "safety_band_sha256": _sha256(args.out_band),
     }
     args.out_route.write_text(json.dumps(route_doc, indent=1), encoding="utf-8")

@@ -58,6 +58,22 @@ MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
 MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
 TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
+TRAJ_MANIFEST="${TRAJ_MANIFEST:-$(dirname "$TRAJ")/localization-map-manifest.json}"
+if [ ! -f "$TRAJ_MANIFEST" ]; then
+  echo "ERROR: trajectory manifest missing: $TRAJ_MANIFEST" >&2
+  exit 2
+fi
+EXPECTED_TRAJ_SHA256="$(
+  python3 - "$TRAJ_MANIFEST" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["trajectory_sha256"])
+PY
+)"
+ACTUAL_TRAJ_SHA256="$(sha256sum "$TRAJ" | awk '{print $1}')"
+if [ "$ACTUAL_TRAJ_SHA256" != "$EXPECTED_TRAJ_SHA256" ]; then
+  echo "ERROR: trajectory SHA-256 mismatch" >&2
+  exit 2
+fi
 ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_waypoints.json}"
 BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_safety_band.json}"
 DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v8.yaml}"

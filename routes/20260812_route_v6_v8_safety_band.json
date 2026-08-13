@@ -2,6 +2,7 @@
  "frame": "map",
  "route_id": "v6-v8:3b176c77709f:3d183e8320f6",
  "drivable_mask_sha256": "3d183e8320f68c5deafd72c8f45a5780dade29ff43ca323664f27f4e3ed2eaa8",
+ "drivable_mask_yaml_sha256": "125d06ed5bc304ec3c99a27be17315857c3fcc09306512e685891ca4ae4f60dc",
  "station_spacing_m": 0.5,
  "stations": [
   {
