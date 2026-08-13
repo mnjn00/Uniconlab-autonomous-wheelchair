@@ -63,7 +63,8 @@ def motion_surface_violations(publishers, subscribers):
 
 
 def validate_snapshot(summary, dynamic_boxes, diagnostics,
-                      diagnostics_stamp=None, max_skew_s=2.0):
+                      diagnostics_stamp=None, boxes_source_stamp=None,
+                      max_skew_s=2.0):
     """Return normalized counts, or raise on an unsafe/incomplete snapshot."""
     if summary.get("status") != "OK":
         raise ValueError("objects_summary is not OK")
@@ -82,6 +83,11 @@ def validate_snapshot(summary, dynamic_boxes, diagnostics,
     summary_stamp = float(summary.get("stamp"))
     if not math.isfinite(summary_stamp):
         raise ValueError("objects_summary stamp is not finite")
+    if boxes_source_stamp is not None:
+        boxes_source_stamp = float(boxes_source_stamp)
+        if not math.isfinite(boxes_source_stamp) or abs(
+                boxes_source_stamp - summary_stamp) > 0.05:
+            raise ValueError("summary and boxes are not from one source cycle")
     summary_ids = sorted(int(item["id"]) for item in objects)
     box_ids = sorted(int(box["id"]) for box in dynamic_boxes)
     if summary_ids != box_ids:

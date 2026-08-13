@@ -163,13 +163,11 @@ python3 "$REPO/tools/check_shadow_ros_graph.py" \
 }
 
 for attempt in $(seq 1 10); do
-  timeout "$TIMEOUT_S" rostopic echo -n 1 /perception/objects_summary \
-    > "$OUT/objects-summary.yaml"
-  timeout "$TIMEOUT_S" rostopic echo -n 1 /perception/dynamic_boxes \
-    > "$OUT/dynamic-boxes.yaml"
-  timeout "$TIMEOUT_S" rostopic echo -n 1 \
-    /fast_lio_icp/localization_diagnostics \
-    > "$OUT/localization-diagnostics.yaml"
+  timeout "$TIMEOUT_S" python3 "$REPO/tools/capture_shadow_snapshot.py" \
+    --timeout "$TIMEOUT_S" \
+    --summary "$OUT/objects-summary.yaml" \
+    --boxes "$OUT/dynamic-boxes.yaml" \
+    --diagnostics "$OUT/localization-diagnostics.yaml"
   if python3 "$REPO/tools/validate_nuc_shadow_snapshot.py" \
       --summary "$OUT/objects-summary.yaml" \
       --boxes "$OUT/dynamic-boxes.yaml" \

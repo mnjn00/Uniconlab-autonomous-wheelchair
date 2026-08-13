@@ -140,6 +140,25 @@ def test_lost_or_incoherent_snapshot_never_passes():
         )
 
 
+def test_summary_and_boxes_must_share_one_source_cycle():
+    with pytest.raises(ValueError, match="source cycle"):
+        validate_snapshot(
+            {"status": "OK", "stamp": 100.0, "objects": [{"id": 1}]},
+            [box(stamp=100.0)],
+            diagnostics(),
+            boxes_source_stamp=100.2,
+        )
+
+
+def test_capture_tool_subscribes_before_selecting_a_shared_cycle():
+    capture = (
+        Path(__file__).parents[3] / "tools" / "capture_shadow_snapshot.py"
+    ).read_text(encoding="utf-8")
+    assert 'payload["stamp"]' in capture
+    assert "shared = summaries.keys() & boxes.keys()" in capture
+    assert "message_yaml(" in capture
+
+
 def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     runner = (
         Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
@@ -177,9 +196,8 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert 'wait "$pid"' in runner
     loop = runner[runner.index("for attempt in"):runner.index(
         'cp "$OUT/nuc-shadow-qa.txt"')]
-    assert loop.index("objects_summary") < loop.index("dynamic_boxes")
-    assert loop.index("dynamic_boxes") < loop.index(
-        "localization_diagnostics")
+    assert "capture_shadow_snapshot.py" in loop
+    assert "rostopic echo -n 1" not in loop
 
 
 def test_motion_graph_detection_checks_nodes_and_command_topics():

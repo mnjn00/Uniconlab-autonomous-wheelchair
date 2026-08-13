@@ -63,6 +63,22 @@ def parse_boxes(document):
     return boxes
 
 
+def parse_boxes_source_stamp(document):
+    markers = document.get("markers", [])
+    if not markers:
+        raise ValueError("dynamic boxes has no cycle marker")
+    stamps = []
+    for marker in markers:
+        stamp = marker.get("header", {}).get("stamp", {})
+        stamps.append(
+            float(stamp.get("secs", 0))
+            + float(stamp.get("nsecs", 0)) * 1e-9
+        )
+    if max(stamps) - min(stamps) > 1e-6:
+        raise ValueError("dynamic boxes contain multiple source cycles")
+    return stamps[0]
+
+
 def parse_diagnostics(document):
     statuses = document.get("status", [])
     if not statuses:
@@ -100,12 +116,15 @@ def main():
     args = parser.parse_args()
 
     summary = parse_summary(load_yaml(args.summary))
-    boxes = parse_boxes(load_yaml(args.boxes))
+    boxes_document = load_yaml(args.boxes)
+    boxes = parse_boxes(boxes_document)
+    boxes_source_stamp = parse_boxes_source_stamp(boxes_document)
     diagnostics = parse_diagnostics(load_yaml(args.diagnostics))
     diagnostics_stamp = diagnostics.pop("_stamp", None)
     evidence = validate_snapshot(
         summary, boxes, diagnostics,
         diagnostics_stamp=diagnostics_stamp,
+        boxes_source_stamp=boxes_source_stamp,
     )
     print(json.dumps({"status": "PASS", **evidence}, sort_keys=True))
 
