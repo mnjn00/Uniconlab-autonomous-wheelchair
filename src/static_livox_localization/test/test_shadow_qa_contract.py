@@ -212,8 +212,8 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
         assert f'{variable}="${variable if variable != "LOCALIZATION_WS" else "WS"}"' \
             in startup
     assert "cleanup || status=90" in runner
-    assert "'[r]oslaunch base_model vectornav'" in runner
-    assert 'pgrep -af "$SHADOW_RE"' in runner
+    assert "[r]oslaunch base_model vectornav" in runner
+    assert "matching_pids" in runner
     assert 'wait "$pid"' in runner
     loop = runner[runner.index("for attempt in"):runner.index(
         'cp "$OUT/nuc-shadow-qa.txt"')]
@@ -240,12 +240,31 @@ def test_graph_checker_is_atomic_and_fails_closed():
     assert "getSystemState" in checker
     assert "rostopic" not in checker
     assert '"status": "ERROR"' in checker
+    assert 'parser.add_argument("--baseline")' in checker
+    assert '"unexpected node: %s"' in checker
     runner = (
         Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
     ).read_text(encoding="utf-8")
     assert "ros-graph-monitor.jsonl" in runner
     assert "ros-graph-final.json" in runner
     assert 'touch "$GRAPH_UNSAFE"' in runner
+
+
+def test_cleanup_restores_process_and_ros_graph_baselines():
+    runner = (
+        Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "[r]oslaunch static_livox_localization moving_localization",
+        "[b]ounded_cloud_preview",
+        "[r]eference_marker",
+        "[l]ocalization_state_marker",
+    ):
+        assert token in runner
+    assert 'matching_pids > "$OUT/process-baseline.txt"' in runner
+    assert 'kill -TERM -- "-$pgid"' in runner
+    assert 'process-baseline-diff.txt' in runner
+    assert '--baseline "$OUT/ros-graph-baseline.json"' in runner
 
 
 def test_field_startup_has_sensor_only_shadow_exit_before_wheel_launch():

@@ -34,27 +34,34 @@ AUTONOMOUS_RE='wheel_cmd|waypoint_follower|dwa_follower|mpc_follower|safety_gate
 LAUNCHED_PIDS=()
 STARTED_STACK=0
 GRAPH_UNSAFE="$OUT/ros-graph-unsafe"
-SHADOW_RE='[r]oslaunch livox_ros_driver2|[r]oslaunch base_model vectornav|[f]astlio_mapping|[m]oving_icp_localizer|[m]ap_preview_publisher|[o]bstacle_clusters|[a]uto_initial_pose'
+SHADOW_RE='[r]oslaunch livox_ros_driver2|[r]oslaunch base_model vectornav|[r]oslaunch static_livox_localization moving_localization|[f]astlio_mapping|[m]oving_icp_localizer|[b]ounded_cloud_preview|[m]ap_preview_publisher|[r]eference_marker|[l]ocalization_state_marker|[o]bstacle_clusters|[a]uto_initial_pose'
+
+matching_pids() {
+  ps -eo pid=,args= | awk -v pattern="$SHADOW_RE|$AUTONOMOUS_RE" \
+    '$0 ~ pattern {print $1}' | sort -n
+}
+
+matching_pids > "$OUT/process-baseline.txt"
 
 cleanup() {
   local pid
   for pid in "${LAUNCHED_PIDS[@]}"; do
     kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
   done
-  pkill -f 'obstacle_clusters.py.*_shadow_qa:=true' 2>/dev/null || true
   if [ "$STARTED_STACK" = "1" ]; then
-    for pattern in \
-        '[r]oslaunch livox_ros_driver2' '[r]oslaunch base_model vectornav' \
-        '[f]astlio_mapping' '[m]oving_icp_localizer' \
-        '[m]ap_preview_publisher' '[o]bstacle_clusters' \
-        '[a]uto_initial_pose'; do
-      pkill -f "$pattern" 2>/dev/null || true
+    baseline="$(cat "$OUT/process-baseline.txt")"
+    for pid in $(matching_pids); do
+      if ! grep -qx "$pid" <<< "$baseline"; then
+        pgid="$(ps -o pgid= -p "$pid" | tr -d ' ')"
+        [ -n "$pgid" ] &&
+          kill -TERM -- "-$pgid" 2>/dev/null || true
+      fi
     done
   fi
   cleanup_failed=0
   for _ in $(seq 1 30); do
-    if ! pgrep -af "$SHADOW_RE" >/dev/null &&
-       ! pgrep -af "$AUTONOMOUS_RE" >/dev/null; then
+    if diff -u "$OUT/process-baseline.txt" <(matching_pids) \
+         >/dev/null; then
       break
     fi
     sleep 0.2
@@ -62,8 +69,15 @@ cleanup() {
   for pid in "${LAUNCHED_PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
   done
-  if pgrep -af "$SHADOW_RE" >/dev/null ||
-      pgrep -af "$AUTONOMOUS_RE" >/dev/null; then
+  matching_pids > "$OUT/process-after.txt"
+  if ! diff -u "$OUT/process-baseline.txt" "$OUT/process-after.txt" \
+       > "$OUT/process-baseline-diff.txt"; then
+    cleanup_failed=1
+  fi
+  if [ -f "$OUT/ros-graph-baseline.json" ] &&
+      ! python3 "$REPO/tools/check_shadow_ros_graph.py" \
+        --baseline "$OUT/ros-graph-baseline.json" \
+        > "$OUT/ros-graph-cleanup.json"; then
     cleanup_failed=1
   fi
   {
@@ -72,7 +86,7 @@ cleanup() {
     echo "remaining_autonomous_processes:"
     pgrep -af "$AUTONOMOUS_RE" || true
     echo "remaining_shadow_processes:"
-    pgrep -af "$SHADOW_RE" || true
+    cat "$OUT/process-baseline-diff.txt" 2>/dev/null || true
   } > "$OUT/cleanup-receipt.txt"
   return "$cleanup_failed"
 }
@@ -117,7 +131,7 @@ if ! rostopic list >/dev/null 2>&1; then
   done
 fi
 python3 "$REPO/tools/check_shadow_ros_graph.py" \
-  > "$OUT/ros-graph-before.json" || {
+  > "$OUT/ros-graph-baseline.json" || {
   echo "ERROR: ROS motion surface present; refusing shadow QA" >&2
   cat "$OUT/ros-graph-before.json" >&2
   exit 25
@@ -198,6 +212,7 @@ for attempt in $(seq 1 10); do
 done
 if [ -e "$GRAPH_UNSAFE" ] ||
     ! python3 "$REPO/tools/check_shadow_ros_graph.py" \
+      --baseline "$OUT/ros-graph-baseline.json" \
       > "$OUT/ros-graph-final.json"; then
   echo "ERROR: final ROS motion graph inspection failed" >&2
   exit 28

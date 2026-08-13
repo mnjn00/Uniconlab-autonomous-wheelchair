@@ -3,6 +3,7 @@
 
 import json
 import os
+import argparse
 import sys
 import xmlrpc.client
 from pathlib import Path
@@ -35,6 +36,9 @@ def system_state(master_uri=None):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--baseline")
+    args = parser.parse_args()
     try:
         publishers, subscribers = system_state()
     except Exception as error:
@@ -42,9 +46,29 @@ def main():
         return 2
     violations = motion_surface_violations(publishers, subscribers)
     if violations:
-        print(json.dumps({"status": "UNSAFE", "violations": violations}))
+        print(json.dumps({
+            "status": "UNSAFE",
+            "violations": violations,
+        }))
         return 1
-    print(json.dumps({"status": "SAFE", "violations": []}))
+    nodes = sorted({
+        node
+        for graph in (publishers, subscribers)
+        for connected in graph.values()
+        for node in connected
+    })
+    if args.baseline:
+        baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        unexpected = sorted(set(nodes) - set(baseline.get("nodes", [])))
+        if unexpected:
+            print(json.dumps({
+                "status": "UNSAFE",
+                "violations": ["unexpected node: %s" % node
+                               for node in unexpected],
+                "nodes": nodes,
+            }))
+            return 1
+    print(json.dumps({"status": "SAFE", "violations": [], "nodes": nodes}))
     return 0
 
 
