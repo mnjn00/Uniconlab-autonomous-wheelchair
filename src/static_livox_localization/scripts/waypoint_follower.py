@@ -766,10 +766,9 @@ class WaypointFollower:
         candidate = max(MIN_LOOKAHEAD_M, wanted)
         while True:
             target = self.target_at_lookahead(candidate)
-            mask_chord_ok = all(
-                self.drivable_mask.contains(
-                    self.pose_xy * (1.0 - t) + target * t)
-                for t in np.linspace(0.0, 1.0, 9))
+            mask_chord_ok = self.drivable_mask.segment_is_contained(
+                self.pose_xy, target
+            )
             if self.band.chord_is_contained(
                     self.pose_xy, target, grace=OFF_BAND_GRACE
                     ) and mask_chord_ok:

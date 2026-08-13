@@ -47,6 +47,21 @@ def test_band_mismatch_fails_closed(tmp_path):
         ASSETS.validate_asset_binding(route, changed)
 
 
+def test_route_waypoint_mutation_fails_closed(tmp_path):
+    route = json.loads(
+        (ROOT / "routes" / "20260812_route_v6_v8_waypoints.json")
+        .read_text(encoding="utf-8")
+    )
+    route["waypoints"][100]["x"] += 1000.0
+    changed = tmp_path / "changed-route.json"
+    changed.write_text(json.dumps(route), encoding="utf-8")
+    with pytest.raises(ValueError, match="route content SHA-256 mismatch"):
+        ASSETS.validate_asset_binding(
+            changed,
+            ROOT / "routes" / "20260812_route_v6_v8_safety_band.json",
+        )
+
+
 def test_mask_geometry_metadata_mismatch_fails_closed(tmp_path):
     route = ROOT / "routes" / "20260812_route_v6_v8_waypoints.json"
     band = ROOT / "routes" / "20260812_route_v6_v8_safety_band.json"

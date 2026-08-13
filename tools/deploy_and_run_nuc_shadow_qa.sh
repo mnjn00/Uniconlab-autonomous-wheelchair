@@ -76,7 +76,10 @@ catkin config --extend "\$FIELD_WS/devel" \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
 OUT="\$HOME/nuc-shadow-qa-$EXPECTED_COMMIT"
 rm -rf "\$OUT"
+TRAJ="\$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt"
+TRAJ_SHA256="4a5972e176ff9aa036f538ca67e20c87f1d5a469865cb8d6b8079f7023dccbbe"
 REPO="\$DEPLOY" WS="\$WS" OUT="\$OUT" \
+  TRAJ="\$TRAJ" TRAJ_SHA256="\$TRAJ_SHA256" \
   "\$DEPLOY/tools/run_nuc_shadow_qa.sh"
 tar -C "\$HOME" -czf "\$HOME/nuc-shadow-qa-$EXPECTED_COMMIT.tgz" \
   "nuc-shadow-qa-$EXPECTED_COMMIT"

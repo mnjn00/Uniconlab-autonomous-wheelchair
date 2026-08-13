@@ -286,6 +286,8 @@ class DwaPlanner:
         if self.route_mask is not None:
             inside &= self.route_mask.contains_many(flat)
         ok = inside.reshape(len(pairs), self.steps).all(axis=1)
+        if self.route_mask is not None:
+            ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
         if not ok.any():
             return 0.0, 0.0, "OFF_BAND"
         if len(obstacles):

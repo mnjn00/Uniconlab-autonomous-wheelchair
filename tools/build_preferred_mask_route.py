@@ -287,6 +287,20 @@ def main() -> int:
     path_xy = smooth_path(path_xy, drivable, resolution_m, origin_xy)
     dense_xy = _resample(path_xy, PATH_STEP_M)
     dense_xy = smooth_path(dense_xy, drivable, resolution_m, origin_xy)
+    validation_xy = _resample(dense_xy, resolution_m * 0.5)
+    validation_rc = np.array([
+        _world_to_rc(point, drivable.shape, resolution_m, origin_xy)
+        for point in validation_xy
+    ])
+    in_bounds = (
+        (validation_rc[:, 0] >= 0)
+        & (validation_rc[:, 0] < drivable.shape[0])
+        & (validation_rc[:, 1] >= 0)
+        & (validation_rc[:, 1] < drivable.shape[1])
+    )
+    if not in_bounds.all() or not drivable[
+            validation_rc[:, 0], validation_rc[:, 1]].all():
+        raise ValueError("smoothed route segment leaves drivable mask")
     tangent = np.gradient(dense_xy, axis=0)
     yaw = np.degrees(np.arctan2(tangent[:, 1], tangent[:, 0]))
     length_m = float(np.linalg.norm(np.diff(dense_xy, axis=0), axis=1).sum())
@@ -368,6 +382,13 @@ def main() -> int:
         "drivable_mask_yaml_sha256": _sha256(args.drivable_yaml),
         "safety_band_sha256": _sha256(args.out_band),
     }
+    route_doc["asset_binding"]["route_content_sha256"] = hashlib.sha256(
+        json.dumps(
+            {k: v for k, v in route_doc.items() if k != "asset_binding"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     args.out_route.write_text(json.dumps(route_doc, indent=1), encoding="utf-8")
     print(
         f"route: {len(dense_xy)} waypoints, {length_m:.3f} m; "

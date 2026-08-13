@@ -48,6 +48,25 @@ class RouteMask:
         """Whether one chair-centre point lies in the authoritative mask."""
         return bool(self.contains_many([point])[0])
 
+    def segment_is_contained(self, start, end):
+        """Check every raster cell crossed by a chair-centre segment."""
+        start = np.asarray(start, dtype=float)
+        end = np.asarray(end, dtype=float)
+        distance = float(np.linalg.norm(end - start))
+        count = max(2, int(np.ceil(distance / (self.resolution * 0.5))) + 1)
+        t = np.linspace(0.0, 1.0, count)[:, None]
+        return bool(self.contains_many(start + (end - start) * t).all())
+
+    def paths_are_contained(self, paths):
+        paths = np.asarray(paths, dtype=float)
+        result = np.ones(len(paths), dtype=bool)
+        for index, path in enumerate(paths):
+            result[index] = all(
+                self.segment_is_contained(start, end)
+                for start, end in zip(path[:-1], path[1:])
+            )
+        return result
+
     def boundary_cost_many(self, points):
         """Zero with room to spare, rising quadratically to one at the edge."""
         row, col, valid = self._cells(points)

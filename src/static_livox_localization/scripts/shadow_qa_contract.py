@@ -62,6 +62,19 @@ def motion_surface_violations(publishers, subscribers):
     return sorted(set(violations))
 
 
+def baseline_node_violations(nodes, baseline):
+    """Require cleanup to restore the exact pre-shadow ROS node set."""
+    expected = set(baseline.get("nodes", []))
+    observed = set(nodes)
+    return (
+        ["unexpected node: %s" % node for node in sorted(observed - expected)]
+        + [
+            "missing baseline node: %s" % node
+            for node in sorted(expected - observed)
+        ]
+    )
+
+
 def validate_snapshot(summary, dynamic_boxes, diagnostics,
                       diagnostics_stamp=None, boxes_source_stamp=None,
                       max_skew_s=2.0):

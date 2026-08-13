@@ -16,7 +16,10 @@ SCRIPTS = (
 )
 sys.path.insert(0, str(SCRIPTS))
 try:
-    from shadow_qa_contract import COMMAND_TOPICS, motion_surface_violations
+    from shadow_qa_contract import (
+        baseline_node_violations,
+        motion_surface_violations,
+    )
 finally:
     sys.path.pop(0)
 
@@ -59,12 +62,11 @@ def main():
     })
     if args.baseline:
         baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
-        unexpected = sorted(set(nodes) - set(baseline.get("nodes", [])))
-        if unexpected:
+        baseline_violations = baseline_node_violations(nodes, baseline)
+        if baseline_violations:
             print(json.dumps({
                 "status": "UNSAFE",
-                "violations": ["unexpected node: %s" % node
-                               for node in unexpected],
+                "violations": baseline_violations,
                 "nodes": nodes,
             }))
             return 1

@@ -410,6 +410,9 @@ class MovingIcpLocalizer {
     std::vector<static_livox_localization::DynamicBox> boxes;
     ros::Time newest(0.0);
     for (const auto& marker : message->markers) {
+      if (marker.header.frame_id == rolling_config_.expected_cloud_frame &&
+          marker.header.stamp > newest)
+        newest = marker.header.stamp;
       if (marker.action != visualization_msgs::Marker::ADD) continue;
       if (marker.type != visualization_msgs::Marker::CUBE) continue;
       if (marker.header.frame_id != rolling_config_.expected_cloud_frame)
@@ -425,7 +428,6 @@ class MovingIcpLocalizer {
               dynamic_box_max_range_m_))
         continue;
       boxes.push_back(box);
-      if (marker.header.stamp > newest) newest = marker.header.stamp;
       if (boxes.size() >= dynamic_box_max_count_) break;
     }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -594,6 +596,8 @@ class MovingIcpLocalizer {
             registration, predicted_map_T_base, decision_config);
 
     std::lock_guard<std::mutex> lock(mutex_);
+    diagnostic_source_stamp_ =
+        dynamic_boxes_stamp_.isZero() ? stamp : dynamic_boxes_stamp_;
     correction_in_progress_ = false;
     if (!alignment_controller_.auto_correction_enabled()) return;
     if (decision.accepted) {
@@ -699,7 +703,9 @@ class MovingIcpLocalizer {
                                  const RegistrationResult& registration,
                                  const CorrectionDecision& decision) {
     diagnostic_msgs::DiagnosticArray array;
-    array.header.stamp = ros::Time::now();
+    array.header.stamp = diagnostic_source_stamp_.isZero()
+                             ? ros::Time::now()
+                             : diagnostic_source_stamp_;
     diagnostic_msgs::DiagnosticStatus status;
     status.name = "fast_lio_icp";
     status.hardware_id = map_id_;
@@ -790,6 +796,7 @@ class MovingIcpLocalizer {
   ros::Publisher pose_pub_;
   ros::Publisher path_pub_;
   ros::Publisher diagnostics_pub_;
+  ros::Time diagnostic_source_stamp_;
   ros::Subscriber seed_sub_;
   ros::Subscriber odom_sub_;
   ros::Subscriber cloud_sub_;

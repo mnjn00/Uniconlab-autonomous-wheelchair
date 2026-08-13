@@ -79,7 +79,7 @@ max_correction_yaw_deg: 2.0
 # 30 DEGRADED episodes cleared inside the follower's 3 s grace on their own -
 # so most of what this fired on was noise. Cost: a genuine loss is now
 # declared about two registrations (~2 s) later.
-degraded_after_failures: 3
+degraded_after_failures: 1
 # 8 s was short enough that any hold longer than it left the state machine
 # primed to declare LOST on the first imperfect registration afterwards.
 # note_unobserved now discounts parked time, but the margin was still thin.
@@ -100,6 +100,6 @@ required_consistent_candidates: 3
 # consequential relaxation here - a re-acquired fix may now settle up to
 # 0.5 m from where a tighter consensus would have put it - and it is the
 # first thing to put back if a run comes up in the wrong place.
-candidate_translation_tolerance_m: 0.50
+candidate_translation_tolerance_m: 0.30
 candidate_yaw_tolerance_deg: 3.0
 

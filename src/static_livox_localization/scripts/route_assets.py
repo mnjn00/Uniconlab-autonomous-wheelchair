@@ -20,12 +20,24 @@ def mask_image_path(mask_yaml):
     return mask_yaml.parent / metadata["image"]
 
 
+def route_content_sha256(route):
+    """Hash route semantics while excluding the binding that stores the hash."""
+    content = dict(route)
+    content.pop("asset_binding", None)
+    payload = json.dumps(
+        content, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def validate_asset_binding(route_path, band_path, mask_yaml=None):
     route = json.loads(Path(route_path).read_text(encoding="utf-8"))
     band = json.loads(Path(band_path).read_text(encoding="utf-8"))
     binding = route.get("asset_binding")
     if not isinstance(binding, dict):
         raise ValueError("route has no asset_binding")
+    if binding.get("route_content_sha256") != route_content_sha256(route):
+        raise ValueError("route content SHA-256 mismatch")
     if binding.get("safety_band_sha256") != sha256(band_path):
         raise ValueError("route/safety-band SHA-256 mismatch")
     if band.get("route_id") != binding.get("route_id"):

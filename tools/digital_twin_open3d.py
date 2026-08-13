@@ -30,7 +30,7 @@ RIDER_Z  = (-0.5, 1.8)
 CORRIDOR_MIN_R = 0.50
 
 # ── follower constants (mirrors waypoint_follower.py) ─────────
-MAX_SPEED = 0.6; SLOPE_SPEED = 0.3; CREEP = 0.15
+MAX_SPEED = 1.0; SLOPE_SPEED = 0.3; CREEP = 0.15
 MAX_YAW_RATE = 0.5; MAX_ACCEL = 0.18; MAX_DECEL = 0.6
 SLOPE_PITCH = math.radians(3.0)
 

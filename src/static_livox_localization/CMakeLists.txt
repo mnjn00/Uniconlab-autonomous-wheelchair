@@ -77,7 +77,8 @@ install(
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py
     scripts/cluster_guard.py
-  scripts/cluster_tracking.py
+    scripts/cluster_tracking.py
+    scripts/cloud_points.py
   scripts/fixed_map_filter.py
     scripts/drive_policy.py
     scripts/localization_policy.py

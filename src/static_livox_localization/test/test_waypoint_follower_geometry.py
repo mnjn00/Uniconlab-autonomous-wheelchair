@@ -90,7 +90,14 @@ def follower_for(module, safe_distance):
     follower.lateral_offset = 0.0
     follower.band = DistanceBand(safe_distance)
     follower.drivable_mask = type(
-        "Mask", (), {"contains": staticmethod(lambda _point: True)}
+        "Mask",
+        (),
+        {
+            "contains": staticmethod(lambda _point: True),
+            "segment_is_contained": staticmethod(
+                lambda _start, _end: True
+            ),
+        },
     )()
     # The guarded configuration: these are the band's own geometry tests, and
     # with the policies off there is no band to test.

@@ -21,6 +21,8 @@ set -eo pipefail
 
 cd "$HOME"
 export SAFETY_POLICIES=false
+export ROUTE="$HOME/wheelchair_localization_src/routes/20260727_chair_centred_waypoints.json"
+export BAND="$HOME/wheelchair_localization_src/routes/20260727_chair_centred_safety_band.json"
 
 echo "=============================================================="
 echo " 0727 LOCALIZATION TRIAL"

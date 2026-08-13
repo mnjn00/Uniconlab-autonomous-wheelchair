@@ -58,19 +58,9 @@ MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
 MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
 TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
-TRAJ_MANIFEST="${TRAJ_MANIFEST:-$(dirname "$TRAJ")/localization-map-manifest.json}"
-if [ ! -f "$TRAJ_MANIFEST" ]; then
-  echo "ERROR: trajectory manifest missing: $TRAJ_MANIFEST" >&2
-  exit 2
-fi
-EXPECTED_TRAJ_SHA256="$(
-  python3 - "$TRAJ_MANIFEST" <<'PY'
-import json, sys
-print(json.load(open(sys.argv[1], encoding="utf-8"))["trajectory_sha256"])
-PY
-)"
+TRAJ_SHA256="${TRAJ_SHA256:-4a5972e176ff9aa036f538ca67e20c87f1d5a469865cb8d6b8079f7023dccbbe}"
 ACTUAL_TRAJ_SHA256="$(sha256sum "$TRAJ" | awk '{print $1}')"
-if [ "$ACTUAL_TRAJ_SHA256" != "$EXPECTED_TRAJ_SHA256" ]; then
+if [ "$ACTUAL_TRAJ_SHA256" != "$TRAJ_SHA256" ]; then
   echo "ERROR: trajectory SHA-256 mismatch" >&2
   exit 2
 fi
@@ -243,10 +233,12 @@ echo "[1/5] cleaning old processes"
 # dwa_follower was added by the DWA profile in the same window this sweep was
 # written in, on a branch that did not have it, so the two merged clean and
 # the derived list caught what neither side could see alone.
+if [ "$SHADOW_QA" != "1" ]; then
 for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters' '[r]oute_identity_publisher'; do
   pkill -f "$pattern" 2>/dev/null || true
 done
 sleep 2
+fi
 if ! pgrep -f '[r]osmaster' >/dev/null; then
   setsid nohup roscore > "$LOG/live_roscore.log" 2>&1 < /dev/null &
   sleep 4

@@ -118,3 +118,20 @@ def test_every_node_the_field_startup_runs_is_installed():
     missing = sorted(launched - set(installed_scripts()))
     assert not missing, (
         "started in the field but not installed: %s" % missing)
+
+
+def test_every_installed_node_sibling_import_is_installed():
+    text = CMAKE.read_text(encoding="utf-8")
+    installed = set(re.findall(r"scripts/(\S+\.py)", text))
+    missing = []
+    for script in installed_scripts():
+        for module in sibling_imports(script):
+            if f"{module}.py" not in installed:
+                missing.append(f"{script} imports {module}.py")
+    assert not missing, "missing installed sibling modules: %s" % missing
+
+
+def test_declared_runtime_dependencies_cover_route_assets():
+    package = (PKG / "package.xml").read_text(encoding="utf-8")
+    assert "<exec_depend>python3-yaml</exec_depend>" in package
+    assert "<exec_depend>python3-pil</exec_depend>" in package

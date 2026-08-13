@@ -67,7 +67,11 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
-TRAJECTORY_SHA256="$(sha256_file "$TRAJ_PATH")"
+TRAJECTORY_SHA256="4a5972e176ff9aa036f538ca67e20c87f1d5a469865cb8d6b8079f7023dccbbe"
+if [ "$(sha256_file "$TRAJ_PATH")" != "$TRAJECTORY_SHA256" ]; then
+  echo "ERROR: trajectory SHA-256 mismatch" >&2
+  exit 2
+fi
 
 require_equal() {
   if [ "$2" != "$3" ]; then

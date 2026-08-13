@@ -176,7 +176,13 @@ def test_capture_tool_subscribes_before_selecting_a_shared_cycle():
         Path(__file__).parents[3] / "tools" / "capture_shadow_snapshot.py"
     ).read_text(encoding="utf-8")
     assert 'payload["stamp"]' in capture
-    assert "shared = summaries.keys() & boxes.keys()" in capture
+    assert "shared = summaries.keys() & boxes.keys() & diagnostics.keys()" \
+        in capture
+    localizer = (
+        Path(__file__).parents[1] / "src" / "moving_icp_localizer.cpp"
+    ).read_text(encoding="utf-8")
+    assert "dynamic_boxes_stamp_.isZero() ? stamp : dynamic_boxes_stamp_" \
+        in localizer
     assert "message_yaml(" in capture
 
 
@@ -211,18 +217,23 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     ):
         assert f'{variable}="${variable if variable != "LOCALIZATION_WS" else "WS"}"' \
             in startup
-    assert "cleanup || status=90" in runner
+    assert "if cleanup; then" in runner
+    assert "status=90" in runner
     assert "[r]oslaunch base_model vectornav" in runner
     assert "matching_pids" in runner
     assert 'wait "$pid"' in runner
-    loop = runner[runner.index("for attempt in"):runner.index(
-        'cp "$OUT/nuc-shadow-qa.txt"')]
+    loop_start = runner.index("for attempt in")
+    loop = runner[loop_start:runner.index(
+        'if [ -e "$GRAPH_UNSAFE" ] ||', loop_start)]
     assert "capture_shadow_snapshot.py" in loop
     assert "rostopic echo -n 1" not in loop
 
 
 def test_motion_graph_detection_checks_nodes_and_command_topics():
-    from shadow_qa_contract import motion_surface_violations
+    from shadow_qa_contract import (
+        baseline_node_violations,
+        motion_surface_violations,
+    )
 
     assert motion_surface_violations(
         {"/cmd_vel": ["/rogue"]}, {}
@@ -231,6 +242,14 @@ def test_motion_graph_detection_checks_nodes_and_command_topics():
         {}, {"/cloud_registered_body": ["/wheel_driver"]}
     )
     assert violations == ["subscriber node: /wheel_driver"]
+    assert baseline_node_violations(
+        ["/rosout", "/shadow"],
+        {"nodes": ["/rosout"]},
+    ) == ["unexpected node: /shadow"]
+    assert baseline_node_violations(
+        ["/rosout"],
+        {"nodes": ["/rosout", "/field_sensor"]},
+    ) == ["missing baseline node: /field_sensor"]
 
 
 def test_graph_checker_is_atomic_and_fails_closed():
@@ -241,7 +260,7 @@ def test_graph_checker_is_atomic_and_fails_closed():
     assert "rostopic" not in checker
     assert '"status": "ERROR"' in checker
     assert 'parser.add_argument("--baseline")' in checker
-    assert '"unexpected node: %s"' in checker
+    assert "baseline_node_violations(nodes, baseline)" in checker
     runner = (
         Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
     ).read_text(encoding="utf-8")
@@ -265,6 +284,24 @@ def test_cleanup_restores_process_and_ros_graph_baselines():
     assert 'kill -TERM -- "-$pgid"' in runner
     assert 'process-baseline-diff.txt' in runner
     assert '--baseline "$OUT/ros-graph-baseline.json"' in runner
+    assert 'OWN_ROSCORE_PID=""' in runner
+    assert 'LAUNCHED_PIDS+=("$OWN_ROSCORE_PID")' not in runner
+    assert 'rm -f "$OUT/integration-green.txt"' in runner
+    finish = runner[runner.index("finish() {"):runner.index(
+        "trap finish EXIT INT TERM")]
+    assert 'cp "$OUT/nuc-shadow-qa.txt" "$OUT/integration-green.txt"' in finish
+
+
+def test_shadow_refuses_old_stack_and_monitors_before_startup():
+    runner = (
+        Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
+    ).read_text(encoding="utf-8")
+    assert "pre-existing sensor/localization stack" in runner
+    monitor = runner.index("ros-graph-monitor.jsonl")
+    startup = runner.index('SHADOW_QA=1 LOCALIZATION_WS="$WS"')
+    assert monitor < startup
+    assert "_body_frame_profile:=builtin" in runner
+    assert "_body_frame_profile:=vn100" not in runner
 
 
 def test_field_startup_has_sensor_only_shadow_exit_before_wheel_launch():
@@ -280,3 +317,5 @@ def test_field_startup_has_sensor_only_shadow_exit_before_wheel_launch():
     shadow_block = startup[shadow_exit:wheel_launch]
     assert "start_object_tracking" in shadow_block
     assert "SHADOW_QA_READY" in shadow_block
+    cleanup = startup[startup.index('echo "[1/5] cleaning old processes"'):]
+    assert 'if [ "$SHADOW_QA" != "1" ]; then' in cleanup

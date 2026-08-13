@@ -250,6 +250,36 @@ def test_map_deployer_rejects_symlink_targets_and_uses_unique_temp_files():
     startup = (
         ROOT / "tools" / "start_wheelchair_localization.sh"
     ).read_text(encoding="utf-8")
-    assert 'EXPECTED_TRAJ_SHA256=' in startup
+    assert (
+        'TRAJ_SHA256="${TRAJ_SHA256:-'
+        "4a5972e176ff9aa036f538ca67e20c87f1d5a469865cb8d6b8079f7023dccbbe"
+        '}"'
+    ) in startup
     assert 'ACTUAL_TRAJ_SHA256=' in startup
     assert "trajectory SHA-256 mismatch" in startup
+    assert "TRAJ_MANIFEST" not in startup
+
+
+def test_dedicated_0727_trial_pins_its_route_and_band():
+    trial = (ROOT / "tools" / "trial_0727.sh").read_text(encoding="utf-8")
+    assert "20260727_chair_centred_waypoints.json" in trial
+    assert "20260727_chair_centred_safety_band.json" in trial
+
+
+def test_direct_launch_defaults_match_field_route_profile():
+    launch = (
+        ROOT
+        / "src"
+        / "static_livox_localization"
+        / "launch"
+        / "moving_localization.launch"
+    ).read_text(encoding="utf-8")
+    assert "20260812_route_v6_v8_waypoints.json" in launch
+    assert 'name="auto_init_min_refined_score" default="0.78"' in launch
+
+
+def test_digital_twin_uses_current_physical_speed_cap():
+    twin = (ROOT / "tools" / "digital_twin_open3d.py").read_text(
+        encoding="utf-8"
+    )
+    assert "MAX_SPEED = 1.0" in twin

@@ -31,7 +31,7 @@ def main():
 
     summaries = {}
     boxes = {}
-    diagnostic = [None]
+    diagnostics = {}
 
     def on_summary(message):
         payload = json.loads(message.data)
@@ -45,18 +45,22 @@ def main():
                for marker in message.markers):
             boxes[round(source, 6)] = message
 
+    def on_diagnostics(message):
+        source = stamp_value(message.header.stamp)
+        diagnostics[round(source, 6)] = message
+
     rospy.Subscriber("/perception/objects_summary", String, on_summary)
     rospy.Subscriber("/perception/dynamic_boxes", MarkerArray, on_boxes)
     rospy.Subscriber(
         "/fast_lio_icp/localization_diagnostics",
         DiagnosticArray,
-        lambda message: diagnostic.__setitem__(0, message),
+        on_diagnostics,
     )
     deadline = rospy.Time.now() + rospy.Duration(args.timeout)
     rate = rospy.Rate(50)
     while not rospy.is_shutdown() and rospy.Time.now() < deadline:
-        shared = summaries.keys() & boxes.keys()
-        if shared and diagnostic[0] is not None:
+        shared = summaries.keys() & boxes.keys() & diagnostics.keys()
+        if shared:
             source = max(shared)
             Path(args.summary).write_text(
                 message_yaml(summaries[source]),
@@ -67,7 +71,7 @@ def main():
                 encoding="utf-8",
             )
             Path(args.diagnostics).write_text(
-                message_yaml(diagnostic[0]),
+                message_yaml(diagnostics[source]),
                 encoding="utf-8",
             )
             return

@@ -15,9 +15,10 @@ finally:
     sys.path.pop(0)
 
 
-def write_mask(tmp_path: Path) -> Path:
-    image = np.full((9, 11), 205, dtype=np.uint8)
-    image[1:8, 1:10] = 254
+def write_mask(tmp_path: Path, image=None) -> Path:
+    if image is None:
+        image = np.full((9, 11), 205, dtype=np.uint8)
+        image[1:8, 1:10] = 254
     Image.fromarray(image).save(tmp_path / "mask.pgm")
     yaml_path = tmp_path / "mask.yaml"
     yaml_path.write_text(
@@ -52,3 +53,15 @@ def test_boundary_cost_rises_toward_the_mask_edge(tmp_path):
     assert costs[0] < costs[1] < costs[2]
     assert costs[0] < 0.05
     assert costs[2] > 0.6
+
+
+def test_segment_containment_catches_forbidden_cell_between_endpoints(tmp_path):
+    image = np.full((3, 5), 254, dtype=np.uint8)
+    image[1, 2] = 0
+    mask = RouteMask(str(write_mask(tmp_path, image)))
+    start = np.array([0.0, 0.1])
+    end = np.array([0.4, 0.1])
+    assert mask.contains(start)
+    assert mask.contains(end)
+    assert not mask.segment_is_contained(start, end)
+    assert not mask.paths_are_contained([[start, end]])[0]

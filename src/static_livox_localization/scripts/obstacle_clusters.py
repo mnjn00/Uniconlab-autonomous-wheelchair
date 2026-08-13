@@ -33,6 +33,7 @@ import json
 import math
 import os
 import sys
+import threading
 
 import numpy as np
 import rospy
@@ -240,6 +241,7 @@ class Accumulator:
         # The pose the merged cloud is expressed about, kept because motion
         # can only be judged in a frame that does not move with the chair.
         self.reference = None
+        self.lock = threading.Lock()
 
     def add_odom(self, message):
         q = message.pose.pose.orientation
@@ -248,13 +250,15 @@ class Accumulator:
         norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
         if not all(math.isfinite(v) for v in
                    (stamp, p.x, p.y, p.z, q.x, q.y, q.z, q.w)) or \
-                stamp <= 0.0 or abs(norm - 1.0) > 0.05 or \
-                (self.odoms and stamp <= self.odoms[-1][0]):
+                stamp <= 0.0 or abs(norm - 1.0) > 0.05:
             return
         T = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
         T[:3, 3] = (p.x, p.y, p.z)
-        self.odoms.append((stamp, T))
-        self.odoms = self.odoms[-80:]
+        with self.lock:
+            if self.odoms and stamp <= self.odoms[-1][0]:
+                return
+            self.odoms.append((stamp, T))
+            self.odoms = self.odoms[-80:]
 
     def nearest(self, stamp):
         if not self.odoms:
@@ -268,28 +272,45 @@ class Accumulator:
     def add_cloud(self, message):
         pts = points_xyzi(message)
         stamp = message.header.stamp.to_sec()
-        if not math.isfinite(stamp) or stamp <= 0.0 or not len(pts) or \
-                (self.scans and stamp <= self.scans[-1][0]):
+        if not math.isfinite(stamp) or stamp <= 0.0 or not len(pts):
             return
-        self.scans.append((stamp, pts))
-        self.scans = [s for s in self.scans
-                      if stamp - s[0] <= WINDOW_S + 0.3]
+        with self.lock:
+            if self.scans and stamp <= self.scans[-1][0]:
+                return
+            self.scans.append((stamp, pts))
+            self.scans = [s for s in self.scans
+                          if stamp - s[0] <= WINDOW_S + 0.3]
+
+    def newest_stamp(self):
+        with self.lock:
+            return self.scans[-1][0] if self.scans else None
 
     def merged(self):
         self.reference = None
-        if not self.scans:
+        with self.lock:
+            scans = list(self.scans)
+            odoms = list(self.odoms)
+        if not scans:
             return None
-        newest = self.scans[-1][0]
-        T_ref = self.nearest(newest)
+        newest = scans[-1][0]
+
+        def nearest(stamp):
+            if not odoms:
+                return None
+            times = np.array([t for t, _ in odoms])
+            k = int(np.argmin(np.abs(times - stamp)))
+            return odoms[k][1] if abs(times[k] - stamp) <= 0.15 else None
+
+        T_ref = nearest(newest)
         if T_ref is None:
             return None
         self.reference = (newest, T_ref)
         inv_ref = np.linalg.inv(T_ref)
         parts = []
-        for stamp, pts in self.scans:
+        for stamp, pts in scans:
             if newest - stamp > WINDOW_S:
                 continue
-            T = self.nearest(stamp)
+            T = nearest(stamp)
             if T is None:
                 continue
             M = (inv_ref @ T).astype(np.float32)
@@ -437,32 +458,32 @@ class ObstacleClusters:
             [(float(point[0]), float(point[1]), boxes[i][0])
              for i, point in enumerate(in_odom)], stamp_s)
 
+    def publish_empty(self, source_stamp, status):
+        delete_all = Marker()
+        delete_all.action = Marker.DELETEALL
+        clear = MarkerArray()
+        clear.markers = [delete_all]
+        self.marker_pub.publish(clear)
+        self.dynamic_pub.publish(clear)
+        self.summary_pub.publish(String(data=json.dumps(
+            {"stamp": source_stamp, "status": status, "objects": []}
+        )))
+
     def step(self):
         stamp = rospy.Time.now()
-        newest_stamp = (
-            self.accumulator.scans[-1][0]
-            if self.accumulator.scans else None)
+        newest_stamp = self.accumulator.newest_stamp()
         if newest_stamp is None or stamp.to_sec() - newest_stamp > CLOUD_STALE_S:
             source_stamp = newest_stamp if newest_stamp is not None else 0.0
-            delete_all = Marker()
-            delete_all.action = Marker.DELETEALL
-            clear = MarkerArray()
-            clear.markers = [delete_all]
-            self.marker_pub.publish(clear)
-            self.dynamic_pub.publish(clear)
-            self.summary_pub.publish(String(data=json.dumps(
-                {"stamp": source_stamp, "status": "NO_CLOUD",
-                 "objects": []})))
+            self.publish_empty(source_stamp, "NO_CLOUD")
             return
         if self._last_processed_stamp is not None and \
                 newest_stamp <= self._last_processed_stamp:
             return
         merged = self.accumulator.merged()
         if merged is None:
-            self.summary_pub.publish(String(data=json.dumps(
-                {"stamp": newest_stamp, "status": "NO_CLOUD",
-                 "objects": []})))
+            self.publish_empty(newest_stamp, "NO_CLOUD")
             return
+        newest_stamp = self.accumulator.reference[0]
         self._last_processed_stamp = newest_stamp
         rel = merged[:, 2] + SENSOR_HEIGHT_M
         keep = (merged[:, 0] > ROI_X[0]) & (merged[:, 0] < ROI_X[1]) & \
@@ -500,9 +521,7 @@ class ObstacleClusters:
         map_pose = None if cloud_stamp is None else \
             self.map_poses.nearest(cloud_stamp)
         if map_pose is None:
-            self.summary_pub.publish(String(data=json.dumps(
-                {"stamp": newest_stamp, "status": "NO_MAP_POSE",
-                 "objects": []})))
+            self.publish_empty(newest_stamp, "NO_MAP_POSE")
             return
         body_T_lidar = np.eye(4)
         body_T_lidar[:3, :3] = np.asarray(

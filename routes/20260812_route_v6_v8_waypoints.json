@@ -11427,6 +11427,7 @@
   "preferred_mask_sha256": "3b176c77709f4020a9a2fe82c6edf96d2ea579da7719772733cf16d8e0d07c83",
   "drivable_mask_sha256": "3d183e8320f68c5deafd72c8f45a5780dade29ff43ca323664f27f4e3ed2eaa8",
   "drivable_mask_yaml_sha256": "125d06ed5bc304ec3c99a27be17315857c3fcc09306512e685891ca4ae4f60dc",
-  "safety_band_sha256": "c8ccb5da4b9ec3abaf608d73919670d9085905a1fc0cdce69afa0aedc4807c96"
+  "safety_band_sha256": "c8ccb5da4b9ec3abaf608d73919670d9085905a1fc0cdce69afa0aedc4807c96",
+  "route_content_sha256": "e538480bacd3cded8f347579ca9579b06623005498a1608cf97956aab647455b"
  }
 }
