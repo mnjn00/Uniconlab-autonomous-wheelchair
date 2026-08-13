@@ -127,10 +127,19 @@ def validate_snapshot(summary, dynamic_boxes, diagnostics,
         if not math.isfinite(value) or value < 0.0:
             raise ValueError("%s must be finite and non-negative" % key)
     raw = int(diagnostics["raw_scan_points"])
+    box_dropped = int(diagnostics["dynamic_returns_dropped"])
     post_box = int(diagnostics["post_box_points"])
+    map_filtered = int(diagnostics["map_filtered"])
     post_map = int(diagnostics["post_map_points"])
+    rolling = int(diagnostics["rolling_submap_points"])
     if post_box > raw or post_map > post_box:
         raise ValueError("registration filter stage counts are not monotonic")
+    if raw - box_dropped != post_box:
+        raise ValueError("box-filter accounting is inconsistent")
+    if post_box - map_filtered != post_map:
+        raise ValueError("map-filter accounting is inconsistent")
+    if raw <= 0 or rolling <= 0:
+        raise ValueError("localization snapshot is empty")
     return {
         "object_count": len(objects),
         "dynamic_box_count": len(dynamic_boxes),

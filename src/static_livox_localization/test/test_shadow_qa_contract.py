@@ -74,6 +74,27 @@ def test_invalid_box_and_missing_filter_diagnostics_fail_closed():
         )
 
 
+def test_filter_accounting_must_be_exact_and_nonempty():
+    summary = {"status": "OK", "stamp": 100.0, "objects": []}
+    broken = diagnostics()
+    broken["dynamic_returns_dropped"] = "1"
+    with pytest.raises(ValueError, match="box-filter accounting"):
+        validate_snapshot(summary, [], broken)
+    broken = diagnostics()
+    broken["map_filtered"] = "1"
+    with pytest.raises(ValueError, match="map-filter accounting"):
+        validate_snapshot(summary, [], broken)
+    broken = diagnostics()
+    broken["raw_scan_points"] = "0"
+    broken["dynamic_returns_dropped"] = "0"
+    broken["post_box_points"] = "0"
+    broken["map_filtered"] = "0"
+    broken["post_map_points"] = "0"
+    broken["rolling_submap_points"] = "0"
+    with pytest.raises(ValueError, match="empty"):
+        validate_snapshot(summary, [], broken)
+
+
 def load_validator():
     path = Path(__file__).parents[3] / "tools" / \
         "validate_nuc_shadow_snapshot.py"
