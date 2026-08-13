@@ -1,0 +1,12 @@
+{
+ "status": "BLOCKED",
+ "samples": 8187,
+ "wheel_envelope_violations": 5549,
+ "minimum_left_clearance_m": -15.188679045960402,
+ "minimum_right_clearance_m": -5.559936842364076,
+ "minimum_wheel_boundary_margin_m": -15.538404981510851,
+ "minimum_padded_footprint_boundary_margin_m": -15.712124161501134,
+ "mask_samples_0p025m": 15531,
+ "mask_outside_samples": 14654,
+ "rejected": true
+}
