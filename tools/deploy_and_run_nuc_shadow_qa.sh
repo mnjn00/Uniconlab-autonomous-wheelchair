@@ -48,10 +48,11 @@ observed="$(
 "${SSH[@]}" 'bash -s' <<EOF
 set -euo pipefail
 REPO="\$HOME/wheelchair_localization_src"
-WS="\$HOME/livox_static_localization_ws"
+FIELD_WS="\$HOME/livox_static_localization_ws"
+WS="\$HOME/.cache/unicon-shadow-$EXPECTED_COMMIT"
 DEPLOY="\$(mktemp -d)"
 cleanup_deploy() {
-  rm -rf "\$DEPLOY"
+  rm -rf "\$DEPLOY" "\$WS"
 }
 trap cleanup_deploy EXIT
 AUTONOMOUS_RE='[w]heel_cmd|[w]heel\\.launch|[w]aypoint_follower|[d]wa_follower|[m]pc_follower|[s]afety_gate|[t]ip_guard'
@@ -64,9 +65,15 @@ git fetch origin relax/tracking-thresholds
 test "\$(git rev-parse "$EXPECTED_COMMIT")" = \
   "\$(git rev-parse origin/relax/tracking-thresholds)"
 git archive "$EXPECTED_COMMIT" | tar -x -C "\$DEPLOY"
+rm -rf "\$WS"
+mkdir -p "\$WS/src"
 rsync -a --delete \
   "\$DEPLOY/src/static_livox_localization/" \
   "\$WS/src/static_livox_localization/"
+cd "\$WS"
+catkin init
+catkin config --extend "\$FIELD_WS/devel" \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release
 OUT="\$HOME/nuc-shadow-qa-$EXPECTED_COMMIT"
 rm -rf "\$OUT"
 REPO="\$DEPLOY" WS="\$WS" OUT="\$OUT" \
