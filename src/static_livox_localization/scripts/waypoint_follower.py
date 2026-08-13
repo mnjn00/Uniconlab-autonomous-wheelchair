@@ -80,6 +80,7 @@ from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
 from safety_band import SafetyBand
+from route_mask import RouteMask
 from route_assets import validate_asset_binding
 import tf.transformations as tft
 
@@ -171,16 +172,17 @@ class WaypointFollower:
         band_path = rospy.get_param("~safety_band")
         with open(route_path) as f:
             route = json.load(f)
+        mask_path = rospy.get_param("~drivable_mask")
         try:
             self.asset_binding = validate_asset_binding(
-                route_path, band_path,
-                rospy.get_param("~drivable_mask", None),
+                route_path, band_path, mask_path,
             )
         except ValueError as error:
             raise rospy.ROSInitException(str(error))
         self.waypoints = np.array(
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
         self.band = SafetyBand(band_path)
+        self.drivable_mask = RouteMask(mask_path)
         self.sensor_height = rospy.get_param("~sensor_height", 0.725)
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))
@@ -639,7 +641,8 @@ class WaypointFollower:
         normal = np.array([-heading[1], heading[0]])
         for ahead in (0.5, 1.5, 2.5, 3.5):
             p = self.pose_xy + heading * ahead + normal * offset
-            if not self.band.contains(p):
+            if (not self.band.contains(p)
+                    or not self.drivable_mask.contains(p)):
                 return False
         return True
 
@@ -748,7 +751,8 @@ class WaypointFollower:
             if norm > 1e-3:
                 normal = np.array([-direction[1], direction[0]]) / norm
                 target = target + normal * self.lateral_offset
-        return self.band.clamp(target) if self.policies else target
+        target = self.band.clamp(target) if self.policies else target
+        return target if self.drivable_mask.contains(target) else self.pose_xy
 
     def safe_target(self, wanted):
         """Return the longest target whose complete drive chord is in band."""
@@ -762,8 +766,13 @@ class WaypointFollower:
         candidate = max(MIN_LOOKAHEAD_M, wanted)
         while True:
             target = self.target_at_lookahead(candidate)
+            mask_chord_ok = all(
+                self.drivable_mask.contains(
+                    self.pose_xy * (1.0 - t) + target * t)
+                for t in np.linspace(0.0, 1.0, 9))
             if self.band.chord_is_contained(
-                    self.pose_xy, target, grace=OFF_BAND_GRACE):
+                    self.pose_xy, target, grace=OFF_BAND_GRACE
+                    ) and mask_chord_ok:
                 implied_speed = max(
                     CREEP_SPEED, (candidate - 1.0) / 1.6)
                 speed_cap = MAX_SPEED if candidate >= wanted - 1e-9 else \

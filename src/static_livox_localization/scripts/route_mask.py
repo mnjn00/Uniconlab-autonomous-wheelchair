@@ -44,6 +44,10 @@ class RouteMask:
         contained[valid] = self.free[row[valid], col[valid]]
         return contained
 
+    def contains(self, point):
+        """Whether one chair-centre point lies in the authoritative mask."""
+        return bool(self.contains_many([point])[0])
+
     def boundary_cost_many(self, points):
         """Zero with room to spare, rising quadratically to one at the edge."""
         row, col, valid = self._cells(points)
