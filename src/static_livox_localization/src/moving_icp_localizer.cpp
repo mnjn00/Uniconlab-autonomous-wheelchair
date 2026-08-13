@@ -220,7 +220,8 @@ class MovingIcpLocalizer {
     private_nh_.param("dynamic_box_margin_m", dynamic_box_margin_m_, 0.15);
     private_nh_.param("dynamic_box_max_fraction",
                       dynamic_box_max_fraction_, 0.50);
-    private_nh_.param("dynamic_box_max_count", dynamic_box_max_count_, 128);
+    private_nh_.param<std::size_t>(
+        "dynamic_box_max_count", dynamic_box_max_count_, std::size_t{128});
     private_nh_.param("dynamic_box_max_dimension_m",
                       dynamic_box_max_dimension_m_, 8.0);
     private_nh_.param("dynamic_box_max_range_m",
