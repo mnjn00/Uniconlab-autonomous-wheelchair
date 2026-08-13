@@ -166,6 +166,18 @@ TEST(RollingSubmap, CrowdDominatedScanIsStillExcluded) {
   EXPECT_TRUE(cloud.empty());
 }
 
+TEST(RollingSubmap, ExcessivePartialRemovalFailsClosed) {
+  auto cloud = grid_cloud(100);
+  static_livox_localization::DynamicBox box;
+  box.centre = Eigen::Vector3d(2.0, 0.0, 0.0);
+  box.half_extent = Eigen::Vector3d(1.5, 1.0, 1.0);
+  const std::size_t dropped =
+      static_livox_localization::filter_dynamic_returns(
+          cloud, {box}, 0.0, 0.25);
+  EXPECT_EQ(dropped, 100u);
+  EXPECT_TRUE(cloud.empty());
+}
+
 TEST(RollingSubmap, NoBoxesLeavesTheScanExactlyAsItWas) {
   auto cloud = grid_cloud(50);
   EXPECT_EQ(static_livox_localization::filter_dynamic_returns(cloud, {}, 0.2, 0.25), 0u);

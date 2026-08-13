@@ -41,3 +41,19 @@ target_link_libraries(
   GTest::gtest_main
   ${PCL_LIBRARIES})
 add_test(NAME moving_tracker COMMAND test_moving_tracker)
+
+add_executable(
+  test_rolling_submap
+  "${STATIC_LOCALIZATION}/src/rolling_submap.cpp"
+  "${STATIC_LOCALIZATION}/test/test_rolling_submap.cpp")
+target_compile_features(test_rolling_submap PRIVATE cxx_std_14)
+target_include_directories(
+  test_rolling_submap PRIVATE
+  "${STATIC_LOCALIZATION}/include"
+  ${PCL_INCLUDE_DIRS})
+target_link_libraries(
+  test_rolling_submap PRIVATE
+  GTest::gtest
+  GTest::gtest_main
+  ${PCL_LIBRARIES})
+add_test(NAME rolling_submap COMMAND test_rolling_submap)

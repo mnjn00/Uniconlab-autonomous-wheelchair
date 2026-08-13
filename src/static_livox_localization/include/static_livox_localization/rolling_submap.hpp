@@ -45,10 +45,10 @@ bool dynamic_box_within_limits(const DynamicBox& box,
 // over a 2 s window, so by the time it is built a walker at 1.4 m/s has laid
 // a 2.8 m trail through it and the current box no longer covers the returns.
 //
-// max_dropped_fraction is retained in the API for diagnostics/config
-// compatibility. Validated map-novel boxes are always excluded: restoring a
-// crowd merely because it dominates a scan is the failure this filter exists
-// to prevent.
+// When validated boxes cover more than max_dropped_fraction, the complete
+// sample is discarded. Restoring a crowd recreates the field bug; retaining
+// only attacker-selected structure lets an untrusted MarkerArray steer
+// registration. An empty sample makes localization fail closed instead.
 std::size_t filter_dynamic_returns(
     pcl::PointCloud<pcl::PointXYZI>& cloud,
     const std::vector<DynamicBox>& boxes,
