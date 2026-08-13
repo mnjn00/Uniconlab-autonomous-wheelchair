@@ -1,0 +1,17 @@
+{
+ "status": "APPROVED",
+ "samples": 7540,
+ "wheel_envelope_violations": 0,
+ "minimum_left_clearance_m": 0.5053158533795612,
+ "minimum_right_clearance_m": 0.45479717676440845,
+ "minimum_wheel_boundary_margin_m": 0.10488308465364943,
+ "minimum_padded_footprint_boundary_margin_m": 0.07521393981202329,
+ "planner_recorded_route_used": false,
+ "route_points": 1897,
+ "path_length_m": 376.21,
+ "traversable_cells": 35856,
+ "traversable_area_m2": 358.56,
+ "curb_mask_components": 1,
+ "start_goal_connected": true,
+ "mask_resolution_m": 0.1
+}
