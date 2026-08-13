@@ -33,6 +33,7 @@ mkdir -p "$OUT"
 AUTONOMOUS_RE='wheel_cmd|waypoint_follower|dwa_follower|mpc_follower|safety_gate'
 LAUNCHED_PIDS=()
 STARTED_STACK=0
+GRAPH_UNSAFE="$OUT/ros-graph-unsafe"
 SHADOW_RE='[r]oslaunch livox_ros_driver2|[r]oslaunch base_model vectornav|[f]astlio_mapping|[m]oving_icp_localizer|[m]ap_preview_publisher|[o]bstacle_clusters|[a]uto_initial_pose'
 
 cleanup() {
@@ -161,8 +162,23 @@ python3 "$REPO/tools/check_shadow_ros_graph.py" \
   echo "ERROR: ROS motion surface appeared during shadow QA" >&2
   exit 26
 }
+(
+  while true; do
+    python3 "$REPO/tools/check_shadow_ros_graph.py" \
+      >> "$OUT/ros-graph-monitor.jsonl" 2>&1 || {
+      touch "$GRAPH_UNSAFE"
+      exit 1
+    }
+    sleep 0.2
+  done
+) &
+LAUNCHED_PIDS+=("$!")
 
 for attempt in $(seq 1 10); do
+  if [ -e "$GRAPH_UNSAFE" ]; then
+    echo "ERROR: ROS motion graph became unsafe during shadow QA" >&2
+    exit 27
+  fi
   timeout "$TIMEOUT_S" python3 "$REPO/tools/capture_shadow_snapshot.py" \
     --timeout "$TIMEOUT_S" \
     --summary "$OUT/objects-summary.yaml" \
@@ -180,4 +196,10 @@ for attempt in $(seq 1 10); do
     exit 24
   fi
 done
+if [ -e "$GRAPH_UNSAFE" ] ||
+    ! python3 "$REPO/tools/check_shadow_ros_graph.py" \
+      > "$OUT/ros-graph-final.json"; then
+  echo "ERROR: final ROS motion graph inspection failed" >&2
+  exit 28
+fi
 cp "$OUT/nuc-shadow-qa.txt" "$OUT/integration-green.txt"

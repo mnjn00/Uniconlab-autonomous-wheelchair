@@ -2,8 +2,9 @@
 """Fail when any ROS motion-control surface is connected during shadow QA."""
 
 import json
-import subprocess
+import os
 import sys
+import xmlrpc.client
 from pathlib import Path
 
 SCRIPTS = (
@@ -19,34 +20,26 @@ finally:
     sys.path.pop(0)
 
 
-def topic_nodes(topic):
-    output = subprocess.run(
-        ["rostopic", "info", topic],
-        check=False,
-        capture_output=True,
-        text=True,
+def system_state(master_uri=None):
+    """Read one atomic ROS-master graph snapshot or fail closed."""
+    uri = master_uri or os.environ.get("ROS_MASTER_URI")
+    if not uri:
+        raise RuntimeError("ROS_MASTER_URI is not set")
+    code, message, state = xmlrpc.client.ServerProxy(uri).getSystemState(
+        "/shadow_qa_audit"
     )
-    if output.returncode != 0:
-        return [], []
-    publishers, subscribers = [], []
-    target = None
-    for line in output.stdout.splitlines():
-        stripped = line.strip()
-        if stripped == "Publishers:":
-            target = publishers
-        elif stripped == "Subscribers:":
-            target = subscribers
-        elif stripped.startswith("* /") and target is not None:
-            target.append(stripped.split()[1])
-    return publishers, subscribers
+    if code != 1:
+        raise RuntimeError("ROS master graph query failed: %s" % message)
+    publishers, subscribers, _services = state
+    return dict(publishers), dict(subscribers)
 
 
 def main():
-    publishers, subscribers = {}, {}
-    for topic in COMMAND_TOPICS:
-        topic_publishers, topic_subscribers = topic_nodes(topic)
-        publishers[topic] = topic_publishers
-        subscribers[topic] = topic_subscribers
+    try:
+        publishers, subscribers = system_state()
+    except Exception as error:
+        print(json.dumps({"status": "ERROR", "error": str(error)}))
+        return 2
     violations = motion_surface_violations(publishers, subscribers)
     if violations:
         print(json.dumps({"status": "UNSAFE", "violations": violations}))

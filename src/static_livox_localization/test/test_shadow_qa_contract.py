@@ -233,6 +233,21 @@ def test_motion_graph_detection_checks_nodes_and_command_topics():
     assert violations == ["subscriber node: /wheel_driver"]
 
 
+def test_graph_checker_is_atomic_and_fails_closed():
+    checker = (
+        Path(__file__).parents[3] / "tools" / "check_shadow_ros_graph.py"
+    ).read_text(encoding="utf-8")
+    assert "getSystemState" in checker
+    assert "rostopic" not in checker
+    assert '"status": "ERROR"' in checker
+    runner = (
+        Path(__file__).parents[3] / "tools" / "run_nuc_shadow_qa.sh"
+    ).read_text(encoding="utf-8")
+    assert "ros-graph-monitor.jsonl" in runner
+    assert "ros-graph-final.json" in runner
+    assert 'touch "$GRAPH_UNSAFE"' in runner
+
+
 def test_field_startup_has_sensor_only_shadow_exit_before_wheel_launch():
     startup = (
         Path(__file__).parents[3]
