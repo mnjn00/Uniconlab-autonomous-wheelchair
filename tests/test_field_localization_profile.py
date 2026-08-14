@@ -182,11 +182,8 @@ def test_localizer_reports_every_registration_filter_stage():
     assert "filter_from_verified_pose" in source
     assert "marker.header.frame_id != rolling_config_.expected_cloud_frame" \
         in source
-    assert (
-        'private_nh_.param<std::size_t>('
-        '\n        "dynamic_box_max_count", dynamic_box_max_count_, '
-        "std::size_t{128});"
-    ) in source
+    assert '"dynamic_box_max_count", dynamic_box_max_count_param' in source
+    assert 'dynamic_box_max_count_ = static_cast<std::size_t>' in source
 
 
 def test_initializer_is_packaged_and_field_startup_selects_global_only():
