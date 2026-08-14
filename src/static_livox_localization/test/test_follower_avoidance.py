@@ -75,6 +75,9 @@ def follower_with(objects, open_offsets=(0.6, -0.6, 1.0, -1.0),
     follower.policies = policies
     follower.clusters_enabled = True
     follower.band = Band(open_offsets)
+    follower.drivable_mask = type(
+        "Mask", (), {"contains": staticmethod(lambda _point: True)}
+    )()
     follower.cluster_summary = cg.parse_summary(json.dumps(
         {"stamp": 100.0, "status": status, "objects": objects}))
     return module, follower

@@ -52,6 +52,8 @@ catkin_install_python(
     scripts/report_static_trial.py
     scripts/report_moving_trial.py
     scripts/replay_metrics.py
+    scripts/route_mask.py
+    scripts/route_identity_publisher.py
     scripts/reference_marker.py
     scripts/localization_state_marker.py
     scripts/auto_initial_pose.py
@@ -76,6 +78,8 @@ install(
     scripts/initial_pose_global_search.py
     scripts/cluster_guard.py
     scripts/cluster_tracking.py
+    scripts/cloud_points.py
+  scripts/fixed_map_filter.py
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
@@ -84,7 +88,9 @@ install(
     scripts/mpc_core.py
     scripts/mpc_speed.py
     scripts/safety_band.py
+    scripts/route_assets.py
     scripts/scan_accumulator.py
+    scripts/shadow_qa_contract.py
     scripts/tip_guard_policy.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

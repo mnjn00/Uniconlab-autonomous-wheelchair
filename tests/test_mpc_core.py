@@ -27,6 +27,10 @@ core = load("mpc_core", SCRIPTS / "mpc_core.py")
 safety_band = load("safety_band", SCRIPTS / "safety_band.py")
 
 
+def test_default_physical_speed_cap_matches_runtime_policy():
+    assert core.MpcParams().v_max == 1.0
+
+
 def make_straight_band(n=60, spacing=1.0, half_width=1.5):
     """Wide straight corridor along +x; stations 1 m apart."""
     stations = [

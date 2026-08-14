@@ -13,6 +13,7 @@ MapVoxelGrid::MapVoxelGrid(const Cloud::ConstPtr& map, double voxel_size_m)
       continue;
     CellKey k = key_for(p.x, p.y, p.z);
     occupied_[k] = true;
+    points_[k].emplace_back(p.x, p.y, p.z);
   }
 }
 
@@ -36,14 +37,44 @@ bool MapVoxelGrid::any_occupied_near(const CellKey& center, int half_range) cons
   return false;
 }
 
+bool MapVoxelGrid::any_point_within(float x, float y, float z, int half_range,
+                                    double radius_m) const {
+  const CellKey center = key_for(x, y, z);
+  const Eigen::Vector3f query(x, y, z);
+  const double radius_sq = radius_m * radius_m;
+  for (int dx = -half_range; dx <= half_range; ++dx) {
+    for (int dy = -half_range; dy <= half_range; ++dy) {
+      for (int dz = -half_range; dz <= half_range; ++dz) {
+        const CellKey key{
+            center.x + dx, center.y + dy, center.z + dz};
+        const auto found = points_.find(key);
+        if (found == points_.end()) continue;
+        for (const auto& point : found->second) {
+          if ((point - query).squaredNorm() <= radius_sq) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 bool MapVoxelGrid::is_likely_static(float x, float y, float z,
                                     double search_radius_m) const {
   CellKey k = key_for(x, y, z);
-  if (occupied_.find(k) != occupied_.end()) return true;
+  // Metric tolerance keeps the same wall across a voxel boundary without
+  // turning every adjacent empty voxel into static structure.
+  if (any_point_within(x, y, z, 1, voxel_size_m_)) return true;
   int half = static_cast<int>(std::ceil(search_radius_m * inv_voxel_size_));
-  if (half < 1) half = 1;
-  if (any_occupied_near(k, half)) return true;
-  return false;
+  if (half < 2) half = 2;
+  // Point is in an empty voxel but map structure exists nearby — this is
+  // "mapped empty space". The map says nothing should be here, so the
+  // return is from a pedestrian, a parked car that was not there when the
+  // map was built, or any other dynamic object. Remove it.
+  if (any_occupied_near(k, half)) return false;
+  // Point is far from any map structure — "unmapped space". We cannot tell
+  // whether it is a new static feature or a dynamic object, so we keep it
+  // to avoid deleting structure the registration depends on.
+  return true;
 }
 
 std::size_t MapVoxelGrid::filter_dynamic(
@@ -66,10 +97,7 @@ std::size_t MapVoxelGrid::filter_dynamic(
   }
   if (dropped == 0) return 0;
 
-  const double fraction =
-      static_cast<double>(dropped) /
-      static_cast<double>(cloud_in_map_frame.size());
-  if (fraction > max_dropped_fraction) return 0;
+  (void)max_dropped_fraction;
 
   Cloud kept;
   kept.reserve(cloud_in_map_frame.size() - dropped);

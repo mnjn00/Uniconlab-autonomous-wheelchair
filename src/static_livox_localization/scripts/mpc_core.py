@@ -33,8 +33,8 @@ STATUS_BLOCKED_STOP = "BLOCKED_STOP"
 class MpcParams:
     """Defaults are the follower's existing constants, not new tuning."""
     dt: float = 0.1            # CONTROL_HZ = 10
-    horizon: int = 25          # 2.5 s, ~1.5 m at v_max
-    v_max: float = 0.6         # MAX_SPEED
+    horizon: int = 25          # 2.5 s, ~2.5 m at v_max
+    v_max: float = 1.0         # operator-approved MAX_SPEED
     a_min: float = -0.6        # -MAX_DECEL
     a_max: float = 0.18        # MAX_ACCEL
     w_max: float = 0.5         # MAX_YAW_RATE

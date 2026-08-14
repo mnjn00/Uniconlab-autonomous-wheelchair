@@ -46,18 +46,31 @@ import numpy as np
 
 # The follower's constants. Kept literal rather than imported because
 # waypoint_follower pulls in rospy and this has to stay testable at a desk.
-MAX_SPEED = 0.6
+MAX_SPEED = 1.0
 TURN_FLOOR_SPEED = 0.30
 MAX_YAW_RATE = 0.5
 
-# How far ahead a candidate is simulated. Long enough to see a corridor bend
-# arriving - 1.7 s is a metre at cruise - and short enough that a constant
-# curvature arc is still a fair description of what the chair will do. Both
-# ends matter: lengthen it and every candidate fails on a curve because no
-# single arc stays in a bending corridor; shorten it and the chair drives
-# into pinches it never looked at.
+# How far ahead a candidate is simulated, as a DISTANCE rather than a time.
+# Long enough to see a corridor bend arriving and short enough that a
+# constant-curvature arc is still a fair description of what the chair will
+# do. Both ends matter: lengthen it and every candidate fails on a curve
+# because no single arc stays in a bending corridor; shorten it and the
+# chair drives into pinches it never looked at.
+#
+# It was 1.7 s, which is the same thing only while the speed never changes.
+# Raising the cap to 1.0 m/s turned that into a 1.7 m arc, and measured
+# against the shipped band the admissible candidate count fell from 102 to
+# 78 at wp 500, 93 to 74 at wp 1500 and 82 to 67 at wp 1773 - the planner
+# lost a fifth to a quarter of its choices in exactly the pinches where it
+# has the fewest. A distance keeps the geometry the planner reasons about
+# identical at every speed, which is also what stops the steering gain -
+# and with it the lateral hunting - from growing with speed.
+SIM_DISTANCE_M = 1.05
+# Retained for callers that still ask in seconds; the planner does not use
+# it. 1.05 m is 1.75 s at the old 0.6 m/s cruise, which is where it came
+# from.
 SIM_TIME_S = 1.7
-SIM_STEP_S = 0.1
+SIM_STEPS = 17
 
 SPEED_SAMPLES = 5
 YAW_SAMPLES = 21
@@ -110,6 +123,10 @@ W_STEER = 1.0
 # were measured on a chair that never leaves the middle, where the term has
 # nothing to do, and they said nothing about the case it exists for.
 W_CENTRE = 2.0
+# Separate from the station band: the v8 raster is the operator's
+# authoritative chair-centre region. Outside it is never selectable, and
+# the last 0.5 m inside it gets progressively more expensive.
+W_MASK_BOUNDARY = 3.0
 
 # A candidate whose rollout passes closer than this to a tracked object is
 # discarded outright rather than scored - the same floor mpc_core keeps.
@@ -133,12 +150,16 @@ def yaw_samples(limit=MAX_YAW_RATE, count=YAW_SAMPLES):
     return tuple(np.linspace(-limit, limit, max(count, 3)))
 
 
-def rollout(state, v, w, sim_time_s=SIM_TIME_S, step_s=SIM_STEP_S):
+def rollout(state, v, w, distance_m=SIM_DISTANCE_M, steps=SIM_STEPS):
     """Where a constant (v, w) takes the chair, sampled along the way.
 
     Returns (n, 3) of (x, y, yaw). The intermediate points are the point -
     a candidate that ends inside the corridor having crossed out of it on
     the way is not a candidate.
+
+    Sampled over a fixed DISTANCE, so the arc a candidate is judged on is
+    the same shape whatever speed it carries. A slow candidate simply takes
+    longer to walk it.
 
     The step rotates and THEN translates, which is what DwaPlanner._rollouts
     does in one batch. It used to translate first, so the two disagreed by a
@@ -151,7 +172,10 @@ def rollout(state, v, w, sim_time_s=SIM_TIME_S, step_s=SIM_STEP_S):
     x, y = float(state[0]), float(state[1])
     yaw0 = float(state[2])
     out = []
-    steps = max(int(round(sim_time_s / step_s)), 1)
+    steps = max(int(steps), 1)
+    if v <= 0.0:
+        return np.array([(x, y, yaw0)] * steps, dtype=float)
+    step_s = float(distance_m) / (float(v) * steps)
     for step in range(1, steps + 1):
         yaw = yaw0 + w * step * step_s
         x += v * math.cos(yaw) * step_s
@@ -186,18 +210,20 @@ class DwaPlanner:
     path distance are each a single call over the whole stack of rollouts.
     """
 
-    def __init__(self, band, route, sim_time_s=SIM_TIME_S,
-                 grace=0.0, max_speed=MAX_SPEED):
+    def __init__(self, band, route, distance_m=SIM_DISTANCE_M,
+                 grace=0.0, max_speed=MAX_SPEED, steps=SIM_STEPS,
+                 route_mask=None):
         from scipy.spatial import cKDTree
         self.band = band
         self.route = np.asarray(route, dtype=float)
         self.tree = cKDTree(self.route)
-        self.sim_time_s = float(sim_time_s)
+        self.distance_m = float(distance_m)
         self.grace = float(grace)
         self.max_speed = float(max_speed)
         seg = np.linalg.norm(np.diff(self.route, axis=0), axis=1)
         self.arc = np.concatenate([[0.0], np.cumsum(seg)])
-        self.steps = max(int(round(self.sim_time_s / SIM_STEP_S)), 1)
+        self.steps = max(int(steps), 1)
+        self.route_mask = route_mask
         tangent = np.gradient(self.route, axis=0)
         tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True),
                               1e-9)
@@ -211,12 +237,16 @@ class DwaPlanner:
         v = np.asarray([p[0] for p in pairs], dtype=float)[:, None]
         w = np.asarray([p[1] for p in pairs], dtype=float)[:, None]
         k = np.arange(1, self.steps + 1)[None, :]
-        yaw = state[2] + w * k * SIM_STEP_S
+        # Every candidate walks the same distance, so each gets its own time
+        # step. This is what makes the arc a candidate is judged on independent
+        # of the speed it carries.
+        dt = self.distance_m / (np.maximum(v, 1e-6) * self.steps)
+        yaw = state[2] + w * k * dt
         # position by integrating the same constant-curvature arc the chair
         # would drive, step by step, so an arc that leaves the band midway
         # is caught rather than judged only on where it ends up
-        dx = np.cumsum(v * np.cos(yaw) * SIM_STEP_S, axis=1)
-        dy = np.cumsum(v * np.sin(yaw) * SIM_STEP_S, axis=1)
+        dx = np.cumsum(v * np.cos(yaw) * dt, axis=1)
+        dy = np.cumsum(v * np.sin(yaw) * dt, axis=1)
         return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0):
@@ -253,7 +283,11 @@ class DwaPlanner:
         # cycle with 100 ms to spend, for one answer computed twice.
         lateral, lo, hi = self.band.margins_many(flat)
         inside = self.band.contained(lateral, lo, hi, self.grace)
+        if self.route_mask is not None:
+            inside &= self.route_mask.contains_many(flat)
         ok = inside.reshape(len(pairs), self.steps).all(axis=1)
+        if self.route_mask is not None:
+            ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
         if not ok.any():
             return 0.0, 0.0, "OFF_BAND"
         if len(obstacles):
@@ -289,8 +323,14 @@ class DwaPlanner:
         edge = np.abs(lateral - (hi + lo) / 2.0) / half
         centre = np.square(np.minimum(edge, 1.0)).reshape(
             len(pairs), self.steps).mean(axis=1)
+        if self.route_mask is None:
+            mask_boundary = np.zeros(len(pairs), dtype=float)
+        else:
+            mask_boundary = self.route_mask.boundary_cost_many(flat).reshape(
+                len(pairs), self.steps).mean(axis=1)
         cost = (W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
-                + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre)
+                + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre
+                + W_MASK_BOUNDARY * mask_boundary)
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
         return float(pairs[best][0]), float(pairs[best][1]), "OK"

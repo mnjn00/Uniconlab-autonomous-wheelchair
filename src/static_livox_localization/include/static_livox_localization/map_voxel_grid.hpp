@@ -36,17 +36,18 @@ class MapVoxelGrid {
   explicit MapVoxelGrid(const Cloud::ConstPtr& map,
                          double voxel_size_m = 0.20);
 
-  // True if the point at (x, y, z) in map frame sits in or near map
-  // structure.  A point within search_radius_m of any occupied voxel
-  // is "near structure" and kept; a point whose voxel is empty and
-  // whose neighbourhood is also empty is "unmapped" and kept; a point
-  // whose voxel is empty but has occupied neighbours is "mapped empty"
-  // and is what gets removed.
+  // True if the point at (x, y, z) in map frame sits on map structure
+  // within one voxel of measurement/pose uncertainty. Points farther away
+  // but still inside search_radius_m of mapped structure occupy known empty
+  // space and are removed. Points beyond the map's observable neighbourhood
+  // remain UNKNOWN and are conservatively kept.
   bool is_likely_static(float x, float y, float z,
                         double search_radius_m = 0.40) const;
 
   // Filter a cloud in map frame: remove points classified as dynamic.
-  // Returns the number of points removed.
+  // Returns the number of points removed. max_dropped_fraction remains for
+  // configuration compatibility; confidently map-novel returns are never
+  // restored because a crowd dominates the scan.
   std::size_t filter_dynamic(
       Cloud& cloud_in_map_frame,
       double search_radius_m = 0.40,
@@ -72,9 +73,13 @@ class MapVoxelGrid {
   double voxel_size_m_;
   double inv_voxel_size_;
   std::unordered_map<CellKey, bool, CellKeyHash> occupied_;
+  std::unordered_map<CellKey, std::vector<Eigen::Vector3f>, CellKeyHash>
+      points_;
 
   CellKey key_for(double x, double y, double z) const;
   bool any_occupied_near(const CellKey& key, int half_range) const;
+  bool any_point_within(float x, float y, float z, int half_range,
+                        double radius_m) const;
 };
 
 }  // namespace static_livox_localization

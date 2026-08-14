@@ -1,0 +1,17 @@
+{
+ "generator": "tools/build_preferred_mask_route.py",
+ "invocation": "python3 tools/build_preferred_mask_route.py --preferred-yaml routes/route_2d_map_v6.yaml --drivable-yaml routes/route_2d_map_v8.yaml --seed-route routes/20260812_route_v6_waypoints.json --seed-band routes/20260812_route_v6_safety_band.json --out-route routes/20260812_route_v6_v8_waypoints.json --out-band routes/20260812_route_v6_v8_safety_band.json",
+ "source_sha256": {
+  "operator_v6_zip": "88e3451f7dcbcc1b956999f11b05fe1446c80ac2e6201ac34fd3f18a2ea0a709",
+  "preferred_v6_pgm": "3b176c77709f4020a9a2fe82c6edf96d2ea579da7719772733cf16d8e0d07c83",
+  "drivable_v8_pgm": "3d183e8320f68c5deafd72c8f45a5780dade29ff43ca323664f27f4e3ed2eaa8",
+  "seed_v6_route": "8f3fb7b95dfcf5ac40d48c25cdf28ff52525f52e4891596adc030e4d7d53aa71",
+  "seed_v6_band": "bd61b81acabdb17f6d0a5d91a178fdf72c2cbb94ab37bbd3f7687a3a407e7b64"
+ },
+ "grid": {
+  "width": 4151,
+  "height": 2628,
+  "resolution_m": 0.1,
+  "origin": [-106.5, -168.9, 0.0]
+ }
+}

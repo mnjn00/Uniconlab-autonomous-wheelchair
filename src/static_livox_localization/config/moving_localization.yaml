@@ -74,32 +74,22 @@ max_correction_yaw_deg: 2.0
 # or min_inlier_ratio is touched here - loosening a gate that is not binding
 # buys nothing and spends real margin.
 #
-# degraded_after_failures 1 -> 3. A single non-converged registration used to
-# declare DEGRADED. 15 % of attempts fail to converge on this route, and 21 of
-# 30 DEGRADED episodes cleared inside the follower's 3 s grace on their own -
-# so most of what this fired on was noise. Cost: a genuine loss is now
-# declared about two registrations (~2 s) later.
-degraded_after_failures: 3
+# Fail closed after one non-converged registration. The follower holds on the
+# first unobserved correction rather than carrying it into physical motion.
+degraded_after_failures: 1
 # 8 s was short enough that any hold longer than it left the state machine
 # primed to declare LOST on the first imperfect registration afterwards.
 # note_unobserved now discounts parked time, but the margin was still thin.
 # Cost is bounded by the follower, which holds on DEGRADED after 3 s and
 # therefore stops the chair long before this expires.
 lost_after_s: 20.0
-# One good registration returns to TRACKING instead of two. Cost: a single
-# lucky match can restore tracking, which is why degraded_after_failures
-# above went up rather than down - the pair is meant to be asymmetric.
+# One good registration returns to TRACKING; candidate consensus remains the
+# independent protection against one lucky spatial match.
 recovery_confirmations: 1
 
 auto_correction_on_start: false
 required_consistent_candidates: 3
-# 0.30 -> 0.50. This is the one that actually blocked re-acquisition at
-# wp 836 on 2026-08-12: the localizer had a fix every cycle but consecutive
-# candidates scattered further than 0.30 m, so three never agreed and it sat
-# in VERIFYING / CANDIDATE_INCONSISTENT until it went LOST. This is the most
-# consequential relaxation here - a re-acquired fix may now settle up to
-# 0.5 m from where a tighter consensus would have put it - and it is the
-# first thing to put back if a run comes up in the wrong place.
-candidate_translation_tolerance_m: 0.50
+# Keep re-acquisition candidates within the field-validated 0.30 m envelope.
+candidate_translation_tolerance_m: 0.30
 candidate_yaw_tolerance_deg: 3.0
 

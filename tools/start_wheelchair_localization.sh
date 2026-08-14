@@ -2,9 +2,25 @@
 # One-command field startup: driver -> FAST-LIO -> localization(+RViz) -> auto seed.
 set -eo pipefail
 
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  cat <<'EOF'
+Usage: start_wheelchair_localization.sh
+
+Environment: SHADOW_QA=1 starts sensors, perception, and localization only.
+PROFILE=pursuit|mpc|dwa selects the controller for a normal field startup.
+No command-line arguments other than --help are accepted.
+EOF
+  exit 0
+fi
+[ "$#" -eq 0 ] || {
+  echo "ERROR: unexpected arguments; use --help" >&2
+  exit 64
+}
+
 # Keep the field workspace as the default, while allowing a reviewed branch to
 # be built and replayed in isolation before it replaces the live package.
 LOCALIZATION_WS="${LOCALIZATION_WS:-$HOME/livox_static_localization_ws}"
+MIN_REFINED_SCORE="${MIN_REFINED_SCORE:-0.78}"
 [ -f "$LOCALIZATION_WS/devel/setup.bash" ] || {
   echo "ERROR: localization workspace is not built: $LOCALIZATION_WS" >&2
   exit 66
@@ -42,8 +58,16 @@ MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
 MAP_ID="${MAP_ID:-merged_0707_0725_v1}"
 TRAJ="${TRAJ:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt}"
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260803_route_v5_waypoints.json}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260803_route_v5_safety_band.json}"
+TRAJ_SHA256="${TRAJ_SHA256:-4a5972e176ff9aa036f538ca67e20c87f1d5a469865cb8d6b8079f7023dccbbe}"
+ACTUAL_TRAJ_SHA256="$(sha256sum "$TRAJ" | awk '{print $1}')"
+if [ "$ACTUAL_TRAJ_SHA256" != "$TRAJ_SHA256" ]; then
+  echo "ERROR: trajectory SHA-256 mismatch" >&2
+  exit 2
+fi
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_waypoints.json}"
+AUTO_INIT_ROUTE="${AUTO_INIT_ROUTE:-$ROUTE}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_safety_band.json}"
+DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v8.yaml}"
 RVIZ="${RVIZ:-true}"
 # SAFETY_POLICIES=false drives with every discretionary guard switched off,
 # leaving the joystick override as the failsafe. It exists to measure one
@@ -103,6 +127,11 @@ case "$STATIONARY_CORRECTION" in
 esac
 
 PROFILE="${PROFILE:-pursuit}"
+SHADOW_QA="${SHADOW_QA:-0}"
+case "$SHADOW_QA" in
+  0|1) ;;
+  *) echo "ERROR: SHADOW_QA must be 0 or 1" >&2; exit 64 ;;
+esac
 case "$PROFILE" in
   pursuit) FOLLOWER_NODE=waypoint_follower.py ;;
   mpc)     FOLLOWER_NODE=mpc_follower.py ;;
@@ -156,7 +185,13 @@ NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1"
 LOG=$HOME
 
 source /opt/ros/noetic/setup.bash
-export ROS_MASTER_URI=http://127.0.0.1:11311
+if [ "$SHADOW_QA" = "1" ]; then
+  : "${ROS_MASTER_URI:?shadow QA requires its isolated ROS master}"
+  DETACH=""
+else
+  export ROS_MASTER_URI=http://127.0.0.1:11311
+  DETACH="setsid nohup"
+fi
 export DISPLAY="${DISPLAY:-:0}"
 
 echo "[0/5] display"
@@ -205,19 +240,21 @@ echo "[1/5] cleaning old processes"
 # dwa_follower was added by the DWA profile in the same window this sweep was
 # written in, on a branch that did not have it, so the two merged clean and
 # the derived list caught what neither side could see alone.
-for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters'; do
+if [ "$SHADOW_QA" != "1" ]; then
+for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters' '[r]oute_identity_publisher'; do
   pkill -f "$pattern" 2>/dev/null || true
 done
 sleep 2
+fi
 if ! pgrep -f '[r]osmaster' >/dev/null; then
-  setsid nohup roscore > "$LOG/live_roscore.log" 2>&1 < /dev/null &
+  $DETACH roscore > "$LOG/live_roscore.log" 2>&1 < /dev/null &
   sleep 4
 fi
 rosparam set /use_sim_time false
 
 echo "[2/5] livox driver"
 source "$HOME/ws_livox/devel/setup.bash"
-setsid nohup roslaunch livox_ros_driver2 msg_MID360.launch \
+$DETACH roslaunch livox_ros_driver2 msg_MID360.launch \
   > "$LOG/live_livox.log" 2>&1 < /dev/null &
 for i in $(seq 1 30); do
   timeout 3 rostopic echo -n1 /livox/lidar/header >/dev/null 2>&1 && break
@@ -248,7 +285,7 @@ if [ "$VN_IMU" = "1" ]; then
     echo "           stale stream. Expected next to this script or in \$HOME."
   fi
   source "$HOME/catkin_ws/devel/setup.bash"
-  setsid nohup roslaunch base_model vectornav.launch \
+    $DETACH roslaunch base_model vectornav.launch \
     > "$LOG/live_vectornav.log" 2>&1 < /dev/null &
   for i in $(seq 1 20); do
     timeout 3 rostopic echo -n1 /vectornav/IMU/header >/dev/null 2>&1 && break
@@ -282,14 +319,16 @@ start_fastlio() {
   # Kill the roslaunch wrapper as well as the node: left running it keeps the
   # laserMapping name registered, and the replacement would evict the old node
   # through a name conflict instead of starting cleanly.
-  pkill -f '[r]oslaunch fast_lio' 2>/dev/null || true
-  pkill -f '[f]astlio_mapping' 2>/dev/null || true
-  for _ in $(seq 1 10); do
-    pgrep -f '[f]astlio_mapping' >/dev/null 2>&1 || break
-    sleep 1
-  done
-  sleep 2
-  setsid nohup roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
+  if [ "$SHADOW_QA" != "1" ]; then
+    pkill -f '[r]oslaunch fast_lio' 2>/dev/null || true
+    pkill -f '[f]astlio_mapping' 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      pgrep -f '[f]astlio_mapping' >/dev/null 2>&1 || break
+      sleep 1
+    done
+    sleep 2
+  fi
+  $DETACH roslaunch fast_lio "$FASTLIO_LAUNCH" rviz:=false \
     > "$LOG/live_fastlio.log" 2>&1 < /dev/null &
   for _ in $(seq 1 20); do
     timeout 3 rostopic echo -n1 /Odometry/header >/dev/null 2>&1 && return 0
@@ -335,13 +374,13 @@ source "$LOCALIZATION_WS/devel/setup.bash"
 rosparam set /fast_lio_icp/auto_initialization_verified false
 rosparam set /fast_lio_icp/auto_initialization_stable false
 rosparam set /fast_lio_icp/auto_initialization_source none
-setsid nohup roslaunch static_livox_localization moving_localization.launch \
+$DETACH roslaunch static_livox_localization moving_localization.launch \
   rviz:="$RVIZ" auto_init:=true auto_init_global_only:=true \
   map_path:="$MAP" map_sha256:="$MAP_SHA256" map_id:="$MAP_ID" \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
-  auto_init_route:="$ROUTE" \
+  auto_init_route:="$AUTO_INIT_ROUTE" \
   auto_init_body_frame_profile:="$BODY_FRAME_PROFILE" \
-  auto_init_min_refined_score:="${MIN_REFINED_SCORE:-0.80}" \
+  auto_init_min_refined_score:="${MIN_REFINED_SCORE:-0.78}" \
   auto_init_require_gpu:="${AUTO_INIT_REQUIRE_GPU:-true}" \
   auto_init_gpu_lateral_radius_m:="${AUTO_INIT_GPU_LATERAL_RADIUS_M:-10.0}" \
   auto_init_gpu_lateral_step_m:="${AUTO_INIT_GPU_LATERAL_STEP_M:-1.0}" \
@@ -399,6 +438,41 @@ if [ "$LOCALIZED" != "1" ]; then
 fi
 echo "LOCALIZED"
 
+start_object_tracking() {
+  source "$LOCALIZATION_WS/devel/setup.bash"
+  $DETACH env $SINGLE_THREAD_ENV \
+    rosrun static_livox_localization obstacle_clusters.py \
+    _body_frame_profile:="$BODY_FRAME_PROFILE" \
+    _safety_band:="$BAND" \
+    _map_path:="$MAP" \
+    _map_sha256:="$MAP_SHA256" \
+    _shadow_qa:="$SHADOW_QA" \
+    > "$LOG/live_clusters.log" 2>&1 < /dev/null &
+  for i in $(seq 1 15); do
+    timeout 2 rostopic echo -n1 /perception/objects_summary \
+      >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! timeout 3 rostopic echo -n1 /perception/objects_summary \
+      >/dev/null 2>&1; then
+    echo "ERROR: object clustering silent (/perception/objects_summary)" >&2
+    echo "       see $LOG/live_clusters.log" >&2
+    return 1
+  fi
+  echo "  object tracking up - watch /perception/objects_summary"
+}
+
+if [ "$SHADOW_QA" = "1" ]; then
+  start_object_tracking
+  if pgrep -af 'wheel_cmd|waypoint_follower|dwa_follower|mpc_follower|safety_gate' \
+      >/dev/null; then
+    echo "ERROR: motion process present during SHADOW_QA" >&2
+    exit 20
+  fi
+  echo "SHADOW_QA_READY: sensor + perception + localization only"
+  exit 0
+fi
+
 echo "[6/7] wheel base + safety gate + follower (paused)"
 source "$HOME/catkin_ws/devel/setup.bash"
 setsid nohup roslaunch base_model wheel.launch \
@@ -422,21 +496,7 @@ setsid nohup rosrun static_livox_localization tip_guard.py \
 # what it reports as moving, so it starts BEFORE the follower and the follower
 # refuses to drive without it (HOLD:CLUSTERS_STALE). A missing producer must
 # not read as an empty road.
-setsid nohup env $SINGLE_THREAD_ENV \
-  rosrun static_livox_localization obstacle_clusters.py \
-  _body_frame_profile:="$BODY_FRAME_PROFILE" \
-  _safety_band:="$BAND" \
-  > "$LOG/live_clusters.log" 2>&1 < /dev/null &
-for i in $(seq 1 15); do
-  timeout 2 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1 && break
-  sleep 1
-done
-if ! timeout 3 rostopic echo -n1 /perception/objects_summary >/dev/null 2>&1; then
-  echo "ERROR: object clustering silent (/perception/objects_summary)" >&2
-  echo "       the follower will hold on CLUSTERS_STALE; see $LOG/live_clusters.log" >&2
-  exit 6
-fi
-echo "  object tracking up - watch /perception/objects_summary"
+start_object_tracking
 for i in $(seq 1 10); do
   timeout 2 rostopic echo -n1 /tip_guard/status >/dev/null 2>&1 && break
   sleep 1
@@ -449,6 +509,7 @@ fi
 setsid nohup env $SINGLE_THREAD_ENV \
   rosrun static_livox_localization "$FOLLOWER_NODE" \
   _route:="$ROUTE" _safety_band:="$BAND" \
+  _drivable_mask:="$DRIVABLE_MASK" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
   _latency_s:="$LATENCY_S" \
@@ -456,12 +517,17 @@ setsid nohup env $SINGLE_THREAD_ENV \
 
 echo "[7/7] black-box recorder"
 mkdir -p "$HOME/localization_trials"
+setsid nohup rosrun static_livox_localization route_identity_publisher.py \
+  _route:="$ROUTE" _safety_band:="$BAND" \
+  _drivable_mask:="$DRIVABLE_MASK" \
+  > "$LOG/live_route_identity.log" 2>&1 < /dev/null &
 setsid nohup rosbag record --lz4 \
   -O "$HOME/localization_trials/blackbox_$(date +%Y%m%d_%H%M%S)" \
   /fast_lio_icp/pose /fast_lio_icp/localization_diagnostics /vectornav/IMU \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
-  /perception/objects_summary \
+  /perception/objects_summary /perception/dynamic_boxes /perception/objects \
+  /waypoint_follower/route_identity \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

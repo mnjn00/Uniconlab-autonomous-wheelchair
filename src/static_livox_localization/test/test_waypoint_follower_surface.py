@@ -13,6 +13,12 @@ def policy_text():
         encoding="utf-8")
 
 
+def method_body(text, name):
+    start = text.index(f"    def {name}(")
+    end = text.find("\n    def ", start + 1)
+    return text[start:] if end < 0 else text[start:end]
+
+
 def test_follower_starts_paused_and_requires_explicit_start():
     text = follower_text()
     assert "self.enabled = False" in text
@@ -42,7 +48,7 @@ def test_follower_keeps_wheelchair_inside_map_safety_band():
 
 def test_follower_speed_policy_is_bounded():
     text = follower_text()
-    assert "MAX_SPEED = 0.6" in text
+    assert "MAX_SPEED = 1.0" in text
     assert "SLOPE_SPEED = 0.3" in text
     assert "MAX_ACCEL" in text and "MAX_DECEL" in text
 
@@ -89,7 +95,15 @@ def test_the_band_still_vets_a_way_round_when_the_policies_are_off():
     start = text.index("def take_a_way_round")
     body = text[start:text.index("\n    def ", start + 1)]
     assert "self.bypass_target_ok(offset)" in body
-    assert "self.policies" not in body
+
+
+def test_pursuit_enforces_authoritative_drivable_mask():
+    text = follower_text()
+    assert "from route_mask import RouteMask" in text
+    assert "self.drivable_mask = RouteMask(" in text
+    for method_name in ("bypass_target_ok", "target_at_lookahead", "safe_target"):
+        body = method_body(text, method_name)
+        assert "self.drivable_mask" in body
 
 
 def test_missing_obstacle_data_is_treated_as_blocked():

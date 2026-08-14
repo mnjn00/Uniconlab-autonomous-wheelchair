@@ -21,20 +21,26 @@ MAP_ID="merged_0707_0725_v1"
 # Must match what start_wheelchair_localization.sh actually launches with. A
 # stale pair here still passes, because the superseded files remain on disk,
 # and the deployment then records a route the chair does not drive.
-ROUTE_NAME="20260803_route_v5_waypoints.json"
-BAND_NAME="20260803_route_v5_safety_band.json"
+ROUTE_NAME="20260812_route_v6_v8_waypoints.json"
+BAND_NAME="20260812_route_v6_v8_safety_band.json"
 
 usage() {
-  echo "usage: deploy_merged_map.sh [--verify-only] <map-directory>" >&2
-  exit 64
+  echo "Usage: deploy_merged_map.sh [--verify-only] <map-directory>"
 }
 
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  usage
+  exit 0
+fi
 VERIFY_ONLY=0
 if [ "${1:-}" = "--verify-only" ]; then
   VERIFY_ONLY=1
   shift
 fi
-[ "$#" -eq 1 ] || usage
+[ "$#" -eq 1 ] || {
+  usage >&2
+  exit 64
+}
 
 SRC_DIR="$(cd "$1" && pwd -P)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,6 +67,11 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
+TRAJECTORY_SHA256="4a5972e176ff9aa036f538ca67e20c87f1d5a469865cb8d6b8079f7023dccbbe"
+if [ "$(sha256_file "$TRAJ_PATH")" != "$TRAJECTORY_SHA256" ]; then
+  echo "ERROR: trajectory SHA-256 mismatch" >&2
+  exit 2
+fi
 
 require_equal() {
   if [ "$2" != "$3" ]; then
@@ -97,7 +108,7 @@ echo "runtime_size_bytes=$runtime_bytes"
 echo "route=$ROUTE_NAME"
 echo "safety_band=$BAND_NAME"
 echo "imu=builtin"
-echo "speed_mps=0.6"
+echo "speed_mps=1.0"
 
 if [ "$VERIFY_ONLY" = "1" ]; then
   exit 0
@@ -168,6 +179,8 @@ manifest="$DEST_DIR/localization-map-manifest.json"
   printf '  "runtime_name": "%s",\n' "$RUNTIME_NAME"
   printf '  "runtime_sha256": "%s",\n' "$RUNTIME_SHA256"
   printf '  "runtime_points": %s,\n' "$RUNTIME_POINTS"
+  printf '  "trajectory_name": "traj_lidar.txt",\n'
+  printf '  "trajectory_sha256": "%s",\n' "$TRAJECTORY_SHA256"
   printf '  "voxel_resolution_m": 0.20\n'
   printf '}\n'
 } > "$manifest_tmp"

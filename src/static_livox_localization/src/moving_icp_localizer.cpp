@@ -220,6 +220,12 @@ class MovingIcpLocalizer {
     private_nh_.param("dynamic_box_margin_m", dynamic_box_margin_m_, 0.15);
     private_nh_.param("dynamic_box_max_fraction",
                       dynamic_box_max_fraction_, 0.50);
+    private_nh_.param<std::size_t>(
+        "dynamic_box_max_count", dynamic_box_max_count_, std::size_t{128});
+    private_nh_.param("dynamic_box_max_dimension_m",
+                      dynamic_box_max_dimension_m_, 8.0);
+    private_nh_.param("dynamic_box_max_range_m",
+                      dynamic_box_max_range_m_, 30.0);
     private_nh_.param("min_inlier_ratio", tracking_config_.min_inlier_ratio,
                       0.35);
     tracking_config_.min_source_points = registration_config_.min_points;
@@ -404,16 +410,25 @@ class MovingIcpLocalizer {
     std::vector<static_livox_localization::DynamicBox> boxes;
     ros::Time newest(0.0);
     for (const auto& marker : message->markers) {
+      if (marker.header.frame_id == rolling_config_.expected_cloud_frame &&
+          marker.header.stamp > newest)
+        newest = marker.header.stamp;
       if (marker.action != visualization_msgs::Marker::ADD) continue;
       if (marker.type != visualization_msgs::Marker::CUBE) continue;
+      if (marker.header.frame_id != rolling_config_.expected_cloud_frame)
+        continue;
       static_livox_localization::DynamicBox box;
       box.centre = Eigen::Vector3d(marker.pose.position.x,
                                    marker.pose.position.y,
                                    marker.pose.position.z);
       box.half_extent = Eigen::Vector3d(marker.scale.x, marker.scale.y,
                                         marker.scale.z) * 0.5;
+      if (!static_livox_localization::dynamic_box_within_limits(
+              box, dynamic_box_max_dimension_m_,
+              dynamic_box_max_range_m_))
+        continue;
       boxes.push_back(box);
-      if (marker.header.stamp > newest) newest = marker.header.stamp;
+      if (boxes.size() >= dynamic_box_max_count_) break;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     dynamic_boxes_ = std::move(boxes);
@@ -421,10 +436,12 @@ class MovingIcpLocalizer {
   }
 
   void cloud_callback(const sensor_msgs::PointCloud2ConstPtr& message) {
+    std::lock_guard<std::mutex> cloud_lock(cloud_callback_mutex_);
     const ros::Time stamp = message->header.stamp.isZero() ? ros::Time::now()
                                                            : message->header.stamp;
     Cloud::Ptr cloud(new Cloud);
     pcl::fromROSMsg(*message, *cloud);
+    const std::size_t raw_points = cloud->size();
 
     // A pedestrian's returns are not in the map, so there is nothing correct
     // for the registration to match them to - and it will not complain while
@@ -433,8 +450,10 @@ class MovingIcpLocalizer {
     // structure on the strength of where somebody was a second ago is the
     // same mistake in the other direction.
     std::size_t dropped = 0;
+    ros::Time source_boxes_stamp;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      source_boxes_stamp = dynamic_boxes_stamp_;
       const double age = (stamp - dynamic_boxes_stamp_).toSec();
       if (!dynamic_boxes_.empty() && dynamic_boxes_stamp_ > ros::Time(0.0) &&
           age >= 0.0 && age <= dynamic_box_max_age_s_) {
@@ -443,19 +462,24 @@ class MovingIcpLocalizer {
             dynamic_box_max_fraction_);
       }
     }
-    last_dynamic_dropped_ = dropped;
+    const std::size_t post_box_points = cloud->size();
 
     std::size_t map_dropped = 0;
     if (map_voxel_grid_ && map_voxel_grid_->voxel_count() > 0) {
-      OdomSample odom_for_filter;
-      bool have_odom = false;
+      Eigen::Isometry3d map_T_base = Eigen::Isometry3d::Identity();
+      bool filter_from_verified_pose = false;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        have_odom = nearest_odom_locked(stamp, &odom_for_filter);
+        OdomSample odom_for_filter;
+        filter_from_verified_pose =
+            has_map_T_odom_ &&
+            state_machine_.state() == TrackingState::TRACKING &&
+            nearest_odom_locked(stamp, &odom_for_filter);
+        if (filter_from_verified_pose) {
+          map_T_base = map_T_odom_ * odom_for_filter.odom_T_base;
+        }
       }
-      if (have_odom) {
-        const Eigen::Isometry3d map_T_base =
-            map_T_odom_ * odom_for_filter.odom_T_base;
+      if (filter_from_verified_pose) {
         Cloud::Ptr in_map(new Cloud);
         pcl::transformPointCloud(*cloud, *in_map,
                                  map_T_base.cast<float>());
@@ -467,7 +491,7 @@ class MovingIcpLocalizer {
         }
       }
     }
-    last_map_filtered_ = map_dropped;
+    const std::size_t post_map_points = cloud->size();
 
     OdomSample odom;
     Cloud::Ptr submap;
@@ -475,6 +499,13 @@ class MovingIcpLocalizer {
     bool initializing = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      diagnostic_source_stamp_ =
+          source_boxes_stamp.isZero() ? stamp : source_boxes_stamp;
+      last_dynamic_dropped_ = dropped;
+      last_map_filtered_ = map_dropped;
+      last_raw_points_ = raw_points;
+      last_post_box_points_ = post_box_points;
+      last_post_map_points_ = post_map_points;
       // These two do NOT mark the interval unobserved, and the distinction
       // is the point: below, a registration is not being attempted because
       // the stack decided not to attempt one, and a fix nobody questioned is
@@ -677,7 +708,9 @@ class MovingIcpLocalizer {
                                  const RegistrationResult& registration,
                                  const CorrectionDecision& decision) {
     diagnostic_msgs::DiagnosticArray array;
-    array.header.stamp = ros::Time::now();
+    array.header.stamp = diagnostic_source_stamp_.isZero()
+                             ? ros::Time::now()
+                             : diagnostic_source_stamp_;
     diagnostic_msgs::DiagnosticStatus status;
     status.name = "fast_lio_icp";
     status.hardware_id = map_id_;
@@ -727,6 +760,15 @@ class MovingIcpLocalizer {
         "dynamic_returns_dropped", std::to_string(last_dynamic_dropped_)));
     status.values.push_back(key_value(
         "map_filtered", std::to_string(last_map_filtered_)));
+    status.values.push_back(
+        key_value("raw_scan_points", std::to_string(last_raw_points_)));
+    status.values.push_back(key_value(
+        "post_box_points", std::to_string(last_post_box_points_)));
+    status.values.push_back(key_value(
+        "post_map_points", std::to_string(last_post_map_points_)));
+    status.values.push_back(key_value(
+        "rolling_submap_points",
+        std::to_string(rolling_submap_.stored_point_count())));
     status.values.push_back(key_value("registration_backend",
                                       registration.backend));
     status.values.push_back(key_value("registration_elapsed_ms",
@@ -759,6 +801,7 @@ class MovingIcpLocalizer {
   ros::Publisher pose_pub_;
   ros::Publisher path_pub_;
   ros::Publisher diagnostics_pub_;
+  ros::Time diagnostic_source_stamp_;
   ros::Subscriber seed_sub_;
   ros::Subscriber odom_sub_;
   ros::Subscriber cloud_sub_;
@@ -777,13 +820,20 @@ class MovingIcpLocalizer {
   ros::Time dynamic_boxes_stamp_{0.0};
   std::size_t last_dynamic_dropped_ = 0;
   std::size_t last_map_filtered_ = 0;
+  std::size_t last_raw_points_ = 0;
+  std::size_t last_post_box_points_ = 0;
+  std::size_t last_post_map_points_ = 0;
   double dynamic_box_max_age_s_ = 0.5;
   double dynamic_box_margin_m_ = 0.15;
   double dynamic_box_max_fraction_ = 0.50;
+  std::size_t dynamic_box_max_count_ = 128;
+  double dynamic_box_max_dimension_m_ = 8.0;
+  double dynamic_box_max_range_m_ = 30.0;
   static_livox_localization::TrackingStateMachine state_machine_;
   static_livox_localization::AssistedAlignmentController alignment_controller_;
 
   std::mutex mutex_;
+  std::mutex cloud_callback_mutex_;
   std::deque<OdomSample> odom_history_;
   OdomSample latest_odom_;
   nav_msgs::Path path_;

@@ -33,6 +33,7 @@ import json
 import math
 import os
 import sys
+import threading
 
 import numpy as np
 import rospy
@@ -49,11 +50,14 @@ from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, body_to_lidar,
 from cloud_points import (COLLISION_MAX_HEIGHT_M,
                           COLLISION_MIN_HEIGHT_M, points_xyzi)
 from cluster_tracking import MOVING, STATIC, UNKNOWN, Tracker
+from fixed_map_filter import FixedMapFilter
 from safety_band import SafetyBand
 import tf.transformations as tft
 
 PROCESS_HZ = 5.0
 WINDOW_S = 0.6
+CLOUD_STALE_S = 1.0
+MAP_MATCH_TOLERANCE_M = 0.15
 SENSOR_HEIGHT_M = 0.725
 # Forward-only FOV: the rider sits behind and around the lidar, so
 # rear/side returns are the rider's body, the wheelchair frame, and
@@ -237,6 +241,7 @@ class Accumulator:
         # The pose the merged cloud is expressed about, kept because motion
         # can only be judged in a frame that does not move with the chair.
         self.reference = None
+        self.lock = threading.Lock()
 
     def add_odom(self, message):
         q = message.pose.pose.orientation
@@ -245,13 +250,15 @@ class Accumulator:
         norm = math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w)
         if not all(math.isfinite(v) for v in
                    (stamp, p.x, p.y, p.z, q.x, q.y, q.z, q.w)) or \
-                stamp <= 0.0 or abs(norm - 1.0) > 0.05 or \
-                (self.odoms and stamp <= self.odoms[-1][0]):
+                stamp <= 0.0 or abs(norm - 1.0) > 0.05:
             return
         T = tft.quaternion_matrix([q.x, q.y, q.z, q.w])
         T[:3, 3] = (p.x, p.y, p.z)
-        self.odoms.append((stamp, T))
-        self.odoms = self.odoms[-80:]
+        with self.lock:
+            if self.odoms and stamp <= self.odoms[-1][0]:
+                return
+            self.odoms.append((stamp, T))
+            self.odoms = self.odoms[-80:]
 
     def nearest(self, stamp):
         if not self.odoms:
@@ -265,28 +272,45 @@ class Accumulator:
     def add_cloud(self, message):
         pts = points_xyzi(message)
         stamp = message.header.stamp.to_sec()
-        if not math.isfinite(stamp) or stamp <= 0.0 or not len(pts) or \
-                (self.scans and stamp <= self.scans[-1][0]):
+        if not math.isfinite(stamp) or stamp <= 0.0 or not len(pts):
             return
-        self.scans.append((stamp, pts))
-        self.scans = [s for s in self.scans
-                      if stamp - s[0] <= WINDOW_S + 0.3]
+        with self.lock:
+            if self.scans and stamp <= self.scans[-1][0]:
+                return
+            self.scans.append((stamp, pts))
+            self.scans = [s for s in self.scans
+                          if stamp - s[0] <= WINDOW_S + 0.3]
+
+    def newest_stamp(self):
+        with self.lock:
+            return self.scans[-1][0] if self.scans else None
 
     def merged(self):
         self.reference = None
-        if not self.scans:
+        with self.lock:
+            scans = list(self.scans)
+            odoms = list(self.odoms)
+        if not scans:
             return None
-        newest = self.scans[-1][0]
-        T_ref = self.nearest(newest)
+        newest = scans[-1][0]
+
+        def nearest(stamp):
+            if not odoms:
+                return None
+            times = np.array([t for t, _ in odoms])
+            k = int(np.argmin(np.abs(times - stamp)))
+            return odoms[k][1] if abs(times[k] - stamp) <= 0.15 else None
+
+        T_ref = nearest(newest)
         if T_ref is None:
             return None
         self.reference = (newest, T_ref)
         inv_ref = np.linalg.inv(T_ref)
         parts = []
-        for stamp, pts in self.scans:
+        for stamp, pts in scans:
             if newest - stamp > WINDOW_S:
                 continue
-            T = self.nearest(stamp)
+            T = nearest(stamp)
             if T is None:
                 continue
             M = (inv_ref @ T).astype(np.float32)
@@ -368,6 +392,11 @@ class ObstacleClusters:
         self.lidar_in_body = lidar_in_body
         self.lidar_to_body_rotation = lidar_to_body_rotation
         self.tracker = Tracker()
+        self.fixed_map_filter = FixedMapFilter(
+            rospy.get_param("~map_path"),
+            rospy.get_param("~map_sha256"),
+            rospy.get_param("~map_match_tolerance",
+                            MAP_MATCH_TOLERANCE_M))
         self.band = SafetyBand(rospy.get_param("~safety_band"))
         self.band_grace_m = float(rospy.get_param(
             "~object_band_grace", OBJECT_BAND_GRACE_M))
@@ -375,6 +404,7 @@ class ObstacleClusters:
             raise rospy.ROSInitException(
                 "~object_band_grace must be a finite non-negative distance")
         self.map_poses = MapPoseBuffer()
+        self._last_processed_stamp = None
         self._last_bloom_removed = 0
         self.marker_pub = rospy.Publisher(
             "/perception/objects", MarkerArray, queue_size=1)
@@ -428,14 +458,33 @@ class ObstacleClusters:
             [(float(point[0]), float(point[1]), boxes[i][0])
              for i, point in enumerate(in_odom)], stamp_s)
 
+    def publish_empty(self, source_stamp, status):
+        delete_all = Marker()
+        delete_all.action = Marker.DELETEALL
+        clear = MarkerArray()
+        clear.markers = [delete_all]
+        self.marker_pub.publish(clear)
+        self.dynamic_pub.publish(clear)
+        self.summary_pub.publish(String(data=json.dumps(
+            {"stamp": source_stamp, "status": status, "objects": []}
+        )))
+
     def step(self):
-        merged = self.accumulator.merged()
         stamp = rospy.Time.now()
-        if merged is None:
-            self.summary_pub.publish(String(data=json.dumps(
-                {"stamp": stamp.to_sec(), "status": "NO_CLOUD",
-                 "objects": []})))
+        newest_stamp = self.accumulator.newest_stamp()
+        if newest_stamp is None or stamp.to_sec() - newest_stamp > CLOUD_STALE_S:
+            source_stamp = newest_stamp if newest_stamp is not None else 0.0
+            self.publish_empty(source_stamp, "NO_CLOUD")
             return
+        if self._last_processed_stamp is not None and \
+                newest_stamp <= self._last_processed_stamp:
+            return
+        merged = self.accumulator.merged()
+        if merged is None:
+            self.publish_empty(newest_stamp, "NO_CLOUD")
+            return
+        newest_stamp = self.accumulator.reference[0]
+        self._last_processed_stamp = newest_stamp
         rel = merged[:, 2] + SENSOR_HEIGHT_M
         keep = (merged[:, 0] > ROI_X[0]) & (merged[:, 0] < ROI_X[1]) & \
                (merged[:, 1] > ROI_Y[0]) & (merged[:, 1] < ROI_Y[1]) & \
@@ -467,14 +516,23 @@ class ObstacleClusters:
         # so a field run that stops for nothing can be distinguished from
         # one that stopped for a ghost the filter missed.
         self._last_bloom_removed = bloom_removed
-        clusters = cluster_grid(points) if len(points) else []
-        clusters = sorted(clusters, key=len, reverse=True)[:MAX_CLUSTERS]
-
         cloud_stamp = None if self.accumulator.reference is None else \
             self.accumulator.reference[0]
         map_pose = None if cloud_stamp is None else \
             self.map_poses.nearest(cloud_stamp)
-        band_status = "OK" if map_pose is not None else "NO_MAP_POSE"
+        if map_pose is None:
+            self.publish_empty(newest_stamp, "NO_MAP_POSE")
+            return
+        body_T_lidar = np.eye(4)
+        body_T_lidar[:3, :3] = np.asarray(
+            self.lidar_to_body_rotation, dtype=np.float64)
+        body_T_lidar[:3, 3] = np.asarray(
+            self.lidar_in_body, dtype=np.float64)
+        points = self.fixed_map_filter.retain_novel(
+            points, map_pose @ body_T_lidar)
+        clusters = cluster_grid(points) if len(points) else []
+        clusters = sorted(clusters, key=len, reverse=True)[:MAX_CLUSTERS]
+        band_status = "OK"
 
         boxes, band_context = [], []
         for cluster in clusters:
@@ -494,13 +552,21 @@ class ObstacleClusters:
         markers, objects = MarkerArray(), []
         dynamic = MarkerArray()
         wipe = Marker()
+        wipe.header.frame_id = "body"
+        wipe.header.stamp = rospy.Time.from_sec(newest_stamp)
         wipe.action = Marker.DELETEALL
         markers.markers.append(wipe)
         dynamic.markers.append(wipe)
         for i, ((label, center, size, points), context) in enumerate(
                 zip(boxes, band_context)):
+            body_center = lidar_to_body(
+                np.asarray([center], dtype=np.float64),
+                self.lidar_in_body, self.lidar_to_body_rotation)[0]
+            body_size = (
+                np.abs(np.asarray(self.lidar_to_body_rotation)) @ size)
             raw_label, band_relation, inside_fraction, profile = context
             track = tracks[i] if tracks else None
+            object_id = i if track is None else int(track.id)
             objects.append({
                 "class": label,
                 "raw_class": raw_label,
@@ -520,7 +586,7 @@ class ObstacleClusters:
                 # needs to know when nothing said it. Without a reference
                 # pose there is no frame to judge motion in, and the honest
                 # answer is UNKNOWN, which every consumer handles as moving.
-                "id": 0 if track is None else int(track.id),
+                "id": object_id,
                 "motion": UNKNOWN if track is None else
                           track.motion(stamp.to_sec()),
                 "speed_mps": 0.0 if track is None else
@@ -528,44 +594,36 @@ class ObstacleClusters:
                 "age_s": 0.0 if track is None else
                          round(float(track.age_s(stamp.to_sec())), 1),
             })
-            # MOVING and UNKNOWN both go to the dynamic box. STATIC is
-            # either in the map or is a real obstacle, so only that is kept
-            # in the registration input. UNKNOWN is what a track looks like
-            # before it has been watched long enough to confirm, and on a
-            # 1.5 s confirmation window a walker at 1.4 m/s has already
-            # moved 2.1 m — the box filter and the map voxel grid are the two
-            # things that can reach those returns before the submap
-            # accumulates a 2.8 m trail through them.
-            if track is not None and track.motion(stamp.to_sec()) != STATIC:
-                in_body = lidar_to_body(
-                    np.asarray([center], dtype=np.float64),
-                    self.lidar_in_body, self.lidar_to_body_rotation)[0]
-                box = Marker()
-                box.header.stamp = stamp
-                box.header.frame_id = "body"
-                box.ns = "dynamic"
-                box.id = i
-                box.type = Marker.CUBE
-                box.action = Marker.ADD
-                box.pose.position.x = float(in_body[0])
-                box.pose.position.y = float(in_body[1])
-                box.pose.position.z = float(in_body[2])
-                box.pose.orientation.w = 1.0
-                box.scale.x = float(size[0])
-                box.scale.y = float(size[1])
-                box.scale.z = float(size[2])
-                box.color.r, box.color.a = 1.0, 0.3
-                dynamic.markers.append(box)
+            # Every map-novel object is excluded from registration. Motion
+            # only controls avoidance policy; a stationary person or parked
+            # vehicle is still absent from the immutable localization map.
+            box = Marker()
+            box.header.stamp = rospy.Time.from_sec(newest_stamp)
+            box.header.frame_id = "body"
+            box.ns = "dynamic"
+            box.id = object_id
+            box.type = Marker.CUBE
+            box.action = Marker.ADD
+            box.pose.position.x = float(body_center[0])
+            box.pose.position.y = float(body_center[1])
+            box.pose.position.z = float(body_center[2])
+            box.pose.orientation.w = 1.0
+            box.scale.x = float(body_size[0])
+            box.scale.y = float(body_size[1])
+            box.scale.z = float(body_size[2])
+            box.color.r, box.color.a = 1.0, 0.3
+            dynamic.markers.append(box)
             m = Marker()
             m.header.frame_id = "body"
-            m.header.stamp = stamp
+            m.header.stamp = rospy.Time.from_sec(newest_stamp)
             m.ns = label
-            m.id = i
+            m.id = object_id
             m.type = Marker.CUBE
             m.action = Marker.ADD
-            m.pose.position = Point(*[float(v) for v in center])
+            m.pose.position = Point(*[float(v) for v in body_center])
             m.pose.orientation.w = 1.0
-            m.scale.x, m.scale.y, m.scale.z = (float(v) for v in size)
+            m.scale.x, m.scale.y, m.scale.z = (
+                float(v) for v in body_size)
             r, g, b = CLASS_COLORS[label]
             m.color.r, m.color.g, m.color.b, m.color.a = r, g, b, 0.55
             m.lifetime = rospy.Duration(1.0 / PROCESS_HZ * 3.0)
@@ -573,7 +631,7 @@ class ObstacleClusters:
         self.marker_pub.publish(markers)
         self.dynamic_pub.publish(dynamic)
         self.summary_pub.publish(String(data=json.dumps({
-            "stamp": stamp.to_sec(),
+            "stamp": newest_stamp,
             "status": "OK",
             "band_status": band_status,
             # Stated because a consumer now steers by these numbers. They

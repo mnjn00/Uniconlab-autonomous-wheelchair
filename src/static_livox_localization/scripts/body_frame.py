@@ -212,4 +212,5 @@ def lidar_to_body(points, offset_xyz=LIDAR_IN_BODY_XYZ,
         raise ValueError("points must have shape (N, 3)")
     if rotation.shape != (3, 3):
         raise ValueError("lidar-to-body rotation must have shape (3, 3)")
-    return array @ rotation.T + np.asarray(offset_xyz, dtype=np.float64)
+    rotated = np.sum(array[:, None, :] * rotation[None, :, :], axis=2)
+    return rotated + np.asarray(offset_xyz, dtype=np.float64)

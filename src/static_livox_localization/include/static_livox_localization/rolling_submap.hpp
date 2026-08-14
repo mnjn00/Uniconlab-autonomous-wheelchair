@@ -27,6 +27,10 @@ struct DynamicBox {
   Eigen::Vector3d half_extent = Eigen::Vector3d::Zero();
 };
 
+bool dynamic_box_within_limits(const DynamicBox& box,
+                               double max_dimension_m,
+                               double max_range_m);
+
 // Drop returns that came off something moving, before they reach the submap.
 //
 // A pedestrian is not in the map, so GICP has nothing correct to match those
@@ -41,10 +45,10 @@ struct DynamicBox {
 // over a 2 s window, so by the time it is built a walker at 1.4 m/s has laid
 // a 2.8 m trail through it and the current box no longer covers the returns.
 //
-// max_dropped_fraction is a refusal, not a clamp. If the boxes would take
-// more of the scan than that, they are more likely to be wrong than the scan
-// is, and removing that much structure is its own way to lose the fix - so
-// nothing is dropped and the caller is told.
+// When validated boxes cover more than max_dropped_fraction, the complete
+// sample is discarded. Restoring a crowd recreates the field bug; retaining
+// only attacker-selected structure lets an untrusted MarkerArray steer
+// registration. An empty sample makes localization fail closed instead.
 std::size_t filter_dynamic_returns(
     pcl::PointCloud<pcl::PointXYZI>& cloud,
     const std::vector<DynamicBox>& boxes,

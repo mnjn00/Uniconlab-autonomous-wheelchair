@@ -26,7 +26,7 @@ Per control cycle:
     because a source with no identity was authorising bypass manoeuvres.
     safety_gate.py keeps its own raw check and can still stop the chair
   - slope guard and bounded DEGRADED-localization grace
-  - speed policy: 0.6 m/s cap (operator-directed), curvature slowdown,
+  - speed policy: 1.0 m/s cap (operator-directed), curvature slowdown,
     accel/yaw-rate limiting
   - dead-man guards: starts PAUSED until /waypoint_follower/start, holds on
     stale pose/cloud/base, LOST or sustained DEGRADED localization, manual
@@ -80,14 +80,16 @@ from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
 from safety_band import SafetyBand
+from route_mask import RouteMask
+from route_assets import validate_asset_binding
 import tf.transformations as tft
 
 # Matched to how the route is actually driven. Measured over the
 # 2026-07-27 manual run of this route (full_debug_20260727_214306.bag,
 # /fast_lio_icp/pose, spin-in-place bookends trimmed): median 0.96 m/s,
-# p75 1.00, p90 1.21, p95 1.58. The operator directed 0.6 m/s for the
-# 0727 field run; the measured p90 remains the upper reference.
-MAX_SPEED = 0.6
+# p75 1.00, p90 1.21, p95 1.58. The operator raised the current cap to
+# 1.0 m/s on 2026-08-12; the measured p90 remains the upper reference.
+MAX_SPEED = 1.0
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 MAX_YAW_RATE = 0.5
@@ -129,11 +131,17 @@ SLOPE_PITCH_RAD = math.radians(3.0)
 # out, and driving resumes the moment the corridor is clear again.
 BYPASS_AFTER_S = 3.0
 BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
-# How far ahead a confirmed-parked object is stepped around. At 0.6 m/s this
-# is eight seconds of warning, which is what turns "stop, wait 3 s, then edge
-# sideways" into one continuous drift past the thing. Not longer: past this
-# the object is often not even on the stretch the chair will drive.
-PLAN_AHEAD_M = 5.0
+# How far ahead a confirmed-parked object is stepped around. The number that
+# matters is the WARNING TIME it buys, which is what turns "stop, wait 3 s,
+# then edge sideways" into one continuous drift past the thing: 5.0 m was
+# eight seconds at the 0.6 m/s cap it was chosen under. At the 1.0 m/s cap
+# the same 5.0 m is five seconds, and the full stopping envelope at that
+# speed is 3.20 m of the 5.0 - so 8.0 m restores the warning time rather
+# than quietly spending it. Still bounded for the reason it always was:
+# past this the object is often not even on the stretch the chair will
+# drive, and stepping around something that is not in the way is its own
+# hazard.
+PLAN_AHEAD_M = 8.0
 GOAL_TOLERANCE_M = 1.0
 POSE_STALE_S = 1.0
 BASE_STALE_S = 1.5
@@ -160,11 +168,21 @@ class WaypointFollower:
 
     def __init__(self):
         rospy.init_node("waypoint_follower")
-        with open(rospy.get_param("~route")) as f:
+        route_path = rospy.get_param("~route")
+        band_path = rospy.get_param("~safety_band")
+        with open(route_path) as f:
             route = json.load(f)
+        mask_path = rospy.get_param("~drivable_mask")
+        try:
+            self.asset_binding = validate_asset_binding(
+                route_path, band_path, mask_path,
+            )
+        except ValueError as error:
+            raise rospy.ROSInitException(str(error))
         self.waypoints = np.array(
             [[w["x"], w["y"]] for w in route["waypoints"]], dtype=np.float64)
-        self.band = SafetyBand(rospy.get_param("~safety_band"))
+        self.band = SafetyBand(band_path)
+        self.drivable_mask = RouteMask(mask_path)
         self.sensor_height = rospy.get_param("~sensor_height", 0.725)
         rospy.loginfo("route: %d waypoints, band stations: %d",
                       len(self.waypoints), len(self.band.xy))
@@ -411,6 +429,18 @@ class WaypointFollower:
             self.drive_mode = message.data[1]
 
     def on_start(self, request):
+        if request.data:
+            unsafe = self.band.route_centre_clearance_violations()
+            unsafe_chords = self.band.route_centre_chord_violations()
+            if unsafe or unsafe_chords:
+                self.enabled = False
+                self.send_stop()
+                message = (
+                    "REFUSED: route centre lacks bilateral wheel clearance "
+                    "at stations %s or leaves the band on chords %s"
+                    % (unsafe[:20], unsafe_chords[:20]))
+                rospy.logerr(message)
+                return SetBoolResponse(success=False, message=message)
         self.enabled = request.data
         if not request.data:
             self.send_stop()
@@ -611,7 +641,8 @@ class WaypointFollower:
         normal = np.array([-heading[1], heading[0]])
         for ahead in (0.5, 1.5, 2.5, 3.5):
             p = self.pose_xy + heading * ahead + normal * offset
-            if not self.band.contains(p):
+            if (not self.band.contains(p)
+                    or not self.drivable_mask.contains(p)):
                 return False
         return True
 
@@ -720,7 +751,8 @@ class WaypointFollower:
             if norm > 1e-3:
                 normal = np.array([-direction[1], direction[0]]) / norm
                 target = target + normal * self.lateral_offset
-        return self.band.clamp(target) if self.policies else target
+        target = self.band.clamp(target) if self.policies else target
+        return target if self.drivable_mask.contains(target) else self.pose_xy
 
     def safe_target(self, wanted):
         """Return the longest target whose complete drive chord is in band."""
@@ -734,8 +766,12 @@ class WaypointFollower:
         candidate = max(MIN_LOOKAHEAD_M, wanted)
         while True:
             target = self.target_at_lookahead(candidate)
+            mask_chord_ok = self.drivable_mask.segment_is_contained(
+                self.pose_xy, target
+            )
             if self.band.chord_is_contained(
-                    self.pose_xy, target, grace=OFF_BAND_GRACE):
+                    self.pose_xy, target, grace=OFF_BAND_GRACE
+                    ) and mask_chord_ok:
                 implied_speed = max(
                     CREEP_SPEED, (candidate - 1.0) / 1.6)
                 speed_cap = MAX_SPEED if candidate >= wanted - 1e-9 else \

@@ -111,27 +111,25 @@ than 57 cm from the obstacle guard.
 A route is the centreline; the band is the lateral limit at each station. The follower is
 constrained by the band, not merely advised by it.
 
-| | `20260727_chair_centred_*` | `20260803_route_v5_*` |
+| | `20260727_chair_centred_*` | `20260812_route_v6_v8_*` |
 | --- | --- | --- |
-| Waypoints | 1,446 (0.2 m) | 2,004 (0.2 m) |
-| Length | 383.4 m | 379.7 m |
-| Band stations | 381 at 1.0 m | 802 at 0.5 m |
-| Origin | Resampled from a recorded drive | Operator-drawn corridor (`route_2d_map_v5.zip`) |
+| Waypoints | 1,446 (0.2 m) | 1,900 (0.2 m) |
+| Length | 383.4 m | 379.2 m |
+| Band stations | 381 at 1.0 m | 761 at 0.5 m |
+| Origin | Resampled from a recorded drive | v6 preferred line smoothed inside the v8 drivable mask |
 | Shipped by the bringup | No | **Yes** |
 | Localization validated on it | **Yes** (07-31) | Not yet |
 
-v5 supersedes v4 and preserves the operator's exact target at `(156.159, -84.341)` through the
-archive's smooth 8 m centreline transition. The source ZIP, mask, 0.2 m centreline and 0.5 m band
-stations are hash-pinned under `data/route_corridor_v5/`.
+The v6/v8 route preserves the preferred v6 line while treating the complete v8 map as a hard
+drivable boundary. Route contents, band, mask image and mask geometry metadata are hash-bound,
+and the route is smoothed before resampling so raster steps do not command alternating steering.
 
 > [!WARNING]
-> **The shipped band's edges are drawn, not measured.** Every one of the 0727 band's 762 edges
+> **Most shipped-band edges are drawn, not measured.** Every one of the 0727 band's 762 edges
 > carried a measured verdict - `step_up` 266, `drop` 203, `lip` 104, `open` 177, `unscanned` 12.
-> All 1,604 edges of the v5 band are `open`, because the ZIP carried no drop measurement; the
-> band says so itself under `physical_edge_semantics`. On the shipped route, the thing keeping
-> the chair away from a kerb is the operator's drawing, not a ground-break measurement. That is
-> a deliberate, recorded choice and not a defect, but it is the single most load-bearing
-> assumption in the stack and it should be re-measured before the band is trusted further.
+> The v6/v8 rebuild retains measured v6 edge semantics at the nearest stations but otherwise
+> relies on the operator-drawn v8 boundary. This remains a load-bearing assumption that requires
+> re-measurement before passenger operation.
 
 Where both exist, the drawing only ever narrows. `safety_band.corridor_limit` takes a `min()`
 against the measured limit, insets the chair half width because the corridor was drawn for the
@@ -305,9 +303,9 @@ written campus approval; and a separately reviewed passenger-operation protocol.
 
 Known open items, kept here rather than in a tracker nobody reads:
 
-- The shipped v5 band carries no measured drop semantics (see the warning above).
-- The localization envelope was measured on the 0727 route; v5 has not been re-measured.
-- A chair parked at the recorded origin joins v5 at waypoint 45, leaving its first 8.5 m undriven.
+- Most shipped v6/v8 band edges still lack measured drop semantics (see the warning above).
+- The localization envelope was measured on the 0727 route; v6/v8 has not been re-measured.
+- Live target-NUC shadow QA is required before this route is eligible for a field start.
 
 See [`contracts/wp0/A16-release-authority.yaml`](contracts/wp0/A16-release-authority.yaml),
 [`contracts/wp0/A14-hazard-log.yaml`](contracts/wp0/A14-hazard-log.yaml), and

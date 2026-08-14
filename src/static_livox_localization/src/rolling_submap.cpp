@@ -9,6 +9,15 @@
 
 namespace static_livox_localization {
 
+bool dynamic_box_within_limits(const DynamicBox& box,
+                               double max_dimension_m,
+                               double max_range_m) {
+  return box.centre.allFinite() && box.half_extent.allFinite() &&
+         (box.half_extent.array() > 0.0).all() &&
+         (box.half_extent.array() * 2.0 <= max_dimension_m).all() &&
+         box.centre.norm() <= max_range_m;
+}
+
 std::size_t filter_dynamic_returns(
     pcl::PointCloud<pcl::PointXYZI>& cloud,
     const std::vector<DynamicBox>& boxes,
@@ -30,9 +39,13 @@ std::size_t filter_dynamic_returns(
     }
   }
   if (dropped == 0) return 0;
-  const double fraction =
-      static_cast<double>(dropped) / static_cast<double>(cloud.size());
-  if (fraction > max_dropped_fraction) return 0;
+  const std::size_t original_size = cloud.size();
+  const double dropped_fraction =
+      static_cast<double>(dropped) / static_cast<double>(original_size);
+  if (dropped_fraction > max_dropped_fraction) {
+    cloud.clear();
+    return original_size;
+  }
   pcl::PointCloud<pcl::PointXYZI> kept;
   kept.reserve(cloud.size() - dropped);
   for (std::size_t i = 0; i < cloud.size(); ++i) {

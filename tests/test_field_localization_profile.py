@@ -15,8 +15,8 @@ RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
 # The shipped pair is chair-centred. A sensor-referenced route applies every
 # clearance about a point 0.2 m left of the chair, which under-protects the
 # right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
-ROUTE_NAME = "20260803_route_v5_waypoints.json"
-BAND_NAME = "20260803_route_v5_safety_band.json"
+ROUTE_NAME = "20260812_route_v6_v8_waypoints.json"
+BAND_NAME = "20260812_route_v6_v8_safety_band.json"
 # Superseded pairs. Deployment naming one of these while the bringup launches
 # the other is how a record ends up describing a drive that did not happen,
 # and the old files staying on disk is what lets it pass unnoticed.
@@ -122,6 +122,7 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_shipped_route():
     band = json.loads((ROOT / "routes" / BAND_NAME).read_text(encoding="utf-8"))
 
     assert shell_default(startup, "VN_IMU") == "0"
+    assert shell_default(startup, "MIN_REFINED_SCORE") == "0.78"
     assert shell_default(startup, "ROUTE").endswith("/" + ROUTE_NAME)
     assert shell_default(startup, "BAND").endswith("/" + BAND_NAME)
     assert route["frame"] == band["frame"] == "map"
@@ -154,12 +155,36 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_shipped_route():
     assert 'rostopic echo -n1 /livox/imu/header' in startup
 
 
-def test_field_speed_is_capped_at_point_six_metres_per_second():
+def test_field_speed_is_capped_at_one_metre_per_second():
     follower = (PACKAGE / "scripts" / "waypoint_follower.py").read_text(
         encoding="utf-8"
     )
 
-    assert re.search(r"^MAX_SPEED\s*=\s*0\.6$", follower, flags=re.MULTILINE)
+    assert re.search(r"^MAX_SPEED\s*=\s*1\.0$", follower, flags=re.MULTILINE)
+
+
+def test_localizer_reports_every_registration_filter_stage():
+    source = (PACKAGE / "src" / "moving_icp_localizer.cpp").read_text(
+        encoding="utf-8"
+    )
+    for key in (
+        "raw_scan_points",
+        "dynamic_returns_dropped",
+        "post_box_points",
+        "map_filtered",
+        "post_map_points",
+        "rolling_submap_points",
+    ):
+        assert '"%s"' % key in source
+    assert "state_machine_.state() == TrackingState::TRACKING" in source
+    assert "filter_from_verified_pose" in source
+    assert "marker.header.frame_id != rolling_config_.expected_cloud_frame" \
+        in source
+    assert (
+        'private_nh_.param<std::size_t>('
+        '\n        "dynamic_box_max_count", dynamic_box_max_count_, '
+        "std::size_t{128});"
+    ) in source
 
 
 def test_initializer_is_packaged_and_field_startup_selects_global_only():
@@ -171,7 +196,7 @@ def test_initializer_is_packaged_and_field_startup_selects_global_only():
     )
     cmake = (PACKAGE / "CMakeLists.txt").read_text(encoding="utf-8")
 
-    assert 'auto_init_route:="$ROUTE"' in startup
+    assert 'auto_init_route:="$AUTO_INIT_ROUTE"' in startup
     assert 'auto_init_body_frame_profile:="$BODY_FRAME_PROFILE"' in startup
     assert 'auto_init_global_only:=true' in startup
     assert '<param name="route" value="$(arg auto_init_route)"/>' in launch
@@ -221,3 +246,43 @@ def test_map_deployer_rejects_symlink_targets_and_uses_unique_temp_files():
     assert ".localization-map-manifest.json.tmp" not in deploy
     assert 'canonical_dest="$DEST_DIR/$CANONICAL_NAME"' in deploy
     assert 'cp -f "$CANONICAL_PATH"' in deploy
+    assert '"trajectory_sha256"' in deploy
+    startup = (
+        ROOT / "tools" / "start_wheelchair_localization.sh"
+    ).read_text(encoding="utf-8")
+    assert (
+        'TRAJ_SHA256="${TRAJ_SHA256:-'
+        "4a5972e176ff9aa036f538ca67e20c87f1d5a469865cb8d6b8079f7023dccbbe"
+        '}"'
+    ) in startup
+    assert 'ACTUAL_TRAJ_SHA256=' in startup
+    assert "trajectory SHA-256 mismatch" in startup
+    assert "TRAJ_MANIFEST" not in startup
+
+
+def test_dedicated_0727_trial_pins_its_route_and_band():
+    trial = (ROOT / "tools" / "trial_0727.sh").read_text(encoding="utf-8")
+    assert (
+        'AUTO_INIT_ROUTE="$HOME/wheelchair_localization_src/routes/'
+        '20260727_chair_centred_waypoints.json"'
+    ) in trial
+    assert "20260727_chair_centred_safety_band.json" not in trial
+
+
+def test_direct_launch_defaults_match_field_route_profile():
+    launch = (
+        ROOT
+        / "src"
+        / "static_livox_localization"
+        / "launch"
+        / "moving_localization.launch"
+    ).read_text(encoding="utf-8")
+    assert "20260812_route_v6_v8_waypoints.json" in launch
+    assert 'name="auto_init_min_refined_score" default="0.78"' in launch
+
+
+def test_digital_twin_uses_current_physical_speed_cap():
+    twin = (ROOT / "tools" / "digital_twin_open3d.py").read_text(
+        encoding="utf-8"
+    )
+    assert "MAX_SPEED = 1.0" in twin

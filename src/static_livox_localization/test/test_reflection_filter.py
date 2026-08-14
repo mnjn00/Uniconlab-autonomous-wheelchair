@@ -134,7 +134,10 @@ def load_producer(now_s):
     rospy.Rate = lambda hz: None
     rospy.is_shutdown = lambda: True
     rospy.loginfo = rospy.logwarn = lambda *a, **k: None
-    rospy.Time = types.SimpleNamespace(now=lambda: Stamp(now_s[0]))
+    rospy.Time = types.SimpleNamespace(
+        now=lambda: Stamp(now_s[0]),
+        from_sec=lambda seconds: Stamp(seconds),
+    )
 
     modules = {"rospy": rospy}
     for pkg, names in {
@@ -189,6 +192,11 @@ def load_producer(now_s):
 ct = load("cluster_tracking")
 
 
+class KeepNovel:
+    def retain_novel(self, points, _map_T_lidar):
+        return points
+
+
 def producer_at(now_s):
     module = load_producer(now_s)
     node = module.ObstacleClusters.__new__(module.ObstacleClusters)
@@ -197,9 +205,11 @@ def producer_at(now_s):
     node.lidar_in_body = lidar_in_body
     node.lidar_to_body_rotation = rotation
     node.tracker = ct.Tracker()
+    node.fixed_map_filter = KeepNovel()
     node.band = None
     node.band_grace_m = module.OBJECT_BAND_GRACE_M
     node.map_poses = module.MapPoseBuffer()
+    node._last_processed_stamp = None
     node.marker_pub = Capture()
     node.dynamic_pub = Capture()
     node.summary_pub = Capture()
@@ -220,6 +230,7 @@ def run(node, module, cloud, now_s, stamp):
     T = np.eye(4)
     node.accumulator.scans = [(stamp, cloud)]
     node.accumulator.odoms = [(stamp, T)]
+    node.map_poses.add(stamp, T)
     now_s[0] = stamp
     node.step()
     return json.loads(node.summary_pub.last.data)
