@@ -111,18 +111,25 @@ than 57 cm from the obstacle guard.
 A route is the centreline; the band is the lateral limit at each station. The follower is
 constrained by the band, not merely advised by it.
 
-| | `20260727_chair_centred_*` | `20260812_route_v6_v8_*` |
-| --- | --- | --- |
-| Waypoints | 1,446 (0.2 m) | 1,900 (0.2 m) |
-| Length | 383.4 m | 379.2 m |
-| Band stations | 381 at 1.0 m | 761 at 0.5 m |
-| Origin | Resampled from a recorded drive | v6 preferred line smoothed inside the v8 drivable mask |
-| Shipped by the bringup | No | **Yes** |
-| Localization validated on it | **Yes** (07-31) | Not yet |
+| | `20260727_chair_centred_*` | `20260812_route_v6_v8_*` | `map_by_algorithm_*` |
+| --- | --- | --- | --- |
+| Waypoints | 1,446 (0.2 m) | 1,900 (0.2 m) | 1,897 (0.2 m) |
+| Length | 383.4 m | 379.2 m | 376.2 m |
+| Band stations | 381 at 1.0 m | 761 at 0.5 m | 1,897 at 0.2 m |
+| Origin | Resampled from a recorded drive | v6 preferred line smoothed inside the v8 drivable mask | Start/goal search inside a dense-map measured curb corridor |
+| Shipped by the bringup | No | **Yes** | No - reviewed promotion candidate |
+| Localization validated on it | **Yes** (07-31) | Not yet | Not yet |
 
 The v6/v8 route preserves the preferred v6 line while treating the complete v8 map as a hard
 drivable boundary. Route contents, band, mask image and mask geometry metadata are hash-bound,
 and the route is smoothed before resampling so raster steps do not command alternating steering.
+
+The independently generated `map_by_algorithm` route passed bilateral centre, wheel-line and
+rotated full-footprint audits against dense-map measured curb boundaries, but it is not bound to
+the runtime launch or deployment scripts. It must not silently replace the shipped v6/v8 route.
+The two OMO implementation lines, commit provenance, algorithms, evidence and promotion gates are
+recorded in
+[`docs/route-implementation-status-ko.md`](docs/route-implementation-status-ko.md).
 
 > [!WARNING]
 > **Most shipped-band edges are drawn, not measured.** Every one of the 0727 band's 762 edges
