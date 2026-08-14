@@ -1,0 +1,13 @@
+{
+  "promoted_from": {
+    "route": "output/map_by_algorithm_route.json",
+    "band": "output/map_by_algorithm_band.json",
+    "mask_yaml": "output/map_by_algorithm_mask.yaml"
+  },
+  "route": "20260814_route_algorithm_waypoints.json",
+  "safety_band": "20260814_route_algorithm_safety_band.json",
+  "drivable_mask": "route_2d_map_algorithm.yaml",
+  "route_id": "algorithm:78265d48a8fa:abe2b04f53b8",
+  "route_geometry_unchanged": true,
+  "field_validation_required": true
+}

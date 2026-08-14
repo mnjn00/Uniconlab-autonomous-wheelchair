@@ -9,6 +9,13 @@
 시작점과 목적지를 다루지만 목적과 안전 근거가 다르므로 하나의 경로처럼
 혼용하면 안 된다.
 
+> 2026-08-14 promotion note: `20260814_route_algorithm_waypoints.json`,
+> `20260814_route_algorithm_safety_band.json` and `route_2d_map_algorithm.yaml`
+> are now the bringup/deployment defaults. The dense-map algorithm route passed
+> the offline centre/chord/footprint audit and is prepared for NUC deployment;
+> localization replay and a controlled field run remain required before passenger
+> operation. The v6/v8 assets remain available as rollback/reference assets.
+
 ## 커밋과 세션 출처
 
 | 구분 | OMO 세션 | 핵심 커밋 | 역할 |

@@ -64,10 +64,10 @@ if [ "$ACTUAL_TRAJ_SHA256" != "$TRAJ_SHA256" ]; then
   echo "ERROR: trajectory SHA-256 mismatch" >&2
   exit 2
 fi
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_waypoints.json}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260814_route_algorithm_waypoints.json}"
 AUTO_INIT_ROUTE="${AUTO_INIT_ROUTE:-$ROUTE}"
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260812_route_v6_v8_safety_band.json}"
-DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v8.yaml}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260814_route_algorithm_safety_band.json}"
+DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_algorithm.yaml}"
 RVIZ="${RVIZ:-true}"
 # SAFETY_POLICIES=false drives with every discretionary guard switched off,
 # leaving the joystick override as the failsafe. It exists to measure one

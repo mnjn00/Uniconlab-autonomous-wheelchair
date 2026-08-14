@@ -15,8 +15,8 @@ RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
 # The shipped pair is chair-centred. A sensor-referenced route applies every
 # clearance about a point 0.2 m left of the chair, which under-protects the
 # right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
-ROUTE_NAME = "20260812_route_v6_v8_waypoints.json"
-BAND_NAME = "20260812_route_v6_v8_safety_band.json"
+ROUTE_NAME = "20260814_route_algorithm_waypoints.json"
+BAND_NAME = "20260814_route_algorithm_safety_band.json"
 # Superseded pairs. Deployment naming one of these while the bringup launches
 # the other is how a record ends up describing a drive that did not happen,
 # and the old files staying on disk is what lets it pass unnoticed.
@@ -27,6 +27,8 @@ SUPERSEDED = (
     "20260727_new_route_safety_band.json",
     "20260727_chair_centred_waypoints.json",
     "20260727_chair_centred_safety_band.json",
+    "20260812_route_v6_v8_waypoints.json",
+    "20260812_route_v6_v8_safety_band.json",
 )
 
 
@@ -277,7 +279,7 @@ def test_direct_launch_defaults_match_field_route_profile():
         / "launch"
         / "moving_localization.launch"
     ).read_text(encoding="utf-8")
-    assert "20260812_route_v6_v8_waypoints.json" in launch
+    assert "20260814_route_algorithm_waypoints.json" in launch
     assert 'name="auto_init_min_refined_score" default="0.78"' in launch
 
 
