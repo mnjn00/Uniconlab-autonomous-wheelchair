@@ -19,6 +19,7 @@ set -euo pipefail
 MAP_SRC="${1:?usage: push_to_nuc.sh <map-directory>}"
 NUC="${NUC:-mprp3@10.26.116.199}"
 REF="${REF:-main}"
+GIT_REMOTE="${GIT_REMOTE:-origin}"
 MAP_ID="merged_0707_0725_v1"
 DEST="$MAP_ID"
 
@@ -69,10 +70,10 @@ if [ -n "$DEPLOY_DIRTY" ]; then
   exit 1
 fi
 EXPECTED_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-git -C "$REPO_ROOT" fetch origin "$REF"
-REMOTE_REF_COMMIT="$(git -C "$REPO_ROOT" rev-parse "origin/$REF")"
+git -C "$REPO_ROOT" fetch "$GIT_REMOTE" "$REF"
+REMOTE_REF_COMMIT="$(git -C "$REPO_ROOT" rev-parse "$GIT_REMOTE/$REF")"
 [ "$EXPECTED_COMMIT" = "$REMOTE_REF_COMMIT" ] || {
-  echo "ERROR: local HEAD is not the exact origin/$REF commit" >&2
+  echo "ERROR: local HEAD is not the exact $GIT_REMOTE/$REF commit" >&2
   echo "  local : $EXPECTED_COMMIT" >&2
   echo "  remote: $REMOTE_REF_COMMIT" >&2
   exit 1
@@ -176,7 +177,7 @@ done
 say "updating code, route and band on the NUC"
 remote_bash \
   "$REPO" "$WS" "$MAPS" "$DEST" "$EXPECTED_COMMIT" "$REF" \
-  "$REMOTE_STAGE" <<'REMOTE_DEPLOY'
+  "$GIT_REMOTE" "$REMOTE_STAGE" <<'REMOTE_DEPLOY'
 set -euo pipefail
 REPO="$1"
 WS="$2"
@@ -184,12 +185,13 @@ MAPS="$3"
 DEST="$4"
 EXPECTED_COMMIT="$5"
 REF="$6"
-STAGE="$7"
+GIT_REMOTE="$7"
+STAGE="$8"
 
 cd "$REPO"
 git fetch --all --prune
 git checkout "$REF"
-git pull --ff-only
+git pull --ff-only "$GIT_REMOTE" "$REF"
 OBSERVED_COMMIT="$(git rev-parse HEAD)"
 [ "$OBSERVED_COMMIT" = "$EXPECTED_COMMIT" ] || {
   echo "ERROR: NUC checkout does not match reviewed commit" >&2
@@ -213,24 +215,24 @@ REMOTE_DIRTY="$(git status --porcelain --untracked-files=all -- \
   exit 1
 }
 
-for f in routes/20260812_route_v6_v8_waypoints.json \
-         routes/20260812_route_v6_v8_safety_band.json \
-         routes/route_2d_map_v8.pgm \
-         routes/route_2d_map_v8.yaml; do
+for f in routes/20260814_route_algorithm_waypoints.json \
+         routes/20260814_route_algorithm_safety_band.json \
+         routes/route_2d_map_algorithm.pgm \
+         routes/route_2d_map_algorithm.yaml; do
   [ -f "$f" ] || { echo "ERROR: $f missing after pull" >&2; exit 1; }
 done
 python3 -c "
 import json
-w = json.load(open('routes/20260812_route_v6_v8_waypoints.json'))
-b = json.load(open('routes/20260812_route_v6_v8_safety_band.json'))
+w = json.load(open('routes/20260814_route_algorithm_waypoints.json'))
+b = json.load(open('routes/20260814_route_algorithm_safety_band.json'))
 assert all('z' in p for p in w['waypoints']), 'waypoints need z'
 assert w.get('reference_point') == 'chair_centre', 'route must be chair-centred'
 assert any('left_kind' in s for s in b['stations']), 'band needs edge kinds'
 c = b.get('corridor')
-assert c, 'band carries no v8 mask provenance'
-assert c['source'] == 'route_2d_map_v8.yaml', 'band is not bound to v8'
+assert c, 'band carries no algorithm mask provenance'
+assert c['source'] == 'route_2d_map_algorithm.yaml', 'band is not bound to algorithm mask'
 print('  route: %d waypoints (with height)' % w['count'])
-print('  band : %d stations (v8 hard-mask authority)' % len(b['stations']))
+print('  band : %d stations (algorithm hard-mask authority)' % len(b['stations']))
 print('  mask : %s' % c['source'])
 "
 

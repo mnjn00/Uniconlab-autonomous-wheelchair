@@ -228,9 +228,9 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert 'REPO="${REPO:-$HOME/wheelchair_localization_src}"' in runner
     assert 'MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"' \
         in runner
-    assert 'ROUTE="${ROUTE:-$REPO/routes/20260812_route_v6_v8_waypoints.json}"' \
+    assert 'ROUTE="${ROUTE:-$REPO/routes/20260814_route_algorithm_waypoints.json}"' \
         in runner
-    assert 'DRIVABLE_MASK="${DRIVABLE_MASK:-$REPO/routes/route_2d_map_v8.yaml}"' \
+    assert 'DRIVABLE_MASK="${DRIVABLE_MASK:-$REPO/routes/route_2d_map_algorithm.yaml}"' \
         in runner
     startup = runner[runner.index("setsid env SHADOW_QA=1"):runner.index(
         "wait \"$STACK_PID\"")]
