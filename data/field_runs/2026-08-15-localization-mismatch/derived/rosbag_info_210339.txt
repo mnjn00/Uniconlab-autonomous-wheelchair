@@ -1,0 +1,35 @@
+path:         /tmp/blackbox_20260815_210339_reindexed.bag
+version:      2.0
+duration:     13:05s (785s)
+start:        Aug 15 2026 21:03:39.50 (1786795419.50)
+end:          Aug 15 2026 21:16:45.18 (1786796205.18)
+size:         19.9 MB
+messages:     409288
+compression:  lz4 [129/129 chunks; 15.59%]
+uncompressed: 96.8 MB @ 126.1 KB/s
+compressed:   15.1 MB @  19.7 KB/s (15.59%)
+types:        diagnostic_msgs/DiagnosticArray         [60810da900de1dd6ddd437c3503511da]
+              geometry_msgs/PoseWithCovarianceStamped [953b798c0f514ff060a53a3498ce6246]
+              geometry_msgs/Twist                     [9f195f881246fdfa2798d1d3eebca84a]
+              nav_msgs/Odometry                       [cd5e73d190d741a2f92e81eda573aca7]
+              sensor_msgs/Imu                         [6a62c6daae103f4ff57a132d6f95cec2]
+              std_msgs/Int16                          [8524586e34fbd7cb1c08c5f5f1ca0e57]
+              std_msgs/Int16MultiArray                [d9338d7f523fcb692fae9d0a0e9f067c]
+              std_msgs/String                         [992ce8a1687cec8c8bd883ec73ca41d1]
+              visualization_msgs/MarkerArray          [d155b9ce5188fbaf89745847fd5882d7]
+topics:       /Odometry                                  7857 msgs    : nav_msgs/Odometry
+              /cmd_vel                                  39284 msgs    : geometry_msgs/Twist
+              /cmd_vel_gated                            11785 msgs    : geometry_msgs/Twist
+              /cmd_vel_raw                               7858 msgs    : geometry_msgs/Twist
+              /fast_lio_icp/localization_diagnostics      744 msgs    : diagnostic_msgs/DiagnosticArray
+              /fast_lio_icp/pose                         7857 msgs    : geometry_msgs/PoseWithCovarianceStamped
+              /livox/imu                               157128 msgs    : sensor_msgs/Imu
+              /mode_cmd                                     1 msg     : std_msgs/Int16
+              /perception/dynamic_boxes                  3928 msgs    : visualization_msgs/MarkerArray
+              /perception/objects                        3928 msgs    : visualization_msgs/MarkerArray
+              /perception/objects_summary                3928 msgs    : std_msgs/String
+              /tip_guard/status                         39284 msgs    : std_msgs/String
+              /waypoint_follower/route_identity             1 msg     : std_msgs/String
+              /waypoint_follower/status                  7857 msgs    : std_msgs/String
+              /wheel_cmd                                39284 msgs    : std_msgs/Int16MultiArray
+              /wheel_status                             78564 msgs    : std_msgs/Int16MultiArray

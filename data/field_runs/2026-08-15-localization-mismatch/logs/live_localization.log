@@ -1,0 +1,224 @@
+... logging to /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/roslaunch-mprp3-3888.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;/home/mprp3/livox_static_localization_ws/src/static_livox_localization/launch/moving_localization.launch
+[1mstarted roslaunch server http://mprp3:43773/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /auto_initial_pose/body_frame_profile: builtin
+ * /auto_initial_pose/global_only: True
+ * /auto_initial_pose/gpu_lateral_radius_m: 10.0
+ * /auto_initial_pose/gpu_lateral_step_m: 1.0
+ * /auto_initial_pose/map: /home/mprp3/wheel...
+ * /auto_initial_pose/min_refined_score: 0.78
+ * /auto_initial_pose/require_gpu: True
+ * /auto_initial_pose/route: /home/mprp3/wheel...
+ * /auto_initial_pose/traj: /home/mprp3/wheel...
+ * /bounded_cloud_preview/auto_correction_on_start: False
+ * /bounded_cloud_preview/base_frame: body
+ * /bounded_cloud_preview/candidate_translation_tolerance_m: 0.3
+ * /bounded_cloud_preview/candidate_yaw_tolerance_deg: 3.0
+ * /bounded_cloud_preview/cloud_topic: /cloud_registered...
+ * /bounded_cloud_preview/correction_period_s: 1.0
+ * /bounded_cloud_preview/degraded_after_failures: 1
+ * /bounded_cloud_preview/initialization_window_s: 3.0
+ * /bounded_cloud_preview/lost_after_s: 20.0
+ * /bounded_cloud_preview/map_frame: map
+ * /bounded_cloud_preview/map_id: merged_0707_0725_v1
+ * /bounded_cloud_preview/map_path: /home/mprp3/wheel...
+ * /bounded_cloud_preview/map_preview_topic: /fast_lio_icp/map...
+ * /bounded_cloud_preview/map_preview_voxel_resolution: 0.75
+ * /bounded_cloud_preview/map_sha256: ee317581328d3eaee...
+ * /bounded_cloud_preview/max_cloud_odom_skew_s: 0.1
+ * /bounded_cloud_preview/max_cloud_samples: 20
+ * /bounded_cloud_preview/max_correction_translation_m: 0.2
+ * /bounded_cloud_preview/max_correction_yaw_deg: 2.0
+ * /bounded_cloud_preview/max_correspondence: 0.5
+ * /bounded_cloud_preview/max_fitness: 0.28
+ * /bounded_cloud_preview/max_iterations: 64
+ * /bounded_cloud_preview/max_prediction_translation_m: 1.5
+ * /bounded_cloud_preview/max_prediction_yaw_deg: 20.0
+ * /bounded_cloud_preview/max_submap_points: 120000
+ * /bounded_cloud_preview/min_inlier_ratio: 0.2
+ * /bounded_cloud_preview/min_points: 500
+ * /bounded_cloud_preview/min_tracking_correction_translation_m: 0.1
+ * /bounded_cloud_preview/min_tracking_correction_yaw_deg: 2.0
+ * /bounded_cloud_preview/odom_frame: camera_init
+ * /bounded_cloud_preview/odom_topic: /Odometry
+ * /bounded_cloud_preview/preview_input_topic: /cloud_registered...
+ * /bounded_cloud_preview/preview_max_rate_hz: 5.0
+ * /bounded_cloud_preview/preview_output_topic: /fast_lio_icp/liv...
+ * /bounded_cloud_preview/preview_voxel_resolution: 0.3
+ * /bounded_cloud_preview/recovery_confirmations: 1
+ * /bounded_cloud_preview/registration_backend: pcl_gicp
+ * /bounded_cloud_preview/required_consistent_candidates: 3
+ * /bounded_cloud_preview/roi_radius: 20.0
+ * /bounded_cloud_preview/roi_z_half_extent: 5.0
+ * /bounded_cloud_preview/rolling_window_s: 2.0
+ * /bounded_cloud_preview/seed_topic: /fast_lio_icp/ini...
+ * /bounded_cloud_preview/voxel_resolution: 0.2
+ * /map_preview_publisher/auto_correction_on_start: False
+ * /map_preview_publisher/base_frame: body
+ * /map_preview_publisher/candidate_translation_tolerance_m: 0.3
+ * /map_preview_publisher/candidate_yaw_tolerance_deg: 3.0
+ * /map_preview_publisher/cloud_topic: /cloud_registered...
+ * /map_preview_publisher/correction_period_s: 1.0
+ * /map_preview_publisher/degraded_after_failures: 1
+ * /map_preview_publisher/initialization_window_s: 3.0
+ * /map_preview_publisher/lost_after_s: 20.0
+ * /map_preview_publisher/map_frame: map
+ * /map_preview_publisher/map_id: merged_0707_0725_v1
+ * /map_preview_publisher/map_path: /home/mprp3/wheel...
+ * /map_preview_publisher/map_preview_topic: /fast_lio_icp/map...
+ * /map_preview_publisher/map_preview_voxel_resolution: 0.75
+ * /map_preview_publisher/map_sha256: ee317581328d3eaee...
+ * /map_preview_publisher/max_cloud_odom_skew_s: 0.1
+ * /map_preview_publisher/max_cloud_samples: 20
+ * /map_preview_publisher/max_correction_translation_m: 0.2
+ * /map_preview_publisher/max_correction_yaw_deg: 2.0
+ * /map_preview_publisher/max_correspondence: 0.5
+ * /map_preview_publisher/max_fitness: 0.28
+ * /map_preview_publisher/max_iterations: 64
+ * /map_preview_publisher/max_prediction_translation_m: 1.5
+ * /map_preview_publisher/max_prediction_yaw_deg: 20.0
+ * /map_preview_publisher/max_submap_points: 120000
+ * /map_preview_publisher/min_inlier_ratio: 0.2
+ * /map_preview_publisher/min_points: 500
+ * /map_preview_publisher/min_tracking_correction_translation_m: 0.1
+ * /map_preview_publisher/min_tracking_correction_yaw_deg: 2.0
+ * /map_preview_publisher/odom_frame: camera_init
+ * /map_preview_publisher/odom_topic: /Odometry
+ * /map_preview_publisher/preview_input_topic: /cloud_registered...
+ * /map_preview_publisher/preview_max_rate_hz: 5.0
+ * /map_preview_publisher/preview_output_topic: /fast_lio_icp/liv...
+ * /map_preview_publisher/preview_voxel_resolution: 0.3
+ * /map_preview_publisher/recovery_confirmations: 1
+ * /map_preview_publisher/registration_backend: pcl_gicp
+ * /map_preview_publisher/required_consistent_candidates: 3
+ * /map_preview_publisher/roi_radius: 20.0
+ * /map_preview_publisher/roi_z_half_extent: 5.0
+ * /map_preview_publisher/rolling_window_s: 2.0
+ * /map_preview_publisher/seed_topic: /fast_lio_icp/ini...
+ * /map_preview_publisher/voxel_resolution: 0.2
+ * /moving_icp_localizer/auto_correction_on_start: False
+ * /moving_icp_localizer/base_frame: body
+ * /moving_icp_localizer/candidate_translation_tolerance_m: 0.3
+ * /moving_icp_localizer/candidate_yaw_tolerance_deg: 3.0
+ * /moving_icp_localizer/cloud_topic: /cloud_registered...
+ * /moving_icp_localizer/correction_period_s: 1.0
+ * /moving_icp_localizer/degraded_after_failures: 1
+ * /moving_icp_localizer/initialization_window_s: 3.0
+ * /moving_icp_localizer/lost_after_s: 20.0
+ * /moving_icp_localizer/map_frame: map
+ * /moving_icp_localizer/map_id: merged_0707_0725_v1
+ * /moving_icp_localizer/map_path: /home/mprp3/wheel...
+ * /moving_icp_localizer/map_preview_topic: /fast_lio_icp/map...
+ * /moving_icp_localizer/map_preview_voxel_resolution: 0.75
+ * /moving_icp_localizer/map_sha256: ee317581328d3eaee...
+ * /moving_icp_localizer/max_cloud_odom_skew_s: 0.1
+ * /moving_icp_localizer/max_cloud_samples: 20
+ * /moving_icp_localizer/max_correction_translation_m: 0.2
+ * /moving_icp_localizer/max_correction_yaw_deg: 2.0
+ * /moving_icp_localizer/max_correspondence: 0.5
+ * /moving_icp_localizer/max_fitness: 0.28
+ * /moving_icp_localizer/max_iterations: 64
+ * /moving_icp_localizer/max_prediction_translation_m: 1.5
+ * /moving_icp_localizer/max_prediction_yaw_deg: 20.0
+ * /moving_icp_localizer/max_submap_points: 120000
+ * /moving_icp_localizer/min_inlier_ratio: 0.2
+ * /moving_icp_localizer/min_points: 500
+ * /moving_icp_localizer/min_tracking_correction_translation_m: 0.1
+ * /moving_icp_localizer/min_tracking_correction_yaw_deg: 2.0
+ * /moving_icp_localizer/odom_frame: camera_init
+ * /moving_icp_localizer/odom_topic: /Odometry
+ * /moving_icp_localizer/preview_input_topic: /cloud_registered...
+ * /moving_icp_localizer/preview_max_rate_hz: 5.0
+ * /moving_icp_localizer/preview_output_topic: /fast_lio_icp/liv...
+ * /moving_icp_localizer/preview_voxel_resolution: 0.3
+ * /moving_icp_localizer/recovery_confirmations: 1
+ * /moving_icp_localizer/registration_backend: fast_vgicp_cuda
+ * /moving_icp_localizer/required_consistent_candidates: 3
+ * /moving_icp_localizer/roi_radius: 20.0
+ * /moving_icp_localizer/roi_z_half_extent: 5.0
+ * /moving_icp_localizer/rolling_window_s: 2.0
+ * /moving_icp_localizer/seed_topic: /fast_lio_icp/ini...
+ * /moving_icp_localizer/voxel_resolution: 0.2
+ * /rosdistro: noetic
+ * /rosversion: 1.17.4
+
+NODES
+  /
+    auto_initial_pose (static_livox_localization/auto_initial_pose.py)
+    bounded_cloud_preview (static_livox_localization/bounded_cloud_preview_node)
+    localization_state_marker (static_livox_localization/localization_state_marker.py)
+    map_preview_publisher (static_livox_localization/map_preview_publisher)
+    moving_icp_localizer (static_livox_localization/moving_icp_localizer)
+    reference_marker (static_livox_localization/reference_marker.py)
+
+[1mROS_MASTER_URI=http://127.0.0.1:11311[0m
+]2;/home/mprp3/livox_static_localization_ws/src/static_livox_localization/launch/moving_localization.launch http://127.0.0.1:11311
+[1mprocess[moving_icp_localizer-1]: started with pid [3936][0m
+[0m[INFO] [1786796761.501138855]: Loaded immutable map merged_0707_0725_v1 (2696359 points); expecting camera_init -> body[0m
+lm not converged!!
+[INFO] [1786796761.126062]: submap sample: 1800 structural points (of 23607, ground removed)
+[INFO] [1786796761.127098]: loading runtime map and mapping trajectory for global fallback
+[INFO] [1786796761.337916]: 778 trajectory candidates
+[INFO] [1786796762.000470]: array backend: cupy (GPU)
+[INFO] [1786796762.497343]: GPU sparse voxel map: 927x588x214 address space, 1.7M support keys, voxel 0.45 m
+[INFO] [1786796762.501004]: GPU global search: 778 trajectory positions expanded to 16338 positions (lateral +/-10.0 m)
+[INFO] [1786796766.389033]: CPU exact re-rank: 256 GPU coarse candidates
+[INFO] [1786796766.392720]: top coarse candidates:
+[INFO] [1786796766.393448]:   score=0.808  (-1.1, -1.0, -0.0) yaw=4deg
+[INFO] [1786796766.393952]:   score=0.794  (-0.8, 0.3, -0.0) yaw=359deg
+[INFO] [1786796766.394436]:   score=0.785  (0.7, 0.7, -0.0) yaw=6deg
+[INFO] [1786796766.394886]:   score=0.785  (-1.3, -0.5, -0.0) yaw=359deg
+[INFO] [1786796766.395341]:   score=0.777  (-1.2, 0.0, -0.0) yaw=4deg
+[INFO] [1786796766.395786]:   score=0.763  (-1.0, 0.1, -0.0) yaw=-4deg
+[INFO] [1786796766.396251]: shortlisted 4 distinct hypotheses from 256 scored
+[INFO] [1786796769.768548]: refined 4 candidates in 3.4 s:
+[INFO] [1786796769.769856]:   score=0.937  (-0.13, -0.22, -0.05) yaw=3.8deg
+[INFO] [1786796769.770736]:   score=0.915  (0.10, 0.31, -0.07) yaw=361.8deg
+[INFO] [1786796769.771420]:   score=0.908  (-0.02, -0.00, -0.01) yaw=2.8deg
+[INFO] [1786796769.772084]:   score=0.604  (3.47, 4.50, -0.08) yaw=5.5deg
+[INFO] [1786796769.772757]: accepted fix (-0.13, -0.22) yaw=3.8 score=0.937
+[INFO] [1786796769.773413]: trying candidate 1: source=global_search score=0.937 (-0.1, -0.2) yaw=4
+[INFO] [1786796775.382674]: initialized: candidate 1 verified (TRACKING)
+[INFO] [1786796780.392747]: stationary localization stable for 5.0 s
+[33m[WARN] [1786797157.383691027]: Shutdown request received.[0m
+[33m[WARN] [1786797157.383732426]: Reason given for shutdown: [user request][0m
+[0m[INFO] [1786796759.585198352]: Bounded RViz preview: /cloud_registered_body -> /fast_lio_icp/live_preview[0m
+[33m[WARN] [1786797157.547085116]: Shutdown request received.[0m
+[33m[WARN] [1786797157.547117462]: Reason given for shutdown: [user request][0m
+[33m[WARN] [1786797157.547498866]: Shutdown request received.[0m
+[33m[WARN] [1786797157.547537894]: Reason given for shutdown: [user request][0m
+[0m[INFO] [1786796760.040914066]: Published latched map preview with 194036 of 2696359 points[0m
+shutdown request: user request
+shutdown request: user request
+[31m================================================================================REQUIRED process [moving_icp_localizer-1] has died!
+process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/moving_icp_localizer-1*.log
+Initiating shutdown!
+================================================================================[0m
+[1mprocess[bounded_cloud_preview-2]: started with pid [3937][0m
+[1mprocess[map_preview_publisher-3]: started with pid [3938][0m
+[1mprocess[reference_marker-4]: started with pid [3939][0m
+[1mprocess[localization_state_marker-5]: started with pid [3940][0m
+[1mprocess[auto_initial_pose-6]: started with pid [3941][0m
+[1m[auto_initial_pose-6] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/auto_initial_pose-6*.log[0m
+[1m[bounded_cloud_preview-2] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/bounded_cloud_preview-2*.log[0m
+[1m[map_preview_publisher-3] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/map_preview_publisher-3*.log[0m
+[1m[localization_state_marker-5] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/localization_state_marker-5*.log[0m
+[1m[reference_marker-4] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/reference_marker-4*.log[0m
+[moving_icp_localizer-1] killing on exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m

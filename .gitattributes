@@ -1,1 +1,8 @@
 blackbox/*.bag filter=lfs diff=lfs merge=lfs -text
+data/field_runs/**/*.bag filter=lfs diff=lfs merge=lfs -text
+data/field_runs/**/*.csv text eol=lf
+data/field_runs/**/*.json text eol=lf
+data/field_runs/**/*.log text eol=lf
+data/field_runs/**/*.md text eol=lf
+data/field_runs/**/*.txt text eol=lf
+data/field_runs/**/*.yaml text eol=lf

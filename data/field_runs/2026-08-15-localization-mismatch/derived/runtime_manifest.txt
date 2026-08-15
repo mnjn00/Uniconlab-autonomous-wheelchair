@@ -1,0 +1,24 @@
+captured_at=2026-08-15T21:35:49+09:00
+hostname=mprp3
+kernel=Linux 5.15.0-139-generic x86_64 GNU/Linux
+deployed_repo=/home/mprp3/wheelchair_localization_src
+## chore/algorithm-route-default...github/chore/algorithm-route-default
+ M routes/20260814_route_algorithm_safety_band.json
+ M routes/route_2d_map_algorithm.yaml
+?? routes/20260815_route_v6_v8_trim_safety_band.json
+?? routes/20260815_route_v6_v8_trim_waypoints.json
+?? scripts/nuc_bluetooth_check.sh
+?? scripts/nuc_bluetooth_pair.sh
+?? scripts/nuc_bridge_restart.sh
+?? scripts/ros1_bluetooth_bridge.py
+commit=c277518968ae2cf144f960419813a08e14da740b
+commit_subject=fix: use XmlRpc-compatible count parameter
+commit_date=2026-08-14T18:45:59+09:00
+startup_profile=dwa
+latency_s=0
+route=/home/mprp3/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_waypoints.json
+safety_band=/home/mprp3/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_safety_band.json
+drivable_mask=/home/mprp3/wheelchair_localization_src/routes/route_2d_map_v8.yaml
+registration_backend=fast_vgicp_cuda
+auto_init_global_only=true on 21:26 restart
+rviz=false

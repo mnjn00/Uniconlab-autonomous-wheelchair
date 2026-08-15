@@ -1,0 +1,170 @@
+{
+  "route_path": "/home/mprp3/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_waypoints.json",
+  "route_waypoints": 1886,
+  "sessions": {
+    "210339_wrong_localization": {
+      "bag": "blackbox_20260815_210339_reindexed.bag",
+      "command_max_abs": {
+        "/cmd_vel": {
+          "angular_z": 0.0,
+          "linear_x": 0.0
+        },
+        "/cmd_vel_gated": {
+          "angular_z": 0.0,
+          "linear_x": 0.0
+        },
+        "/cmd_vel_raw": {
+          "angular_z": 0.0,
+          "linear_x": 0.0
+        }
+      },
+      "counts": {
+        "/cmd_vel": 39284,
+        "/cmd_vel_gated": 11785,
+        "/cmd_vel_raw": 7858,
+        "/fast_lio_icp/localization_diagnostics": 744,
+        "/fast_lio_icp/pose": 7857,
+        "/waypoint_follower/route_identity": 1,
+        "/waypoint_follower/status": 7857
+      },
+      "diagnostic_reasons": {
+        "STATIONARY_CORRECTION_SUPPRESSED": 744
+      },
+      "diagnostic_states": {
+        "TRACKING": 744
+      },
+      "duration_s": 785.6725249290466,
+      "end_time": 1786796205.1762998,
+      "first_pose": {
+        "nearest_dense_wp": 11,
+        "nearest_distance_m": 2.1552759966586574,
+        "t_ros": 1786795419.5268037,
+        "x": -4.948873529317086,
+        "y": -3.5904120902297456,
+        "yaw_deg": 12.690322819923614,
+        "z": -0.09664775843129508
+      },
+      "follower_events": [
+        {
+          "status": "HOLD:PAUSED",
+          "t_ros": 1786795419.543523
+        },
+        {
+          "status": "HOLD:OFF_BAND",
+          "t_ros": 1786795486.0445569
+        },
+        {
+          "status": "HOLD:PAUSED",
+          "t_ros": 1786795496.6444073
+        }
+      ],
+      "last_pose": {
+        "nearest_dense_wp": 11,
+        "nearest_distance_m": 2.1427621699520265,
+        "t_ros": 1786796205.125736,
+        "x": -4.95537807358408,
+        "y": -3.5797160875527565,
+        "yaw_deg": 12.613308081681632,
+        "z": -0.07854531890512702
+      },
+      "pose_bounds": {
+        "max_x": -4.944046255637906,
+        "max_y": -3.564134453319275,
+        "min_x": -4.9719171894396945,
+        "min_y": -3.6038763240842937
+      },
+      "route_identity": {
+        "drivable_mask_sha256": "3d183e8320f68c5deafd72c8f45a5780dade29ff43ca323664f27f4e3ed2eaa8",
+        "drivable_mask_yaml_sha256": "125d06ed5bc304ec3c99a27be17315857c3fcc09306512e685891ca4ae4f60dc",
+        "preferred_mask_sha256": "3b176c77709f4020a9a2fe82c6edf96d2ea579da7719772733cf16d8e0d07c83",
+        "route_content_sha256": "1f8e17594e47d4cead4d00892a783101d2739771dbea754c2ea39f4373997946",
+        "route_id": "v6-v8-t755:3b176c77709f:3d183e8320f6",
+        "safety_band_sha256": "3b09ba387f0abf42bc43ccaebb00a620d1fd0b925ef9421ae29afbb1e05c3a13"
+      },
+      "sha256": "eef24ac5aa2267690f2494d87a57634868c36a397c05711983a8299228de82d3",
+      "start_time": 1786795419.503775
+    },
+    "212633_wp0_relocalization": {
+      "bag": "blackbox_20260815_212633.bag",
+      "command_max_abs": {
+        "/cmd_vel": {
+          "angular_z": 0.0,
+          "linear_x": 0.0
+        },
+        "/cmd_vel_gated": {
+          "angular_z": 0.0,
+          "linear_x": 0.0
+        },
+        "/cmd_vel_raw": {
+          "angular_z": 0.0,
+          "linear_x": 0.0
+        }
+      },
+      "counts": {
+        "/cmd_vel": 18097,
+        "/cmd_vel_gated": 5429,
+        "/cmd_vel_raw": 3607,
+        "/fast_lio_icp/localization_diagnostics": 192,
+        "/fast_lio_icp/pose": 3620,
+        "/waypoint_follower/route_identity": 1,
+        "/waypoint_follower/status": 3603
+      },
+      "diagnostic_reasons": {
+        "CANDIDATE_ACCUMULATING": 10,
+        "CANDIDATE_INCONSISTENT": 14,
+        "CONSENSUS_READY": 2,
+        "MANUAL_ALIGN": 4,
+        "OK": 24,
+        "STATIONARY_CORRECTION_SUPPRESSED": 136,
+        "VERIFYING": 2
+      },
+      "diagnostic_states": {
+        "MANUAL_ALIGN": 4,
+        "TRACKING": 162,
+        "VERIFYING": 26
+      },
+      "duration_s": 361.93826603889465,
+      "end_time": 1786797156.2040308,
+      "first_pose": {
+        "nearest_dense_wp": 43,
+        "nearest_distance_m": 0.04937760016212194,
+        "t_ros": 1786796794.3075151,
+        "x": 0.05990560784082412,
+        "y": 0.17037912481618456,
+        "yaw_deg": 4.017422750125466,
+        "z": -0.05516128234280517
+      },
+      "follower_events": [
+        {
+          "status": "HOLD:PAUSED",
+          "t_ros": 1786796795.9578562
+        }
+      ],
+      "last_pose": {
+        "nearest_dense_wp": 0,
+        "nearest_distance_m": 1.4103893046558182,
+        "t_ros": 1786797156.2037103,
+        "x": -9.305151139501593,
+        "y": -2.9214424384014843,
+        "yaw_deg": 15.706123488393528,
+        "z": -0.0660610664785827
+      },
+      "pose_bounds": {
+        "max_x": 0.0695265788485564,
+        "max_y": 0.1972069731551086,
+        "min_x": -9.314546618185465,
+        "min_y": -3.8155206306317884
+      },
+      "route_identity": {
+        "drivable_mask_sha256": "3d183e8320f68c5deafd72c8f45a5780dade29ff43ca323664f27f4e3ed2eaa8",
+        "drivable_mask_yaml_sha256": "125d06ed5bc304ec3c99a27be17315857c3fcc09306512e685891ca4ae4f60dc",
+        "preferred_mask_sha256": "3b176c77709f4020a9a2fe82c6edf96d2ea579da7719772733cf16d8e0d07c83",
+        "route_content_sha256": "1f8e17594e47d4cead4d00892a783101d2739771dbea754c2ea39f4373997946",
+        "route_id": "v6-v8-t755:3b176c77709f:3d183e8320f6",
+        "safety_band_sha256": "3b09ba387f0abf42bc43ccaebb00a620d1fd0b925ef9421ae29afbb1e05c3a13"
+      },
+      "sha256": "664a48bebe3103e2f9023844815852ba1aaff60b28ba2c6199648cdedd09cf5f",
+      "start_time": 1786796794.2657647
+    }
+  }
+}
