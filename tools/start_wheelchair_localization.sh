@@ -66,6 +66,19 @@ if [ "$ACTUAL_TRAJ_SHA256" != "$TRAJ_SHA256" ]; then
 fi
 ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260814_route_algorithm_waypoints.json}"
 AUTO_INIT_ROUTE="${AUTO_INIT_ROUTE:-$ROUTE}"
+# Global search only, by default. The known-start shortcut hands the route's
+# first waypoint straight to the localizer and reaches TRACKING in about 16 s,
+# where the global search regularly spends its whole 180 s budget and gives up
+# into MANUAL_ALIGN. It stays opt-in because it is only correct when the chair
+# really is parked at that waypoint -- and either way the seed is a hypothesis,
+# since ICP consensus still has to accept it and rejects a wrong prior.
+#   AUTO_INIT_GLOBAL_ONLY=false ./start_wheelchair_localization.sh
+AUTO_INIT_GLOBAL_ONLY="${AUTO_INIT_GLOBAL_ONLY:-true}"
+case "$AUTO_INIT_GLOBAL_ONLY" in
+  true|false) ;;
+  *) echo "ERROR: AUTO_INIT_GLOBAL_ONLY must be true or false, got '$AUTO_INIT_GLOBAL_ONLY'" >&2
+     exit 67 ;;
+esac
 BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260814_route_algorithm_safety_band.json}"
 DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_algorithm.yaml}"
 RVIZ="${RVIZ:-true}"
@@ -375,7 +388,7 @@ rosparam set /fast_lio_icp/auto_initialization_verified false
 rosparam set /fast_lio_icp/auto_initialization_stable false
 rosparam set /fast_lio_icp/auto_initialization_source none
 $DETACH roslaunch static_livox_localization moving_localization.launch \
-  rviz:="$RVIZ" auto_init:=true auto_init_global_only:=true \
+  rviz:="$RVIZ" auto_init:=true auto_init_global_only:="$AUTO_INIT_GLOBAL_ONLY" \
   map_path:="$MAP" map_sha256:="$MAP_SHA256" map_id:="$MAP_ID" \
   auto_init_map:="$MAP" auto_init_traj:="$TRAJ" \
   auto_init_route:="$AUTO_INIT_ROUTE" \

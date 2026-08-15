@@ -1,0 +1,29 @@
+=== who publishes wheel_battery / battery_consumption / robot_fault ===
+/home/mprp3/catkin_ws/src/base_model/src/serv_comm.py:181:    rospy.Subscriber('wheel_battery', Int16, self.set_robot_battery_info, queue_size=1)
+/home/mprp3/catkin_ws/src/base_model/src/serv_comm.py:263:    self.wheel_battery = 0
+/home/mprp3/catkin_ws/src/base_model/src/serv_comm.py:318:      self.sData['Data']['WheelBattery'] = self.wheel_battery
+/home/mprp3/catkin_ws/src/base_model/src/serv_comm.py:641:    self.wheel_battery = msg.data
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:64:    self.battery_consumption = self.prev_bat
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:69:    self.bat_pub = rospy.Publisher('wheel_battery', Int16, queue_size=1)
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:70:    self.bat_con_pub = rospy.Publisher('battery_consumption', Int16, queue_size=1)
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:78:    self.wheel_battery = int()
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:92:    if self.wheel_battery != msg.data[7]:
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:93:      self.wheel_battery = msg.data[7]
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:95:      self.init_bat = self.wheel_battery
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:97:    self.battery_consumption = self.prev_bat + self.init_bat - self.wheel_battery
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:150:    data_bat = [{'Value': self.battery_consumption}]
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:174:    self.bat_pub.publish(Int16(self.wheel_battery))
+/home/mprp3/catkin_ws/src/base_model/src/bridge_to_server.py:175:    self.bat_con_pub.publish(Int16(self.battery_consumption))
+/home/mprp3/catkin_ws/src/mpr_val/src/fault_check.py:13:    self.fault_pub = rospy.Publisher('robot_fault', Int16MultiArray, queue_size=1)
+
+=== waypoint_follower status + start_drive ===
+/home/mprp3/livox_static_localization_ws/src/pgy_path_planner/scripts/path_follower_node_custom.py:45:        self.start_drive_sub = rospy.Subscriber('/start_drive', Bool, self.start_drive_cb)
+/home/mprp3/livox_static_localization_ws/src/pgy_path_planner/scripts/path_follower_node_custom.py:49:        rospy.loginfo("PathFollowerCustom: Node initialized. Waiting for path, odom, collision status, and run trigger (/start_drive)...")
+/home/mprp3/livox_static_localization_ws/src/pgy_path_planner/scripts/path_follower_node_custom.py:75:    def start_drive_cb(self, msg):
+/home/mprp3/livox_static_localization_ws/src/pgy_path_planner/scripts/path_follower_node_custom.py:98:            rospy.logwarn_throttle(5.0, "PathFollowerCustom: Autonomous drive is currently WAITING. Publish 'true' to /start_drive topic to move.")
+/home/mprp3/livox_static_localization_ws/src/static_livox_localization/scripts/waypoint_follower.py:335:            "/waypoint_follower/status", String, queue_size=2)
+/home/mprp3/livox_static_localization_ws/src/static_livox_localization/scripts/dwa_run_report.py:56:                topics=["/waypoint_follower/status", "/fast_lio_icp/pose",
+/home/mprp3/livox_static_localization_ws/src/static_livox_localization/scripts/dwa_run_report.py:59:            if topic == "/waypoint_follower/status":
+/home/mprp3/livox_static_localization_ws/src/static_livox_localization/scripts/dwa_run_report.py:90:        print("  %s: no /waypoint_follower/status in this bag" % path)
+
+=== uart.py battery extraction ===
