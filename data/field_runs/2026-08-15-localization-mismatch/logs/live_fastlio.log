@@ -1,0 +1,106 @@
+Multi thread started
+p_pre->lidar_type 1
+~~~~/home/mprp3/fast_lio_ws/src/FAST_LIO/ file opened
+[33m[WARN] [1786796748.599544894]: No point, skip this scan!
+[0m
+[0m[INFO] [1786796748.598862305]: IMU Initial Done[0m
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_1.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_2.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_3.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_4.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_5.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_6.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_7.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_8.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_9.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_10.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_11.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_12.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_13.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_14.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_15.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_16.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_17.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_18.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_19.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_20.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_21.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_22.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_23.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_24.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_25.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_26.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_27.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_28.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_29.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_30.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_31.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_32.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_33.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_34.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_35.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_36.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_37.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_38.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_39.pcd
+current scan saved to /PCD//home/mprp3/fast_lio_ws/src/FAST_LIO/PCD/scans_40.pcd
+[33m[WARN] [1786797157.443067384]: Shutdown request received.[0m
+[33m[WARN] [1786797157.443123242]: Reason given for shutdown: [user request][0m
+current scan saved to /PCD/scans.pcd
+Rebuild thread terminated normally
+... logging to /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/roslaunch-mprp3-3626.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;/home/mprp3/fast_lio_ws/src/FAST_LIO/launch/mapping_mid360.launch
+[1mstarted roslaunch server http://mprp3:44355/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /common/imu_topic: /livox/imu
+ * /common/lid_topic: /livox/lidar
+ * /common/time_offset_lidar_to_imu: 0.0
+ * /common/time_sync_en: False
+ * /cube_side_length: 1000.0
+ * /feature_extract_enable: False
+ * /filter_size_map: 0.5
+ * /filter_size_surf: 0.5
+ * /mapping/acc_cov: 0.1
+ * /mapping/b_acc_cov: 0.0001
+ * /mapping/b_gyr_cov: 0.0001
+ * /mapping/det_range: 100.0
+ * /mapping/extrinsic_R: [1, 0, 0, 0, 1, 0...
+ * /mapping/extrinsic_T: [-0.011, -0.02329...
+ * /mapping/extrinsic_est_en: False
+ * /mapping/fov_degree: 360
+ * /mapping/gyr_cov: 0.1
+ * /max_iteration: 3
+ * /pcd_save/interval: 100
+ * /pcd_save/pcd_save_en: True
+ * /point_filter_num: 3
+ * /preprocess/blind: 0.5
+ * /preprocess/lidar_type: 1
+ * /preprocess/scan_line: 4
+ * /publish/dense_publish_en: True
+ * /publish/path_en: False
+ * /publish/scan_bodyframe_pub_en: True
+ * /publish/scan_publish_en: True
+ * /rosdistro: noetic
+ * /rosversion: 1.17.4
+ * /runtime_pos_log_enable: False
+
+NODES
+  /
+    laserMapping (fast_lio/fastlio_mapping)
+
+[1mROS_MASTER_URI=http://127.0.0.1:11311[0m
+]2;/home/mprp3/fast_lio_ws/src/FAST_LIO/launch/mapping_mid360.launch http://127.0.0.1:11311
+[1mprocess[laserMapping-1]: started with pid [3670][0m
+[1m[laserMapping-1] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/laserMapping-1*.log[0m
+all processes on machine have died, roslaunch will exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m

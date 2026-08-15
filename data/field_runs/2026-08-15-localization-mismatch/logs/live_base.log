@@ -1,0 +1,53 @@
+[33m[WARN] [1786797157.819040798]: Shutdown request received.[0m
+[33m[WARN] [1786797157.820084502]: Reason given for shutdown: [user request][0m
+shutdown request: user request
+[WARN] [1786796785.377400]: uart watchdog: wheel_cmd starved, sending stop
+
+
+[[[ Manual Mode ]]]
+shutdown request: user request
+shutdown request: user request
+... logging to /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/roslaunch-mprp3-4675.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;/home/mprp3/catkin_ws/src/base_model/launch/wheel.launch
+[1mstarted roslaunch server http://mprp3:42123/[0m
+
+SUMMARY
+========
+
+PARAMETERS
+ * /robot_description: <?xml version="1....
+ * /rosdistro: noetic
+ * /rosversion: 1.17.4
+
+NODES
+  /
+    joint_state_publisher (joint_state_publisher/joint_state_publisher)
+    odom_pub (base_model/odom_pub.py)
+    robot_state_publisher (robot_state_publisher/robot_state_publisher)
+    uart (base_model/uart.py)
+    wheel_cmd (base_model/wheel_cmd_tmp.py)
+
+[1mROS_MASTER_URI=http://127.0.0.1:11311[0m
+]2;/home/mprp3/catkin_ws/src/base_model/launch/wheel.launch http://127.0.0.1:11311
+[1mprocess[joint_state_publisher-1]: started with pid [4720][0m
+[1mprocess[robot_state_publisher-2]: started with pid [4721][0m
+[1mprocess[uart-3]: started with pid [4722][0m
+[1mprocess[odom_pub-4]: started with pid [4723][0m
+[1mprocess[wheel_cmd-5]: started with pid [4724][0m
+[1m[joint_state_publisher-1] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/joint_state_publisher-1*.log[0m
+[1m[robot_state_publisher-2] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/robot_state_publisher-2*.log[0m
+[1m[odom_pub-4] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/odom_pub-4*.log[0m
+[1m[uart-3] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/uart-3*.log[0m
+[1m[wheel_cmd-5] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/wheel_cmd-5*.log[0m
+all processes on machine have died, roslaunch will exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m

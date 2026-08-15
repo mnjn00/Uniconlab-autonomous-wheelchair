@@ -1,0 +1,18 @@
+[WARN] [1786796795.130096]: route was built about (0.000, -0.173), the chair is now measured at (-0.500, -0.200) - driving the route about its own point so the path is reproduced, but the band's clearances are stated 0.501 m from where the chair centre actually is
+[WARN] [1786796858.857949]: waypoint_follower: position diverged from windowed search (wp 43, 2.1m) vs global nearest (wp 32, 0.1m) - resyncing
+[WARN] [1786796863.757998]: waypoint_follower: position diverged from windowed search (wp 32, 2.2m) vs global nearest (wp 21, 0.2m) - resyncing
+[WARN] [1786796868.458013]: waypoint_follower: position diverged from windowed search (wp 21, 2.1m) vs global nearest (wp 10, 0.1m) - resyncing
+[WARN] [1786796938.006470]: pose step clamped: 0.82 m withheld over 0.10 s - the chair cannot move that fast, so this is the fix correcting
+[WARN] [1786796951.209865]: pose step clamped: 1.35 m withheld over 0.10 s - the chair cannot move that fast, so this is the fix correcting
+[WARN] [1786796993.906965]: pose step clamped: 1.36 m withheld over 0.10 s - the chair cannot move that fast, so this is the fix correcting
+[WARN] [1786797017.106950]: pose step clamped: 1.27 m withheld over 0.10 s - the chair cannot move that fast, so this is the fix correcting
+[INFO] [1786796795.128802]: route: 1886 waypoints, band stations: 755
+[INFO] [1786796795.131893]: control law: dwa
+[INFO] [1786796795.132319]: cluster avoidance: ON
+[INFO] [1786796795.132759]: waypoint_follower: safety policies ENABLED
+[INFO] [1786796795.956932]: DWA profile: sim 1.05 m, 6 speeds x 21 yaw rates, band and drivable mask as hard rejects
+[INFO] [1786796906.054754]: follower PAUSED
+[INFO] [1786796936.611140]: follower PAUSED
+[INFO] [1786797033.186177]: follower PAUSED
+[INFO] [1786797150.564744]: follower PAUSED
+shutdown request: user request

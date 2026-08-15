@@ -1,0 +1,36 @@
+[33m[WARN] [1786797157.820693792]: Shutdown request received.[0m
+[33m[WARN] [1786797157.820723636]: Reason given for shutdown: [user request][0m
+... logging to /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/roslaunch-mprp3-3240.log
+Checking log directory for disk usage. This may take a while.
+Press Ctrl-C to interrupt
+Done checking log file disk usage. Usage is <1GB.
+]2;roscore
+[1mstarted roslaunch server http://mprp3:40315/[0m
+ros_comm version 1.17.4
+
+
+SUMMARY
+========
+
+PARAMETERS
+ * /rosdistro: noetic
+ * /rosversion: 1.17.4
+
+NODES
+
+auto-starting new master
+[1mprocess[master]: started with pid [3262][0m
+[1mROS_MASTER_URI=http://mprp3:11311/[0m
+]2;roscore http://mprp3:11311/
+[1msetting /run_id to 685be1d4-98a4-11f1-a63f-d770f2def5a0[0m
+[1mprocess[rosout-1]: started with pid [3283][0m
+started core service [/rosout]
+[1m[rosout-1] process has finished cleanly
+log file: /home/mprp3/.ros/log/685be1d4-98a4-11f1-a63f-d770f2def5a0/rosout-1*.log[0m
+[rosout-1] restarting process
+[1mprocess[rosout-1]: started with pid [9685][0m
+[rosout-1] killing on exit
+[master] killing on exit
+shutting down processing monitor...
+... shutting down processing monitor complete
+[1mdone[0m
