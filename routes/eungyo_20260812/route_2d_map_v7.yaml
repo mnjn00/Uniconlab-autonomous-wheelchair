@@ -1,0 +1,7 @@
+image: route_2d_map_v7.pgm
+resolution: 0.1
+origin: [-106.5, -168.9, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+mode: trinary

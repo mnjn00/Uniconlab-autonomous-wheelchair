@@ -1,1 +1,13 @@
 blackbox/*.bag filter=lfs diff=lfs merge=lfs -text
+
+# Occupancy-grid masks are binary. Without this, git's autocrlf rewrites bytes
+# inside them on a Windows checkout, which silently breaks the SHA-256 that
+# route_assets.py uses to bind route, band and mask together -- the follower
+# then refuses to start with a mask SHA-256 mismatch while the bring-up still
+# reports READY. This bit us on 2026-08-15.
+*.pgm binary
+*.png binary
+*.pcd binary
+# Route assets are hashed byte-for-byte after stripping only a trailing
+# newline, so they must not be line-ending converted either.
+*.json -text

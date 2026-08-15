@@ -1,0 +1,48 @@
+{
+  "frame_id": "map",
+  "width": 4151,
+  "height": 2628,
+  "resolution_m_per_pixel": 0.1,
+  "origin": [
+    -106.5,
+    -168.9,
+    0.0
+  ],
+  "source_sha256": "50cac2ad74f9ac27d1b6fc3152eaef78e18a59f4ed7a5e9dc507e7b866f7b0c5",
+  "route_pixel_count": 73436,
+  "removed_component_sizes": [
+    58,
+    39,
+    38,
+    8,
+    7,
+    6,
+    6,
+    4,
+    4,
+    4,
+    4,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "source_previous_route": "route_corridor_v5",
+  "centerline_method": "project previous dense centerline along its local normal to the maximum Euclidean distance inside the new largest green component",
+  "red_target_policy": "none; no red points were present; centreline used for every waypoint",
+  "path_length_m": 383.894,
+  "dense_waypoint_count": 2004,
+  "field_waypoint_count": 769,
+  "shift_abs_median": 0.06,
+  "shift_abs_max": 1.12,
+  "semantics": {
+    "route_pixel_value": 254,
+    "background_pixel_value": 205
+  }
+}
