@@ -35,14 +35,19 @@ def test_shipped_v6_v8_assets_are_cryptographically_bound():
 
 
 def test_algorithm_default_assets_are_cryptographically_bound_and_clear():
-    route = ROOT / "routes" / "20260814_route_algorithm_waypoints.json"
-    band_path = ROOT / "routes" / "20260814_route_algorithm_safety_band.json"
-    mask = ROOT / "routes" / "route_2d_map_algorithm.yaml"
+    # The shipped default since 2026-08-16. It replaced the algorithm
+    # route, which has 13 corners below TURN_FLOOR_SPEED and ended the
+    # 08-15 drive at station 395; this one clears the curvature gate at
+    # zero blocked stations.
+    route = ROOT / "routes" / "20260815_route_v6_v8_trim_waypoints.json"
+    band_path = (ROOT / "routes"
+                 / "20260815_route_v6_v8_trim_safety_band.json")
+    mask = ROOT / "routes" / "route_2d_map_v8.yaml"
     binding = ASSETS.validate_asset_binding(route, band_path, mask)
-    assert binding["route_id"].startswith("algorithm:")
+    assert binding["route_id"].startswith("v6-v8-t")
     route_data = json.loads(route.read_text(encoding="utf-8"))
     band_data = json.loads(band_path.read_text(encoding="utf-8"))
-    assert route_data["count"] == 1897
+    assert route_data["count"] == 1886
     assert route_data["reference_point"] == "chair_centre"
     assert band_data["route_id"] == binding["route_id"]
     band = SAFETY.SafetyBand(band_path)

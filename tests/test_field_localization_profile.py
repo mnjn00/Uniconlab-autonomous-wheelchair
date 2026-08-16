@@ -15,8 +15,8 @@ RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
 # The shipped pair is chair-centred. A sensor-referenced route applies every
 # clearance about a point 0.2 m left of the chair, which under-protects the
 # right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
-ROUTE_NAME = "20260814_route_algorithm_waypoints.json"
-BAND_NAME = "20260814_route_algorithm_safety_band.json"
+ROUTE_NAME = "20260815_route_v6_v8_trim_waypoints.json"
+BAND_NAME = "20260815_route_v6_v8_trim_safety_band.json"
 # Superseded pairs. Deployment naming one of these while the bringup launches
 # the other is how a record ends up describing a drive that did not happen,
 # and the old files staying on disk is what lets it pass unnoticed.
@@ -63,7 +63,8 @@ def test_field_startup_uses_one_hash_pinned_runtime_map_for_auto_init_and_icp():
     assert 'auto_init_map:="$MAP"' in startup
     assert "auto_initialization_verified false" in startup
     assert "rosparam get /fast_lio_icp/auto_initialization_verified" in startup
-    assert 'auto_init_global_only:=true' in startup
+    assert 'auto_init_global_only:="$AUTO_INIT_GLOBAL_ONLY"' in startup
+    assert 'AUTO_INIT_GLOBAL_ONLY="${AUTO_INIT_GLOBAL_ONLY:-true}"' in startup
     assert "/fast_lio_icp/auto_initialization_stable" in startup
     assert "MAP_OVERRIDE_COUNT" in startup
     assert "head -1 || true" in startup
@@ -197,7 +198,8 @@ def test_initializer_is_packaged_and_field_startup_selects_global_only():
 
     assert 'auto_init_route:="$AUTO_INIT_ROUTE"' in startup
     assert 'auto_init_body_frame_profile:="$BODY_FRAME_PROFILE"' in startup
-    assert 'auto_init_global_only:=true' in startup
+    assert 'auto_init_global_only:="$AUTO_INIT_GLOBAL_ONLY"' in startup
+    assert 'AUTO_INIT_GLOBAL_ONLY="${AUTO_INIT_GLOBAL_ONLY:-true}"' in startup
     assert '<param name="route" value="$(arg auto_init_route)"/>' in launch
     assert (
         '<param name="body_frame_profile" '
@@ -276,7 +278,7 @@ def test_direct_launch_defaults_match_field_route_profile():
         / "launch"
         / "moving_localization.launch"
     ).read_text(encoding="utf-8")
-    assert "20260814_route_algorithm_waypoints.json" in launch
+    assert "20260815_route_v6_v8_trim_waypoints.json" in launch
     assert 'name="auto_init_min_refined_score" default="0.78"' in launch
 
 

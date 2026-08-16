@@ -10,7 +10,7 @@
   <arg name="map_id" default="merged_0707_0725_v1"/>
   <arg name="auto_init_map" default="$(arg map_path)"/>
   <arg name="auto_init_traj" default="/home/mprp3/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt"/>
-  <arg name="auto_init_route" default="/home/mprp3/wheelchair_localization_src/routes/20260814_route_algorithm_waypoints.json"/>
+  <arg name="auto_init_route" default="/home/mprp3/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_waypoints.json"/>
   <arg name="auto_init_body_frame_profile" default="builtin"/>
   <!-- How much of what the chair can see a global fix must explain before
        it is believed. The default is derived from synthetic scenes;

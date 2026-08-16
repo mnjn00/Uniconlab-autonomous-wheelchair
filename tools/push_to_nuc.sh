@@ -215,16 +215,16 @@ REMOTE_DIRTY="$(git status --porcelain --untracked-files=all -- \
   exit 1
 }
 
-for f in routes/20260814_route_algorithm_waypoints.json \
-         routes/20260814_route_algorithm_safety_band.json \
+for f in routes/20260815_route_v6_v8_trim_waypoints.json \
+         routes/20260815_route_v6_v8_trim_safety_band.json \
          routes/route_2d_map_algorithm.pgm \
          routes/route_2d_map_algorithm.yaml; do
   [ -f "$f" ] || { echo "ERROR: $f missing after pull" >&2; exit 1; }
 done
 python3 -c "
 import json
-w = json.load(open('routes/20260814_route_algorithm_waypoints.json'))
-b = json.load(open('routes/20260814_route_algorithm_safety_band.json'))
+w = json.load(open('routes/20260815_route_v6_v8_trim_waypoints.json'))
+b = json.load(open('routes/20260815_route_v6_v8_trim_safety_band.json'))
 assert all('z' in p for p in w['waypoints']), 'waypoints need z'
 assert w.get('reference_point') == 'chair_centre', 'route must be chair-centred'
 assert any('left_kind' in s for s in b['stations']), 'band needs edge kinds'
