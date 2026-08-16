@@ -15,8 +15,8 @@ RUNTIME_NAME = "merged_0707_0725_0p20m_xyzi.pcd"
 # The shipped pair is chair-centred. A sensor-referenced route applies every
 # clearance about a point 0.2 m left of the chair, which under-protects the
 # right side by exactly that much; see body_frame.CHAIR_CENTRE_IN_BODY_XYZ.
-ROUTE_NAME = "20260812_route_v6_v8_waypoints.json"
-BAND_NAME = "20260812_route_v6_v8_safety_band.json"
+ROUTE_NAME = "20260814_route_algorithm_waypoints.json"
+BAND_NAME = "20260814_route_algorithm_safety_band.json"
 # Superseded pairs. Deployment naming one of these while the bringup launches
 # the other is how a record ends up describing a drive that did not happen,
 # and the old files staying on disk is what lets it pass unnoticed.
@@ -27,6 +27,8 @@ SUPERSEDED = (
     "20260727_new_route_safety_band.json",
     "20260727_chair_centred_waypoints.json",
     "20260727_chair_centred_safety_band.json",
+    "20260812_route_v6_v8_waypoints.json",
+    "20260812_route_v6_v8_safety_band.json",
 )
 
 
@@ -180,11 +182,8 @@ def test_localizer_reports_every_registration_filter_stage():
     assert "filter_from_verified_pose" in source
     assert "marker.header.frame_id != rolling_config_.expected_cloud_frame" \
         in source
-    assert (
-        'private_nh_.param<std::size_t>('
-        '\n        "dynamic_box_max_count", dynamic_box_max_count_, '
-        "std::size_t{128});"
-    ) in source
+    assert '"dynamic_box_max_count", dynamic_box_max_count_param' in source
+    assert 'dynamic_box_max_count_ = static_cast<std::size_t>' in source
 
 
 def test_initializer_is_packaged_and_field_startup_selects_global_only():
@@ -277,7 +276,7 @@ def test_direct_launch_defaults_match_field_route_profile():
         / "launch"
         / "moving_localization.launch"
     ).read_text(encoding="utf-8")
-    assert "20260812_route_v6_v8_waypoints.json" in launch
+    assert "20260814_route_algorithm_waypoints.json" in launch
     assert 'name="auto_init_min_refined_score" default="0.78"' in launch
 
 

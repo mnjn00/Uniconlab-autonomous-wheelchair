@@ -111,24 +111,28 @@ than 57 cm from the obstacle guard.
 A route is the centreline; the band is the lateral limit at each station. The follower is
 constrained by the band, not merely advised by it.
 
-| | `20260727_chair_centred_*` | `20260812_route_v6_v8_*` | `map_by_algorithm_*` |
+| | `20260727_chair_centred_*` | `20260812_route_v6_v8_*` | `20260814_route_algorithm_*` |
 | --- | --- | --- | --- |
 | Waypoints | 1,446 (0.2 m) | 1,900 (0.2 m) | 1,897 (0.2 m) |
 | Length | 383.4 m | 379.2 m | 376.2 m |
 | Band stations | 381 at 1.0 m | 761 at 0.5 m | 1,897 at 0.2 m |
-| Origin | Resampled from a recorded drive | v6 preferred line smoothed inside the v8 drivable mask | Start/goal search inside a dense-map measured curb corridor |
-| Shipped by the bringup | No | **Yes** | No - reviewed promotion candidate |
-| Localization validated on it | **Yes** (07-31) | Not yet | Not yet |
+| Origin | Resampled from a recorded drive | Previous v6 preferred line inside the v8 drivable mask | Dense-map measured curb corridor and algorithmic route search |
+| Shipped by the bringup | No | Previous default | **Yes (2026-08-14)** |
+| Localization validated on it | **Yes** (07-31) | Previous field route | Offline audit passed; field validation pending |
 
 The v6/v8 route preserves the preferred v6 line while treating the complete v8 map as a hard
 drivable boundary. Route contents, band, mask image and mask geometry metadata are hash-bound,
 and the route is smoothed before resampling so raster steps do not command alternating steering.
 
-The independently generated `map_by_algorithm` route passed bilateral centre, wheel-line and
-rotated full-footprint audits against dense-map measured curb boundaries, but it is not bound to
-the runtime launch or deployment scripts. It must not silently replace the shipped v6/v8 route.
-The two OMO implementation lines, commit provenance, algorithms, evidence and promotion gates are
-recorded in
+The `20260814_route_algorithm_*` route is now the runtime default. It is generated from the
+dense-map curb corridor, uses a 0.2 m station spacing, and is hash-bound to its safety band and
+drivable mask. The promotion keeps the existing localization and follower validation gates; it
+does not claim field localization validation until a replay and a controlled outdoor run are
+completed. The previous v6/v8 pair remains in `routes/` for comparison and rollback.
+
+The route audit passed bilateral centre, wheel-line and rotated full-footprint checks against
+dense-map measured curb boundaries. The two OMO implementation lines, commit provenance,
+algorithms, evidence and promotion gates are recorded in
 [`docs/route-implementation-status-ko.md`](docs/route-implementation-status-ko.md).
 
 > [!WARNING]

@@ -4,7 +4,9 @@
 
 - 정본 지도: `mergedmap.ply`
 - 주행용 지도: `merged_0707_0725_0p20m_xyzi.pcd`
-- 경로: `20260812_route_v6_v8_waypoints.json` (v6 선호, v8 주행가능 hard mask)
+- 경로: `20260814_route_algorithm_waypoints.json` (dense-map 알고리즘 경로)
+- 안전 밴드: `20260814_route_algorithm_safety_band.json`
+- 주행가능 마스크: `route_2d_map_algorithm.yaml`
 - 기본 IMU: Livox MID-360 내장 IMU
 - 최고 주행 속도: 1.0 m/s (2026-08-12 운영자 지시)
 

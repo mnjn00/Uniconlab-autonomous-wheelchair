@@ -1,0 +1,63 @@
+=== bridge_to_server: wheel_status frame decoding ===
+    self.distance_auto   = 0.
+    self.is_obstructed   = 0
+
+  def UartCallback(self, msg):
+    if self.mode != msg.data[1]:
+      self.mode = msg.data[1]
+
+    if self.wheel_battery != msg.data[7]:
+      self.wheel_battery = msg.data[7]
+    if self.init_bat_flag:
+      self.init_bat = self.wheel_battery
+      self.init_bat_flag = False
+    self.battery_consumption = self.prev_bat + self.init_bat - self.wheel_battery
+
+  def OdomCallback(self, msg):
+    current_time = rospy.Time.now()
+    dt = (current_time - self.last_time).to_sec()
+    vel = msg.twist.twist.linear.x
+    if abs(vel) < 1e-3:
+      vel = 0.
+    dis = abs(vel*dt)
+
+    if self.mode == 77:
+      self.time_manual += dt
+      self.distance_manual += dis
+    elif self.mode == 65:
+
+=== fault_check.py codes ===
+5:from std_msgs.msg import Int16MultiArray
+11:    rospy.init_node('fault_check')
+13:    self.fault_pub = rospy.Publisher('robot_fault', Int16MultiArray, queue_size=1)
+25:    self.scan_fault = False
+26:    self.odom_fault = False
+27:    self.imu_fault = False
+28:    self.roll_fault = False
+29:    self.pitch_fault = False
+33:    self.fault_msg = Int16MultiArray()
+51:      self.scan_fault = True
+53:      self.scan_fault = False
+56:      self.odom_fault = True
+58:      self.odom_fault = False
+61:      self.imu_fault = True
+63:      self.imu_fault = False
+66:        self.roll_fault = True
+68:        self.roll_fault = False
+71:        self.pitch_fault = True
+73:        self.pitch_fault = False
+75:    #print('scan  : ', self.scan_fault)
+76:    #print('odom  : ', self.odom_fault)
+77:    #print('imu   : ', self.imu_fault)
+78:    #print('roll  : ', self.roll_fault)
+79:    #print('pitch : ', self.pitch_fault)
+82:    self.fault_msg.data = [self.scan_fault, self.odom_fault, self.imu_fault, self.roll_fault, self.pitch_fault]
+
+=== waypoint_follower status strings ===
+872:status_pub.publish(String(data="WOULD_HOLD:
+879:status_pub.publish(String(data="HOLD:
+940:status_pub.publish(String(data="HOLD:UNSAFE_CHORD
+983:status_pub.publish(String(data="%s wp=%d/%d v=%.2f%s
+
+=== tip_guard status strings ===
+81:"STALE"

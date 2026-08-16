@@ -1,0 +1,338 @@
+########## ~/stop.sh ##########
+#!/usr/bin/env bash
+# Stop the drive. Deliberately does not check anything first - a stop that
+# refuses because a precondition failed is not a stop.
+source /opt/ros/noetic/setup.bash >/dev/null 2>&1
+export ROS_MASTER_URI=http://127.0.0.1:11311
+
+rosservice call /waypoint_follower/start "data: false" 2>/dev/null || true
+rostopic pub -1 /mode_cmd std_msgs/Int16 77 >/dev/null 2>&1 || true
+echo "STOPPED (follower paused, base out of auto mode)."
+
+########## ~/trial_0727.sh ##########
+#!/usr/bin/env bash
+# Bring the chair up for the 0727 localization trial and stop, armed but not
+# driving.
+#
+# The question this run answers is narrow: does localization stay attached
+# over the whole 383 m of the 0727 line? So the discretionary guards are off
+# - a band refusal, a geofence trip or a raw-scan obstacle stop would all end
+# the measurement, and from outside a stationary chair they look identical to
+# a lost fix. The suppressed guards are still evaluated and published as
+# WOULD_HOLD: on /waypoint_follower/status, which is where the thresholds get
+# calibrated afterwards.
+#
+# What stays on is what watches for people: the cluster tracker. Objects it
+# has seen standing still get driven around from 5 m out; anything moving, or
+# not yet watched long enough to judge, is waited for. And the joystick, which
+# is the failsafe - moving it drops the base out of auto mode and the follower
+# holds on MANUAL_MODE within a control cycle.
+#
+# Nothing drives until go.sh.
+set -eo pipefail
+
+cd "$HOME"
+export SAFETY_POLICIES=false
+export AUTO_INIT_ROUTE="$HOME/wheelchair_localization_src/routes/20260727_chair_centred_waypoints.json"
+
+echo "=============================================================="
+echo " 0727 LOCALIZATION TRIAL"
+echo "   route      the 0727 drive itself, 1446 points, 0.2 m apart"
+echo "   guards     discretionary ones OFF - measuring localization"
+echo "   watching   cluster tracker (go round parked, wait for moving)"
+echo "   failsafe   the joystick"
+echo "=============================================================="
+echo ""
+
+./start_wheelchair_localization.sh
+
+echo ""
+echo "=============================================================="
+echo " READY - not driving."
+echo ""
+echo "   start:  ~/go.sh"
+echo "   stop:   ~/stop.sh   (or just move the joystick)"
+echo ""
+echo " Watch:  rostopic echo /waypoint_follower/status"
+echo "         rostopic echo /fast_lio_icp/localization_diagnostics"
+echo "=============================================================="
+
+########## ~/preflight.sh ##########
+#!/usr/bin/env bash
+# Everything the bringup will check, checked now so the field visit does
+# not spend its time discovering it.
+set +u
+source /opt/ros/noetic/setup.bash
+S=$HOME/livox_static_localization_ws/src/static_livox_localization/scripts
+R=$HOME/wheelchair_localization_src
+fail=0
+ok()   { echo "  PASS  $1"; }
+bad()  { echo "  FAIL  $1"; fail=1; }
+
+echo "== deployed artifacts vs the pins the bringup enforces =="
+pin() { grep -m1 "$1=" "$HOME/start_wheelchair_localization.sh" | grep -o "[0-9a-f]\{64\}"; }
+chk() { local got; got=$(sha256sum "$2" 2>/dev/null | awk '{print $1}');
+        [ "$got" = "$(pin "$1")" ] && ok "$3" || bad "$3 (pin $(pin "$1") vs $got)"; }
+chk EXPECTED_MAP_SHA256   "$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd" "runtime map"
+chk EXPECTED_WHEEL_GUARD_SHA256 "$HOME/catkin_ws/src/base_model/src/wheel_cmd_tmp.py" "wheel command guard"
+chk EXPECTED_UART_WATCHDOG_SHA256 "$HOME/catkin_ws/src/base_model/src/uart.py" "UART watchdog"
+
+echo "== route and band =="
+python3 - "$R" <<'PY'
+import json, sys, math
+r = sys.argv[1]
+w = json.load(open(r + "/routes/20260727_new_route_waypoints.json"))
+b = json.load(open(r + "/routes/20260727_new_route_safety_band.json"))
+first, second = w["waypoints"][0], w["waypoints"][1]
+travel = math.degrees(math.atan2(second["y"] - first["y"], second["x"] - first["x"]))
+gap = abs((first["yaw_deg"] - travel + 180) % 360 - 180)
+print("  PASS  route %d wp, start (%.2f, %.2f) yaw %.1f deg, %.1f deg off travel"
+      % (w["count"], first["x"], first["y"], first["yaw_deg"], gap)
+      if gap < 90 else "  FAIL  start heading reversed (%.0f deg)" % gap)
+print("  PASS  band %d stations with drop depths" % len(b["stations"])
+      if all("left_drop_m" in s for s in b["stations"]) else "  FAIL  band lacks drop depths")
+print("  PASS  profile %s" % w["body_frame_profile"])
+PY
+
+echo "== every node imports through the devel shim =="
+source $HOME/livox_static_localization_ws/devel/setup.bash
+for n in waypoint_follower.py safety_gate.py tip_guard.py obstacle_clusters.py \
+         auto_initial_pose.py localization_ready.py; do
+  out=$(timeout 8 rosrun static_livox_localization $n 2>&1 | head -8)
+  echo "$out" | grep -qE "ImportError|ModuleNotFoundError|SyntaxError" \
+    && bad "$n" || ok "$n"
+done
+
+echo "== the guard that broke initialization is live =="
+grep -q start_heading_reversed $S/initial_pose_candidates.py && ok "reversed-heading guard" || bad "reversed-heading guard"
+
+echo "== hardware =="
+[ -e /dev/uart ] && ok "/dev/uart -> $(readlink /dev/uart)" || bad "/dev/uart missing"
+pgrep -f livox_ros_driver2_node >/dev/null && ok "lidar driver already running" || echo "  note  lidar driver not running (bringup starts it)"
+pgrep -x x11vnc >/dev/null && echo "  note  x11vnc IS running - bringup refuses to start; run: pkill -x x11vnc" || ok "no x11vnc blocking bringup"
+df -h "$HOME" | tail -1 | awk '{print "  note  disk " $4 " free"}'
+
+echo
+[ "$fail" = 0 ] && echo "PREFLIGHT OK - bash ~/start_wheelchair_localization.sh" \
+                || echo "PREFLIGHT HAS FAILURES"
+
+########## ~/go_mpc.sh ##########
+#!/usr/bin/env bash
+# Start the drive, but only if the MPC control law is the one that will do
+# the driving.
+#
+# go.sh is control-law agnostic on purpose: it checks the things that must
+# hold whichever law is running. That leaves one thing unchecked, and it is
+# the thing an MPC run exists to observe - MPC is asked for by an
+# environment variable at bringup, hours earlier, and every downstream
+# signal looks identical either way. Same node name, same topics, same
+# service, and a status line that reads HOLD:PAUSED for both right up until
+# the chair moves. An operator who forgot PROFILE=mpc finds out by watching
+# a pursuit run and recording it as an MPC measurement.
+#
+# The check reads the identity the follower published about itself. That
+# distinction is the whole point: ~/preflight_priest_v5.sh compared a shell
+# variable it had exported one line earlier against itself, and went on
+# reporting "priest" long after 81fed5d reverted the PRIEST planner and the
+# bringup stopped forwarding it.
+#
+# Nothing safety-bearing is duplicated here. Once the law is confirmed this
+# hands straight to go.sh, which owns the follower/perception/localization
+# checks and the start itself.
+set -eo pipefail
+
+source /opt/ros/noetic/setup.bash >/dev/null 2>&1
+export ROS_MASTER_URI=http://127.0.0.1:11311
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+fail() { echo "REFUSING TO START: $1" >&2; exit 1; }
+
+LAW="$(rosparam get /waypoint_follower/control_law 2>/dev/null)" || fail \
+  "the follower is not publishing a control law - it is either not running,
+   or it predates ~control_law and cannot be identified. Bring the stack up
+   with: PROFILE=mpc ~/start_wheelchair_localization.sh"
+
+[ "$LAW" = "mpc" ] || fail \
+  "the running control law is '$LAW', not mpc. Nothing here can switch it -
+   the profile is chosen when the follower starts. Stop the stack and bring
+   it up with: PROFILE=mpc ~/start_wheelchair_localization.sh"
+
+echo "control law: mpc (confirmed by the running follower)"
+
+# Unmeasured on this NUC, so it is reported rather than enforced: the
+# runbook's promotion gate is solve-time p99 <= 25 ms with FAST-LIO running,
+# and a run that never sees REUSED. Watch /waypoint_follower/status.
+LATENCY="$(rosparam get /waypoint_follower/latency_s 2>/dev/null || echo "?")"
+echo "latency compensation: ${LATENCY} s"
+if [ "$LATENCY" = "0.0" ] || [ "$LATENCY" = "0" ]; then
+  echo "  (unmeasured - see docs/runbooks/mpc-profile-ko.md section 5)"
+fi
+
+echo ""
+echo "MPC has never driven this chair. Watch for steering hunting and for"
+echo "REUSED on /waypoint_follower/status; abort criteria are in section 4"
+echo "of docs/runbooks/mpc-profile-ko.md. Keep a hand on the joystick."
+echo ""
+
+exec "$SCRIPT_DIR/go.sh"
+
+########## ~/drive_tonight.sh ##########
+#!/usr/bin/env bash
+# Operator-authorized run: the inlier metric under-reports (0.18 where a
+# faithful replication of its own computation gives 0.865), so its gate is
+# lowered for THIS run only. Everything that does not depend on that metric
+# is left alone - fitness 0.28, correction caps, geofence, band, obstacle
+# guard, speed. The yaml on disk is restored immediately, so the next
+# bringup is back to the shipped gate.
+set +u
+source /opt/ros/noetic/setup.bash
+source "$HOME/livox_static_localization_ws/devel/setup.bash"
+Y=$HOME/livox_static_localization_ws/src/static_livox_localization/config/moving_localization.yaml
+MAP="$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd"
+TRAJ="$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt"
+ROUTE="$HOME/wheelchair_localization_src/routes/20260727_new_route_waypoints.json"
+
+cp "$Y" "$Y.shipped"
+sed -i 's/^min_inlier_ratio: .*/min_inlier_ratio: 0.12/' "$Y"
+
+for pat in moving_localization moving_icp_localizer auto_initial_pose \
+           bounded_cloud_preview map_preview_publisher reference_marker \
+           localization_state_marker; do
+  pkill -f "$pat" 2>/dev/null || true
+done
+sleep 3
+setsid nohup roslaunch static_livox_localization moving_localization.launch \
+  rviz:=false auto_init:=false \
+  map_path:="$MAP" \
+  map_sha256:=ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431 \
+  map_id:=merged_0707_0725_v1 \
+  > "$HOME/live_localization.log" 2>&1 < /dev/null &
+sleep 6
+mv "$Y.shipped" "$Y"      # disk back to the shipped gate straight away
+echo "localizer up with the relaxed gate; yaml on disk restored"
+
+for i in $(seq 1 40); do
+  sleep 3
+  timeout 3 rostopic echo -n1 /fast_lio_icp/localization_diagnostics >/dev/null 2>&1 && break
+done
+
+# Seed the route start - the pose an independent check put the chair at
+# within 2 cm, with the recorded start heading.
+python3 - "$ROUTE" <<'PY'
+import json, math, sys, rospy
+from geometry_msgs.msg import PoseWithCovarianceStamped
+w = json.load(open(sys.argv[1]))["waypoints"][0]
+rospy.init_node("seed_start", anonymous=True)
+pub = rospy.Publisher("/fast_lio_icp/initialpose", PoseWithCovarianceStamped, queue_size=1)
+rospy.sleep(1.5)
+m = PoseWithCovarianceStamped()
+m.header.frame_id = "map"; m.header.stamp = rospy.Time.now()
+m.pose.pose.position.x, m.pose.pose.position.y, m.pose.pose.position.z = w["x"], w["y"], w["z"]
+yaw = math.radians(w["yaw_deg"])
+m.pose.pose.orientation.z, m.pose.pose.orientation.w = math.sin(yaw/2), math.cos(yaw/2)
+pub.publish(m); rospy.sleep(1.0)
+print("  seeded (%.2f, %.2f) yaw %.1f deg" % (w["x"], w["y"], w["yaw_deg"]))
+PY
+
+sleep 2
+rosservice call /fast_lio_icp/enable_auto_correction "data: true"
+for i in $(seq 1 25); do
+  sleep 2
+  S=$(timeout 3 rostopic echo -n1 /fast_lio_icp/localization_diagnostics 2>/dev/null |
+      awk '/key: "raw_state"/{getline; s=$2} /key: "inlier_ratio"/{getline; i=$2} END{print s, i}')
+  echo "  $S"
+  echo "$S" | grep -q TRACKING && break
+done
+echo "$S" | grep -q TRACKING || { echo "NOT_TRACKING - stopping, no motion started"; exit 1; }
+echo "LOCALIZED"
+
+########## ~/resume_motion_chain.sh ##########
+#!/usr/bin/env bash
+# Continue a bringup whose localization gate timed out: keep the running
+# sensor/localization stack, wait for TRACKING (reseeding while the
+# chair is stationary), then start ONLY the motion chain and arm it.
+source /opt/ros/noetic/setup.bash
+source "$HOME/livox_static_localization_ws/devel/setup.bash"
+MAP="$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd"
+TRAJ="$HOME/wheelchair_localization_maps/merged_0707_0725_v1/traj_lidar.txt"
+ROUTE="$HOME/wheelchair_localization_src/routes/20260727_new_route_waypoints.json"
+BAND="$HOME/wheelchair_localization_src/routes/20260727_new_route_safety_band.json"
+EXPECTED_MAP_SHA256="ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431"
+EXPECTED_ROUTE_SHA256="0b32cec58e7e1ea973b6355ac00914eff77c9b825bc19e69caf82e9a6c1db2e1"
+EXPECTED_BAND_SHA256="c3473ba139b0987dc3c89d767fa89007984ca4c1148198adbac5c5ed1ecde35f"
+LOG="$HOME"
+
+state() {
+  timeout 4 rostopic echo -n1 /fast_lio_icp/localization_diagnostics 2>/dev/null |
+    grep -A1 '"raw_state"' | grep value | grep -oE "TRACKING|VERIFYING|LOST|MANUAL_ALIGN"
+}
+speed() {
+  timeout 3 rostopic echo -n1 /Odometry/twist/twist/linear/x 2>/dev/null | head -1
+}
+
+echo "[resume 1/3] waiting for TRACKING (reseeding while stationary)"
+LOCKED=0
+for attempt in $(seq 1 60); do
+  s=$(state)
+  if [ "$s" = "TRACKING" ]; then LOCKED=1; echo "TRACKING locked"; break; fi
+  v=$(speed); v=${v:-9}
+  moving=$(python3 -c "print(1 if abs(float('$v' or 9)) > 0.05 else 0)" 2>/dev/null || echo 1)
+  if [ "$moving" = "0" ] && ! pgrep -f "auto_initial_pose" >/dev/null; then
+    echo "  reseeding (attempt $attempt, state=${s:-none})"
+    timeout 120 rosrun static_livox_localization auto_initial_pose.py \
+      --map "$MAP" --traj "$TRAJ" 2>&1 | grep -aE "initialized" | tail -1
+  fi
+  sleep 8
+done
+[ "$LOCKED" = "1" ] || { echo "GAVE_UP: no TRACKING"; exit 1; }
+
+echo "[resume 2/3] motion chain"
+source "$HOME/catkin_ws/devel/setup.bash"
+pgrep -f "wheel.launch" >/dev/null || {
+  setsid nohup roslaunch base_model wheel.launch \
+    > "$LOG/live_base.log" 2>&1 < /dev/null &
+}
+for i in $(seq 1 15); do
+  timeout 3 rostopic echo -n1 /wheel_status >/dev/null 2>&1 && break
+  sleep 2
+done
+timeout 3 rostopic echo -n1 /wheel_status >/dev/null 2>&1 || {
+  echo "ERROR: wheel base silent"; exit 5; }
+source "$HOME/livox_static_localization_ws/devel/setup.bash"
+pgrep -f "safety_gate" >/dev/null || {
+  setsid nohup rosrun static_livox_localization safety_gate.py \
+    _body_frame_profile:=builtin > "$LOG/live_gate.log" 2>&1 < /dev/null &
+}
+pgrep -f "tip_guard" >/dev/null || {
+  setsid nohup rosrun static_livox_localization tip_guard.py \
+    > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
+}
+pgrep -f "obstacle_clusters" >/dev/null || {
+  setsid nohup rosrun static_livox_localization obstacle_clusters.py \
+    > "$LOG/live_clusters.log" 2>&1 < /dev/null &
+}
+pgrep -f "waypoint_follower" >/dev/null || {
+  setsid nohup rosrun static_livox_localization waypoint_follower.py \
+    _route:="$ROUTE" _safety_band:="$BAND" \
+    _body_frame_profile:=builtin \
+    _expected_map_sha256:="$EXPECTED_MAP_SHA256" \
+    _expected_route_sha256:="$EXPECTED_ROUTE_SHA256" \
+    _expected_band_sha256:="$EXPECTED_BAND_SHA256" \
+    > "$LOG/live_follower.log" 2>&1 < /dev/null &
+}
+for i in $(seq 1 15); do
+  timeout 3 rostopic echo -n1 /waypoint_follower/status >/dev/null 2>&1 && break
+  sleep 2
+done
+timeout 3 rostopic echo -n1 /waypoint_follower/status >/dev/null 2>&1 || {
+  echo "ERROR: follower silent"; exit 6; }
+echo "motion chain up"
+
+echo "[resume 3/3] arming"
+rosservice call /waypoint_follower/start "data: true"
+rostopic pub -1 /mode_cmd std_msgs/Int16 "data: 65"
+sleep 2
+timeout 4 rostopic echo -n1 /waypoint_follower/status
+echo "ARMED_AND_LIVE"
+

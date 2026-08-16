@@ -34,6 +34,22 @@ def test_shipped_v6_v8_assets_are_cryptographically_bound():
     assert band.route_centre_chord_violations() == []
 
 
+def test_algorithm_default_assets_are_cryptographically_bound_and_clear():
+    route = ROOT / "routes" / "20260814_route_algorithm_waypoints.json"
+    band_path = ROOT / "routes" / "20260814_route_algorithm_safety_band.json"
+    mask = ROOT / "routes" / "route_2d_map_algorithm.yaml"
+    binding = ASSETS.validate_asset_binding(route, band_path, mask)
+    assert binding["route_id"].startswith("algorithm:")
+    route_data = json.loads(route.read_text(encoding="utf-8"))
+    band_data = json.loads(band_path.read_text(encoding="utf-8"))
+    assert route_data["count"] == 1897
+    assert route_data["reference_point"] == "chair_centre"
+    assert band_data["route_id"] == binding["route_id"]
+    band = SAFETY.SafetyBand(band_path)
+    assert band.route_centre_clearance_violations() == []
+    assert band.route_centre_chord_violations() == []
+
+
 def test_band_mismatch_fails_closed(tmp_path):
     route = ROOT / "routes" / "20260812_route_v6_v8_waypoints.json"
     band = json.loads(

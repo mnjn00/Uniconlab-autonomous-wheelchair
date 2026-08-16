@@ -1,0 +1,47 @@
+=== HOST ===
+mprp3
+Ubuntu 20.04.6 LTS
+5.15.0-139-generic
+Python 3.8.10
+BT adapter: Controller 7C:B5:66:E6:A8:A6 (public)
+=== ROS ===
+noetic
+=== workspaces ===
+/home/mprp3/livox_static_localization_ws -> no-git
+/home/mprp3/catkin_ws -> no-git
+/home/mprp3/wheelchair_localization_src -> c277518 fix: use XmlRpc-compatible count parameter
+=== routes ===
+20260727_chair_centred_corridor_audit.json
+20260727_chair_centred_corridor_audit.png
+20260727_chair_centred_no_go_zones.json
+20260727_chair_centred_safety_band.json
+20260727_chair_centred_safety_band_preview.png
+20260727_chair_centred_waypoints.json
+20260727_new_route_safety_band.json
+20260727_new_route_safety_band_preview.png
+20260727_new_route_waypoints.json
+20260727_no_go_zones.json
+=== serial devices ===
+crw-rw-rw- 1 root dialout 188, 0 Aug 14 19:15 /dev/ttyUSB0
+crw-rw-rw- 1 root dialout 188, 1 Aug 14 19:15 /dev/ttyUSB1
+=== udev rules ===
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="0001", SYMLINK+="uart", MODE="0666"
+
+=== uart port ===
+23:ser = serial.Serial(
+25:  baudrate = 115200,
+=== packages in each ws ===
+/home/mprp3/catkin_ws/src:
+base_model
+CMakeLists.txt
+mpr_val
+navigation
+timed_roslaunch
+topology_builder
+vectornav
+webrtc_ros
+
+/home/mprp3/livox_static_localization_ws/src:
+fast_gicp
+pgy_path_planner
+static_livox_localization
