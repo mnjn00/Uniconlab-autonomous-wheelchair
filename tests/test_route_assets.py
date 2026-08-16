@@ -24,7 +24,7 @@ def test_shipped_v6_v8_assets_are_cryptographically_bound():
     binding = ASSETS.validate_asset_binding(
         ROOT / "routes" / "20260812_route_v6_v8_waypoints.json",
         ROOT / "routes" / "20260812_route_v6_v8_safety_band.json",
-        ROOT / "routes" / "route_2d_map_v8.yaml",
+        ROOT / "routes" / "route_2d_map_v9.yaml",
     )
     assert binding["route_id"].startswith("v6-v8:")
     band = SAFETY.SafetyBand(
@@ -39,15 +39,15 @@ def test_algorithm_default_assets_are_cryptographically_bound_and_clear():
     # route, which has 13 corners below TURN_FLOOR_SPEED and ended the
     # 08-15 drive at station 395; this one clears the curvature gate at
     # zero blocked stations.
-    route = ROOT / "routes" / "20260815_route_v6_v8_trim_waypoints.json"
+    route = ROOT / "routes" / "20260816_route_v9_clearance_waypoints.json"
     band_path = (ROOT / "routes"
-                 / "20260815_route_v6_v8_trim_safety_band.json")
-    mask = ROOT / "routes" / "route_2d_map_v8.yaml"
+                 / "20260816_route_v9_clearance_safety_band.json")
+    mask = ROOT / "routes" / "route_2d_map_v9.yaml"
     binding = ASSETS.validate_asset_binding(route, band_path, mask)
-    assert binding["route_id"].startswith("v6-v8-t")
+    assert binding["route_id"].startswith("v6-v9")
     route_data = json.loads(route.read_text(encoding="utf-8"))
     band_data = json.loads(band_path.read_text(encoding="utf-8"))
-    assert route_data["count"] == 1886
+    assert route_data["count"] == 1988
     assert route_data["reference_point"] == "chair_centre"
     assert band_data["route_id"] == binding["route_id"]
     band = SAFETY.SafetyBand(band_path)
@@ -86,7 +86,7 @@ def test_route_waypoint_mutation_fails_closed(tmp_path):
 def test_mask_geometry_metadata_mismatch_fails_closed(tmp_path):
     route = ROOT / "routes" / "20260812_route_v6_v8_waypoints.json"
     band = ROOT / "routes" / "20260812_route_v6_v8_safety_band.json"
-    source = ROOT / "routes" / "route_2d_map_v8.yaml"
+    source = ROOT / "routes" / "route_2d_map_v9.yaml"
     changed = tmp_path / "route_2d_map_v8.yaml"
     changed.write_text(
         source.read_text(encoding="utf-8").replace(

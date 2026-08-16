@@ -64,17 +64,18 @@ if [ "$ACTUAL_TRAJ_SHA256" != "$TRAJ_SHA256" ]; then
   echo "ERROR: trajectory SHA-256 mismatch" >&2
   exit 2
 fi
-# 은교's v6 preferred route inside the v8 drivable mask, with the last 3 m
-# trimmed off. It replaces the 20260814 algorithm route, which has 13 corners
-# the loaded base cannot turn: curvature_speed asks for less than
-# TURN_FLOOR_SPEED, mpc_speed returns STOP, and since the condition depends on
-# a position that then cannot change the follower holds forever. That ended
-# the 08-15 drive at station 395 of 1897. This route has none of them -- the
-# one it did have was in the last 3 m, hence the trim:
+# 은교's v6 preferred route, re-centred to keep >=0.3 m clearance inside the
+# v9 drivable mask. Replaces the v6+v8 trim driven on 08-16, which stopped
+# six times: four of those were the band, and this is the band answer to
+# them. v9 nearly doubles the corridor (median width 2.10 -> 3.75 m, minimum
+# 0.80 -> 1.70 m) and removes every width discontinuity -- 16 stations on
+# the v8 band collapsed against both neighbours, which is what held the
+# chair at stops 5 and 6 while it sat within 4 cm of the line. On v9 there
+# are none, and the curvature gate is still clean:
 #   tools/trim_route_tail.py --route ... --band ...
 #   docs/nuc_snapshot/curvature_profile.py <band>   # must exit 0
 # Run that gate before making any other route the default here.
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_waypoints.json}"
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260816_route_v9_clearance_waypoints.json}"
 AUTO_INIT_ROUTE="${AUTO_INIT_ROUTE:-$ROUTE}"
 # Global search only, by default. The known-start shortcut hands the route's
 # first waypoint straight to the localizer and reaches TRACKING in about 16 s,
@@ -91,8 +92,8 @@ case "$AUTO_INIT_GLOBAL_ONLY" in
 esac
 # Bound to ROUTE by SHA-256 (route_assets.validate_asset_binding), so these
 # three move together or the follower refuses to start.
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_safety_band.json}"
-DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v8.yaml}"
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260816_route_v9_clearance_safety_band.json}"
+DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v9.yaml}"
 RVIZ="${RVIZ:-true}"
 # SAFETY_POLICIES=false drives with every discretionary guard switched off,
 # leaving the joystick override as the failsafe. It exists to measure one

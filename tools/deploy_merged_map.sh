@@ -21,8 +21,8 @@ MAP_ID="merged_0707_0725_v1"
 # Must match what start_wheelchair_localization.sh actually launches with. A
 # stale pair here still passes, because the superseded files remain on disk,
 # and the deployment then records a route the chair does not drive.
-ROUTE_NAME="20260815_route_v6_v8_trim_waypoints.json"
-BAND_NAME="20260815_route_v6_v8_trim_safety_band.json"
+ROUTE_NAME="20260816_route_v9_clearance_waypoints.json"
+BAND_NAME="20260816_route_v9_clearance_safety_band.json"
 
 usage() {
   echo "Usage: deploy_merged_map.sh [--verify-only] <map-directory>"
