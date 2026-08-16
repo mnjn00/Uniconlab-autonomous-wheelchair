@@ -637,6 +637,73 @@ def cleanup_patterns():
             for token in _quoted(match.group(1))}
 
 
+def roslaunched_nodes():
+    """Node executables the bringup starts through roslaunch, not rosrun.
+
+    The detached-rosrun scan below cannot see these: they are children of a
+    roslaunch wrapper, so the only name the sweep has for them is
+    'roslaunch' itself. That is a request to take the children down, and
+    the fast_lio block in the bringup exists because the request is not
+    always honoured in time - it kills 'roslaunch fast_lio', then
+    'fastlio_mapping', then waits up to 10 s for the process to actually go,
+    with a comment saying the replacement would otherwise evict the old node
+    through a name conflict.
+
+    An eviction does not kill the loser. The master drops it, the process
+    keeps running, and it still holds its publishers. Two
+    moving_icp_localizers means /fast_lio_icp/pose has two of them and the
+    follower steers by whichever arrived last.
+
+    Derived from the launch files the bringup names, for the same reason
+    detached_nodes is derived: a hand-kept list would be edited in the same
+    commit as the thing it is meant to check.
+    """
+    text = re.sub(r"\\\n", " ", bringup())
+    nodes = set()
+    for package, launch_file in set(
+            re.findall(r"roslaunch\s+(\S+)\s+(\S+\.launch)", text)):
+        if "$" in package or "$" in launch_file:
+            continue
+        path = ROOT / "src" / package / "launch" / launch_file
+        if not path.exists():
+            continue
+        for node_type in re.findall(r'type="([^"]+)"',
+                                    path.read_text(encoding="utf-8")):
+            if "$" in node_type:
+                continue
+            nodes.add(node_type[:-3] if node_type.endswith(".py")
+                      else node_type)
+    return nodes
+
+
+def test_the_roslaunch_scan_actually_finds_the_nodes():
+    """Same guard as the rosrun scan below: a regex over shell and XML can
+    quietly return nothing and make the check vacuous."""
+    assert "moving_icp_localizer" in roslaunched_nodes()
+
+
+def test_every_roslaunched_node_is_also_cleaned_up():
+    """An orphaned localizer is the worst of these, so name it in the sweep.
+
+    Leaving it to the roslaunch wrapper is what the fast_lio special case
+    already documents as unreliable. Anything started that way has to be
+    killable by name, or a wrapper that is slow to reap leaves a second
+    publisher on the topic the follower steers by.
+    """
+    # pkill -f matches a substring of the command line, so a pattern covers
+    # a node whenever it appears in the node's name. Set difference would
+    # call bounded_cloud_preview_node uncovered on a bounded_cloud_preview
+    # pattern that does in fact kill it.
+    patterns = cleanup_patterns()
+    missing = sorted(node for node in roslaunched_nodes()
+                     if not any(pattern in node for pattern in patterns))
+    assert not missing, (
+        "the bringup starts %s through roslaunch but stage 1 cannot kill "
+        "them by name; a slow wrapper leaves them running and the "
+        "replacement evicts them by name conflict instead"
+        % ", ".join(missing))
+
+
 def detached_nodes():
     """Nodes the bringup leaves running after it returns.
 

@@ -6,15 +6,31 @@ curvature_speed(band, point) 는 이 휠체어가 그 지점을 지날 때 yaw �
 천천히 돌아야 하는데 베이스가 천천히 못 돌기 때문.
 """
 import json
+import os
 import sys
 
-sys.path.insert(0, "/home/mprp3/livox_static_localization_ws/src/static_livox_localization/scripts")
+# The scripts directory, wherever this copy of the repo lives. The NUC path is
+# kept as the fallback so the snapshot still runs there unchanged.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _candidate in (
+        os.path.join(_HERE, "..", "..", "src", "static_livox_localization",
+                     "scripts"),
+        "/home/mprp3/livox_static_localization_ws/src/static_livox_localization/scripts"):
+    if os.path.isdir(_candidate):
+        sys.path.insert(0, os.path.abspath(_candidate))
+        break
+
 import numpy as np
 import mpc_speed
 from safety_band import SafetyBand
 
-BAND = "/home/mprp3/wheelchair_localization_src/routes/20260814_route_algorithm_safety_band.json"
+# Gate any band, not just the one that was under investigation on 08-15:
+# every new route has to clear this before it is driven.
+BAND = sys.argv[1] if len(sys.argv) > 1 else (
+    "/home/mprp3/wheelchair_localization_src/routes/"
+    "20260814_route_algorithm_safety_band.json")
 band = SafetyBand(BAND)
+print("밴드: %s" % BAND)
 FLOOR = mpc_speed.TURN_FLOOR_SPEED
 
 pts = band.xy
@@ -60,6 +76,11 @@ out = {
     "curvature_speed": [None if np.isnan(v) else round(float(v), 3) for v in speeds],
     "runs": [[int(a), int(b), round(float(np.nanmin(speeds[a:b + 1])), 3)] for a, b in runs],
 }
-with open("/tmp/curvature_profile.json", "w") as fh:
+dest = sys.argv[2] if len(sys.argv) > 2 else "/tmp/curvature_profile.json"
+with open(dest, "w") as fh:
     json.dump(out, fh)
-print("저장: /tmp/curvature_profile.json")
+print("저장: %s" % dest)
+
+# Non-zero exit when the route is undrivable, so the gate can be a step in a
+# pipeline and not only something a human reads.
+sys.exit(1 if blocked.any() else 0)

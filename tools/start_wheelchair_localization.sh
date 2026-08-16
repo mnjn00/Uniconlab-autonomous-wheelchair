@@ -64,7 +64,17 @@ if [ "$ACTUAL_TRAJ_SHA256" != "$TRAJ_SHA256" ]; then
   echo "ERROR: trajectory SHA-256 mismatch" >&2
   exit 2
 fi
-ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260814_route_algorithm_waypoints.json}"
+# 은교's v6 preferred route inside the v8 drivable mask, with the last 3 m
+# trimmed off. It replaces the 20260814 algorithm route, which has 13 corners
+# the loaded base cannot turn: curvature_speed asks for less than
+# TURN_FLOOR_SPEED, mpc_speed returns STOP, and since the condition depends on
+# a position that then cannot change the follower holds forever. That ended
+# the 08-15 drive at station 395 of 1897. This route has none of them -- the
+# one it did have was in the last 3 m, hence the trim:
+#   tools/trim_route_tail.py --route ... --band ...
+#   docs/nuc_snapshot/curvature_profile.py <band>   # must exit 0
+# Run that gate before making any other route the default here.
+ROUTE="${ROUTE:-$HOME/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_waypoints.json}"
 AUTO_INIT_ROUTE="${AUTO_INIT_ROUTE:-$ROUTE}"
 # Global search only, by default. The known-start shortcut hands the route's
 # first waypoint straight to the localizer and reaches TRACKING in about 16 s,
@@ -79,8 +89,10 @@ case "$AUTO_INIT_GLOBAL_ONLY" in
   *) echo "ERROR: AUTO_INIT_GLOBAL_ONLY must be true or false, got '$AUTO_INIT_GLOBAL_ONLY'" >&2
      exit 67 ;;
 esac
-BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260814_route_algorithm_safety_band.json}"
-DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_algorithm.yaml}"
+# Bound to ROUTE by SHA-256 (route_assets.validate_asset_binding), so these
+# three move together or the follower refuses to start.
+BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260815_route_v6_v8_trim_safety_band.json}"
+DRIVABLE_MASK="${DRIVABLE_MASK:-$HOME/wheelchair_localization_src/routes/route_2d_map_v8.yaml}"
 RVIZ="${RVIZ:-true}"
 # SAFETY_POLICIES=false drives with every discretionary guard switched off,
 # leaving the joystick override as the failsafe. It exists to measure one
@@ -253,10 +265,36 @@ echo "[1/5] cleaning old processes"
 # dwa_follower was added by the DWA profile in the same window this sweep was
 # written in, on a branch that did not have it, so the two merged clean and
 # the derived list caught what neither side could see alone.
+# The list also has to reach what roslaunch starts, not only what this
+# script detaches itself. Killing '[r]oslaunch' asks the wrapper to take its
+# children down, but that is a request with a deadline: the fast_lio block
+# below already found 2 s too short and waits up to 10 s for laserMapping to
+# actually go. Every other roslaunch child had only the 2 s. A node that
+# outlives it keeps its ROS name, so the replacement evicts it through a name
+# conflict - the master drops the old one, the *process* keeps running, and
+# what is left is an unregistered orphan still burning CPU and still holding
+# its publishers. moving_icp_localizer is the one that matters: two of them
+# alive means /fast_lio_icp/pose has two publishers and the follower believes
+# whichever arrives last.
 if [ "$SHADOW_QA" != "1" ]; then
-for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters' '[r]oute_identity_publisher'; do
+for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters' '[r]oute_identity_publisher' '[m]oving_icp_localizer' '[b]ounded_cloud_preview' '[m]ap_preview_publisher' '[l]ivox_ros_driver2' '[v]ectornav' '[w]heel_cmd' '[l]ocalization_state_marker' '[r]eference_marker' '[r]viz'; do
   pkill -f "$pattern" 2>/dev/null || true
 done
+# Confirm they are gone rather than assuming a fixed sleep did it. Same
+# reasoning as the fast_lio wait, applied to the whole sweep.
+for _ in $(seq 1 10); do
+  pgrep -f '[m]oving_icp_localizer|[s]afety_gate|[o]bstacle_clusters|[w]aypoint_follower|[d]wa_follower|[m]pc_follower' >/dev/null 2>&1 || break
+  sleep 1
+done
+survivors="$(pgrep -af '[m]oving_icp_localizer|[s]afety_gate|[o]bstacle_clusters|[w]aypoint_follower|[d]wa_follower|[m]pc_follower' 2>/dev/null || true)"
+if [ -n "$survivors" ]; then
+  # SIGKILL rather than start on top of them: an orphan localizer publishing
+  # a stale pose is worse than a bringup that takes two seconds longer.
+  echo "  sweep: forcing $(echo "$survivors" | wc -l) survivor(s)" >&2
+  echo "$survivors" >&2
+  pkill -9 -f '[m]oving_icp_localizer|[s]afety_gate|[o]bstacle_clusters|[w]aypoint_follower|[d]wa_follower|[m]pc_follower' 2>/dev/null || true
+  sleep 1
+fi
 sleep 2
 fi
 if ! pgrep -f '[r]osmaster' >/dev/null; then

@@ -99,7 +99,17 @@ YAW_SLEW_RPS2 = 1.5
 # Actuation lag, measured 2026-08-11 (see led_state). Overridable with
 # ~latency_s for a vehicle this has not been measured on; at 0.0 the lead is
 # the identity and the profile behaves exactly as it did before.
-LATENCY_S = 0.55
+#
+# Back to 0.0 on 2026-08-15. The 0.55 was measured while mpc_speed.MAX_SPEED
+# was still 0.6, and the lead it produces is a distance, not a time:
+# speed x 0.55, so 0.33 m at the speed it was measured at and 0.55 m at the
+# 1.0 the cap was raised to afterwards. The 08-15 drive steered in S-curves
+# that the 08-12 drive at 0.6 did not, and led_state's own warning is that a
+# lead longer than the real lag over-steers. Unmeasured at this speed is
+# what it now is, so it takes the value the docstring prescribes for that.
+# Re-measure at 1.0 m/s (command angular.z against yaw rate differentiated
+# from /fast_lio_icp/pose) before putting a non-zero number back.
+LATENCY_S = 0.0
 
 # How wide a slice of each object the planner is shown, either side of the
 # centreline. Wider than the follower's CORRIDOR_HALF_WIDTH 0.45, which is
