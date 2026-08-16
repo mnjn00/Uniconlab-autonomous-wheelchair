@@ -453,3 +453,55 @@ def is_stale(summary_stamp_s, now_s, stale_s=STALE_S):
     if not math.isfinite(now_s) or not math.isfinite(summary_stamp_s):
         return True
     return (now_s - summary_stamp_s) > stale_s
+
+
+# Preference order for a step around a parked object. Sizes are what the
+# corridor is asked for; bypass_offsets_for_room decides what it can give.
+BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
+# The largest step this will ever take, and the room it keeps between the
+# offset chair's outer edge and the band edge.
+#
+# The ladder above is a preference order, not a set of achievable offsets.
+# On 2026-08-16 the chair took a 0.60 m step in a corridor whose band was
+# 1.70 m wide - 0.85 m either side of the line - and the operator stopped
+# it. The step was legal: band.contains() tests the centre point, and an
+# edge with no drop behind it only insets EDGE_MARGIN, by design, because
+# that is what buys room to pass obstacles at all. But the chair is 0.70 m
+# wide, so 0.60 m off the line put its outer edge 0.275 m past the band.
+# Legal and drivable are not the same number, and the ladder could not tell
+# the difference because it never asked how much room was there.
+BYPASS_OFFSET_MAX_M = 1.0
+BYPASS_EDGE_KEEP_M = 0.25
+# Below this the chair has not gone round anything, it has only drifted,
+# and it still pays the whole cost of leaving the line.
+BYPASS_OFFSET_MIN_M = 0.30
+# Where the step is measured and checked. One list so the offset that gets
+# sized and the offset that gets approved are talking about the same ground.
+BYPASS_PROBE_AHEAD_M = (0.5, 1.5, 2.5, 3.5)
+
+
+def bypass_offsets_for_room(left_room, right_room):
+    """Offsets worth trying, given the room each side actually has.
+
+    BYPASS_OFFSETS is the preference order; this is what the corridor can
+    give. An entry survives at its own size when it fits, and is cut down
+    to the side's room when it does not, so a narrow corridor is offered a
+    step sized to it instead of a 0.60 m step admitted because the centre
+    point happened to land inside the band. A side with less room than
+    BYPASS_OFFSET_MIN_M is dropped: there is no step there worth the cost
+    of leaving the line.
+
+    ROS-free so it can be tested without a running follower.
+    """
+    room = {1.0: min(left_room, BYPASS_OFFSET_MAX_M),
+            -1.0: min(right_room, BYPASS_OFFSET_MAX_M)}
+    offsets = []
+    for wanted in BYPASS_OFFSETS:
+        side = 1.0 if wanted > 0 else -1.0
+        allowed = room[side]
+        if allowed < BYPASS_OFFSET_MIN_M:
+            continue
+        value = side * min(abs(wanted), allowed)
+        if not any(abs(value - seen) < 1e-6 for seen in offsets):
+            offsets.append(value)
+    return offsets

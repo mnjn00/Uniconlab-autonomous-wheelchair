@@ -83,7 +83,7 @@ RegistrationResult register_cloud(
       gicp.setInputTarget(target);
       gicp.setMaxCorrespondenceDistance(config.max_correspondence);
       gicp.setMaximumIterations(config.max_iterations);
-      gicp.setTransformationEpsilon(1e-6);
+      gicp.setTransformationEpsilon(config.transformation_epsilon);
       gicp.setEuclideanFitnessEpsilon(1e-6);
       // Reciprocal correspondences: a match is kept only if each point is
       // the other's nearest neighbour. This rejects one-way matches
@@ -102,11 +102,21 @@ RegistrationResult register_cloud(
       gicp.setInputTarget(target);
       gicp.setResolution(config.voxel_resolution);
       gicp.setNeighborSearchMethod(fast_gicp::NeighborSearchMethod::DIRECT7);
+      // Unmeasured, and the first place to look at the cycle time: the CUDA
+      // backend is doing its nearest-neighbour search on the CPU. On
+      // 2026-08-16 a registration took 370 ms against a 10 Hz input, so the
+      // localizer handled about 2.7 of every 10 clouds, fell behind, and
+      // ended up unable to pair the cloud it held with an odometry sample -
+      // CLOUD_ODOMETRY_TIME_MISMATCH, which it did not recover from without
+      // a restart. Where that 370 ms goes has not been profiled. fast_gicp
+      // also offers GPU_BRUTEFORCE and GPU_RBF_KERNEL; switching needs a GPU
+      // run and a fitness comparison, so it is left alone rather than
+      // swapped blind.
       gicp.setNearestNeighborSearchMethod(
           fast_gicp::NearestNeighborMethod::CPU_PARALLEL_KDTREE);
       gicp.setMaxCorrespondenceDistance(config.max_correspondence);
       gicp.setMaximumIterations(config.max_iterations);
-      gicp.setTransformationEpsilon(1e-6);
+      gicp.setTransformationEpsilon(config.transformation_epsilon);
       gicp.setEuclideanFitnessEpsilon(1e-6);
       gicp.align(*aligned, seed.matrix().cast<float>());
       result.epsilon_met = gicp.hasConverged();

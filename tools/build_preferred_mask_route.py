@@ -21,9 +21,25 @@ FREE: Final = 254
 CHAIR_HALF_WIDTH_M: Final = 0.35
 PATH_STEP_M: Final = 0.2
 BAND_STEP_M: Final = 0.5
-PREFERENCE_WEIGHT: Final = 4.0
+PREFERENCE_WEIGHT: Final = 8.0
 BOUNDARY_WEIGHT: Final = 2.0
 BOUNDARY_SCALE_M: Final = 0.5
+# Centre the line inside the preferred region, not merely inside it.
+#
+# preference_distance is the distance to the nearest preferred cell, so it
+# is zero everywhere inside the drawing and gives the planner no gradient
+# once the path is in. The only centring term was BOUNDARY_WEIGHT, and that
+# measures clearance in the DRIVABLE mask - so the route centred itself in
+# v8 and was free to run along the edge of v6.
+#
+# That is what the 08-16 route did, and hugging the drivable boundary is
+# what exposed it to the boundary's own measurement noise: stops 5 and 6
+# both happened with the chair within 4 cm of the line, held by a band whose
+# width had been sampled against that edge. Penalising proximity to the
+# preferred edge gives the planner a reason to sit in the middle of the
+# green instead of anywhere inside it.
+PREFERRED_EDGE_WEIGHT: Final = 3.0
+PREFERRED_EDGE_SCALE_M: Final = 0.6
 SMOOTH_WINDOW: Final = 15
 SMOOTH_PASSES: Final = 2
 
@@ -38,9 +54,15 @@ def plan_preferred_path(
     """A* inside ``drivable`` with preference and boundary costs."""
     clearance = ndimage.distance_transform_edt(drivable) * resolution_m
     preference_distance = ndimage.distance_transform_edt(~preferred) * resolution_m
+    # Room inside the preferred region, which is what the third term reads.
+    # Zero outside it, so that term saturates there and the first one is
+    # what does the work until the path is back in the green.
+    preferred_clearance = ndimage.distance_transform_edt(preferred) * resolution_m
     cost = (
         1.0
         + PREFERENCE_WEIGHT * preference_distance
+        + PREFERRED_EDGE_WEIGHT
+        * np.exp(-preferred_clearance / PREFERRED_EDGE_SCALE_M)
         + BOUNDARY_WEIGHT * np.exp(-clearance / BOUNDARY_SCALE_M)
     )
     height, width = drivable.shape

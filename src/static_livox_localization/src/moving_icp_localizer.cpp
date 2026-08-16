@@ -205,6 +205,8 @@ class MovingIcpLocalizer {
                       registration_config_.max_correspondence, 1.0);
     private_nh_.param("max_iterations", registration_config_.max_iterations,
                       64);
+    private_nh_.param("transformation_epsilon",
+                      registration_config_.transformation_epsilon, 1e-4);
     private_nh_.param("min_points", registration_config_.min_points, 500);
     private_nh_.param("max_fitness", registration_config_.max_fitness, 0.20);
     private_nh_.param("registration_max_seed_translation_m",

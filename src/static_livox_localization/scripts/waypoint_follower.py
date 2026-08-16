@@ -68,9 +68,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, REFERENCE_BODY,
                         lidar_extrinsics, pose_correction,
                         reference_correction, route_chair_centre)
-from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S, GO_ROUND,
-                           Threat, avoidance_decision, is_stale,
-                           nearest_threat, parse_summary)
+from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
+                           BYPASS_EDGE_KEEP_M, BYPASS_OFFSET_MAX_M,
+                           BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
+                           BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
+                           avoidance_decision, bypass_offsets_for_room,
+                           is_stale, nearest_threat, parse_summary)
 from cluster_tracking import MOVING
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import SUPPRESSED_WHILE_PARKED
@@ -130,7 +133,7 @@ SLOPE_PITCH_RAD = math.radians(3.0)
 # that clears sooner - a pedestrian crossing the path - is simply waited
 # out, and driving resumes the moment the corridor is clear again.
 BYPASS_AFTER_S = 3.0
-BYPASS_OFFSETS = (0.6, -0.6, 1.0, -1.0)
+
 # How far ahead a confirmed-parked object is stepped around. The number that
 # matters is the WARNING TIME it buys, which is what turns "stop, wait 3 s,
 # then edge sideways" into one continuous drift past the thing: 5.0 m was
@@ -619,8 +622,13 @@ class WaypointFollower:
         the chair could brake. Checking only the stopping distance picks a
         lane with something standing 4 m down it, which is a sidestep into
         the second of two objects and then a stop between them.
+
+        The offsets tried are bounded by the room the band actually has over
+        the step - see bypass_offsets() - so a corridor that cannot take a
+        0.60 m step is offered a smaller one instead of that one being
+        admitted on a centre-point test.
         """
-        for offset in BYPASS_OFFSETS:
+        for offset in self.bypass_offsets():
             clear = self.corridor_threat(offset)
             if (clear is None or clear.distance_m > clear_for_m) and \
                     self.bypass_target_ok(offset):
@@ -632,6 +640,30 @@ class WaypointFollower:
             10, "no side of this has room in the band - waiting")
         return False
 
+    def bypass_room_each_side(self):
+        """Lateral room the band has over the step, per side, in metres.
+
+        Measured at the same look-ahead points bypass_target_ok checks, and
+        reduced to the tightest one: a step is only as safe as its worst
+        station. The value returned is what the chair's CENTRE may take,
+        already net of the room kept from the edge, so it can be used as an
+        offset directly.
+        """
+        if self.pose_xy is None:
+            return 0.0, 0.0
+        heading = np.array([math.cos(self.pose_yaw), math.sin(self.pose_yaw)])
+        left_room = right_room = float("inf")
+        for ahead in BYPASS_PROBE_AHEAD_M:
+            _, lo, hi = self.band.lateral_limits(self.pose_xy + heading * ahead)
+            left_room = min(left_room, hi)
+            right_room = min(right_room, -lo)
+        keep = BYPASS_EDGE_KEEP_M
+        return (max(0.0, left_room - keep), max(0.0, right_room - keep))
+
+    def bypass_offsets(self):
+        """Offsets worth trying here, in preference order."""
+        return bypass_offsets_for_room(*self.bypass_room_each_side())
+
     def bypass_target_ok(self, offset):
         """A lateral bypass is allowed only if the offset corridor stays
         inside the safety band for the next few meters."""
@@ -639,7 +671,7 @@ class WaypointFollower:
             return False
         heading = np.array([math.cos(self.pose_yaw), math.sin(self.pose_yaw)])
         normal = np.array([-heading[1], heading[0]])
-        for ahead in (0.5, 1.5, 2.5, 3.5):
+        for ahead in BYPASS_PROBE_AHEAD_M:
             p = self.pose_xy + heading * ahead + normal * offset
             if (not self.band.contains(p)
                     or not self.drivable_mask.contains(p)):
