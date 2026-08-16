@@ -13,7 +13,9 @@
 # show it are the process table and the publisher count on a topic.
 #
 # Read-only: this reports, it does not kill anything.
-set -u
+#
+# No `set -u`: ROS's own setup.bash reads unbound variables and exits under
+# it, which killed this script before its first line of output.
 
 source /opt/ros/noetic/setup.bash 2>/dev/null || true
 
@@ -37,8 +39,13 @@ for node in $NODES; do
   real=""
   for pid in $pids; do
     args="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    # Skip the wrapper, the master, and any shell whose command line merely
+    # mentions the node name -- a diagnostic that echoes these names would
+    # otherwise count itself, which is how this script first reported a
+    # safety_gate that was not running.
     case "$args" in
-      *roslaunch*|*rosmaster*|*" -f "*) continue ;;
+      *roslaunch*|*rosmaster*|*check_duplicate_nodes*|*pgrep*|*" echo "*)
+        continue ;;
     esac
     case "$args" in
       *"$node"*) real="$real $pid" ;;
@@ -83,17 +90,44 @@ fi
 
 echo
 echo "=== 3. 등록되지 않았는데 살아있는 프로세스 (축출된 유령) ==="
+# Compare by PID, not by name. A node's ROS name is not its executable name
+# -- fastlio_mapping registers as /laserMapping, livox_ros_driver2 as
+# /livox_lidar_publisher2 -- so matching names reports orphans that are not
+# there. What actually identifies an orphan is a process that looks like one
+# of our nodes and whose pid no registered node claims.
 if timeout 5 rosnode list >/dev/null 2>&1; then
-  registered="$(timeout 8 rosnode list 2>/dev/null)"
-  for node in $NODES; do
-    running="$(pgrep -fc "[${node:0:1}]${node:1}" 2>/dev/null || echo 0)"
-    [ "$running" -eq 0 ] && continue
-    if ! echo "$registered" | grep -q "$node"; then
-      printf '  !! %-26s 프로세스는 있는데 rosnode list 에 없음\n' "$node"
-      status=1
-    fi
+  registered_pids=""
+  for name in $(timeout 10 rosnode list 2>/dev/null); do
+    pid="$(timeout 5 rosnode info "$name" 2>/dev/null \
+           | sed -n 's/^Pid: *\([0-9]\+\).*/\1/p' | head -1)"
+    [ -n "$pid" ] && registered_pids="$registered_pids $pid"
   done
-  [ "$status" -eq 0 ] && echo "     없음"
+  if [ -z "$registered_pids" ]; then
+    echo "  rosnode info 가 pid 를 주지 않음 - 건너뜀"
+  else
+    found_orphan=0
+    for node in $NODES; do
+      for pid in $(pgrep -f "[${node:0:1}]${node:1}" 2>/dev/null); do
+        args="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+        case "$args" in
+          *roslaunch*|*rosmaster*|*check_duplicate_nodes*|*pgrep*) continue ;;
+        esac
+        case " $registered_pids " in
+          *" $pid "*) ;;
+          *)
+            printf '  !! %-26s pid %-7s 실행 중인데 마스터에 등록 안 됨\n' \
+              "$node" "$pid"
+            printf '       cpu %s  시작 %s\n' \
+              "$(ps -o pcpu= -p "$pid" 2>/dev/null | tr -d ' ')" \
+              "$(ps -o lstart= -p "$pid" 2>/dev/null)"
+            found_orphan=1
+            status=1
+            ;;
+        esac
+      done
+    done
+    [ "$found_orphan" -eq 0 ] && echo "     없음"
+  fi
 else
   echo "  roscore 없음 - 건너뜀"
 fi
