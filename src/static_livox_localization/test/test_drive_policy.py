@@ -177,6 +177,15 @@ class Band:
     def contains(self, xy, grace=0.0):
         return self.inside
 
+    def lateral_limits(self, xy):
+        # bypass_room_each_side asks the band how much room each side has.
+        # The double answers with a corridor wide enough that the room test
+        # never decides anything - these tests are about which side the
+        # policy picks, not about how much band there is to pick it in. Room
+        # has to clear BYPASS_OFFSET_MAX_M + BYPASS_EDGE_KEEP_M or the widest
+        # rungs of the ladder disappear before the policy sees them.
+        return 0.0, -3.0, 3.0
+
 
 def follower_at(policies, drive_mode=65, wheel_age_s=0.0):
     """A follower positioned on its route, fully healthy, and off band."""

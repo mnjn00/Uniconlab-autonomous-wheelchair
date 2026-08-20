@@ -268,8 +268,16 @@ class DwaFollower(WaypointFollower):
             last_yaw_rate=self.last_yaw_rate)
         if status != "OK":
             if status != self.dwa_status:
-                rospy.logwarn("DWA %s at wp %d/%d", status,
-                              self.nearest_index, len(self.waypoints))
+                if status == "SPEED_BELOW_FLOOR":
+                    rospy.logwarn(
+                        "DWA %s at wp %d/%d: cap %.2f m/s is under the "
+                        "%.2f m/s the wheels turn for (v_ref %.2f%s)",
+                        status, self.nearest_index, len(self.waypoints),
+                        cap, dwa_core.TURN_FLOOR_SPEED, float(v_ref[0]),
+                        ", threat guard" if threat is not None else "")
+                else:
+                    rospy.logwarn("DWA %s at wp %d/%d", status,
+                                  self.nearest_index, len(self.waypoints))
             self.dwa_status = status
             self.publish_state("HOLD:DWA_" + status, "HOLD:DWA_" + status)
             self.send_stop()

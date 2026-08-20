@@ -98,6 +98,37 @@ RIDER_EXCLUDE_HALF_WIDTH_M = 0.40
 FORWARD_FOV_HALF_DEG = 50.0
 CORRIDOR_MIN_RANGE_M = 0.50
 
+# OBSTACLE_SWEEP is a speed limit, not a stop.
+#
+# The swept footprint grows with the speed it is evaluated at, so a binary
+# stop makes standing still the condition for being allowed to move: stopped
+# -> short sweep -> gate opens -> accelerate -> sweep lengthens -> blocked ->
+# stopped. Measured on 2026-08-16 that cycle ran every 2.5-5 s with
+# cmd_vel_raw held at 0.79 the whole time, and raising the cap from 0.6 to
+# 0.8 made it fire more often. Capping instead of stopping settles: the chair
+# holds the fastest speed whose sweep is clear and the loop has no gain.
+#
+# Braking safety is unaffected. The separate OBSTACLE test above still stops
+# outright when a return sits inside the stopping envelope; this one only
+# governs how fast the chair may drive past something it can already stop for.
+SWEEP_BISECTION_STEPS = 5
+# Below this a cap is not worth having, and the number is the chair's, not a
+# preference: under roughly 0.3 m/s the loaded wheels do not turn at all, so
+# capping into that band commands a speed that does nothing while reading as
+# motion. dwa_core.TURN_FLOOR_SPEED and mpc_speed.TURN_FLOOR_SPEED carry the
+# same measurement; the gate keeps its own copy because it must hold for any
+# control law, including one that never imports either.
+#
+# Two modules disagreeing about this floor is not hypothetical. The cluster
+# guard ramps from CREEP_SPEED = 0.15 while the DWA sampler refuses anything
+# under 0.30, so a tracked object at exactly the guard distance produced a
+# cap of 0.15, no executable candidate, and a stop reported as NO_CANDIDATE -
+# the 2026-08-20 stall.
+SWEEP_MIN_SPEED_MPS = 0.30
+# The cap drops instantly and recovers at this rate, so a return that flickers
+# in and out of the sweep cannot chatter the command.
+SWEEP_CAP_RELEASE_MPS2 = 0.5
+
 
 class SafetyGate:
     def __init__(self):
@@ -116,6 +147,7 @@ class SafetyGate:
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""
+        self.sweep_cap = HARD_V_LIMIT
         self.policies = bool(rospy.get_param("~safety_policies", True))
         if self.policies:
             rospy.loginfo(announce(True, "safety_gate", []))
@@ -155,11 +187,11 @@ class SafetyGate:
     def motion_blocked(self, now):
         """Check visible obstacles; drop safety remains map-band containment."""
         if self.cloud is None or len(self.cloud) < 100:
-            return "NO_CLOUD"
+            return "NO_CLOUD", None
         reason = motion_hold_reason(
             self.motion, now.to_sec(), ODOM_STALE_S)
         if reason:
-            return reason
+            return reason, None
 
         requested_speed = max(0.0, min(HARD_V_LIMIT,
                                        self.raw.linear.x))
@@ -200,24 +232,43 @@ class SafetyGate:
             zone = obstacles
         if len(zone) >= 5 and \
                 np.percentile(zone[:, 0], 5) < envelope.distance_m:
-            return "OBSTACLE"
+            return "OBSTACLE", None
 
-        speed = max(self.motion.linear_speed_mps, requested_speed)
         yaw_rates = [requested_yaw_rate]
         if abs(self.motion.angular_speed_rps - requested_yaw_rate) > 0.05:
             yaw_rates.append(self.motion.angular_speed_rps)
-        for yaw_rate in yaw_rates:
-            if swept_footprint_collision(
-                    obstacles,
-                    linear_speed_mps=speed,
-                    angular_speed_rps=yaw_rate,
-                    horizon_s=envelope.horizon_s,
-                    front_m=FOOTPRINT_FRONT_M,
-                    rear_m=FOOTPRINT_REAR_M,
-                    half_width_m=FOOTPRINT_HALF_WIDTH_M,
-                    margin_m=SWEEP_MARGIN_M):
-                return "OBSTACLE_SWEEP"
-        return ""
+
+        def sweep_hits(candidate_speed):
+            for yaw_rate in yaw_rates:
+                if swept_footprint_collision(
+                        obstacles,
+                        linear_speed_mps=candidate_speed,
+                        angular_speed_rps=yaw_rate,
+                        horizon_s=envelope.horizon_s,
+                        front_m=FOOTPRINT_FRONT_M,
+                        rear_m=FOOTPRINT_REAR_M,
+                        half_width_m=FOOTPRINT_HALF_WIDTH_M,
+                        margin_m=SWEEP_MARGIN_M):
+                    return True
+            return False
+
+        # The search is over what may be COMMANDED. The measured speed is not
+        # folded in here on purpose: at 0.6 m/s measured, max(measured, v) is
+        # 0.6 for every candidate, the search returns zero, and the binary
+        # stop is back. What the chair is already carrying is the stopping
+        # envelope's business, and OBSTACLE above has already ruled on it.
+        if not sweep_hits(requested_speed):
+            return "", None
+        low, high = 0.0, requested_speed
+        for _ in range(SWEEP_BISECTION_STEPS):
+            middle = 0.5 * (low + high)
+            if sweep_hits(middle):
+                high = middle
+            else:
+                low = middle
+        if low < SWEEP_MIN_SPEED_MPS:
+            return "OBSTACLE_SWEEP", None
+        return "", low
 
     def spin(self):
         rate = rospy.Rate(GATE_HZ)
@@ -240,9 +291,19 @@ class SafetyGate:
                     abs(self.raw.linear.x) > MOTION_EPSILON or \
                     abs(self.raw.angular.z) > MOTION_EPSILON
                 if wants_motion:
-                    blocked = self.motion_blocked(now)
+                    blocked, cap = self.motion_blocked(now)
                     if self.policies:
                         reason = blocked
+                        step = SWEEP_CAP_RELEASE_MPS2 / GATE_HZ
+                        target = HARD_V_LIMIT if cap is None else cap
+                        # Down instantly, up on a leash. Taking min() with the
+                        # standing cap instead would let one tight frame hold
+                        # the chair slow long after the return had gone.
+                        if target < self.sweep_cap:
+                            self.sweep_cap = target
+                        else:
+                            self.sweep_cap = min(
+                                target, self.sweep_cap + step)
                     elif blocked:
                         # Still measured, still logged, just not acted on:
                         # this log is where the run finds out how often the
@@ -250,8 +311,13 @@ class SafetyGate:
                         rospy.logwarn_throttle(
                             5.0, "policies off: would have stopped on %s",
                             blocked)
+                else:
+                    self.sweep_cap = min(
+                        HARD_V_LIMIT,
+                        self.sweep_cap + SWEEP_CAP_RELEASE_MPS2 / GATE_HZ)
                 if not reason:
                     out.linear.x = max(0.0, min(HARD_V_LIMIT,
+                                                self.sweep_cap,
                                                 self.raw.linear.x))
                     out.angular.z = max(-HARD_W_LIMIT,
                                         min(HARD_W_LIMIT, self.raw.angular.z))

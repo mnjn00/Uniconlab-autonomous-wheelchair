@@ -272,7 +272,13 @@ class DwaPlanner:
                  # a wall on 2026-08-04. Excluded.
                  for w in yaw_samples()]
         if not pairs:
-            return 0.0, 0.0, "NO_CANDIDATE"
+            # Not a planning failure and not an obstacle: the cap handed in
+            # is below the speed the wheels will actually turn for, so there
+            # is nothing executable to score. It reads as a mystery stop
+            # unless it says so - on 2026-08-20 it cost a stall that took an
+            # hour to attribute, because the name suggested the geometry had
+            # run out. The caller that set the cap is the one to look at.
+            return 0.0, 0.0, "SPEED_BELOW_FLOOR"
         paths = self._rollouts(np.asarray(state, dtype=float), pairs)
         flat = paths[:, :, :2].reshape(-1, 2)
         # ONE pass over the band geometry, used twice: to reject the arcs that

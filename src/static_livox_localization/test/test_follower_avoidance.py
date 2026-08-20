@@ -64,6 +64,15 @@ class Band:
     def clamp(self, target):
         return target
 
+    def lateral_limits(self, xy):
+        # bypass_room_each_side asks the band how much room each side has.
+        # The double answers with a corridor wide enough that the room test
+        # never decides anything - these tests are about which side the
+        # policy picks, not about how much band there is to pick it in. Room
+        # has to clear BYPASS_OFFSET_MAX_M + BYPASS_EDGE_KEEP_M or the widest
+        # rungs of the ladder disappear before the policy sees them.
+        return 0.0, -3.0, 3.0
+
 
 def follower_with(objects, open_offsets=(0.6, -0.6, 1.0, -1.0),
                   policies=False, status="OK"):
