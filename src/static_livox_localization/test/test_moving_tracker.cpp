@@ -100,11 +100,45 @@ TEST(MovingTracker, LimitsAcceptedMapToOdomCorrectionStep) {
   config.max_correction_rotation_rad = 5.0 * M_PI / 180.0;
 
   const Eigen::Isometry3d limited = limit_map_T_odom_step(
-      Eigen::Isometry3d::Identity(), pose(1.0, 0.0, 0.5), config);
+      Eigen::Isometry3d::Identity(), pose(1.0, 0.0, 0.5),
+      Eigen::Isometry3d::Identity(), config);
 
   EXPECT_NEAR(limited.translation().norm(), 0.30, 1e-9);
   EXPECT_NEAR(Eigen::AngleAxisd(limited.rotation()).angle(),
               config.max_correction_rotation_rad, 1e-9);
+}
+
+// A yaw-only correction about the odom origin is what put the chair 1.92 m
+// sideways on 2026-08-20 while every gate read nominal. The clamp has to bound
+// what the chair does, not what the transform says.
+TEST(MovingTracker, BoundsChairDisplacementFarFromTheOdomOrigin) {
+  TrackingConfig config;
+  config.max_correction_translation_m = 0.20;
+  config.max_correction_rotation_rad = 2.0 * M_PI / 180.0;
+
+  const double r = 148.0;
+  Eigen::Isometry3d odom_T_base = Eigen::Isometry3d::Identity();
+  odom_T_base.translation() = Eigen::Vector3d(r, 0.0, 0.0);
+
+  // 0.53 deg about the odom origin - the correction actually applied that day.
+  const double yaw = 0.53 * M_PI / 180.0;
+  Eigen::Isometry3d candidate = Eigen::Isometry3d::Identity();
+  candidate.linear() =
+      Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+
+  const Eigen::Isometry3d current = Eigen::Isometry3d::Identity();
+  const Eigen::Isometry3d limited =
+      limit_map_T_odom_step(current, candidate, odom_T_base, config);
+
+  const Eigen::Vector3d before = (current * odom_T_base).translation();
+  const Eigen::Vector3d after = (limited * odom_T_base).translation();
+  const double unclamped = (candidate * odom_T_base).translation().x() - before.x();
+  (void)unclamped;
+
+  // Left alone this is r * yaw = 1.37 m.
+  EXPECT_GT(((candidate * odom_T_base).translation() - before).norm(), 1.3);
+  EXPECT_LE((after - before).norm(),
+            config.max_correction_translation_m + 1e-9);
 }
 
 TEST(MovingTracker, RequiresRealMotionBeforeAnotherTrackingCorrection) {

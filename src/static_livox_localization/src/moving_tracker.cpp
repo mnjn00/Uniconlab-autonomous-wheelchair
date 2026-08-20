@@ -73,12 +73,29 @@ CorrectionDecision evaluate_correction(
   return decision;
 }
 
+// The step is clamped about the CHAIR, not about the odom origin.
+//
+// Clamping the delta in the odom frame bounds the transform but not what the
+// transform does. A yaw term applied about the odom origin displaces the base
+// by yaw x r, where r is how far the chair has driven from that origin, so the
+// same allowance buys more error the longer the route runs. Measured on the
+// 2026-08-20 drive: at r = 148 m a 0.53 deg correction moved the pose 1.24 m
+// and a 0.75 deg one moved it 1.92 m, both far inside the 2 deg limit, which
+// therefore never fired. The identical yaw noise at r = 6 m early in the same
+// run moved the pose 0.25 m and nobody noticed.
+//
+// Conjugating the delta into the base frame makes the clamped translation the
+// displacement the chair actually sees, and leaves a yaw error rotating the
+// chair in place instead of swinging it on a 148 m arm.
 Eigen::Isometry3d limit_map_T_odom_step(
     const Eigen::Isometry3d& current_map_T_odom,
     const Eigen::Isometry3d& candidate_map_T_odom,
+    const Eigen::Isometry3d& odom_T_base,
     const TrackingConfig& config) {
-  const Eigen::Isometry3d delta =
+  const Eigen::Isometry3d delta_odom =
       current_map_T_odom.inverse() * candidate_map_T_odom;
+  const Eigen::Isometry3d delta =
+      odom_T_base.inverse() * delta_odom * odom_T_base;
   Eigen::Isometry3d limited_delta = Eigen::Isometry3d::Identity();
 
   const double translation_norm = delta.translation().norm();
@@ -99,7 +116,8 @@ Eigen::Isometry3d limit_map_T_odom_step(
   limited_delta.linear() =
       Eigen::Quaterniond::Identity().slerp(rotation_scale, delta_q).toRotationMatrix();
 
-  return current_map_T_odom * limited_delta;
+  return current_map_T_odom * odom_T_base * limited_delta *
+         odom_T_base.inverse();
 }
 
 bool tracking_motion_exceeds_threshold(

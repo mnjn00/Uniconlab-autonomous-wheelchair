@@ -45,9 +45,12 @@ CorrectionDecision evaluate_correction(
     const Eigen::Isometry3d& predicted_map_T_base,
     const TrackingConfig& config);
 
+// odom_T_base is what makes the limit mean anything: the step is clamped
+// about the chair rather than about the odom origin. See the definition.
 Eigen::Isometry3d limit_map_T_odom_step(
     const Eigen::Isometry3d& current_map_T_odom,
     const Eigen::Isometry3d& candidate_map_T_odom,
+    const Eigen::Isometry3d& odom_T_base,
     const TrackingConfig& config);
 
 bool tracking_motion_exceeds_threshold(

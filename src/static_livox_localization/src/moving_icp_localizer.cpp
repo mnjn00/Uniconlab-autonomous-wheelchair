@@ -632,7 +632,8 @@ class MovingIcpLocalizer {
         publish_diagnostic_locked(consensus.reason, registration, decision);
       } else {
         map_T_odom_ = static_livox_localization::limit_map_T_odom_step(
-            map_T_odom_, candidate_map_T_odom, tracking_config_);
+            map_T_odom_, candidate_map_T_odom, odom.odom_T_base,
+            tracking_config_);
         tracking_correction_reference_odom_ = odom.odom_T_base;
         has_tracking_correction_reference_ = true;
         state_machine_.observe(true, stamp.toSec());
