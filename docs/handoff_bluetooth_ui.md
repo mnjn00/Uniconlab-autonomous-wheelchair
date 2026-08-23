@@ -181,6 +181,7 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
 | `{"command":"estop"}` | `/mode_cmd=77` 직접 발행. 확인 없음 — 비상 정지는 한 번에 걸려야 합니다 |
 | `{"command":"estop_release","confirm":true}` | `/mode_cmd=65`, §3 가드 적용 |
 | `{"command":"stack_start","confirm":true}` | **`start_wheelchair_localization.sh` 실행** |
+| `{"command":"stack_stop","confirm":true}` | **`stop_stack.sh` 실행** — 주행 정지 후 스택 전체를 내립니다. 기동이 도는 중에도 대기 없이 실행됩니다 |
 | `{"command":"drive_start","confirm":true}` | **`go.sh` 실행** (없으면 mode 65 + 서비스로 폴백) |
 | `{"command":"drive_stop"}` | **`stop.sh` 실행.** 기동이 도는 중에도 대기 없이 실행됩니다 |
 | `{"command":"job_cancel"}` | 실행 중인 스크립트에 SIGTERM (프로세스 그룹 전체) |
@@ -203,6 +204,7 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
 | 이름 | 스크립트 |
 | :--- | :--- |
 | `stack` | `start_wheelchair_localization.sh` |
+| `stack_stop` | `stop_stack.sh` |
 | `drive` | `go.sh` |
 | `halt` | `stop.sh` |
 
@@ -428,14 +430,35 @@ NUC를 페어링하고, 앱에서 `mprp3`를 선택해 SPP로 연결한 뒤 대�
     띄웠는지에 의존하지 않도록 기본값을 `PROFILE=dwa SAFETY_POLICIES=true`로 두고,
     기동 로그 끝에 그 값을 찍습니다. 다른 프로파일은 `PROFILE=pursuit ./scripts/nuc_bridge_restart.sh ...`.
 
-### 아직 폰만으로 안 되는 것
+### 로컬 끄기 — `tools/stop_stack.sh`
 
-**스택을 내리는 건 폰으로 못 합니다.** 프로토콜에 `stack_stop`이 없고, `stop.sh`는
-주행만 멈춥니다(팔로워 정지 + `mode_cmd 77`). `job_cancel`은 추적 중인 작업에만
-SIGTERM을 보내는데 기동 스크립트는 노드를 `setsid`로 떼어 놓으므로 손자 프로세스에는
-닿지 않습니다. `~`에 스택 teardown 스크립트도 없습니다. 무엇을 어디까지 죽일지는
-운용 정책이라 임의로 만들지 않았습니다 — 필요하면 teardown 스크립트를 정해서
-`JOBS` 표에 넣으면 됩니다.
+[로컬 켜기]의 짝입니다. 설계에서 중요한 점 네 가지:
+
+1. **노드 목록을 복사하지 않습니다.** `start_wheelchair_localization.sh`가 이미
+   `for pattern in '[r]oslaunch' ... ; do` 한 줄로 스윕 목록을 들고 있고, 그 목록은
+   현장에서 여러 번 고쳐졌으며 `test_every_detached_node_is_also_cleaned_up`이
+   고정합니다. 두 벌이 되면 반드시 갈라지고, 하나를 놓친 teardown은
+   **이름 충돌로 마스터에서만 쫓겨나고 프로세스는 살아 있는 고아 노드**를 남깁니다
+   (`moving_icp_localizer`가 둘이면 `/fast_lio_icp/pose` publisher가 둘). 그래서
+   그 줄을 **읽어서** 씁니다. 못 찾으면 추측으로 죽이지 않고 **거부합니다.**
+2. **페일세이프가 먼저입니다.** 노드를 하나라도 내리기 전에 `stop.sh`로 팔로워를
+   세우고 `mode_cmd 77`을 겁니다. 그 뒤로 무슨 일이 나든 휠체어는 이미 조종간입니다.
+3. **블랙박스는 SIGINT로 닫습니다.** `rosbag record`는 클린 인터럽트에서만 인덱스를
+   쓰고, 더 센 신호에는 `.active`가 남습니다. 기동 스윕은 어차피 새 bag을 시작하니
+   상관없지만, teardown이 방금 끝난 주행의 기록을 깨뜨리면 곤란합니다.
+4. **roscore는 살려둡니다.** 브릿지가 rospy 노드를 물고 있어서, 마스터를 내리면
+   스택과 함께 운용자의 링크도 같이 꺼집니다. 꺼진 대시보드에서는 [로컬 켜기]를
+   누를 수 없습니다. 기동 스크립트는 roscore가 없을 때만 띄우므로 남겨도 손해가
+   없습니다.
+
+`stack_stop`은 `halt`와 함께 **슬롯 대기를 하지 않습니다.** 기동이 도는 중인 스택을
+실제로 중단시킬 수 있는 유일한 수단이기 때문입니다 — `job_cancel`은 추적 중인
+프로세스 그룹에만 신호를 보내는데, 기동 스크립트는 노드를 `setsid`로 떼어 놓아
+이미 올라간 센서에는 그 신호가 닿지 않습니다.
+
+한 가지 주의: 스윕의 `[r]oslaunch` 패턴은 이 머신의 **모든** roslaunch를 내립니다
+(기동 스크립트가 원래 그렇게 동작합니다). foxglove 브릿지 등 다른 걸 roslaunch로
+띄워 뒀다면 같이 내려갑니다.
 
 ---
 

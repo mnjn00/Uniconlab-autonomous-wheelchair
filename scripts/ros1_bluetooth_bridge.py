@@ -262,6 +262,7 @@ class JobRunner:
     # run is not something this link should offer.
     JOBS = {
         "stack": ("start_wheelchair_localization.sh", "로컬라이제이션 스택 기동"),
+        "stack_stop": ("stop_stack.sh", "로컬 끄기"),
         "drive": ("go.sh", "주행 시작"),
         "halt": ("stop.sh", "주행 정지"),
     }
@@ -314,12 +315,18 @@ class JobRunner:
 
     # Stopping must never queue behind anything. stop.sh deliberately checks
     # nothing, and a stop that waits for a bring-up to finish is not a stop.
-    ALWAYS_ALLOWED = ("halt",)
+    #
+    # stack_stop is here for a second reason: it is the only real abort for a
+    # bring-up in progress. job_cancel signals the tracked process group, but the
+    # bring-up detaches its nodes with setsid, so the sensors it already started
+    # never see that signal. Making the teardown wait for the bring-up it is
+    # meant to undo would be the same bug as a stop that queues.
+    ALWAYS_ALLOWED = ("halt", "stack_stop")
 
-    def _spawn(self, path):
+    def _spawn(self, path, name):
         """Launch detached without touching the tracked slot."""
         try:
-            handle = open("/tmp/bt_job_halt.log", "wb")
+            handle = open("/tmp/bt_job_%s.log" % name, "wb")
         except OSError:
             handle = subprocess.DEVNULL
         return subprocess.Popen(
@@ -339,11 +346,11 @@ class JobRunner:
             # Runs even while a bring-up holds the slot, and does not overwrite
             # that job's status -- the operator still needs to see how it ended.
             try:
-                self._spawn(path)
+                self._spawn(path, name)
             except OSError as exc:
                 return False, "failed to launch %s: %s" % (path, exc)
             log("job '%s' started (unqueued): %s" % (name, path))
-            return True, "%s 실행함" % label
+            return True, "%s 실행함 (로그: /tmp/bt_job_%s.log)" % (label, name)
 
         with self.lock:
             if self.proc is not None and self.proc.poll() is None:
@@ -1047,6 +1054,8 @@ class Session:
                 ok, detail = self._halt()
             elif command == "stack_start":
                 ok, detail = self._stack_start(payload)
+            elif command == "stack_stop":
+                ok, detail = self._stack_stop(payload)
             elif command == "job_cancel":
                 ok, detail = (self.jobs.cancel() if self.jobs is not None
                               else (False, "스크립트 실행이 설정되지 않았습니다"))
@@ -1133,6 +1142,15 @@ class Session:
             return False, ("확인 필요: \"confirm\": true 를 함께 보내세요 — "
                            "라이다·IMU·측위 노드가 기동됩니다 (수 분 소요)")
         return self.jobs.start("stack")
+
+    def _stack_stop(self, payload):
+        """Undo [로컬 켜기]. Confirmed, because it ends the drive and the sensors."""
+        if self.jobs is None or not self.jobs.enabled:
+            return False, "스크립트 실행이 꺼져 있습니다 (--allow-scripts off)"
+        if not payload.get("confirm"):
+            return False, ("확인 필요: \"confirm\": true 를 함께 보내세요 — "
+                           "주행을 멈추고 라이다·측위 노드를 모두 내립니다")
+        return self.jobs.start("stack_stop")
 
     def _drive(self, payload, running):
         """Mirror go.sh's refusals rather than starting into a broken precondition."""
