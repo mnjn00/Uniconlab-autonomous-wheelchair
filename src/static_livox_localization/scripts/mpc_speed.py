@@ -91,7 +91,7 @@ import numpy as np
 # 15 m ahead and takes the minimum, so the pinches that made up 19 % of the
 # route still come out at the 0.30 floor; what changes is the 81 % that was
 # being held at 0.6 for no reason the geometry gave.
-MAX_SPEED = 1.0
+MAX_SPEED = 0.8
 SLOPE_SPEED = 0.3
 CREEP_SPEED = 0.15
 SLACK_FULL_SPEED_M = 0.8

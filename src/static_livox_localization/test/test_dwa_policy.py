@@ -179,6 +179,7 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.last_yaw_rate = 0.0
     follower.last_command_stamp = None
     follower.dwa_status = ""
+    follower.command_accel = 0.0
     follower.status = ""
     follower.band = None
     follower.anchor = types.SimpleNamespace(

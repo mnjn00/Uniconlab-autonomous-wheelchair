@@ -83,7 +83,7 @@ import dwa_core
 import mpc_speed
 from cluster_guard import GO_ROUND, WAIT, corridor_obstacle_points
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
-from mpc_command import MAX_COMMAND_GAP_S, advance_command
+from mpc_command import MAX_COMMAND_GAP_S, advance_command, jerk_limited
 from route_mask import RouteMask
 from waypoint_follower import (WaypointFollower, CONTROL_HZ, CREEP_SPEED,
                                GUARD_SLOW_EXTRA_M, MAX_ACCEL, MAX_DECEL,
@@ -139,10 +139,18 @@ class DwaFollower(WaypointFollower):
         self.odom_v = 0.0
         self.odom_w = 0.0
         self.dwa_status = ""
+        # Carried across cycles so the ramp has a slope to be limited against.
+        self.command_accel = 0.0
         rospy.loginfo(
             "DWA profile: sim %.2f m, %d speeds x %d yaw rates, band and "
             "drivable mask as hard rejects", self.planner.distance_m,
             len(dwa_core.speed_samples()), len(dwa_core.yaw_samples()))
+
+    def send_stop(self):
+        # The jerk limit shapes driving, never braking. Dropping the carried
+        # acceleration here is what keeps a stop as abrupt as it was before.
+        self.command_accel = 0.0
+        WaypointFollower.send_stop(self)
 
     def on_odom(self, message):
         """Wheel odometry, kept for the anchor as well as for the base."""
@@ -296,9 +304,12 @@ class DwaFollower(WaypointFollower):
             self.last_yaw_rate = float(state[4])
         self.last_command_stamp = now
         step = max(elapsed, 1e-3)
+        wanted_accel = np.clip((target_v - self.current_speed) / step,
+                               -MAX_DECEL, MAX_ACCEL)
+        self.command_accel = jerk_limited(
+            wanted_accel, self.command_accel, step)
         accel = np.array([
-            np.clip((target_v - self.current_speed) / step,
-                    -MAX_DECEL, MAX_ACCEL),
+            self.command_accel,
             np.clip((target_w - self.last_yaw_rate) / step,
                     -YAW_SLEW_RPS2, YAW_SLEW_RPS2)])
         speed, yaw_rate = advance_command(

@@ -42,6 +42,28 @@ MAX_COMMAND_GAP_S = 0.5
 # ...and a cycle shorter than this contributes no meaningful ramp. It also
 # covers the first cycle, where there is no previous stamp to subtract.
 MIN_COMMAND_STEP_S = 0.02
+# Ceiling on how fast the acceleration itself may change. The ramp above is
+# built from a velocity error divided by a step, so it can jump from nothing
+# to MAX_ACCEL between two cycles: the speed curve is trapezoidal and the
+# corners are what the rider feels. Bounding the slope turns those corners
+# into an S. Sized against the chair, not comfort alone - MAX_ACCEL is
+# 0.18 m/s^2, so 0.8 m/s^3 reaches full acceleration in 0.23 s and costs
+# nothing at the speeds this route runs.
+MAX_JERK = 0.8
+
+
+def jerk_limited(desired_accel, previous_accel, step_s, max_jerk=MAX_JERK):
+    """The acceleration to use this cycle, given the one used last cycle.
+
+    Pure, because the alternative is a follower that cannot be tested without
+    a chair under it. Hard braking does not come through here: a stop resets
+    the carried acceleration instead, so nothing about ride quality can
+    delay one.
+    """
+    room = abs(float(max_jerk)) * max(float(step_s), 0.0)
+    low = float(previous_accel) - room
+    high = float(previous_accel) + room
+    return min(max(float(desired_accel), low), high)
 
 
 def advance_command(speed, yaw_rate, u0, elapsed_s, v_max, yaw_max):

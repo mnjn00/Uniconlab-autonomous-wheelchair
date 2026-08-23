@@ -542,6 +542,11 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
   > "$LOG/live_gate.log" 2>&1 < /dev/null &
+# Watches whether a commanded stop reaches the wheels. It cannot force one -
+# if the serial write is what is stuck, its mode frame is stuck behind it -
+# so its product is the alarm and the joystick remains the failsafe.
+setsid nohup rosrun static_livox_localization stop_watchdog.py \
+  > "$LOG/live_stopwatchdog.log" 2>&1 < /dev/null &
 setsid nohup rosrun static_livox_localization tip_guard.py \
   > "$LOG/live_tipguard.log" 2>&1 < /dev/null &
 # The follower steers around what this node reports as parked and waits for
@@ -579,7 +584,7 @@ setsid nohup rosbag record --lz4 \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
   /perception/objects_summary /perception/dynamic_boxes /perception/objects \
-  /waypoint_follower/route_identity \
+  /waypoint_follower/route_identity /uart_tx_diag /stop_watchdog/alarm \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

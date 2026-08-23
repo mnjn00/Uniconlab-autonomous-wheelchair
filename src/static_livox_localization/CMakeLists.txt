@@ -49,6 +49,7 @@ target_link_libraries(bounded_cloud_preview_node bounded_cloud_preview ${catkin_
 catkin_install_python(
   PROGRAMS
     scripts/preflight.py
+    scripts/stop_watchdog.py
     scripts/report_static_trial.py
     scripts/report_moving_trial.py
     scripts/replay_metrics.py
