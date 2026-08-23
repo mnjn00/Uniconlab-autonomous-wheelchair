@@ -448,7 +448,26 @@ class BridgeState:
         self.started_at = time.time()
 
         self.drive_mode = None          # 65 / 77, echoed by the motor controller
-        self.battery_percent = None     # /wheel_status data[7]
+        # /wheel_status data[7], which this bridge used to report as
+        # battery_percent. It is not a charge level. Sampled across a drive on
+        # 2026-08-23 it took exactly two values, 88 ('X') and 77 ('M'), toggling
+        # with motion (77 at 0.94 m/s, 88 at 0.74, 77 at 0.53, 88 at rest) and
+        # never anything in between -- no discharge curve looks like that.
+        #
+        # The frame explains why. uart.py sends [72] + wheel_cmd + [ck,13,10]
+        # where wheel_cmd is (dir_L, mag_L, dir_R, mag_R, 79) from
+        # wheel_cmd_tmp.compute_wheel_command; directions are 'C'/'W'/'S' and
+        # magnitudes are counts+33. The reply is the same shape with the mode
+        # echo inserted, so data[2..6] are wheel direction/magnitude fields and
+        # data[7] is a one-byte status the controller appends -- an ASCII flag,
+        # not a percentage. Nothing in base_model scales or documents it;
+        # bridge_to_server.py just republishes it and differences it into a
+        # "consumption" that a two-valued signal cannot support.
+        #
+        # So it is reported as a diagnostic byte and battery_percent is null.
+        # What data[7] actually means is still unknown -- decode it against the
+        # motor controller's manual before showing it to a rider as anything.
+        self.wheel_status_byte7 = None
         self.wheel_status_stamp = None
         self.follower_status = None
         self.robot_fault = None
@@ -583,9 +602,11 @@ class BridgeState:
                 "follower_state": self.follower_state,
                 "last_command_detail": self.last_command_detail,
 
-                # data[7] of the raw UART frame; bridge_to_server.py reads the
-                # same byte to publish wheel_battery.
-                "battery_percent": self.battery_percent,
+                # Nothing on this stack measures charge. Reporting the raw
+                # data[7] byte as a percentage put a number in front of a rider
+                # that looked like remaining range and was not.
+                "battery_percent": None,
+                "wheel_status_byte7": self.wheel_status_byte7,
                 # No step-level concept exists in this stack.
                 "step_level": None,
             }
@@ -699,7 +720,7 @@ class RosLink:
             if len(msg.data) > 1:
                 self.state.drive_mode = int(msg.data[1])
             if len(msg.data) > 7:
-                self.state.battery_percent = int(msg.data[7])
+                self.state.wheel_status_byte7 = int(msg.data[7])
 
     def _pose_cb(self, msg):
         p = msg.pose.pose.position

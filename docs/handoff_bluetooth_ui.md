@@ -76,8 +76,16 @@ uart.py              모드 게이트 + 0.6초 명령 기아 워치독
 | `77` `'M'` | **Manual** | 모터 정지 프레임 송신 후 **모든 `wheel_cmd` 무시** |
 
 `/wheel_status`(`Int16MultiArray`)는 원본 UART 프레임입니다. `data[0]==72`(`'H'`)가 헤더,
-**`data[1]`이 모터 컨트롤러가 되돌려주는 모드 echo**, `data[7]`이 배터리입니다. 이 echo가
-명령이 실제로 먹혔는지 확인할 유일한 근거입니다.
+**`data[1]`이 모터 컨트롤러가 되돌려주는 모드 echo**입니다. 이 echo가 명령이 실제로
+먹혔는지 확인할 유일한 근거입니다.
+
+> **⚠ 정정 (2026-08-23)** — 이전 판의 "`data[7]`이 배터리"는 **틀렸습니다.** §6-1 참조.
+
+프레임 구조는 TX와 대칭입니다. `uart.py`는 `[72] + wheel_cmd + [checksum,13,10]`을 보내고
+`wheel_cmd`는 `wheel_cmd_tmp.compute_wheel_command`가 만드는
+`(dir_L, mag_L, dir_R, mag_R, 79)` — 방향은 `'C'`(전진)/`'W'`(후진)/`'S'`(정지),
+크기는 `counts + 33`입니다. RX는 여기에 모드 echo가 끼어든 모양이라
+`data[2..6]`이 바퀴 방향·크기 필드이고 `data[7]`은 컨트롤러가 덧붙이는 **상태 바이트 1개**입니다.
 
 ### 브릿지가 지키는 규칙
 
@@ -155,7 +163,7 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
  "localization_status":"TRACKING","localization_tracking":true,
  "objects_summary":"clusters=3 nearest=2.4m","robot_fault":"none",
  "speed_source":"wheel",
- "battery_percent":87,"step_level":null,
+ "battery_percent":null,"wheel_status_byte7":88,"step_level":null,
  "unavailable":["step_level"]}
 ```
 
@@ -380,6 +388,31 @@ NUC를 페어링하고, 앱에서 `mprp3`를 선택해 SPP로 연결한 뒤 대�
    → `데이터 없음`으로 구분하고, 미수신 항목이 있으면 서브시스템 줄 전체를 회색 처리.
 7. `--debug-tcp` accept 루프가 일시적 `OSError` 한 번에 조용히 죽어 프로브 포트가
    그 프로세스 수명 내내 사라졌습니다. → 리스너가 실제로 닫혔을 때만 종료.
+8. **[로컬 켜기]가 마지막 주행과 다른 컨트롤러를 띄웠습니다.**
+   `start_wheelchair_localization.sh`는 `$PROFILE`로 컨트롤러를 고르고 **기본값이
+   `pursuit`** 입니다(155행). 현장 DWA 주행은
+   `PROFILE=dwa SAFETY_POLICIES=true /home/mprp3/start_wheelchair_localization.sh`로
+   띄웁니다. 브릿지는 자기 환경을 그대로 물려주므로, 평범한 셸에서 띄운 브릿지의
+   [로컬 켜기]는 **pursuit**을 기동합니다 — 같은 버튼, 같은 스크립트, 다른 로봇.
+   → `--job-env KEY=VALUE`(반복 가능)로 운용 환경을 명시하고, 텔레메트리
+   `stack_profile`로 그 버튼이 실제로 띄울 컨트롤러를 표시합니다. 현장 기동 예:
+   `nuc_bridge_restart.sh --allow-commands --allow-scripts --job-env PROFILE=dwa --job-env SAFETY_POLICIES=true`
+   반면 **[주행 시작]/[주행 정지]는 프로파일과 무관**합니다. `go.sh`는
+   `rosservice call /waypoint_follower/start "data: true"` 한 줄이고,
+   `stop.sh`도 마찬가지라 지금 떠 있는 팔로워가 무엇이든 그대로 동작합니다.
+9. **`data[7]`은 배터리가 아닙니다.** 주행 중 샘플링해 보니 값이 **88(`'X'`)과
+   77(`'M'`) 딱 두 개**뿐이고 주행 상태에 따라 토글합니다
+   (0.94 m/s에서 77, 0.74에서 88, 0.53에서 77, 정지에서 88). 중간값이 전혀 없으므로
+   방전 곡선일 수 없습니다. 프레임 구조상으로도 컨트롤러가 덧붙이는 상태 바이트
+   자리입니다(§2). `base_model` 어디에도 이 바이트를 스케일하거나 문서화한 곳이 없고,
+   `bridge_to_server.py`는 이걸 그냥 재발행하면서 차분으로 "소비량"을 만드는데
+   두 값짜리 신호로는 성립하지 않습니다.
+   → `battery_percent`는 이제 항상 `null`이고(따라서 `unavailable`),
+   원시 바이트만 `wheel_status_byte7`로 진단용 노출합니다. 앱은 배터리를
+   `측정 안 됨 · data[7]=88 (용도 미확인)`으로 표시합니다.
+   **이 바이트의 진짜 의미는 아직 모릅니다** — 모터 컨트롤러 매뉴얼로 디코딩하기
+   전에는 탑승자에게 어떤 의미로도 보여주지 마세요. 이 스택에는 배터리 잔량을
+   측정하는 노드가 없습니다.
 
 ---
 
