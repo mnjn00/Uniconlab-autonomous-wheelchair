@@ -40,6 +40,27 @@ if [ -z "$PATTERN_LINE" ]; then
     exit 2
 fi
 eval "set -- $PATTERN_LINE"
+
+# The bring-up sweep is authoritative but not complete: it launches
+# `rosrun static_livox_localization stop_watchdog.py` and never sweeps it, so
+# every bring-up so far has run on top of the previous run's stop_watchdog.
+# Verified 2026-08-23 -- it was the one process left alive by the first real
+# teardown. Rather than pin a rival list here, derive what the script detaches
+# and add anything its own patterns do not already cover. A gap in their list
+# then shows up as an extra pattern instead of as an orphan.
+EXTRA=""
+for node in $(grep -oE "rosrun [a-z_]+ [A-Za-z_]+\.py" "$BRINGUP"               | awk "{print \$3}" | sed "s/\.py$//" | sort -u); do
+    covered=0
+    for pattern in "$@"; do
+        case "$node" in *"$(printf %s "$pattern" | tr -d "[]")"*) covered=1 ;; esac
+    done
+    [ "$covered" -eq 0 ] && EXTRA="$EXTRA $node"
+done
+if [ -n "$EXTRA" ]; then
+    echo "기동 스크립트 스윕이 놓친 노드:$EXTRA"
+    set -- "$@" $EXTRA
+fi
+
 echo "[스택 내리기] 대상 $# 종류 (start_wheelchair_localization.sh 에서 읽음)"
 
 # 1. Fail-safe first. Whatever happens below, the base is already out of auto
@@ -90,6 +111,15 @@ else
 fi
 
 source /opt/ros/noetic/setup.bash >/dev/null 2>&1 || true
+
+# A killed node stays registered with the master until something unregisters
+# it, so rosnode list keeps naming processes that are gone -- the first
+# teardown left seven of them, every one answering "connection refused" to a
+# ping. Left behind they make a torn-down stack look half up, and the next
+# bring-up's duplicate-node check has to reason about ghosts.
+echo "[5/5] 죽은 노드 등록 정리 (rosnode cleanup)"
+yes | timeout 30 rosnode cleanup >/dev/null 2>&1 || true
+
 echo "=== 남아 있는 ROS 노드 ==="
 rosnode list 2>/dev/null || echo "(roscore 응답 없음)"
 echo

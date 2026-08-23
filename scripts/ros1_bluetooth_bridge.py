@@ -97,6 +97,16 @@ MODE_LABELS = {AUTO_MODE: "auto", MANUAL_MODE: "manual"}
 
 FOLLOWER_START_SERVICE = "/waypoint_follower/start"
 MOTION_EPS = 0.02       # m/s and rad/s below which a Twist counts as zero
+# /wheel_status data[7] at full charge. The gauge moves in steps of 11, so this
+# is 8 bars; every value seen in the field has been a multiple of 11.
+BATTERY_FULL = 88
+# How long a subsystem reading stays believable after its topic goes quiet.
+# /wheel_status already had a TTL, which is why the wheel link reported 끊김 the
+# moment the stack came down -- while localization went on claiming TRACKING and
+# the obstacle line went on claiming a clear band, from nodes that no longer
+# existed. Every one of those publishes at 1 Hz or faster, so five seconds of
+# silence means the publisher is gone, not slow.
+FIELD_TTL_S = 5.0
 
 # The interpreter the operator scripts are run with. A module constant rather
 # than a literal so the job tests can point it at a bash that exists on the
@@ -469,9 +479,11 @@ class BridgeState:
         # motor current the gauge sits a step low, and a number that drops 12%
         # every time the chair sets off is worse than no number.
         #
-        # The scale itself is still unconfirmed -- 88 is merely the largest
-        # value seen, not a documented full charge. Treat it as a level out of
-        # 88, not as a percentage, until the controller manual says otherwise.
+        # 88 is full, confirmed by the team 2026-08-23, so the gauge is 8 steps
+        # of 11 over a 0..88 range and a percentage is 100 * level / 88. It is
+        # the wheel-base battery -- the motor controller's own reading, not the
+        # NUC's. The step is coarse: one bar is 12.5%, so 88/77/66 show as
+        # 100/88/75% and nothing in between exists.
         self.battery_raw = None
         self.battery_at_rest = None
         self.wheel_status_stamp = None
@@ -504,10 +516,20 @@ class BridgeState:
         self.cmd_out = 0.0              # what tip_guard sends to the wheels
         self.cmd_raw_stamp = None
         self.tip_guard_status = None
+        self.tip_guard_stamp = None
         self.localization_status = None
+        self.localization_stamp = None
         self.objects_summary = None
+        self.objects_stamp = None
+        self.follower_stamp = None
         self.estop_requested_at = None
         self.last_command_detail = None
+
+    def _fresh(self, value, stamp, now):
+        """The value, or None once its publisher has gone quiet."""
+        if stamp is None or now - stamp > FIELD_TTL_S:
+            return None
+        return value
 
     def ground_speed(self, now=None):
         """Best available answer to "is the chair moving", and where it came from.
@@ -541,6 +563,13 @@ class BridgeState:
             wheel_age = age(self.wheel_status_stamp)
             wheel_link_ok = wheel_age is not None and wheel_age <= ttl_s
             speed, yaw_rate, speed_source = self.ground_speed(now)
+            # A reading whose publisher has gone quiet is not a reading.
+            localization = self._fresh(self.localization_status,
+                                       self.localization_stamp, now)
+            objects = self._fresh(self.objects_summary, self.objects_stamp, now)
+            tip_guard = self._fresh(self.tip_guard_status, self.tip_guard_stamp, now)
+            follower = self._fresh(self.follower_status, self.follower_stamp, now)
+            follower_live = follower is not None
             stopped = speed is not None and speed <= 0.05
             if stopped and self.battery_raw is not None:
                 self.battery_at_rest = self.battery_raw
@@ -593,11 +622,11 @@ class BridgeState:
                 "wheel_link_ok": wheel_link_ok,
                 "wheel_status_age_s": wheel_age,
                 "odom_age_s": age(self.odom_stamp),
-                "tip_guard_status": self.tip_guard_status,
-                "follower_status": self.follower_status,
-                "localization_status": self.localization_status,
-                "localization_tracking": self.localization_status == "TRACKING",
-                "objects_summary": self.objects_summary,
+                "tip_guard_status": tip_guard,
+                "follower_status": follower,
+                "localization_status": localization,
+                "localization_tracking": localization == "TRACKING",
+                "objects_summary": objects,
                 "robot_fault": self.robot_fault,
 
                 # Navigation view. Pose is the same /fast_lio_icp/pose the route
@@ -607,20 +636,25 @@ class BridgeState:
                 "pose_y": self.pose_y,
                 "pose_yaw_deg": self.pose_yaw_deg,
                 "pose_age_s": age(self.pose_stamp),
-                "loc_fitness": self.loc_fitness,
-                "loc_inlier_ratio": self.loc_inlier_ratio,
-                "loc_reason": self.loc_reason,
-                "wp_index": self.wp_index,
-                "wp_total": self.wp_total,
-                "follower_state": self.follower_state,
+                "loc_fitness": self._fresh(self.loc_fitness,
+                                           self.localization_stamp, now),
+                "loc_inlier_ratio": self._fresh(self.loc_inlier_ratio,
+                                                self.localization_stamp, now),
+                "loc_reason": self._fresh(self.loc_reason,
+                                          self.localization_stamp, now),
+                "wp_index": self.wp_index if follower_live else None,
+                "wp_total": self.wp_total if follower_live else None,
+                "follower_state": self.follower_state if follower_live else None,
                 "last_command_detail": self.last_command_detail,
 
                 # Level, not percent -- see the note on battery_raw. The
                 # at-rest reading is the one worth showing; battery_raw is what
                 # the frame says right now, which sags a step under load.
-                "battery_percent": None,
+                "battery_percent": (None if self.battery_at_rest is None else
+                                    int(round(100.0 * self.battery_at_rest
+                                              / BATTERY_FULL))),
                 "battery_level": self.battery_at_rest,
-                "battery_level_max_seen": 88,
+                "battery_level_full": BATTERY_FULL,
                 "battery_raw": self.battery_raw,
                 "battery_under_load": battery_under_load,
                 # No step-level concept exists in this stack.
@@ -631,8 +665,8 @@ class BridgeState:
             frame["ready_to_drive"] = bool(
                 wheel_link_ok
                 and self.drive_mode == AUTO_MODE
-                and self.localization_status == "TRACKING"
-                and self.objects_summary is not None
+                and localization == "TRACKING"
+                and objects is not None
                 and not motion_blocked)
             frame["unavailable"] = sorted(k for k, v in frame.items() if v is None)
             # Fail closed: unknown reads as not-driving-safely.
@@ -760,6 +794,7 @@ class RosLink:
         match = self._STATUS_RE.match(text)
         with self.state.lock:
             self.state.follower_status = text
+            self.state.follower_stamp = time.time()
             if match:
                 self.state.follower_state = match.group("state")
                 self.state.wp_index = int(match.group("i"))
@@ -808,6 +843,7 @@ class RosLink:
     def _tip_cb(self, msg):
         with self.state.lock:
             self.state.tip_guard_status = msg.data
+            self.state.tip_guard_stamp = time.time()
 
     def _objects_cb(self, msg):
         # obstacle_clusters.py publishes a JSON blob, not a sentence. Dumping the
@@ -830,6 +866,7 @@ class RosLink:
             pass
         with self.state.lock:
             self.state.objects_summary = text[:80]
+            self.state.objects_stamp = time.time()
 
     def _diag_cb(self, msg):
         try:
@@ -845,6 +882,7 @@ class RosLink:
                     fields[item.key] = item.value
                 with self.state.lock:
                     self.state.localization_status = worst.message.strip()[:80]
+                    self.state.localization_stamp = time.time()
                     # The localizer emits a sentinel (1e9) for fitness while ICP
                     # correction is suppressed -- e.g. STATIONARY_CORRECTION_
                     # SUPPRESSED, which is normal for a parked chair. Printing
@@ -1163,13 +1201,21 @@ class Session:
 
     def _drive(self, payload, running):
         """Mirror go.sh's refusals rather than starting into a broken precondition."""
+        now = time.time()
         with self.state.lock:
             in_manual = self.state.drive_mode == MANUAL_MODE
             app_estop = self.state.estop_requested_at is not None
-            tracking = self.state.localization_status == "TRACKING"
-            objects = self.state.objects_summary
+            # Freshness matters more here than anywhere. A localizer that died
+            # leaves its last word behind, and its last word is usually
+            # TRACKING -- refusing on the reading rather than on the topic
+            # being alive would wave the drive through onto a dead fix.
+            localization = self.state._fresh(self.state.localization_status,
+                                             self.state.localization_stamp, now)
+            tracking = localization == "TRACKING"
+            objects = self.state._fresh(self.state.objects_summary,
+                                        self.state.objects_stamp, now)
             link_age = (None if self.state.wheel_status_stamp is None
-                        else time.time() - self.state.wheel_status_stamp)
+                        else now - self.state.wheel_status_stamp)
         # Both refusals are "the base is in manual", but they are not the same
         # situation and they do not have the same next step. Calling the resting
         # state an E-STOP sent the operator looking for an emergency that never
@@ -1193,7 +1239,7 @@ class Session:
                            "reads exactly like clear road")
         if not tracking:
             return False, ("refusing: localization is '%s', not TRACKING"
-                           % (self.state.localization_status or "silent"))
+                           % (localization or "silent"))
         # Prefer the operator's own go.sh: it re-checks authoritatively and its
         # refusal text is the wording the team already knows. Reimplementing the
         # launch policy in Python would mean two copies that drift apart.
