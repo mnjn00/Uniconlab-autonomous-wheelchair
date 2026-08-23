@@ -30,6 +30,7 @@ def load(name):
 mpc_speed = load("mpc_speed")
 limit = mpc_speed.slope_speed_limit
 FLOOR = mpc_speed.TURN_FLOOR_SPEED
+DOWNHILL_MIN = mpc_speed.SLOPE_DOWNHILL_MIN_MPS
 TOP = mpc_speed.MAX_SPEED
 
 
@@ -54,7 +55,7 @@ def test_descending_gives_up_speed_as_the_grade_takes_the_brake():
     speeds = [limit(deg(d)) for d in (3.5, 4.5, 5.0, 5.5, 6.0, 7.0)]
     assert speeds == sorted(speeds, reverse=True)
     assert speeds[0] == approx(TOP)
-    assert speeds[-1] == approx(FLOOR)
+    assert speeds[-1] == approx(DOWNHILL_MIN)
 
 
 def test_the_speed_is_one_the_chair_can_stop_from():
@@ -62,24 +63,30 @@ def test_the_speed_is_one_the_chair_can_stop_from():
     stops inside the margin, so re-deriving it has to give the margin back."""
     brake = mpc_speed.SLOPE_BRAKE_MPS2
     margin = mpc_speed.SLOPE_STOP_MARGIN_M
-    for d in (4.5, 5.0, 5.5):
+    for d in (4.5, 5.0):
         v = limit(deg(d))
         remaining = brake - mpc_speed.GRAVITY_MPS2 * math.sin(deg(d))
         assert remaining > 0
         assert v * v / (2.0 * remaining) <= margin + 1e-9
 
 
-def test_a_grade_with_no_braking_left_gets_the_floor_not_a_stop():
-    """Past about 6.5 deg the brake is spent. The floor is what remains -
-    stopping outright is the gate's call and the band's, not this policy's,
-    and a cap under the floor commands a speed the wheels ignore."""
+def test_a_steep_descent_still_gets_a_usable_speed():
+    """Past about 5 deg the braking term alone would fall below what the
+    operator calls a safe descent. It does not: a long hill crawled at the
+    actuation floor is minutes spent on it, which is its own hazard, and the
+    descent floor is where that judgement lives."""
     for d in (7, 9, 15):
-        assert limit(deg(d)) == approx(FLOOR)
+        assert limit(deg(d)) == approx(DOWNHILL_MIN)
 
 
-def test_the_floor_is_never_undercut():
+def test_no_grade_is_given_less_than_the_descent_floor():
     for d in range(-15, 21):
-        assert limit(deg(d)) >= FLOOR - 1e-9
+        assert limit(deg(d)) >= DOWNHILL_MIN - 1e-9
+
+
+def test_the_descent_floor_sits_in_the_range_the_operator_set():
+    """0.6 to 0.8 m/s, said on 2026-08-23."""
+    assert 0.6 <= DOWNHILL_MIN <= TOP <= 0.8
 
 
 def test_a_weaker_brake_slows_the_descent_sooner():

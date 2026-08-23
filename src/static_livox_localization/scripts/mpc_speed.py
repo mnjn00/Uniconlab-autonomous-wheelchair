@@ -106,6 +106,24 @@ SLOPE_BRAKE_MPS2 = 1.1
 # How much room a stop is allowed to take on a grade. The same figure the
 # gate's stopping envelope keeps for geometry.
 SLOPE_STOP_MARGIN_M = 0.9
+# Slowest the policy will ask for going downhill, set by the operator on
+# 2026-08-23: 0.6 to 0.8 m/s is the range they judge safe to descend on this
+# chair, and crawling a hill it can hold at speed is its own hazard - the
+# route's descents are long and a chair at 0.35 m/s is on them for minutes.
+#
+# This floor asserts more braking than has been measured, and the assertion
+# should be written down rather than buried in a constant. Stopping 0.6 m/s
+# inside SLOPE_STOP_MARGIN_M needs brake >= 0.20 + g sin(theta):
+#
+#     grade      4     5     6     7     8     9    9.8 (route max)
+#     m/s^2    0.88  1.05  1.23  1.40  1.57  1.73  1.87
+#
+# Measured braking is 1.11 to 3.17 m/s^2 over five stop transitions, median
+# 1.39 - so the steeper half of that table sits above the slowest sample and
+# inside the rest. No sample is from a descent, because the policy this
+# replaces never produced one. A downhill braking test is what turns this
+# from an assertion into a measurement.
+SLOPE_DOWNHILL_MIN_MPS = 0.6
 GRAVITY_MPS2 = 9.81
 # Below this the loaded base was measured not to rotate; it is also above
 # the solver's measured standstill threshold of 0.22.
@@ -267,8 +285,8 @@ def slope_speed_limit(pitch_rad, brake_mps2=SLOPE_BRAKE_MPS2,
 
     Downhill, gravity spends the brake instead. What is left is
     brake - g sin(theta), and the speed that still stops inside the margin is
-    sqrt(2 a s). At 4 deg that is 0.87 m/s, at 5 deg 0.66, and by 6.5 deg
-    there is nothing left and the floor is all that is on offer.
+    sqrt(2 a s) - held above SLOPE_DOWNHILL_MIN_MPS, which is the operator's
+    judgement of a safe descent and the reason a long hill is not crawled.
 
     Positive pitch is downhill on this chair - measured, not assumed:
     correlating /fast_lio_icp/pose pitch against the height change along the
@@ -279,8 +297,8 @@ def slope_speed_limit(pitch_rad, brake_mps2=SLOPE_BRAKE_MPS2,
         return MAX_SPEED
     remaining = float(brake_mps2) - GRAVITY_MPS2 * math.sin(pitch)
     if remaining <= 0.0:
-        return TURN_FLOOR_SPEED
-    return max(TURN_FLOOR_SPEED,
+        return SLOPE_DOWNHILL_MIN_MPS
+    return max(SLOPE_DOWNHILL_MIN_MPS,
                min(MAX_SPEED, math.sqrt(2.0 * remaining * float(margin_m))))
 
 
