@@ -97,9 +97,22 @@ CREEP_SPEED = 0.15
 SLACK_FULL_SPEED_M = 0.8
 SLACK_CREEP_M = 0.15
 SLOPE_PITCH_RAD = math.radians(3.0)
+# Downhill braking, measured. Five stop transitions in the 08-20 and 08-23
+# runs gave 1.11 to 3.17 m/s^2, median 1.39, all from 0.38-0.44 m/s on flat
+# or slight uphill - there are no downhill samples at speed because the old
+# policy never allowed any. 1.1 is the slowest of them, so it is the number
+# that does not depend on the others being representative.
+SLOPE_BRAKE_MPS2 = 1.1
+# How much room a stop is allowed to take on a grade. The same figure the
+# gate's stopping envelope keeps for geometry.
+SLOPE_STOP_MARGIN_M = 0.9
+GRAVITY_MPS2 = 9.81
 # Below this the loaded base was measured not to rotate; it is also above
 # the solver's measured standstill threshold of 0.22.
-TURN_FLOOR_SPEED = 0.30
+# Under roughly 0.30 m/s the loaded wheels do not turn at all. The
+# operator asked for 0.35 on 2026-08-23: 0.30 is the edge of the
+# deadband and a command sitting on an edge is not a stable command.
+TURN_FLOOR_SPEED = 0.35
 
 # Corridor-width shaping. This one is NOT transcribed from the pursuit
 # follower, and the reason it is justified here and absent there is the
@@ -237,6 +250,40 @@ def hazard_speed(clearance_m):
     return CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED)
 
 
+def slope_speed_limit(pitch_rad, brake_mps2=SLOPE_BRAKE_MPS2,
+                      margin_m=SLOPE_STOP_MARGIN_M):
+    """Speed a grade leaves the chair, from what braking is left on it.
+
+    The old rule was abs(pitch) > 3 deg -> 0.30 m/s, which spent the same
+    caution on both directions and held 47 % of the 08-23 route at the floor.
+    Uphill and downhill are not the same problem. The base holds whatever
+    speed it is given, adding drive or brake as the grade demands, so the
+    question is never whether the speed can be produced - it is how much
+    braking is left for a stop.
+
+    Uphill, gravity brakes for you: at 4 deg it adds 0.68 m/s^2 to whatever
+    the brakes make. There is no braking argument for slowing down, so
+    nothing is taken off.
+
+    Downhill, gravity spends the brake instead. What is left is
+    brake - g sin(theta), and the speed that still stops inside the margin is
+    sqrt(2 a s). At 4 deg that is 0.87 m/s, at 5 deg 0.66, and by 6.5 deg
+    there is nothing left and the floor is all that is on offer.
+
+    Positive pitch is downhill on this chair - measured, not assumed:
+    correlating /fast_lio_icp/pose pitch against the height change along the
+    path over the 08-23 run gives -0.49.
+    """
+    pitch = float(pitch_rad)
+    if pitch <= SLOPE_PITCH_RAD:
+        return MAX_SPEED
+    remaining = float(brake_mps2) - GRAVITY_MPS2 * math.sin(pitch)
+    if remaining <= 0.0:
+        return TURN_FLOOR_SPEED
+    return max(TURN_FLOOR_SPEED,
+               min(MAX_SPEED, math.sqrt(2.0 * remaining * float(margin_m))))
+
+
 def policy_speed(band, point, pitch_rad=0.0, degraded=False,
                  obstacle_speed=None):
     """What the follower's policy would allow here, before the floor.
@@ -245,8 +292,7 @@ def policy_speed(band, point, pitch_rad=0.0, degraded=False,
     that means is shaped_reference's job, not this one's.
     """
     limit = hazard_speed(band.hazard_clearance(point))
-    if abs(float(pitch_rad)) > SLOPE_PITCH_RAD:
-        limit = min(limit, SLOPE_SPEED)
+    limit = min(limit, slope_speed_limit(pitch_rad))
     if degraded:
         limit = min(limit, SLOPE_SPEED)
     if obstacle_speed is not None:

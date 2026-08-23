@@ -82,6 +82,7 @@ from scan_accumulator import CloudAccumulator
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
+import mpc_speed
 from safety_band import SafetyBand
 from route_mask import RouteMask
 from route_assets import validate_asset_binding
@@ -101,7 +102,10 @@ MAX_YAW_RATE = 0.5
 # to need before it rotates at all; below that a turn is commanded and
 # simply does not occur. The wheel guard defends the same floor
 # independently, so a slow command still turns even if this is bypassed.
-TURN_FLOOR_SPEED = 0.30
+# Under roughly 0.30 m/s the loaded wheels do not turn at all. The
+# operator asked for 0.35 on 2026-08-23: 0.30 is the edge of the
+# deadband and a command sitting on an edge is not a stable command.
+TURN_FLOOR_SPEED = 0.35
 MAX_ACCEL = 0.18
 MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
@@ -939,8 +943,8 @@ class WaypointFollower:
             allowed = min(allowed, CREEP_SPEED)
         if self.policies:
             allowed = min(allowed, self.slack_speed())
-            if abs(self.pose_pitch) > SLOPE_PITCH_RAD:
-                allowed = min(allowed, SLOPE_SPEED)
+            allowed = min(allowed, mpc_speed.slope_speed_limit(
+                self.pose_pitch))
             if self.tracking_state == "DEGRADED":
                 allowed = min(allowed, SLOPE_SPEED)
 

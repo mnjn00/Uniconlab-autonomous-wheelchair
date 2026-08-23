@@ -47,7 +47,10 @@ import numpy as np
 # The follower's constants. Kept literal rather than imported because
 # waypoint_follower pulls in rospy and this has to stay testable at a desk.
 MAX_SPEED = 0.8
-TURN_FLOOR_SPEED = 0.30
+# Under roughly 0.30 m/s the loaded wheels do not turn at all. The
+# operator asked for 0.35 on 2026-08-23: 0.30 is the edge of the
+# deadband and a command sitting on an edge is not a stable command.
+TURN_FLOOR_SPEED = 0.35
 MAX_YAW_RATE = 0.5
 
 # How far ahead a candidate is simulated, as a DISTANCE rather than a time.

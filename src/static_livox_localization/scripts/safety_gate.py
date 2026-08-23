@@ -124,7 +124,7 @@ SWEEP_BISECTION_STEPS = 5
 # under 0.30, so a tracked object at exactly the guard distance produced a
 # cap of 0.15, no executable candidate, and a stop reported as NO_CANDIDATE -
 # the 2026-08-20 stall.
-SWEEP_MIN_SPEED_MPS = 0.30
+SWEEP_MIN_SPEED_MPS = 0.35
 # The cap drops instantly and recovers at this rate, so a return that flickers
 # in and out of the sweep cannot chatter the command.
 SWEEP_CAP_RELEASE_MPS2 = 0.5
