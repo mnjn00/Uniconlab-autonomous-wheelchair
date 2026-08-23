@@ -1050,6 +1050,8 @@ class Session:
             elif command == "job_cancel":
                 ok, detail = (self.jobs.cancel() if self.jobs is not None
                               else (False, "스크립트 실행이 설정되지 않았습니다"))
+            elif command == "route":
+                ok, detail = self._resend_route()
             elif command == "ping":
                 ok, detail = True, "pong"
             elif command in ("mode", "step"):
@@ -1066,6 +1068,31 @@ class Session:
         except Exception as exc:                                  # noqa: BLE001
             reply["detail"] = "%s: %s" % (type(exc).__name__, exc)
             return reply
+
+    def _resend_route(self):
+        """Re-resolve and re-send the route frame.
+
+        The route goes out once per connection, ahead of any telemetry, so a
+        client that was not listening yet never sees it -- which is exactly what
+        happened: the device picker owns the shared Bluetooth callback until the
+        dashboard swaps itself in a moment later, and its onLineReceived is
+        empty. The map then stayed blank for the whole session while telemetry
+        streamed happily, because telemetry repeats and the route did not.
+
+        Re-resolving rather than replaying the cached copy also picks up the real
+        route once the stack is up: connect first, press [로컬 켜기], and the
+        follower's own param finally exists.
+        """
+        if self.route_finder is None:
+            return False, "경로가 설정되지 않았습니다 (--route \"\")"
+        route = self.route_finder()
+        if route is None:
+            return False, "경로 파일을 읽지 못했습니다"
+        self.route = route
+        if not self.send(route):
+            return False, "경로 전송 실패"
+        return True, "경로 %d개 지점 전송 (%s)" % (route.get("count_full", 0),
+                                              route.get("source", "?"))
 
     def _release(self, payload):
         """Two-step: the app must send confirm=true, and the chair must be stopped."""
