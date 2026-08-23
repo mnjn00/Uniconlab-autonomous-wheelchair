@@ -106,6 +106,9 @@ MAX_YAW_RATE = 0.5
 # operator asked for 0.35 on 2026-08-23: 0.30 is the edge of the
 # deadband and a command sitting on an edge is not a stable command.
 TURN_FLOOR_SPEED = 0.35
+# Centre to centre, measured on the chair. The base converts (v, w) to wheel
+# speeds with the same figure; this copy is for reading them back.
+WHEEL_SEPARATION_M = 0.54
 MAX_ACCEL = 0.18
 MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
@@ -208,6 +211,11 @@ class WaypointFollower:
         self.degraded_since = None
         self.drive_mode = None
         self.wheel_status_stamp = rospy.Time(0)
+        # What the wheels are actually doing. /Odometry carries no twist -
+        # FAST-LIO leaves it at zero - so this frame is the only velocity
+        # measurement on the bus, and until 2026-08-23 nothing decoded it.
+        self.measured_speed = 0.0
+        self.measured_yaw_rate = 0.0
         self.route_locked = False
         profile = str(rospy.get_param("~body_frame_profile"))
         lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
@@ -430,10 +438,33 @@ class WaypointFollower:
             rospy.logwarn_throttle(
                 5.0, "objects_summary unreadable: %s", error)
 
+    @staticmethod
+    def reported_wheel_speeds(data):
+        """(left, right) in m/s from a base status frame, signed.
+
+        Frame and scaling are the base's, from base_model/src/uart.py and
+        wheel_cmd_tmp.py: direction in bytes 2 and 4 as C forward, W back,
+        S stop, and speed in 3 and 5 as (byte - 0x21) / 10 km/h.
+        """
+        def one(direction, magnitude):
+            speed = (float(magnitude) - 0x21) / 10.0 / 3.6
+            letter = chr(int(direction))
+            if letter == "C":
+                return speed
+            if letter == "W":
+                return -speed
+            return 0.0
+        return one(data[2], data[3]), one(data[4], data[5])
+
     def on_wheel_status(self, message):
         self.wheel_status_stamp = rospy.Time.now()
-        if len(message.data) > 1:
-            self.drive_mode = message.data[1]
+        data = message.data
+        if len(data) > 1:
+            self.drive_mode = data[1]
+        if len(data) >= 6:
+            left, right = self.reported_wheel_speeds(data)
+            self.measured_speed = (left + right) / 2.0
+            self.measured_yaw_rate = (right - left) / WHEEL_SEPARATION_M
 
     def on_start(self, request):
         if request.data:

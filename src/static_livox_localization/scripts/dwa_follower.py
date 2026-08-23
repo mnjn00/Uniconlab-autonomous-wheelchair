@@ -244,8 +244,14 @@ class DwaFollower(WaypointFollower):
             self.last_command_stamp = None
             return
 
+        # /Odometry carries no twist - FAST-LIO leaves it at zero, and all
+        # 13,395 samples of the 08-23 run are exactly 0.000 - so the anchor
+        # had been folding in a velocity of nought and the rollouts started
+        # from a chair that was never moving. The base reports what the
+        # wheels are doing at 100 Hz; that is the measurement.
         state = self.anchor.update(self.pose_xy, self.pose_yaw,
-                                   self.odom_v, self.odom_w, now.to_sec())
+                                   self.measured_speed, self.measured_yaw_rate,
+                                   now.to_sec())
         # The speed policy still applies: the corridor ahead, the slope and
         # a DEGRADED fix all cap what any candidate may be worth choosing.
         v_ref, stop_reason = mpc_speed.shaped_reference(
@@ -300,7 +306,8 @@ class DwaFollower(WaypointFollower):
         state = self.led_state(state)
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
-            last_yaw_rate=self.last_yaw_rate)
+            last_yaw_rate=self.last_yaw_rate,
+            last_speed=self.current_speed)
         if status != "OK":
             if status != self.dwa_status:
                 if status == "SPEED_BELOW_FLOOR":

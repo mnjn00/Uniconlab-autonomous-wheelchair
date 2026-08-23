@@ -76,6 +76,18 @@ SIM_TIME_S = 1.7
 SIM_STEPS = 17
 
 SPEED_SAMPLES = 5
+# How far ahead the reachable-speed window is drawn. A textbook DWA takes it
+# over one control period, but this chair accelerates at 0.18 m/s^2, so one
+# 0.1 s period is +/- 0.018 m/s and the window would pin the speed forever.
+# Over a second the window is +0.18 / -0.60, which is the range the ramp can
+# actually deliver before the next plan replaces it.
+VELOCITY_WINDOW_S = 1.0
+# The ramp's own limits, kept here so the window can be drawn without
+# importing the follower. They match waypoint_follower; the asymmetry is the
+# chair's, and it is why a needless speed change costs more than it looks:
+# the brake takes it away three times faster than the drive gives it back.
+MAX_ACCEL = 0.18
+MAX_DECEL = 0.6
 YAW_SAMPLES = 21
 
 # Scoring weights. Path first: this stack's whole safety argument is that the
@@ -101,6 +113,14 @@ W_HEADING = 2.0
 # yaw samples. Above about 2.0 the chair starts cutting corners: at 4.0 the
 # closed-loop replay lost a third of its progress and tripled its cross-track.
 W_STEER = 1.0
+# The same idea as W_STEER, for the other axis, and missing until 2026-08-23.
+# Nothing rewarded holding a speed, so on flat ground the winner changed
+# about once a second - 1,035 target changes over the flat sections of the
+# 08-23 run - as the tiniest movement in path cost reordered five candidates
+# that were nearly tied. Each change is felt: the ramp brakes at 0.60 m/s^2
+# and accelerates at 0.18, so a flip down and back is a lurch and a long
+# crawl out of it.
+W_SPEED = 1.0
 
 # How dearly the corridor's edge is bought. Containment is a hard reject, so
 # without this the middle of the band and a hair inside its edge score the
@@ -137,16 +157,35 @@ OBSTACLE_FLOOR_M = 0.40
 
 
 def speed_samples(max_speed=MAX_SPEED, floor=TURN_FLOOR_SPEED,
-                  count=SPEED_SAMPLES):
+                  count=SPEED_SAMPLES, current=None,
+                  accel=MAX_ACCEL, decel=MAX_DECEL,
+                  window_s=VELOCITY_WINDOW_S):
     """Executable speeds only: stop, or something the wheels will turn for.
 
     The gap between them is the actuation deadband, measured on the loaded
     chair. Sampling inside it produces candidates that score well, get
     commanded, and do nothing.
+
+    With current set, the samples are also bounded by what the ramp can
+    reach from there inside window_s - the dynamic window this had been
+    missing. Without it every cycle re-scored the whole range regardless of
+    what the chair was doing, so a candidate two steps away could win on a
+    hair and the ramp would spend a second chasing it.
     """
     if max_speed < floor:
         return (0.0,)
-    return (0.0,) + tuple(np.linspace(floor, max_speed, max(count, 1)))
+    low, high = floor, max_speed
+    if current is not None:
+        room_up = abs(float(accel)) * float(window_s)
+        room_down = abs(float(decel)) * float(window_s)
+        high = min(high, float(current) + room_up)
+        low = max(low, float(current) - room_down)
+        if high < floor:
+            # Even flat out the ramp cannot reach an executable speed this
+            # cycle; a stop is the only honest answer.
+            return (0.0,)
+        low = min(low, high)
+    return (0.0,) + tuple(np.linspace(low, high, max(count, 1)))
 
 
 def yaw_samples(limit=MAX_YAW_RATE, count=YAW_SAMPLES):
@@ -252,7 +291,8 @@ class DwaPlanner:
         dy = np.cumsum(v * np.sin(yaw) * dt, axis=1)
         return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
 
-    def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0):
+    def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
+             last_speed=None):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -269,7 +309,8 @@ class DwaPlanner:
         """
         cap = self.max_speed if speed_cap is None else min(self.max_speed,
                                                            float(speed_cap))
-        pairs = [(v, w) for v in speed_samples(cap) if v > 0.0
+        pairs = [(v, w) for v in speed_samples(cap, current=last_speed)
+                 if v > 0.0
                  # Turning on the spot is not something this chair does below
                  # its rotation floor, and it is the manoeuvre that put it at
                  # a wall on 2026-08-04. Excluded.
@@ -322,6 +363,8 @@ class DwaPlanner:
         aim = np.abs(np.arctan2(np.sin(paths[:, :, 2] - ref),
                                 np.cos(paths[:, :, 2] - ref))).mean(axis=1)
         steer = np.abs(np.asarray([p[1] for p in pairs]) - float(last_yaw_rate))
+        held = 0.0 if last_speed is None else float(last_speed)
+        speed_change = np.abs(np.asarray([p[0] for p in pairs]) - held)
         # Where the rollout sits between the corridor's two edges: 0 in the
         # middle, 1 against either edge. Taken from the band's own geometry
         # rather than from distance to the recorded line, because the line is
@@ -337,7 +380,8 @@ class DwaPlanner:
         else:
             mask_boundary = self.route_mask.boundary_cost_many(flat).reshape(
                 len(pairs), self.steps).mean(axis=1)
-        cost = (W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
+        cost = (W_SPEED * speed_change
+                + W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
                 + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre
                 + W_MASK_BOUNDARY * mask_boundary)
         cost = np.where(ok, cost, np.inf)

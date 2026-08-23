@@ -139,7 +139,8 @@ class RecordingPlanner(object):
     def __init__(self):
         self.calls = []
 
-    def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0):
+    def plan(self, state, obstacles=(), speed_cap=None,
+             last_yaw_rate=0.0, last_speed=None):
         self.calls.append({"obstacles": list(obstacles),
                            "speed_cap": speed_cap})
         return 0.3, 0.0, "OK"
@@ -180,6 +181,10 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.last_command_stamp = None
     follower.dwa_status = ""
     follower.command_accel = 0.0
+    # The base's own report is the only velocity on the bus; the double
+    # stands in for it because /Odometry carries no twist.
+    follower.measured_speed = 0.0
+    follower.measured_yaw_rate = 0.0
     follower.status = ""
     follower.band = None
     follower.anchor = types.SimpleNamespace(
