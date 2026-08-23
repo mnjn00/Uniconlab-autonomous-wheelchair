@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# 로컬 끄기 -- take the localization stack down. The counterpart of
-# start_wheelchair_localization.sh, and the [로컬 끄기] button's script.
+# 스택 내리기 -- take the whole running stack down. The counterpart of
+# start_wheelchair_localization.sh, and the [스택 내리기] button's script.
+#
+# Everything the bring-up started goes: the drive, the followers and guards,
+# the wheel base nodes, the lidar, FAST-LIO, the localizer, rviz and the black
+# box. roscore is the single deliberate exception, for the reason below.
 #
 # The node list is NOT duplicated here. start_wheelchair_localization.sh already
 # carries a sweep that the field corrected several times -- it has to reach what
@@ -36,7 +40,7 @@ if [ -z "$PATTERN_LINE" ]; then
     exit 2
 fi
 eval "set -- $PATTERN_LINE"
-echo "[로컬 끄기] 대상 $# 종류 (start_wheelchair_localization.sh 에서 읽음)"
+echo "[스택 내리기] 대상 $# 종류 (start_wheelchair_localization.sh 에서 읽음)"
 
 # 1. Fail-safe first. Whatever happens below, the base is already out of auto
 #    and the follower is paused, so the chair is on the joystick before a single
@@ -89,5 +93,5 @@ source /opt/ros/noetic/setup.bash >/dev/null 2>&1 || true
 echo "=== 남아 있는 ROS 노드 ==="
 rosnode list 2>/dev/null || echo "(roscore 응답 없음)"
 echo
-echo "로컬 끄기 완료. roscore 와 블루투스 브릿지는 그대로 둡니다."
+echo "스택 내리기 완료. roscore 와 블루투스 브릿지는 그대로 둡니다."
 echo "다시 올리려면 앱에서 [로컬 켜기]."

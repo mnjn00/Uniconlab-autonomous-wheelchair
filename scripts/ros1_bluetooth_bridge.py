@@ -262,7 +262,7 @@ class JobRunner:
     # run is not something this link should offer.
     JOBS = {
         "stack": ("start_wheelchair_localization.sh", "로컬라이제이션 스택 기동"),
-        "stack_stop": ("stop_stack.sh", "로컬 끄기"),
+        "stack_stop": ("stop_stack.sh", "스택 내리기"),
         "drive": ("go.sh", "주행 시작"),
         "halt": ("stop.sh", "주행 정지"),
     }
@@ -455,26 +455,25 @@ class BridgeState:
         self.started_at = time.time()
 
         self.drive_mode = None          # 65 / 77, echoed by the motor controller
-        # /wheel_status data[7], which this bridge used to report as
-        # battery_percent. It is not a charge level. Sampled across a drive on
-        # 2026-08-23 it took exactly two values, 88 ('X') and 77 ('M'), toggling
-        # with motion (77 at 0.94 m/s, 88 at 0.74, 77 at 0.53, 88 at rest) and
-        # never anything in between -- no discharge curve looks like that.
+        # /wheel_status data[7]. A coarse battery level, almost certainly:
+        # every value observed is a multiple of 11 -- 88, 77, 66 -- which reads
+        # as an 8-step gauge at ~12.5% per step rather than a percentage.
         #
-        # The frame explains why. uart.py sends [72] + wheel_cmd + [ck,13,10]
-        # where wheel_cmd is (dir_L, mag_L, dir_R, mag_R, 79) from
-        # wheel_cmd_tmp.compute_wheel_command; directions are 'C'/'W'/'S' and
-        # magnitudes are counts+33. The reply is the same shape with the mode
-        # echo inserted, so data[2..6] are wheel direction/magnitude fields and
-        # data[7] is a one-byte status the controller appends -- an ASCII flag,
-        # not a percentage. Nothing in base_model scales or documents it;
-        # bridge_to_server.py just republishes it and differences it into a
-        # "consumption" that a two-valued signal cannot support.
+        # It was briefly reported here as not-a-battery on the strength of a
+        # 55 s sample that happened to hold only 88 and 77. A longer look
+        # settled it: at rest it read 88 early in the session and 77 two and a
+        # half hours of driving later, and it dips one step (to 66) under load
+        # and comes back. That is a discharge trend with load sag, not a flag.
         #
-        # So it is reported as a diagnostic byte and battery_percent is null.
-        # What data[7] actually means is still unknown -- decode it against the
-        # motor controller's manual before showing it to a rider as anything.
-        self.wheel_status_byte7 = None
+        # Which is why only the at-rest reading is reported as the level. Under
+        # motor current the gauge sits a step low, and a number that drops 12%
+        # every time the chair sets off is worse than no number.
+        #
+        # The scale itself is still unconfirmed -- 88 is merely the largest
+        # value seen, not a documented full charge. Treat it as a level out of
+        # 88, not as a percentage, until the controller manual says otherwise.
+        self.battery_raw = None
+        self.battery_at_rest = None
         self.wheel_status_stamp = None
         self.follower_status = None
         self.robot_fault = None
@@ -542,6 +541,13 @@ class BridgeState:
             wheel_age = age(self.wheel_status_stamp)
             wheel_link_ok = wheel_age is not None and wheel_age <= ttl_s
             speed, yaw_rate, speed_source = self.ground_speed(now)
+            stopped = speed is not None and speed <= 0.05
+            if stopped and self.battery_raw is not None:
+                self.battery_at_rest = self.battery_raw
+            battery_under_load = (not stopped
+                                  and self.battery_raw is not None
+                                  and self.battery_at_rest is not None
+                                  and self.battery_raw < self.battery_at_rest)
 
             # safety_gate holds motion by zeroing its output while the follower is
             # still asking for movement. The gate does not publish its reason, so
@@ -609,11 +615,14 @@ class BridgeState:
                 "follower_state": self.follower_state,
                 "last_command_detail": self.last_command_detail,
 
-                # Nothing on this stack measures charge. Reporting the raw
-                # data[7] byte as a percentage put a number in front of a rider
-                # that looked like remaining range and was not.
+                # Level, not percent -- see the note on battery_raw. The
+                # at-rest reading is the one worth showing; battery_raw is what
+                # the frame says right now, which sags a step under load.
                 "battery_percent": None,
-                "wheel_status_byte7": self.wheel_status_byte7,
+                "battery_level": self.battery_at_rest,
+                "battery_level_max_seen": 88,
+                "battery_raw": self.battery_raw,
+                "battery_under_load": battery_under_load,
                 # No step-level concept exists in this stack.
                 "step_level": None,
             }
@@ -727,7 +736,7 @@ class RosLink:
             if len(msg.data) > 1:
                 self.state.drive_mode = int(msg.data[1])
             if len(msg.data) > 7:
-                self.state.wheel_status_byte7 = int(msg.data[7])
+                self.state.battery_raw = int(msg.data[7])
 
     def _pose_cb(self, msg):
         p = msg.pose.pose.position
