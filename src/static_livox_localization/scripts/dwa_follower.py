@@ -121,6 +121,34 @@ LATENCY_S = 0.0
 OBSTACLE_HALF_WIDTH_M = 1.0
 
 
+def approach_cap(base_cap, distance_m, stop_m, floor_mps):
+    """Speed for closing on something the chair may have to go round.
+
+    The ramp exists so the chair arrives at a parked object already slow
+    enough to steer past it, rather than at cruise. It used to ramp down to
+    CREEP_SPEED, which is below the speed the loaded wheels turn at, and that
+    turned the approach into a stop: dwa_core.speed_samples returns nothing
+    executable under its floor, the planner has no candidate to score, and
+    the manoeuvre the ramp was preparing for never gets attempted.
+
+    Measured on 2026-08-23 against a parked motorcycle at wp 1437-1441: the
+    ramp handed down 0.21, 0.25, 0.28 and finally 0.15 m/s, and the chair
+    stopped 1.3 m short and sat there for 2.4 minutes with the object
+    correctly tracked as static and crossing the band the whole time.
+
+    So the ramp stops at the floor. Below it there is no such thing as a
+    slower approach, only a stop, and a stop is what WAIT and the planner's
+    own obstacle critic are for - both of which still hold: WAIT halts before
+    this is reached, rollouts inside OBSTACLE_FLOOR_M are rejected, and the
+    gate stops outright for anything inside the braking envelope.
+    """
+    if distance_m >= stop_m + GUARD_SLOW_EXTRA_M:
+        return base_cap
+    ratio = max(0.0, (distance_m - stop_m) / GUARD_SLOW_EXTRA_M)
+    ramped = CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED)
+    return min(base_cap, max(floor_mps, ramped))
+
+
 class DwaFollower(WaypointFollower):
     CONTROL_LAW = "dwa"
 
@@ -254,10 +282,9 @@ class DwaFollower(WaypointFollower):
         # planner that only knows stop-or-cruise arrives at what it is about
         # to wait for at full speed and stops there.
         cap = float(v_ref[0])
-        if threat is not None and threat.distance_m < stop_m + \
-                GUARD_SLOW_EXTRA_M:
-            ratio = max(0.0, (threat.distance_m - stop_m) / GUARD_SLOW_EXTRA_M)
-            cap = min(cap, CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
+        if threat is not None:
+            cap = approach_cap(cap, threat.distance_m, stop_m,
+                               dwa_core.TURN_FLOOR_SPEED)
 
         # Geometry only when going round it. Handing the planner an object it
         # is not allowed to go round would let it sidestep anyway.
