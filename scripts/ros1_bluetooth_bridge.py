@@ -134,6 +134,10 @@ def twist_magnitude(twist):
 # captured at 0.2 m spacing; at ~1 m it is visually identical on a phone-sized
 # top-down view and costs a fifth of the link budget.
 ROUTE_MAX_POINTS = 400
+# The drivable corridor is sent as two edge polylines, thinned like the route.
+# Fewer points than the route: the band is a smooth pair of offsets, and its job
+# on a phone-sized view is to show where the room runs out, not every wobble.
+BAND_MAX_POINTS = 200
 
 
 _BRINGUP_ROUTE_RE = re.compile(r'^\s*ROUTE=\"\$\{ROUTE:-(?P<path>[^}]+)\}\"')
@@ -200,6 +204,58 @@ def resolve_route_path(cli_default, script_dir=None):
     return cli_default
 
 
+def load_band(route_path):
+    """Left and right edges of the drivable corridor, in the map frame.
+
+    The route alone is a centreline, which tells an operator where the chair is
+    going but not how much room it has -- and on this route the room is the
+    interesting part: the v9 corridor is what the tight corners are measured
+    against. The band file sits next to the route with the same stem and carries
+    a station every 0.5 m with left_m/right_m clearances, so the edges are just
+    the centreline offset by those, perpendicular to the station heading.
+    """
+    band_path = re.sub(r"_waypoints\.json$", "_safety_band.json", route_path)
+    if band_path == route_path:
+        return None
+    try:
+        with open(os.path.expanduser(band_path), "r") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    stations = data.get("stations") or []
+    if len(stations) < 2:
+        return None
+
+    left, right = [], []
+    for station in stations:
+        try:
+            x = float(station["x"])
+            y = float(station["y"])
+            heading = math.radians(float(station["heading_deg"]))
+            lm = float(station.get("left_m", 0.0))
+            rm = float(station.get("right_m", 0.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Left of travel is heading + 90 degrees.
+        left.append([round(x - math.sin(heading) * lm, 2),
+                     round(y + math.cos(heading) * lm, 2)])
+        right.append([round(x + math.sin(heading) * rm, 2),
+                      round(y - math.cos(heading) * rm, 2)])
+    if len(left) < 2:
+        return None
+
+    stride = max(1, (len(left) + BAND_MAX_POINTS - 1) // BAND_MAX_POINTS)
+    def thin(points):
+        slim = points[::stride]
+        if slim[-1] != points[-1]:
+            slim.append(points[-1])
+        return slim
+    log("band loaded: %d stations (%d sent) from %s"
+        % (len(left), len(thin(left)), os.path.basename(band_path)))
+    return {"left": thin(left), "right": thin(right),
+            "source": os.path.basename(band_path)}
+
+
 def load_route(path):
     """Read the waypoint JSON the follower is driving, for the app's map view.
 
@@ -237,6 +293,7 @@ def load_route(path):
 
     log("route loaded: %d waypoints (%d sent, stride %d) from %s"
         % (len(full), len(slim), stride, os.path.basename(path)))
+    band = load_band(path)
     return {
         "type": "route",
         "frame": data.get("frame"),
@@ -247,6 +304,9 @@ def load_route(path):
         "points": slim,
         "source": os.path.basename(path),
         "path": path,
+        "band_left": None if band is None else band["left"],
+        "band_right": None if band is None else band["right"],
+        "band_source": None if band is None else band["source"],
     }
 
 
