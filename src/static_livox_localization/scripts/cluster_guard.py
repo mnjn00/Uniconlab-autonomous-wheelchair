@@ -83,6 +83,10 @@ BOX_SAMPLE_M = 0.2
 # x points) inside a 0.1 s control period - the producer's forty-cluster
 # ceiling arriving whole would be a different node.
 MAX_OBSTACLE_OBJECTS = 4
+# The producer's label for a person. Compared rather than enumerated,
+# because a label this code does not recognise must not silently become
+# something it is willing to drive around.
+PERSON_LABEL = "person"
 
 
 class Threat(object):
@@ -113,6 +117,16 @@ class Threat(object):
         answer is that this could be someone about to step out.
         """
         return self.motion == STATIC
+
+    @property
+    def is_person(self):
+        """A person, however still they are standing.
+
+        The label is the producer's, and anything it cannot name is not
+        given the benefit of the doubt in the other direction either: this
+        only ever adds caution, never removes it.
+        """
+        return str(self.label).strip().lower() == PERSON_LABEL
 
 
 class Summary(object):
@@ -427,6 +441,14 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     Nothing here resumes the chair explicitly: once they leave the corridor
     the threat is gone, the answer becomes CLEAR, and it drives on.
 
+    A person is waited out whatever the tracker says about them, which the
+    two rules below did not do. Standing still for CONFIRM_S - 1.5 s, less
+    than a pause to check a phone - made someone STATIC, and STATIC is
+    parked, so the first rule would step around a stationary pedestrian
+    from 8 m out without the blocked clock ever starting. The second rule
+    reached the same place by a slower road. Both now stop short of it: the
+    only thing that clears a person is the person leaving.
+
     blocked_for_s is the fallback for sources that carry no identity. A
     raw-scan return is UNKNOWN forever, so standing in the way is the only
     evidence of parkedness it can ever offer - but it never overrules a
@@ -434,6 +456,8 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     """
     if threat is None:
         return CLEAR
+    if threat.is_person:
+        return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
         return GO_ROUND
     if blocking and blocked_for_s is not None and \

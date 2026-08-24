@@ -74,6 +74,38 @@ SIM_DISTANCE_M = 1.05
 # from.
 SIM_TIME_S = 1.7
 SIM_STEPS = 17
+# ...but never less than this many seconds of it. A fixed distance means the
+# preview shrinks as the chair speeds up - 1.05 m is 3.0 s at 0.35 m/s and
+# 1.3 s at 0.80 - so the planner turns myopic exactly where it can least
+# afford to, and the actuation lag grows from a fifth of the preview to
+# nearly half of it. On 2026-08-23 that produced a weave that grew 0.15 m,
+# 0.24, 0.53 and saturated the yaw rate three times in thirteen seconds.
+#
+# The floor is a time, applied to the arc every candidate in a cycle walks -
+# not per candidate, which would make the arc depend on the speed carrying
+# it and undo what the fixed distance is for.
+SIM_MIN_PREVIEW_S = 2.0
+
+# How far out the obstacle test looks, however short the scored arc is.
+#
+# These are two different questions and they were being answered with one
+# number. The arc is a STEERING horizon and it is deliberately short: at
+# 1.7 m the admissible candidate count fell from 102 to 78 at wp 500,
+# because no single constant-curvature arc stays in a bending corridor.
+# The obstacle test is a VETO horizon, and it has to reach at least as far
+# as the thing that can veto the chair - safety_gate, whose stopping
+# envelope carries a fixed 0.9 m geometry margin and so exceeds 1.4 m even
+# at the 0.35 m/s floor.
+#
+# On 2026-08-23 that gap deadlocked the chair for 130 s. A parked
+# motorcycle stood 1.42 m ahead and 0.77 m to the right, well inside a
+# corridor that was open 2.70 m to the left. The preview reached 1.05 m, so
+# every candidate scored clear, the planner held straight at the floor
+# speed with w within 0.05 of zero, and the gate vetoed it. The chair
+# stopped, which shortened nothing, so the next cycle repeated it exactly.
+# Neither side was wrong on its own terms; they were looking at different
+# distances.
+OBSTACLE_PREVIEW_M = 3.0
 
 SPEED_SAMPLES = 5
 # How far ahead the reachable-speed window is drawn. A textbook DWA takes it
@@ -113,14 +145,33 @@ W_HEADING = 2.0
 # yaw samples. Above about 2.0 the chair starts cutting corners: at 4.0 the
 # closed-loop replay lost a third of its progress and tripled its cross-track.
 W_STEER = 1.0
-# The same idea as W_STEER, for the other axis, and missing until 2026-08-23.
-# Nothing rewarded holding a speed, so on flat ground the winner changed
-# about once a second - 1,035 target changes over the flat sections of the
-# 08-23 run - as the tiniest movement in path cost reordered five candidates
-# that were nearly tied. Each change is felt: the ramp brakes at 0.60 m/s^2
-# and accelerates at 0.18, so a flip down and back is a lurch and a long
-# crawl out of it.
-W_SPEED = 1.0
+# Speed is rewarded here and nowhere else, which is not obvious and cost a
+# drive to learn. The rollout is sampled over a fixed DISTANCE, so every
+# candidate walks the same 1.05 m arc: for one yaw rate, path cost, heading,
+# centring, clearance and progress all come out identical whatever speed
+# carries them. Before 2026-08-23 that left the five speeds exactly tied and
+# the winner decided by which one argmin happened to see first - which is
+# the 1,035 target changes measured over the flat sections of that run, once
+# a second, all over the route. Not near-ties. No difference at all.
+#
+# So the reward is explicit. Faster is better - but only just. The size of it
+# is the whole question, and 2.0 was too much: across the 0.35 to 0.80 range
+# it is worth 0.9, and W_PATH turns 0.3 m of lateral error into the same 0.9,
+# so the planner would buy a third of a metre off the line to go half a metre
+# per second faster. It did. The first run at this weight wove with a growing
+# amplitude - 0.15 m, then 0.24, then 0.53 - and saturated the yaw rate at
+# +/-0.50 three times in thirteen seconds before the gate stopped it.
+#
+# At 0.8 the reward spans 0.36 across the same range, which W_PATH matches at
+# 0.12 m of error. That is the trade this is allowed to make: a hand's width,
+# not half a metre.
+W_VELOCITY = 0.8
+# ...and a smaller penalty for changing, which is the W_STEER idea on the
+# other axis. It breaks the remaining ties toward what the chair is already
+# doing without ever outweighing the reward for speeding up - the ramp brakes
+# at 0.60 m/s^2 and accelerates at 0.18, so a needless dip costs three times
+# longer to climb out of than it took to fall into.
+W_SPEED = 0.25
 
 # How dearly the corridor's edge is bought. Containment is a hard reject, so
 # without this the middle of the band and a hair inside its edge score the
@@ -153,7 +204,16 @@ W_MASK_BOUNDARY = 3.0
 
 # A candidate whose rollout passes closer than this to a tracked object is
 # discarded outright rather than scored - the same floor mpc_core keeps.
-OBSTACLE_FLOOR_M = 0.40
+# Matched to safety_gate's own veto geometry, not chosen independently.
+# The gate hard-stops for any obstacle point inside a HALF_WIDTH_M = 0.50 m
+# forward corridor within the stopping envelope. At 0.40 the planner would
+# happily propose a path threading a 0.45 m gap that the gate then refuses,
+# and because refusing does not move the chair the next cycle proposes it
+# again. That is the second entrance to the 2026-08-23 motorcycle deadlock:
+# the nearest surface of it sat 0.47 m off the centreline - clear to the
+# planner, a stop to the gate. A planner must not propose what the gate
+# forbids; where they disagree the chair simply stands still.
+OBSTACLE_FLOOR_M = 0.50
 
 
 def speed_samples(max_speed=MAX_SPEED, floor=TURN_FLOOR_SPEED,
@@ -174,26 +234,20 @@ def speed_samples(max_speed=MAX_SPEED, floor=TURN_FLOOR_SPEED,
     """
     if max_speed < floor:
         return (0.0,)
-    if current is not None and float(current) < floor:
-        # The 2026-08-23 field run left rest by holding a floor-speed target
-        # while the downstream command ramp climbed through the wheel
-        # deadband.  Applying the reachable window below the floor instead
-        # returns only zero (0.0 + 0.18 * 1 s < 0.35), and every replanning
-        # cycle resets that ramp before the wheels can turn.  Keep exactly
-        # one executable bootstrap target until the commanded speed reaches
-        # the range where the ordinary dynamic window is meaningful.
-        return (0.0, float(floor))
     low, high = floor, max_speed
     if current is not None:
         room_up = abs(float(accel)) * float(window_s)
         room_down = abs(float(decel)) * float(window_s)
-        high = min(high, float(current) + room_up)
-        low = max(low, float(current) - room_down)
-        if high < floor:
-            # Even flat out the ramp cannot reach an executable speed this
-            # cycle; a stop is the only honest answer.
-            return (0.0,)
-        low = min(low, high)
+        # The window bounds what the ramp reaches; the floor is what the
+        # wheels execute. Those are different things, and letting the window
+        # push the ceiling under the floor is what stopped the chair from
+        # ever pulling away on 2026-08-23: from rest the reachable ceiling is
+        # 0.18 m/s, the floor is 0.35, no candidate existed, and it reported
+        # SPEED_BELOW_FLOOR from a standstill forever. Aiming at the floor
+        # from rest is right - the ramp takes about two seconds to arrive,
+        # which is the acceleration the chair has and not a planning error.
+        high = max(floor, min(high, float(current) + room_up))
+        low = max(low, min(high, float(current) - room_down))
     return (0.0,) + tuple(np.linspace(low, high, max(count, 1)))
 
 
@@ -275,15 +329,6 @@ class DwaPlanner:
         self.arc = np.concatenate([[0.0], np.cumsum(seg)])
         self.steps = max(int(steps), 1)
         self.route_mask = route_mask
-        self.last_diagnostics = {
-            "total": 0,
-            "band_ok": 0,
-            "mask_ok": 0,
-            "geometry_ok": 0,
-            "obstacle_ok": 0,
-            "all_ok": 0,
-            "max_clearance_m": None,
-        }
         tangent = np.gradient(self.route, axis=0)
         tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True),
                               1e-9)
@@ -292,7 +337,22 @@ class DwaPlanner:
     def arc_at(self, point):
         return float(self.arc[int(self.tree.query(np.asarray(point))[1])])
 
-    def _rollouts(self, state, pairs):
+    def preview_distance(self, current_speed=None):
+        """How far ahead this cycle looks, in metres.
+
+        The distance is the floor and the time is the other one: at speed the
+        arc is stretched so the preview does not collapse to a length the
+        actuation lag eats. One distance for the whole cycle, from the speed
+        the chair is carrying - per-candidate would make the arc depend on the
+        speed judged on it, which is the thing the fixed distance exists to
+        avoid.
+        """
+        if current_speed is None:
+            return self.distance_m
+        return max(self.distance_m,
+                   abs(float(current_speed)) * SIM_MIN_PREVIEW_S)
+
+    def _rollouts(self, state, pairs, distance_m=None):
         """(candidates, steps, 3) for every (v, w) at once."""
         v = np.asarray([p[0] for p in pairs], dtype=float)[:, None]
         w = np.asarray([p[1] for p in pairs], dtype=float)[:, None]
@@ -300,7 +360,8 @@ class DwaPlanner:
         # Every candidate walks the same distance, so each gets its own time
         # step. This is what makes the arc a candidate is judged on independent
         # of the speed it carries.
-        dt = self.distance_m / (np.maximum(v, 1e-6) * self.steps)
+        span = self.distance_m if distance_m is None else float(distance_m)
+        dt = span / (np.maximum(v, 1e-6) * self.steps)
         yaw = state[2] + w * k * dt
         # position by integrating the same constant-curvature arc the chair
         # would drive, step by step, so an arc that leaves the band midway
@@ -308,6 +369,34 @@ class DwaPlanner:
         dx = np.cumsum(v * np.cos(yaw) * dt, axis=1)
         dy = np.cumsum(v * np.sin(yaw) * dt, axis=1)
         return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
+
+    def _obstacle_paths(self, paths, span_m, reach_m):
+        """The scored arc continued straight, out to the veto horizon.
+
+        Straight, not curved: holding the sampled yaw rate out to 3 m would
+        be 8.6 s of it at the floor speed, and a 0.5 rad/s candidate would
+        corkscrew through 4 rad - a trajectory the chair never drives,
+        because the planner replans ten times a second. What it does do is
+        take the arc for about a preview and then straighten onto whatever
+        heading that left it with, which is what this builds.
+
+        The extension is used ONLY to see obstacles. Corridor containment
+        stays on the short arc, so the candidate count is untouched.
+        """
+        extra = float(reach_m) - float(span_m)
+        if extra <= 0.0:
+            return paths
+        spacing = float(span_m) / self.steps
+        count = int(math.ceil(extra / spacing))
+        if count <= 0:
+            return paths
+        tail = paths[:, -1, :]
+        k = np.arange(1, count + 1)[None, :] * spacing
+        yaw = tail[:, 2][:, None]
+        xs = tail[:, 0][:, None] + k * np.cos(yaw)
+        ys = tail[:, 1][:, None] + k * np.sin(yaw)
+        grown = np.stack([xs, ys, np.repeat(yaw, count, axis=1)], axis=2)
+        return np.concatenate([paths, grown], axis=1)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
              last_speed=None):
@@ -340,17 +429,9 @@ class DwaPlanner:
             # unless it says so - on 2026-08-20 it cost a stall that took an
             # hour to attribute, because the name suggested the geometry had
             # run out. The caller that set the cap is the one to look at.
-            self.last_diagnostics = {
-                "total": 0,
-                "band_ok": 0,
-                "mask_ok": 0,
-                "geometry_ok": 0,
-                "obstacle_ok": 0,
-                "all_ok": 0,
-                "max_clearance_m": None,
-            }
             return 0.0, 0.0, "SPEED_BELOW_FLOOR"
-        paths = self._rollouts(np.asarray(state, dtype=float), pairs)
+        span = self.preview_distance(last_speed)
+        paths = self._rollouts(np.asarray(state, dtype=float), pairs, span)
         flat = paths[:, :, :2].reshape(-1, 2)
         # ONE pass over the band geometry, used twice: to reject the arcs that
         # leave the corridor, and below to score how near its edge the rest of
@@ -359,42 +440,33 @@ class DwaPlanner:
         # 1,785 points twice over - 24.4 ms each on the target NUC, 96 % of a
         # cycle with 100 ms to spend, for one answer computed twice.
         lateral, lo, hi = self.band.margins_many(flat)
-        band_inside = self.band.contained(lateral, lo, hi, self.grace)
-        band_ok = band_inside.reshape(len(pairs), self.steps).all(axis=1)
+        inside = self.band.contained(lateral, lo, hi, self.grace)
         if self.route_mask is not None:
-            mask_inside = self.route_mask.contains_many(flat)
-            mask_ok = mask_inside.reshape(
-                len(pairs), self.steps).all(axis=1)
-            mask_ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
-        else:
-            mask_ok = np.ones(len(pairs), dtype=bool)
-        geometry_ok = band_ok & mask_ok
+            inside &= self.route_mask.contains_many(flat)
+        ok = inside.reshape(len(pairs), self.steps).all(axis=1)
+        if self.route_mask is not None:
+            ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
+        if not ok.any():
+            return 0.0, 0.0, "OFF_BAND"
         if len(obstacles):
             pts = np.asarray(obstacles, dtype=float).reshape(-1, 2)
-            clear = np.linalg.norm(
-                paths[:, :, None, :2] - pts[None, None, :, :],
-                axis=3).min(axis=(1, 2))
+            watched = self._obstacle_paths(paths, span, OBSTACLE_PREVIEW_M)
+            # Nearest-neighbour rather than every pair. The brute force this
+            # replaces materialised candidates x steps x points distances -
+            # 126 x 65 x 2000 is 16 million per cycle, 371 ms on this NUC,
+            # for a control loop with 100 ms to spend. It was already 158 ms
+            # before the veto horizon lengthened the rollouts; extending
+            # them without changing this would have been a stall waiting
+            # for a crowded frame.
+            from scipy.spatial import cKDTree
+            flat_watched = watched[:, :, :2].reshape(-1, 2)
+            distance, _ = cKDTree(pts).query(flat_watched, workers=-1)
+            clear = distance.reshape(len(pairs), -1).min(axis=1)
         else:
             clear = np.full(len(pairs), np.inf)
-        obstacle_ok = clear >= OBSTACLE_FLOOR_M
-        all_ok = geometry_ok & obstacle_ok
-        geometry_clearance = clear[geometry_ok]
-        self.last_diagnostics = {
-            "total": len(pairs),
-            "band_ok": int(np.count_nonzero(band_ok)),
-            "mask_ok": int(np.count_nonzero(mask_ok)),
-            "geometry_ok": int(np.count_nonzero(geometry_ok)),
-            "obstacle_ok": int(np.count_nonzero(obstacle_ok)),
-            "all_ok": int(np.count_nonzero(all_ok)),
-            "max_clearance_m": (
-                float(np.max(geometry_clearance))
-                if len(geometry_clearance) else None),
-        }
-        if not geometry_ok.any():
-            return 0.0, 0.0, "OFF_BAND"
-        if not all_ok.any():
+        ok &= clear >= OBSTACLE_FLOOR_M
+        if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
-        ok = all_ok
         d, idx = self.tree.query(flat, workers=-1)
         path_cost = d.reshape(len(pairs), self.steps).mean(axis=1)
         here = self.arc_at(state[:2])
@@ -426,6 +498,7 @@ class DwaPlanner:
             mask_boundary = self.route_mask.boundary_cost_many(flat).reshape(
                 len(pairs), self.steps).mean(axis=1)
         cost = (W_SPEED * speed_change
+                - W_VELOCITY * np.asarray([p[0] for p in pairs])
                 + W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
                 + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre
                 + W_MASK_BOUNDARY * mask_boundary)

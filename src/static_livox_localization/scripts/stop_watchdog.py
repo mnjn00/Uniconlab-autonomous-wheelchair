@@ -1,299 +1,250 @@
 #!/usr/bin/env python3
-"""Verify that a gated stop intent reaches the measured wheels.
+"""Watches whether a commanded stop actually reaches the wheels.
 
-The final wheel command is intentionally not used as the stop intent.  The
-base now ramps a stop with C/C or C/S frames, and tip_guard may spend time
-decelerating before /cmd_vel itself reaches zero.  The watchdog therefore
-observes three separate facts:
+On 2026-08-19 the chair was told to stop, kept the left wheel at 0.72 m/s for
+12.97 seconds, and turned about 2.9 times on the spot at the finish line. The
+IMU measured the rotation and /wheel_status reported the speed, so every fact
+needed to catch it inside a second was already on the bus - nothing was
+watching. On 08-16 the same fault ran 3.7 s. Neither was noticed live.
 
-* /cmd_vel_gated: the safety chain requested a stop;
-* /cmd_vel: the final command reached zero after its rate limit;
-* /wheel_status: the two wheels actually slowed symmetrically.
+What this cannot do is fix it. If the reason a stop is not honoured is that
+the serial write is blocked, then the mode frame this node sends is blocked
+behind it, and the joystick is the only thing left. So the alarm is the
+product here and the stop attempt is a bonus: the node exists to put a loud,
+timestamped, self-explaining record on the bus at the moment it happens,
+carrying the uart TX counters that say whether the frames reached the wire.
 
-The 2026-08-23 field failure had one stopped wheel and one wheel at 0.36 m/s.
-That is detected as a pivot before the generic failed-stop timeout, logged
-with the UART counters, and followed by one best-effort request for mode 77.
+Decoding, from base_model/src/wheel_cmd_tmp.py and uart.py:
+  wheel_cmd     [ll, lv, rr, rv, brk]      direction C forward, W back, S stop
+  wheel_status  [72, mode, ll, lv, rr, rv, brk, battery, checksum, 13, 10]
+  speed         (byte - 0x21) / 10 / 3.6 m/s
 """
 
 import json
-import math
 
 import rospy
-from geometry_msgs.msg import Twist
 from std_msgs.msg import Int16, Int16MultiArray, String
 
 
 AUTO_MODE = 65
 MANUAL_MODE = 77
-FORWARD_DIRECTION = ord("C")
-REVERSE_DIRECTION = ord("W")
 STOP_DIRECTION = ord("S")
-WHEEL_SEPARATION_M = 0.54
 
-FINAL_STOP_GRACE_S = 0.40
+# A stop is judged on whether the wheels are SLOWING, not on how long they
+# take. The first version of this node used a flat 0.40 s grace, read off
+# two clean stops in the 08-20 run that settled in 0.22 s and 0.25 s. Those
+# were stops from a crawl. From the 0.80 m/s cruise this chair coasts down
+# at about 0.47 m/s^2 - measured 2026-08-23, 0.75 m/s at the stop command
+# to rest 1.7 s later - so reaching MOVING_MPS inside 0.40 s would need
+# 1.6 m/s^2, which it cannot do. The grace therefore fired on every stop
+# from cruise, and the failsafe below it dropped the chair into manual. It
+# did exactly that in front of a pedestrian: the profile saw the person,
+# chose to wait, commanded the stop, the wheels were slowing properly, and
+# this node took the chair off auto anyway.
+#
+# The fault it is looking for does not look like slow braking. In all four
+# recorded events the speed held flat or ROSE after the stop - 0.78 to
+# 0.94, 0.72 to 0.83, 0.61 to 0.67 - because the base was still running a
+# ramp toward the previous setpoint. Inertia cannot do that. So the test is
+# an envelope: from the speed the wheels carried when the stop was issued,
+# they must keep shedding at least this much, or something is driving them.
+STOP_DECEL_FLOOR_MPS2 = 0.15
+# Never judge inside this. One frame of noise at the moment of the command
+# is not evidence of anything.
+GRACE_S = 0.5
+# Still rolling this long after a stop is a fault whatever the envelope
+# says. From 0.80 m/s the envelope alone expects rest by 4.3 s.
+CEILING_S = 5.0
+# A rise this far above the speed carried into the stop is the fault's own
+# signature and is not waited out any further than the grace.
+RISE_MARGIN_MPS = 0.06
+# One wheel stopped while the other still carries this much is a split, and
+# a split is a pivot: 0.67 m/s across a 0.54 m track is 71 deg/s. Inertia
+# cannot produce it - both wheels carry the same momentum into a stop - so
+# it needs no envelope and no patience, only long enough to be sure it is
+# not one noisy frame.
+#
+# Measured 2026-08-23 alongside a pedestrian: the right wheel honoured the
+# stop in 0.5 s at 1.66 m/s^2 while the left held 0.64-0.69 for 0.7 s, and
+# the chair turned about 50 degrees before this node caught it on the
+# deceleration envelope instead. Both wheels are told to stop by the same
+# frame - /wheel_cmd read S0.00 / S0.00 throughout - so a split is the base
+# ignoring one channel, not anything upstream of it.
+SPLIT_MPS = 0.35
+SPLIT_HOLD_S = 0.15
+# Below this the report is noise on a stationary wheel, not motion.
 MOVING_MPS = 0.15
+# A command older than this says nothing about now.
 COMMAND_FRESH_S = 0.30
-NOT_SLOWING_WINDOW_S = 0.50
-MIN_DECELERATION_MPS = 0.05
-PIVOT_STATIONARY_MPS = 0.15
-PIVOT_MOVING_MPS = 0.30
-PIVOT_YAW_RPS = 0.50
-PIVOT_CONFIRM_S = 0.15
 
 
-def _finite(value):
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return None
-    return value if math.isfinite(value) else None
+def wheel_speed(byte_value):
+    return (float(byte_value) - 0x21) / 10.0 / 3.6
 
 
-def _is_zero_twist(linear, angular):
-    linear = _finite(linear)
-    angular = _finite(angular)
-    return linear is not None and angular is not None and \
-        abs(linear) <= 1e-6 and abs(angular) <= 1e-6
-
-
-def wheel_speed(direction, byte_value):
-    """Decode one signed wheel speed from the base status protocol."""
-    try:
-        direction = int(direction)
-        speed = (float(byte_value) - 0x21) / 10.0 / 3.6
-    except (TypeError, ValueError):
-        return 0.0
-    if not math.isfinite(speed):
-        return 0.0
-    if direction == FORWARD_DIRECTION:
-        return speed
-    if direction == REVERSE_DIRECTION:
-        return -speed
-    return 0.0
-
-
-def reported_wheel_speeds(data):
-    """Return signed (left, right) speeds, or None for a short frame."""
-    if len(data) < 6:
-        return None
-    return wheel_speed(data[2], data[3]), wheel_speed(data[4], data[5])
+def commanded_stop(data):
+    """True when the frame on the wire tells both wheels to stop."""
+    return len(data) >= 3 and \
+        int(data[0]) == STOP_DIRECTION and int(data[2]) == STOP_DIRECTION
 
 
 def reported_motion(data):
-    """Compatibility helper returning absolute measured speeds."""
-    speeds = reported_wheel_speeds(data)
-    if speeds is None:
+    """(left, right) speed in m/s from a status frame, or None if malformed."""
+    if len(data) < 6:
         return None
-    return abs(speeds[0]), abs(speeds[1])
+    return (abs(wheel_speed(data[3])), abs(wheel_speed(data[5])))
 
 
 class StopHonouredCheck:
-    """Pure stop-intent state machine, independent of ROS."""
+    """The decision, with no ROS in it so it can be tested without a chair.
 
-    def __init__(
-            self,
-            final_stop_grace_s=FINAL_STOP_GRACE_S,
-            moving_mps=MOVING_MPS,
-            command_fresh_s=COMMAND_FRESH_S,
-            not_slowing_window_s=NOT_SLOWING_WINDOW_S,
-            min_deceleration_mps=MIN_DECELERATION_MPS,
-            pivot_stationary_mps=PIVOT_STATIONARY_MPS,
-            pivot_moving_mps=PIVOT_MOVING_MPS,
-            pivot_yaw_rps=PIVOT_YAW_RPS,
-            pivot_confirm_s=PIVOT_CONFIRM_S):
-        self.final_stop_grace_s = float(final_stop_grace_s)
+    Feed it commands and status frames with timestamps; it returns a reason
+    string the first cycle a stop has gone unhonoured past the grace, then
+    None until the wheels stop and the condition can arm again.
+    """
+
+    def __init__(self, grace_s=GRACE_S, moving_mps=MOVING_MPS,
+                 command_fresh_s=COMMAND_FRESH_S,
+                 decel_floor_mps2=STOP_DECEL_FLOOR_MPS2,
+                 ceiling_s=CEILING_S, rise_margin_mps=RISE_MARGIN_MPS,
+                 split_mps=SPLIT_MPS, split_hold_s=SPLIT_HOLD_S):
+        self.grace_s = float(grace_s)
         self.moving_mps = float(moving_mps)
         self.command_fresh_s = float(command_fresh_s)
-        self.not_slowing_window_s = float(not_slowing_window_s)
-        self.min_deceleration_mps = float(min_deceleration_mps)
-        self.pivot_stationary_mps = float(pivot_stationary_mps)
-        self.pivot_moving_mps = float(pivot_moving_mps)
-        self.pivot_yaw_rps = float(pivot_yaw_rps)
-        self.pivot_confirm_s = float(pivot_confirm_s)
-
-        self.intent_since = None
-        self.final_stop_since = None
-        self.last_gated_s = None
-        self.last_final_s = None
-        self.baseline_speed_mps = None
-        self.pivot_since = None
+        self.decel_floor_mps2 = float(decel_floor_mps2)
+        self.ceiling_s = float(ceiling_s)
+        self.rise_margin_mps = float(rise_margin_mps)
+        self.split_mps = float(split_mps)
+        self.split_hold_s = float(split_hold_s)
+        self.split_since = None
+        self.stop_since = None
+        self.entry_speed = None
         self.latched = False
-        self.awaiting_auto_rearm = False
+        self.last_command_s = 0.0
 
-    def _disarm(self):
-        self.intent_since = None
-        self.final_stop_since = None
-        self.baseline_speed_mps = None
-        self.pivot_since = None
-        self.latched = False
-
-    def observe_gated_command(self, linear, angular, now_s):
-        now_s = float(now_s)
-        self.last_gated_s = now_s
-        if _is_zero_twist(linear, angular):
-            if self.intent_since is None:
-                self.intent_since = now_s
-                self.final_stop_since = None
-                self.baseline_speed_mps = None
-                self.pivot_since = None
-                self.latched = False
-            return
-        self._disarm()
-
-    def observe_final_command(self, linear, angular, now_s):
-        now_s = float(now_s)
-        self.last_final_s = now_s
-        if _is_zero_twist(linear, angular):
-            if self.final_stop_since is None:
-                self.final_stop_since = now_s
+    def observe_command(self, data, now_s):
+        if commanded_stop(data):
+            if self.stop_since is None:
+                self.stop_since = float(now_s)
         else:
-            self.final_stop_since = None
-
-    def _fault(self, code, now_s, left, right, yaw):
-        intent_age = float(now_s) - self.intent_since
-        gated_age = float(now_s) - self.last_gated_s
-        final_age = -1.0 if self.final_stop_since is None else \
-            float(now_s) - self.final_stop_since
-        reasons = {
-            "ONE_WHEEL_PIVOT": "one wheel stopped while the other kept moving",
-            "NOT_SLOWING": "measured wheels did not slow after stop intent",
-            "STOP_NOT_HONOURED": "final zero command was not honoured",
-        }
-        self.latched = True
-        return {
-            "code": code,
-            "reason": reasons[code],
-            "left_mps": left,
-            "right_mps": right,
-            "pivot_yaw_rps": yaw,
-            "intent_age_s": intent_age,
-            "gated_age_s": gated_age,
-            "final_age_s": final_age,
-        }
+            self.stop_since = None
+            self.entry_speed = None
+            self.split_since = None
+            self.latched = False
+        self.last_command_s = float(now_s)
 
     def observe_status(self, data, now_s, mode):
-        """Return one structured fault while a fresh stop intent is armed."""
-        speeds = reported_wheel_speeds(data)
-        if speeds is None:
+        """Returns a reason when the stop has not been honoured, else None."""
+        motion = reported_motion(data)
+        if motion is None:
             return None
-        if int(mode) != AUTO_MODE:
-            self._disarm()
-            self.awaiting_auto_rearm = True
+        left, right = motion
+        if int(mode) != AUTO_MODE or self.stop_since is None:
             return None
-        if self.awaiting_auto_rearm:
-            # Zero commands published while manual was active are not a new
-            # autonomous stop intent. Consume the AUTO transition, then wait
-            # for the next gated command before arming again.
-            self._disarm()
-            self.awaiting_auto_rearm = False
+        if float(now_s) - self.last_command_s > self.command_fresh_s:
+            # The command stream has stopped; that is a different fault and
+            # uart.py's own watchdog owns it.
             return None
-        if self.intent_since is None or self.last_gated_s is None:
+        speed = max(left, right)
+        if self.entry_speed is None:
+            # The speed the stop was issued against. Taken from the first
+            # frame after it rather than the last one before, which is the
+            # conservative side: any braking already done shrinks the
+            # envelope this has to stay inside.
+            self.entry_speed = speed
+        if speed <= self.moving_mps:
+            # Honoured. Arm again for the next stop.
+            self.split_since = None
+            self.latched = False
             return None
-        now_s = float(now_s)
-        if now_s - self.last_gated_s > self.command_fresh_s or self.latched:
-            return None
-
-        left, right = speeds
-        magnitudes = abs(left), abs(right)
-        current = max(magnitudes)
-        yaw = abs(right - left) / WHEEL_SEPARATION_M
-        if self.baseline_speed_mps is None:
-            self.baseline_speed_mps = current
-
-        pivoting = min(magnitudes) <= self.pivot_stationary_mps and \
-            current >= self.pivot_moving_mps and yaw >= self.pivot_yaw_rps
-        if pivoting:
-            if self.pivot_since is None:
-                self.pivot_since = now_s
-            if now_s - self.pivot_since >= self.pivot_confirm_s:
-                return self._fault(
-                    "ONE_WHEEL_PIVOT", now_s, left, right, yaw)
+        held = float(now_s) - self.stop_since
+        # Judged before the envelope and before the grace, because the
+        # chair is turning while this is true and every frame spent
+        # confirming it is more of the turn.
+        if min(left, right) <= self.moving_mps and speed >= self.split_mps:
+            if self.split_since is None:
+                self.split_since = float(now_s)
+            if float(now_s) - self.split_since >= self.split_hold_s \
+                    and not self.latched:
+                self.latched = True
+                return ("one wheel ignored a stop: left %.2f m/s, right "
+                        "%.2f m/s, %.0f deg/s of pivot"
+                        % (left, right, abs(left - right) / 0.54 * 57.3))
         else:
-            self.pivot_since = None
-
-        intent_age = now_s - self.intent_since
-        if intent_age >= self.not_slowing_window_s and \
-                self.baseline_speed_mps > self.moving_mps and \
-                current > self.baseline_speed_mps - self.min_deceleration_mps:
-            return self._fault("NOT_SLOWING", now_s, left, right, yaw)
-
-        final_is_fresh = self.last_final_s is not None and \
-            now_s - self.last_final_s <= self.command_fresh_s
-        if self.final_stop_since is not None and final_is_fresh and \
-                now_s - self.final_stop_since >= self.final_stop_grace_s and \
-                current > self.moving_mps:
-            return self._fault("STOP_NOT_HONOURED", now_s, left, right, yaw)
-        return None
+            self.split_since = None
+        if held < self.grace_s or self.latched:
+            return None
+        allowed = self.entry_speed - self.decel_floor_mps2 * held
+        if speed > self.entry_speed + self.rise_margin_mps:
+            fault = ("wheels sped up after a stop: %.2f m/s against %.2f "
+                     "when it was issued" % (speed, self.entry_speed))
+        elif held >= self.ceiling_s:
+            fault = "still rolling %.2f s after a stop" % held
+        elif speed > max(self.moving_mps, allowed):
+            fault = ("not slowing after a stop: %.2f m/s at %.2f s, "
+                     "%.2f expected" % (speed, held, allowed))
+        else:
+            return None
+        self.latched = True
+        return ("%s (left %.2f m/s, right %.2f m/s)"
+                % (fault, left, right))
 
 
 class StopWatchdog:
     def __init__(self):
         rospy.init_node("stop_watchdog")
-        legacy_grace = float(rospy.get_param("~grace_s", FINAL_STOP_GRACE_S))
         self.check = StopHonouredCheck(
-            final_stop_grace_s=float(rospy.get_param(
-                "~final_stop_grace_s", legacy_grace)),
-            moving_mps=float(rospy.get_param("~moving_mps", MOVING_MPS)),
-        )
-        self.attempt_stop = bool(rospy.get_param("~attempt_stop", True))
+            grace_s=float(rospy.get_param("~grace_s", GRACE_S)),
+            moving_mps=float(rospy.get_param("~moving_mps", MOVING_MPS)))
+        self.attempt_stop = bool(
+            rospy.get_param("~attempt_stop", True))
         self.tx_diag = {}
         self.alarm_pub = rospy.Publisher(
             "stop_watchdog/alarm", String, queue_size=4, latch=True)
         self.mode_pub = rospy.Publisher("mode_cmd", Int16, queue_size=1)
-        rospy.Subscriber(
-            "/cmd_vel_gated", Twist, self.on_gated_command, queue_size=1)
-        rospy.Subscriber(
-            "/cmd_vel", Twist, self.on_final_command, queue_size=1)
-        rospy.Subscriber(
-            "wheel_status", Int16MultiArray, self.on_status, queue_size=5)
-        rospy.Subscriber("uart_tx_diag", String, self.on_tx_diag, queue_size=5)
+        rospy.Subscriber("wheel_cmd", Int16MultiArray, self.on_command)
+        rospy.Subscriber("wheel_status", Int16MultiArray, self.on_status)
+        rospy.Subscriber("uart_tx_diag", String, self.on_tx_diag)
         rospy.loginfo(
-            "stop watchdog: intent %.2f s, final %.2f s, pivot %.2f s",
-            self.check.not_slowing_window_s,
-            self.check.final_stop_grace_s,
-            self.check.pivot_confirm_s,
-        )
+            "stop watchdog: %.2f s grace, %.2f m/s floor, stop attempt %s",
+            self.check.grace_s, self.check.moving_mps,
+            "on" if self.attempt_stop else "off")
 
     def on_tx_diag(self, message):
         try:
             self.tx_diag = json.loads(message.data)
-        except (TypeError, ValueError):
+        except ValueError:
             pass
 
-    def on_gated_command(self, message):
-        self.check.observe_gated_command(
-            message.linear.x,
-            message.angular.z,
-            rospy.Time.now().to_sec(),
-        )
-
-    def on_final_command(self, message):
-        self.check.observe_final_command(
-            message.linear.x,
-            message.angular.z,
-            rospy.Time.now().to_sec(),
-        )
+    def on_command(self, message):
+        self.check.observe_command(
+            list(message.data), rospy.Time.now().to_sec())
 
     def on_status(self, message):
         data = list(message.data)
         if len(data) < 2:
             return
-        now_s = rospy.Time.now().to_sec()
-        fault = self.check.observe_status(data, now_s, data[1])
-        if fault is None:
+        reason = self.check.observe_status(
+            data, rospy.Time.now().to_sec(), data[1])
+        if reason is None:
             return
-
-        alarm = {"stamp": now_s}
-        alarm.update(fault)
-        alarm["uart_tx"] = self.tx_diag
-        rospy.logerr(
-            "STOP FAULT %s - %s | uart tx %s",
-            fault["code"],
-            fault["reason"],
-            json.dumps(self.tx_diag),
-        )
+        motion = reported_motion(data) or (0.0, 0.0)
+        alarm = {
+            "stamp": rospy.Time.now().to_sec(),
+            "reason": reason,
+            "left_mps": round(motion[0], 3),
+            "right_mps": round(motion[1], 3),
+            # Whether our frames reached the wire is the whole question, and
+            # this is the only place the answer is recorded at the moment it
+            # matters.
+            "uart_tx": self.tx_diag,
+        }
+        rospy.logerr("STOP NOT HONOURED - %s | uart tx %s", reason,
+                     json.dumps(self.tx_diag))
         self.alarm_pub.publish(String(data=json.dumps(alarm)))
         if self.attempt_stop:
+            # Best effort only. If the serial write is what is stuck, this
+            # frame is stuck behind it and the joystick is the failsafe.
             self.mode_pub.publish(Int16(data=MANUAL_MODE))
 
 

@@ -97,6 +97,16 @@ MODE_LABELS = {AUTO_MODE: "auto", MANUAL_MODE: "manual"}
 
 FOLLOWER_START_SERVICE = "/waypoint_follower/start"
 MOTION_EPS = 0.02       # m/s and rad/s below which a Twist counts as zero
+# /wheel_status data[7] at full charge. The gauge moves in steps of 11, so this
+# is 8 bars; every value seen in the field has been a multiple of 11.
+BATTERY_FULL = 88
+# How long a subsystem reading stays believable after its topic goes quiet.
+# /wheel_status already had a TTL, which is why the wheel link reported 끊김 the
+# moment the stack came down -- while localization went on claiming TRACKING and
+# the obstacle line went on claiming a clear band, from nodes that no longer
+# existed. Every one of those publishes at 1 Hz or faster, so five seconds of
+# silence means the publisher is gone, not slow.
+FIELD_TTL_S = 5.0
 
 # The interpreter the operator scripts are run with. A module constant rather
 # than a literal so the job tests can point it at a bash that exists on the
@@ -124,9 +134,43 @@ def twist_magnitude(twist):
 # captured at 0.2 m spacing; at ~1 m it is visually identical on a phone-sized
 # top-down view and costs a fifth of the link budget.
 ROUTE_MAX_POINTS = 400
+# The drivable corridor is sent as two edge polylines, thinned like the route.
+# Fewer points than the route: the band is a smooth pair of offsets, and its job
+# on a phone-sized view is to show where the room runs out, not every wobble.
+BAND_MAX_POINTS = 200
 
 
-def resolve_route_path(cli_default):
+_BRINGUP_ROUTE_RE = re.compile(r'^\s*ROUTE=\"\$\{ROUTE:-(?P<path>[^}]+)\}\"')
+
+
+def route_from_bringup_script(script_dir):
+    """The route start_wheelchair_localization.sh would launch with.
+
+    Second-best after the live param and far better than a filename pinned here:
+    the bring-up script is where the field default is actually chosen, so reading
+    it means the app follows a route promotion without this file being touched.
+    """
+    seen = []
+    for base in (script_dir, "~"):
+        if not base:
+            continue
+        path = os.path.join(os.path.expanduser(base),
+                            "start_wheelchair_localization.sh")
+        if path in seen:
+            continue
+        seen.append(path)
+        try:
+            with open(path, "r") as handle:
+                for line in handle:
+                    match = _BRINGUP_ROUTE_RE.match(line)
+                    if match:
+                        return os.path.expandvars(match.group("path"))
+        except OSError:
+            continue
+    return None
+
+
+def resolve_route_path(cli_default, script_dir=None):
     """Ask the follower which route it is actually driving.
 
     start_wheelchair_localization.sh launches the follower with `_route:="$ROUTE"`,
@@ -134,8 +178,13 @@ def resolve_route_path(cli_default):
     guess. Guessing wrong is worse than showing nothing: the app would draw one
     route while the chair drove another, and the progress marker would be placed
     on a line that is not the line being followed. The launched value lands in the
-    private param /waypoint_follower/route, so read that and only fall back to the
-    CLI default when it is absent.
+    private param /waypoint_follower/route, so read that first.
+
+    With the stack down there is no param -- and that is exactly when the app is
+    open, because the operator is about to press [로컬 켜기]. So read the bring-up
+    script's own ROUTE default next, and only then the CLI default. Skipping that
+    step is how the app came to draw the 1897-point 20260814 algorithm route while
+    the chair was pinned to the 1917-point v9 clearance route.
     """
     if ROS_AVAILABLE:
         for key in ("/waypoint_follower/route", "/waypoint_follower/_route"):
@@ -146,8 +195,65 @@ def resolve_route_path(cli_default):
             if value:
                 log("route from follower param %s" % key)
                 return str(value)
-        log("follower route param not found -- falling back to --route")
+        log("follower route param not found -- reading the bring-up script")
+    from_script = route_from_bringup_script(script_dir)
+    if from_script:
+        log("route from start_wheelchair_localization.sh: %s"
+            % os.path.basename(from_script))
+        return from_script
     return cli_default
+
+
+def load_band(route_path):
+    """Left and right edges of the drivable corridor, in the map frame.
+
+    The route alone is a centreline, which tells an operator where the chair is
+    going but not how much room it has -- and on this route the room is the
+    interesting part: the v9 corridor is what the tight corners are measured
+    against. The band file sits next to the route with the same stem and carries
+    a station every 0.5 m with left_m/right_m clearances, so the edges are just
+    the centreline offset by those, perpendicular to the station heading.
+    """
+    band_path = re.sub(r"_waypoints\.json$", "_safety_band.json", route_path)
+    if band_path == route_path:
+        return None
+    try:
+        with open(os.path.expanduser(band_path), "r") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    stations = data.get("stations") or []
+    if len(stations) < 2:
+        return None
+
+    left, right = [], []
+    for station in stations:
+        try:
+            x = float(station["x"])
+            y = float(station["y"])
+            heading = math.radians(float(station["heading_deg"]))
+            lm = float(station.get("left_m", 0.0))
+            rm = float(station.get("right_m", 0.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Left of travel is heading + 90 degrees.
+        left.append([round(x - math.sin(heading) * lm, 2),
+                     round(y + math.cos(heading) * lm, 2)])
+        right.append([round(x + math.sin(heading) * rm, 2),
+                      round(y - math.cos(heading) * rm, 2)])
+    if len(left) < 2:
+        return None
+
+    stride = max(1, (len(left) + BAND_MAX_POINTS - 1) // BAND_MAX_POINTS)
+    def thin(points):
+        slim = points[::stride]
+        if slim[-1] != points[-1]:
+            slim.append(points[-1])
+        return slim
+    log("band loaded: %d stations (%d sent) from %s"
+        % (len(left), len(thin(left)), os.path.basename(band_path)))
+    return {"left": thin(left), "right": thin(right),
+            "source": os.path.basename(band_path)}
 
 
 def load_route(path):
@@ -187,6 +293,7 @@ def load_route(path):
 
     log("route loaded: %d waypoints (%d sent, stride %d) from %s"
         % (len(full), len(slim), stride, os.path.basename(path)))
+    band = load_band(path)
     return {
         "type": "route",
         "frame": data.get("frame"),
@@ -197,6 +304,9 @@ def load_route(path):
         "points": slim,
         "source": os.path.basename(path),
         "path": path,
+        "band_left": None if band is None else band["left"],
+        "band_right": None if band is None else band["right"],
+        "band_source": None if band is None else band["source"],
     }
 
 
@@ -222,13 +332,21 @@ class JobRunner:
     # run is not something this link should offer.
     JOBS = {
         "stack": ("start_wheelchair_localization.sh", "로컬라이제이션 스택 기동"),
+        "stack_stop": ("stop_stack.sh", "스택 내리기"),
         "drive": ("go.sh", "주행 시작"),
         "halt": ("stop.sh", "주행 정지"),
     }
 
-    def __init__(self, script_dir, enabled):
+    def __init__(self, script_dir, enabled, env=None):
         self.script_dir = os.path.expanduser(script_dir)
         self.enabled = enabled
+        # start_wheelchair_localization.sh picks its controller from $PROFILE and
+        # defaults to pursuit. The field DWA runs are launched as
+        # `PROFILE=dwa SAFETY_POLICIES=true start_wheelchair_localization.sh`, so a
+        # bridge started from a plain shell would bring up a *different controller*
+        # than the one that was last driven -- same button, same script, different
+        # robot behaviour. Carry the operator's environment explicitly instead.
+        self.env_overlay = dict(env or {})
         self.lock = threading.Lock()
         self.proc = None
         self.name = None
@@ -248,6 +366,11 @@ class JobRunner:
             return None, "%s not found at %s" % (entry[0], path)
         return path, entry[1]
 
+    def job_env(self):
+        env = os.environ.copy()
+        env.update(self.env_overlay)
+        return env
+
     def available(self):
         """Which jobs actually exist on this machine, for the UI to grey buttons."""
         out = {}
@@ -262,16 +385,22 @@ class JobRunner:
 
     # Stopping must never queue behind anything. stop.sh deliberately checks
     # nothing, and a stop that waits for a bring-up to finish is not a stop.
-    ALWAYS_ALLOWED = ("halt",)
+    #
+    # stack_stop is here for a second reason: it is the only real abort for a
+    # bring-up in progress. job_cancel signals the tracked process group, but the
+    # bring-up detaches its nodes with setsid, so the sensors it already started
+    # never see that signal. Making the teardown wait for the bring-up it is
+    # meant to undo would be the same bug as a stop that queues.
+    ALWAYS_ALLOWED = ("halt", "stack_stop")
 
-    def _spawn(self, path):
+    def _spawn(self, path, name):
         """Launch detached without touching the tracked slot."""
         try:
-            handle = open("/tmp/bt_job_halt.log", "wb")
+            handle = open("/tmp/bt_job_%s.log" % name, "wb")
         except OSError:
             handle = subprocess.DEVNULL
         return subprocess.Popen(
-            [BASH, path], cwd=os.path.expanduser("~"),
+            [BASH, path], cwd=os.path.expanduser("~"), env=self.job_env(),
             stdin=subprocess.DEVNULL, stdout=handle,
             stderr=subprocess.STDOUT, start_new_session=True)
 
@@ -287,11 +416,11 @@ class JobRunner:
             # Runs even while a bring-up holds the slot, and does not overwrite
             # that job's status -- the operator still needs to see how it ended.
             try:
-                self._spawn(path)
+                self._spawn(path, name)
             except OSError as exc:
                 return False, "failed to launch %s: %s" % (path, exc)
             log("job '%s' started (unqueued): %s" % (name, path))
-            return True, "%s 실행함" % label
+            return True, "%s 실행함 (로그: /tmp/bt_job_%s.log)" % (label, name)
 
         with self.lock:
             if self.proc is not None and self.proc.poll() is None:
@@ -306,7 +435,7 @@ class JobRunner:
                 # that is already half way through starting the sensors.
                 self.proc = subprocess.Popen(
                     [BASH, path],
-                    cwd=os.path.expanduser("~"),
+                    cwd=os.path.expanduser("~"), env=self.job_env(),
                     stdin=subprocess.DEVNULL, stdout=handle,
                     stderr=subprocess.STDOUT, start_new_session=True)
             except OSError as exc:
@@ -386,13 +515,37 @@ class JobRunner:
 class BridgeState:
     """Everything the phone can see, with provenance for each field."""
 
+    # A speed reading older than this is not evidence about what the chair is
+    # doing now. Wheel odometry runs at 100 Hz, so half a second is generous.
+    SPEED_TTL_S = 0.5
+
     def __init__(self):
         self.lock = threading.Lock()
         self.seq = 0
         self.started_at = time.time()
 
         self.drive_mode = None          # 65 / 77, echoed by the motor controller
-        self.battery_percent = None     # /wheel_status data[7]
+        # /wheel_status data[7]. A coarse battery level, almost certainly:
+        # every value observed is a multiple of 11 -- 88, 77, 66 -- which reads
+        # as an 8-step gauge at ~12.5% per step rather than a percentage.
+        #
+        # It was briefly reported here as not-a-battery on the strength of a
+        # 55 s sample that happened to hold only 88 and 77. A longer look
+        # settled it: at rest it read 88 early in the session and 77 two and a
+        # half hours of driving later, and it dips one step (to 66) under load
+        # and comes back. That is a discharge trend with load sag, not a flag.
+        #
+        # Which is why only the at-rest reading is reported as the level. Under
+        # motor current the gauge sits a step low, and a number that drops 12%
+        # every time the chair sets off is worse than no number.
+        #
+        # 88 is full, confirmed by the team 2026-08-23, so the gauge is 8 steps
+        # of 11 over a 0..88 range and a percentage is 100 * level / 88. It is
+        # the wheel-base battery -- the motor controller's own reading, not the
+        # NUC's. The step is coarse: one bar is 12.5%, so 88/77/66 show as
+        # 100/88/75% and nothing in between exists.
+        self.battery_raw = None
+        self.battery_at_rest = None
         self.wheel_status_stamp = None
         self.follower_status = None
         self.robot_fault = None
@@ -407,18 +560,57 @@ class BridgeState:
         self.wp_index = None
         self.wp_total = None
         self.follower_state = None
+        # FAST-LIO's /Odometry. Pose only: laserMapping publishes an all-zero
+        # twist, verified on the moving chair 2026-08-23, so this is NOT a speed
+        # source. Kept for freshness, and as a fallback if wheel odometry dies.
         self.odom_speed_mps = None
         self.odom_yaw_rate = None
         self.odom_stamp = None
+        # /odom from base_model's odom_pub.py: encoder speed integrated in the
+        # world frame, 100 Hz. This is the one that knows the chair is rolling.
+        self.wheel_odom_speed_mps = None
+        self.wheel_odom_yaw_rate = None
+        self.wheel_odom_stamp = None
         self.cmd_raw = 0.0              # what the follower wants
         self.cmd_gated = 0.0            # what safety_gate allows
         self.cmd_out = 0.0              # what tip_guard sends to the wheels
         self.cmd_raw_stamp = None
         self.tip_guard_status = None
+        self.tip_guard_stamp = None
         self.localization_status = None
+        self.localization_stamp = None
         self.objects_summary = None
+        self.objects_stamp = None
+        self.follower_stamp = None
         self.estop_requested_at = None
         self.last_command_detail = None
+
+    def _fresh(self, value, stamp, now):
+        """The value, or None once its publisher has gone quiet."""
+        if stamp is None or now - stamp > FIELD_TTL_S:
+            return None
+        return value
+
+    def ground_speed(self, now=None):
+        """Best available answer to "is the chair moving", and where it came from.
+
+        Wheel odometry first. /Odometry looks like the natural source and is what
+        this bridge used to read, but FAST-LIO leaves its twist at zero -- so the
+        speed tile read 0.0 while the chair drove at 0.30 m/s, and the guard that
+        refuses an E-STOP release on a rolling chair could never fire. Caller must
+        hold the lock.
+
+        :returns: ``(speed_mps, yaw_rate_radps, source)`` where source is
+                  ``"wheel"``, ``"lio"`` or ``None`` when nothing is fresh.
+        """
+        now = time.time() if now is None else now
+        if (self.wheel_odom_stamp is not None
+                and now - self.wheel_odom_stamp <= self.SPEED_TTL_S):
+            return self.wheel_odom_speed_mps, self.wheel_odom_yaw_rate, "wheel"
+        if (self.odom_stamp is not None
+                and now - self.odom_stamp <= self.SPEED_TTL_S):
+            return self.odom_speed_mps, self.odom_yaw_rate, "lio"
+        return None, None, None
 
     def snapshot(self, ros_connected, ttl_s, follower_available):
         with self.lock:
@@ -430,6 +622,21 @@ class BridgeState:
 
             wheel_age = age(self.wheel_status_stamp)
             wheel_link_ok = wheel_age is not None and wheel_age <= ttl_s
+            speed, yaw_rate, speed_source = self.ground_speed(now)
+            # A reading whose publisher has gone quiet is not a reading.
+            localization = self._fresh(self.localization_status,
+                                       self.localization_stamp, now)
+            objects = self._fresh(self.objects_summary, self.objects_stamp, now)
+            tip_guard = self._fresh(self.tip_guard_status, self.tip_guard_stamp, now)
+            follower = self._fresh(self.follower_status, self.follower_stamp, now)
+            follower_live = follower is not None
+            stopped = speed is not None and speed <= 0.05
+            if stopped and self.battery_raw is not None:
+                self.battery_at_rest = self.battery_raw
+            battery_under_load = (not stopped
+                                  and self.battery_raw is not None
+                                  and self.battery_at_rest is not None
+                                  and self.battery_raw < self.battery_at_rest)
 
             # safety_gate holds motion by zeroing its output while the follower is
             # still asking for movement. The gate does not publish its reason, so
@@ -457,8 +664,9 @@ class BridgeState:
                 "bridge_uptime_s": round(now - self.started_at, 1),
                 "ros_connected": ros_connected,
 
-                "speed_mps": self.odom_speed_mps,
-                "yaw_rate_radps": self.odom_yaw_rate,
+                "speed_mps": speed,
+                "yaw_rate_radps": yaw_rate,
+                "speed_source": speed_source,
                 "commanded_mps": self.cmd_out,
 
                 "drive_mode": MODE_LABELS.get(self.drive_mode),
@@ -474,11 +682,11 @@ class BridgeState:
                 "wheel_link_ok": wheel_link_ok,
                 "wheel_status_age_s": wheel_age,
                 "odom_age_s": age(self.odom_stamp),
-                "tip_guard_status": self.tip_guard_status,
-                "follower_status": self.follower_status,
-                "localization_status": self.localization_status,
-                "localization_tracking": self.localization_status == "TRACKING",
-                "objects_summary": self.objects_summary,
+                "tip_guard_status": tip_guard,
+                "follower_status": follower,
+                "localization_status": localization,
+                "localization_tracking": localization == "TRACKING",
+                "objects_summary": objects,
                 "robot_fault": self.robot_fault,
 
                 # Navigation view. Pose is the same /fast_lio_icp/pose the route
@@ -488,17 +696,27 @@ class BridgeState:
                 "pose_y": self.pose_y,
                 "pose_yaw_deg": self.pose_yaw_deg,
                 "pose_age_s": age(self.pose_stamp),
-                "loc_fitness": self.loc_fitness,
-                "loc_inlier_ratio": self.loc_inlier_ratio,
-                "loc_reason": self.loc_reason,
-                "wp_index": self.wp_index,
-                "wp_total": self.wp_total,
-                "follower_state": self.follower_state,
+                "loc_fitness": self._fresh(self.loc_fitness,
+                                           self.localization_stamp, now),
+                "loc_inlier_ratio": self._fresh(self.loc_inlier_ratio,
+                                                self.localization_stamp, now),
+                "loc_reason": self._fresh(self.loc_reason,
+                                          self.localization_stamp, now),
+                "wp_index": self.wp_index if follower_live else None,
+                "wp_total": self.wp_total if follower_live else None,
+                "follower_state": self.follower_state if follower_live else None,
                 "last_command_detail": self.last_command_detail,
 
-                # data[7] of the raw UART frame; bridge_to_server.py reads the
-                # same byte to publish wheel_battery.
-                "battery_percent": self.battery_percent,
+                # Level, not percent -- see the note on battery_raw. The
+                # at-rest reading is the one worth showing; battery_raw is what
+                # the frame says right now, which sags a step under load.
+                "battery_percent": (None if self.battery_at_rest is None else
+                                    int(round(100.0 * self.battery_at_rest
+                                              / BATTERY_FULL))),
+                "battery_level": self.battery_at_rest,
+                "battery_level_full": BATTERY_FULL,
+                "battery_raw": self.battery_raw,
+                "battery_under_load": battery_under_load,
                 # No step-level concept exists in this stack.
                 "step_level": None,
             }
@@ -507,8 +725,8 @@ class BridgeState:
             frame["ready_to_drive"] = bool(
                 wheel_link_ok
                 and self.drive_mode == AUTO_MODE
-                and self.localization_status == "TRACKING"
-                and self.objects_summary is not None
+                and localization == "TRACKING"
+                and objects is not None
                 and not motion_blocked)
             frame["unavailable"] = sorted(k for k, v in frame.items() if v is None)
             # Fail closed: unknown reads as not-driving-safely.
@@ -577,6 +795,7 @@ class RosLink:
             rospy.init_node(self.node_name, anonymous=False, disable_signals=True)
             rospy.Subscriber("/wheel_status", Int16MultiArray, self._wheel_cb, queue_size=5)
             rospy.Subscriber("/Odometry", Odometry, self._odom_cb, queue_size=1)
+            rospy.Subscriber("/odom", Odometry, self._wheel_odom_cb, queue_size=1)
             rospy.Subscriber("/cmd_vel_raw", Twist, self._raw_cb, queue_size=1)
             rospy.Subscriber("/cmd_vel_gated", Twist, self._gated_cb, queue_size=1)
             rospy.Subscriber("/cmd_vel", Twist, self._out_cb, queue_size=1)
@@ -611,7 +830,7 @@ class RosLink:
             if len(msg.data) > 1:
                 self.state.drive_mode = int(msg.data[1])
             if len(msg.data) > 7:
-                self.state.battery_percent = int(msg.data[7])
+                self.state.battery_raw = int(msg.data[7])
 
     def _pose_cb(self, msg):
         p = msg.pose.pose.position
@@ -635,6 +854,7 @@ class RosLink:
         match = self._STATUS_RE.match(text)
         with self.state.lock:
             self.state.follower_status = text
+            self.state.follower_stamp = time.time()
             if match:
                 self.state.follower_state = match.group("state")
                 self.state.wp_index = int(match.group("i"))
@@ -657,6 +877,16 @@ class RosLink:
             self.state.odom_yaw_rate = round(v.angular.z, 3)
             self.state.odom_stamp = time.time()
 
+    def _wheel_odom_cb(self, msg):
+        # odom_pub.py integrates the encoder speed in the world frame, so linear
+        # x and y are both populated and the magnitude is the ground speed.
+        v = msg.twist.twist
+        speed = (v.linear.x ** 2 + v.linear.y ** 2) ** 0.5
+        with self.state.lock:
+            self.state.wheel_odom_speed_mps = round(speed, 3)
+            self.state.wheel_odom_yaw_rate = round(v.angular.z, 3)
+            self.state.wheel_odom_stamp = time.time()
+
     def _raw_cb(self, msg):
         with self.state.lock:
             self.state.cmd_raw = round(twist_magnitude(msg), 3)
@@ -673,6 +903,7 @@ class RosLink:
     def _tip_cb(self, msg):
         with self.state.lock:
             self.state.tip_guard_status = msg.data
+            self.state.tip_guard_stamp = time.time()
 
     def _objects_cb(self, msg):
         # obstacle_clusters.py publishes a JSON blob, not a sentence. Dumping the
@@ -695,6 +926,7 @@ class RosLink:
             pass
         with self.state.lock:
             self.state.objects_summary = text[:80]
+            self.state.objects_stamp = time.time()
 
     def _diag_cb(self, msg):
         try:
@@ -710,6 +942,7 @@ class RosLink:
                     fields[item.key] = item.value
                 with self.state.lock:
                     self.state.localization_status = worst.message.strip()[:80]
+                    self.state.localization_stamp = time.time()
                     # The localizer emits a sentinel (1e9) for fitness while ICP
                     # correction is suppressed -- e.g. STATIONARY_CORRECTION_
                     # SUPPRESSED, which is normal for a parked chair. Printing
@@ -766,14 +999,37 @@ class RosLink:
                       % ("정지됨" if paused else "정지 실패(%s) — 해제 전에 확인 필요"
                          % pause_detail[:60]))
 
-    def release_estop(self):
+    def release_estop(self, resume=False):
+        """mode_cmd=65, and optionally resume the follower in the same breath.
+
+        Arming used to be documented as "driving stays stopped until you start
+        it", and that was never reliably true. waypoint_follower.py holds on
+        MANUAL_MODE but stays ``enabled``, so whether mode 65 resumed the drive
+        depended on how the follower had been paused: stop.sh disables it, a
+        joystick failsafe does not. Same button, two different outcomes.
+
+        The operator asked for the resuming one, so it is now what the command
+        does -- explicitly, by calling the start service, rather than by relying
+        on a leftover ``enabled``. One button, one outcome, and the app says the
+        chair will move.
+        """
         ok, detail = self._publish_mode(AUTO_MODE)
-        if ok:
-            with self.state.lock:
-                self.state.estop_requested_at = None
-            detail = ("released (mode_cmd=65). A stop frame is sent first, so the "
-                      "chair does not lurch. Driving stays stopped until you start it.")
-        return ok, detail
+        if not ok:
+            return ok, detail
+        with self.state.lock:
+            self.state.estop_requested_at = None
+        if not resume:
+            return True, ("released (mode_cmd=65). A stop frame is sent first, so "
+                          "the chair does not lurch. Driving stays stopped.")
+        # uart.py sends a motor stop frame when it re-enters auto, so the resume
+        # has to land after that; a service call is not instant either, which is
+        # the gap that makes this ordering safe rather than a lurch.
+        started, follower_detail = self.set_follower(True)
+        if not started:
+            return True, ("자동 모드 전환 완료 (mode_cmd=65). 다만 주행 재개는 "
+                          "실패했습니다 — %s. [주행 시작]을 눌러주세요." % follower_detail)
+        return True, ("자동 모드 전환 + 주행 재개 (mode_cmd=65, 팔로워 시작). "
+                      "휠체어가 멈춘 지점의 웨이포인트부터 이어서 주행합니다.")
 
     def set_follower(self, running, ensure_auto=False):
         if not self.allow_commands:
@@ -863,6 +1119,11 @@ class Session:
                 frame.update(self.jobs.snapshot())
                 frame["jobs_available"] = self.jobs.available()
                 frame["scripts_enabled"] = self.jobs.enabled
+                # Which controller [로컬 켜기] would actually bring up. The app
+                # shows it on the button, because "start the stack" means a
+                # different robot depending on this one word.
+                frame["stack_profile"] = self.jobs.env_overlay.get(
+                    "PROFILE", os.environ.get("PROFILE", "pursuit"))
             if not self.send(frame):
                 return
             self.stop.wait(self.period)
@@ -917,15 +1178,21 @@ class Session:
                 ok, detail = self.ros.engage_estop()
             elif command in ("estop_release", "release", "rearm", "arm"):
                 ok, detail = self._release(payload)
+            elif command == "arm_and_drive":
+                ok, detail = self._release(payload, resume=True)
             elif command == "drive_start":
                 ok, detail = self._drive(payload, True)
             elif command == "drive_stop":
                 ok, detail = self._halt()
             elif command == "stack_start":
                 ok, detail = self._stack_start(payload)
+            elif command == "stack_stop":
+                ok, detail = self._stack_stop(payload)
             elif command == "job_cancel":
                 ok, detail = (self.jobs.cancel() if self.jobs is not None
                               else (False, "스크립트 실행이 설정되지 않았습니다"))
+            elif command == "route":
+                ok, detail = self._resend_route()
             elif command == "ping":
                 ok, detail = True, "pong"
             elif command in ("mode", "step"):
@@ -943,20 +1210,51 @@ class Session:
             reply["detail"] = "%s: %s" % (type(exc).__name__, exc)
             return reply
 
-    def _release(self, payload):
+    def _resend_route(self):
+        """Re-resolve and re-send the route frame.
+
+        The route goes out once per connection, ahead of any telemetry, so a
+        client that was not listening yet never sees it -- which is exactly what
+        happened: the device picker owns the shared Bluetooth callback until the
+        dashboard swaps itself in a moment later, and its onLineReceived is
+        empty. The map then stayed blank for the whole session while telemetry
+        streamed happily, because telemetry repeats and the route did not.
+
+        Re-resolving rather than replaying the cached copy also picks up the real
+        route once the stack is up: connect first, press [로컬 켜기], and the
+        follower's own param finally exists.
+        """
+        if self.route_finder is None:
+            return False, "경로가 설정되지 않았습니다 (--route \"\")"
+        route = self.route_finder()
+        if route is None:
+            return False, "경로 파일을 읽지 못했습니다"
+        self.route = route
+        if not self.send(route):
+            return False, "경로 전송 실패"
+        return True, "경로 %d개 지점 전송 (%s)" % (route.get("count_full", 0),
+                                              route.get("source", "?"))
+
+    def _release(self, payload, resume=False):
         """Two-step: the app must send confirm=true, and the chair must be stopped."""
         if not payload.get("confirm"):
             return False, ("confirmation required: resend with \"confirm\": true "
                            "after the rider has checked it is safe to proceed")
         with self.state.lock:
-            moving = self.state.odom_speed_mps
+            moving, _yaw, source = self.state.ground_speed()
             link_age = (None if self.state.wheel_status_stamp is None
                         else time.time() - self.state.wheel_status_stamp)
         if link_age is None or link_age > self.ttl_s:
             return False, "refusing: no fresh /wheel_status, cannot confirm the chair is stopped"
-        if moving is not None and moving > 0.05:
-            return False, "refusing: chair is still moving (%.2f m/s)" % moving
-        return self.ros.release_estop()
+        # Fail closed. "No speed reading" used to sail straight past this check,
+        # which is the same as asserting the chair is stopped on no evidence.
+        if moving is None:
+            return False, ("refusing: no fresh speed reading (/odom, /Odometry) — "
+                           "cannot confirm the chair is stopped")
+        if moving > 0.05:
+            return False, ("refusing: chair is still moving (%.2f m/s, %s odometry)"
+                           % (moving, source))
+        return self.ros.release_estop(resume=resume)
 
     def _halt(self):
         """Stop must never refuse, so fall back to the direct path when the script
@@ -977,16 +1275,44 @@ class Session:
                            "라이다·IMU·측위 노드가 기동됩니다 (수 분 소요)")
         return self.jobs.start("stack")
 
+    def _stack_stop(self, payload):
+        """Undo [로컬 켜기]. Confirmed, because it ends the drive and the sensors."""
+        if self.jobs is None or not self.jobs.enabled:
+            return False, "스크립트 실행이 꺼져 있습니다 (--allow-scripts off)"
+        if not payload.get("confirm"):
+            return False, ("확인 필요: \"confirm\": true 를 함께 보내세요 — "
+                           "주행을 멈추고 라이다·측위 노드를 모두 내립니다")
+        return self.jobs.start("stack_stop")
+
     def _drive(self, payload, running):
         """Mirror go.sh's refusals rather than starting into a broken precondition."""
+        now = time.time()
         with self.state.lock:
-            estopped = self.state.drive_mode == MANUAL_MODE
-            tracking = self.state.localization_status == "TRACKING"
-            objects = self.state.objects_summary
+            in_manual = self.state.drive_mode == MANUAL_MODE
+            app_estop = self.state.estop_requested_at is not None
+            # Freshness matters more here than anywhere. A localizer that died
+            # leaves its last word behind, and its last word is usually
+            # TRACKING -- refusing on the reading rather than on the topic
+            # being alive would wave the drive through onto a dead fix.
+            localization = self.state._fresh(self.state.localization_status,
+                                             self.state.localization_stamp, now)
+            tracking = localization == "TRACKING"
+            objects = self.state._fresh(self.state.objects_summary,
+                                        self.state.objects_stamp, now)
             link_age = (None if self.state.wheel_status_stamp is None
-                        else time.time() - self.state.wheel_status_stamp)
-        if estopped:
-            return False, "refusing: E-STOP is engaged. Release it first, then start driving."
+                        else now - self.state.wheel_status_stamp)
+        # Both refusals are "the base is in manual", but they are not the same
+        # situation and they do not have the same next step. Calling the resting
+        # state an E-STOP sent the operator looking for an emergency that never
+        # happened -- and the app greys out [E-STOP 해제] unless one is engaged,
+        # so the advice pointed at a disabled button. Say which one it is.
+        if in_manual and app_estop:
+            return False, ("거부: E-STOP이 걸려 있습니다. [E-STOP 해제]로 먼저 "
+                           "푼 다음 주행하세요.")
+        if in_manual:
+            return False, ("거부: 베이스가 수동 모드입니다 (기동 직후의 정상 상태이거나 "
+                           "조종간 페일세이프). [자동 모드 전환]으로 시동을 건 뒤 "
+                           "주행하세요.")
         if not payload.get("confirm"):
             return False, ("confirmation required: resend with \"confirm\": true -- "
                            "the chair will begin moving")
@@ -998,7 +1324,7 @@ class Session:
                            "reads exactly like clear road")
         if not tracking:
             return False, ("refusing: localization is '%s', not TRACKING"
-                           % (self.state.localization_status or "silent"))
+                           % (localization or "silent"))
         # Prefer the operator's own go.sh: it re-checks authoritatively and its
         # refusal text is the wording the team already knows. Reimplementing the
         # launch policy in Python would mean two copies that drift apart.
@@ -1015,14 +1341,30 @@ def start_debug_tcp(args, state, ros, jobs=None, route=None, route_finder=None):
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", args.debug_tcp))
     listener.listen(2)
+    # rospy installs a process-wide default socket timeout, which a socket created
+    # after init_node inherits -- so accept() would keep raising socket.timeout.
+    listener.settimeout(None)
     log("DEBUG probe on tcp://127.0.0.1:%d (loopback only)" % args.debug_tcp)
 
     def accept_loop():
         while True:
             try:
                 conn, _ = listener.accept()
-            except OSError:
-                return
+            except socket.timeout:
+                continue
+            except OSError as exc:
+                # A client that vanishes between SYN and accept() raises
+                # ECONNABORTED, which is not the listener dying -- but treating
+                # every OSError as fatal returned from this thread, dropped the
+                # last reference to `listener`, and took the probe port down for
+                # the rest of the bridge's life with nothing in the log. Only
+                # give up once the socket really is closed.
+                if listener.fileno() < 0:
+                    return
+                log("debug probe accept failed (%s: %s) -- still listening"
+                    % (type(exc).__name__, exc))
+                time.sleep(0.1)
+                continue
             threading.Thread(
                 target=lambda c=conn: (Session(c, state, ros, args.ttl, args.rate, jobs=jobs, route=route, route_finder=route_finder).serve(),
                                        c.close()),
@@ -1280,6 +1622,11 @@ def main(argv=None):
                                           "20260814_route_algorithm_waypoints.json",
                         help="waypoint JSON sent to the app once per connection "
                              "for the map view; empty string disables it")
+    parser.add_argument("--job-env", action="append", default=[], metavar="KEY=VALUE",
+                        help="environment for the launched scripts, repeatable. "
+                             "The field DWA runs need "
+                             "--job-env PROFILE=dwa --job-env SAFETY_POLICIES=true; "
+                             "without it the bring-up script defaults to pursuit.")
     parser.add_argument("--script-dir", default="~",
                         help="directory holding the operator scripts (default ~)")
     parser.add_argument("--node-name", default="wheelchair_bt_bridge")
@@ -1296,10 +1643,19 @@ def main(argv=None):
     state = BridgeState()
     ros = RosLink(state, args.allow_commands, args.node_name)
     # Scripts spawn processes on the robot, so they need BOTH gates.
-    jobs = JobRunner(args.script_dir, bool(args.allow_scripts and args.allow_commands))
+    job_env = {}
+    for item in args.job_env:
+        key, _, value = item.partition("=")
+        if not key or not _:
+            log("ignoring malformed --job-env %r (expected KEY=VALUE)" % item)
+            continue
+        job_env[key] = value
+    jobs = JobRunner(args.script_dir, bool(args.allow_scripts and args.allow_commands),
+                     job_env)
     # Deliberately NOT resolved here -- see Session.broadcast.
     route = None
-    route_finder = lambda: load_route(resolve_route_path(args.route))
+    route_finder = lambda: load_route(
+        resolve_route_path(args.route, args.script_dir))
     if args.allow_scripts and not args.allow_commands:
         log("--allow-scripts ignored: it also requires --allow-commands.")
     if not args.self_test:

@@ -192,6 +192,52 @@ def test_an_untrackable_return_that_has_not_moved_for_3s_is_gone_around():
     assert decide(threat(1.0, ct.UNKNOWN), blocked_for_s=4.0) == cg.GO_ROUND
 
 
+def person(distance, motion):
+    return cg.Threat(distance, motion, cg.PERSON_LABEL)
+
+
+def test_a_person_standing_still_is_waited_for_not_driven_around():
+    """The rule the docstring always claimed and the code only half kept.
+
+    CONFIRM_S is 1.5 s, so someone who stops to check a phone is STATIC,
+    and STATIC is parked - which sent the chair around a stationary
+    pedestrian from 8 m out without the blocked clock ever starting.
+    """
+    assert decide(person(4.0, ct.STATIC), blocking=False) == cg.CLEAR
+    assert decide(person(4.0, ct.STATIC)) == cg.WAIT
+
+
+def test_a_person_is_not_gone_around_by_the_time_rule_either():
+    """The slower road to the same place. Standing in the way for three
+    seconds is evidence of parkedness for a thing; for a person it is
+    evidence of nothing but that they are standing there."""
+    assert decide(person(1.0, ct.STATIC), blocked_for_s=30.0) == cg.WAIT
+    assert decide(person(1.0, ct.UNKNOWN), blocked_for_s=30.0) == cg.WAIT
+
+
+def test_a_person_who_leaves_the_corridor_clears_it():
+    """Nothing resumes the chair explicitly, here least of all."""
+    assert decide(person(2.0, ct.STATIC), blocking=False) == cg.CLEAR
+
+
+def test_the_same_geometry_without_the_label_is_still_gone_around():
+    """The exclusion is the label, not a general loss of nerve: a parked
+    motorcycle at the same range is still a thing to drift past."""
+    assert decide(threat(4.0, ct.STATIC), blocking=False) == cg.GO_ROUND
+
+
+@pytest.mark.parametrize("label", ["Person", " person ", "PERSON"])
+def test_the_label_is_matched_the_way_producers_actually_write_it(label):
+    assert cg.Threat(2.0, ct.STATIC, label).is_person
+
+
+@pytest.mark.parametrize("label", ["", "obstacle", "vehicle", "personnel"])
+def test_nothing_else_is_quietly_treated_as_a_person(label):
+    """This exclusion only ever adds caution. A label it does not
+    recognise must not become one it is unwilling to pass."""
+    assert not cg.Threat(2.0, ct.STATIC, label).is_person
+
+
 def test_a_clear_corridor_is_clear():
     assert decide(None, blocking=False) == cg.CLEAR
 

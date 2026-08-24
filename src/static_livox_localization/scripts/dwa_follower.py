@@ -68,6 +68,7 @@ on one run of the route to be worth its risk. That run is what this profile
 needs before anything else.
 """
 
+import json
 import math
 import os
 import sys
@@ -109,7 +110,21 @@ YAW_SLEW_RPS2 = 1.5
 # what it now is, so it takes the value the docstring prescribes for that.
 # Re-measure at 1.0 m/s (command angular.z against yaw rate differentiated
 # from /fast_lio_icp/pose) before putting a non-zero number back.
-LATENCY_S = 0.0
+# Back on, and for the first time it will do something. led_state leads the
+# pose by speed x lag, and until 2026-08-23 the speed in the state was always
+# zero - /Odometry carries no twist and nothing decoded the wheel report - so
+# every value of this constant was identical to nought. The 08-15 note that
+# set it to 0.0 blamed a weave on a lead that was never applied.
+#
+# The measurement stands and has now been corroborated twice: 2026-08-11
+# cross-correlated commanded angular.z against the yaw rate differentiated
+# from /fast_lio_icp/pose and found the peak at 0.55 s with gain 1.03 and
+# R^2 0.90, and the steady-state gain measured off /wheel_status on 08-23,
+# over 15 samples above 0.7 m/s where the command was held 0.8 s or longer,
+# comes out at 1.03 as well. The base turns as asked; it just takes 0.55 s
+# to get there, and at 0.8 m/s that is 0.44 m of travel the planner was
+# correcting for a place the chair had already left.
+LATENCY_S = 0.55
 
 # How wide a slice of each object the planner is shown, either side of the
 # centreline. Wider than the follower's CORRIDOR_HALF_WIDTH 0.45, which is
@@ -120,30 +135,45 @@ LATENCY_S = 0.0
 # points) batch inside a 0.1 s period.
 OBSTACLE_HALF_WIDTH_M = 1.0
 
+# The gate refusing something this follower cannot see.
+#
+# There are two obstacle sources on this chair and they do not see the same
+# world. safety_gate works on raw returns inside a height band and has no
+# idea what anything is; the follower and the planner work on classified
+# clusters and cannot see what the producer did not cluster. When something
+# lands only in the first - a bush leaning into the corridor, a thin post,
+# clutter the producer files as outside_band - the follower reports a clear
+# corridor and keeps commanding 0.80 m/s while the gate zeroes every frame
+# of it. Nothing resolves: the follower never registers a threat, so
+# blocked_since never starts, and the chair stands there reading DWA v=0.80
+# until somebody walks over to it. That shape was on the wire at wp 1218 on
+# 2026-08-23.
+#
+# What this does NOT do is route around it. The gate can say a distance and
+# a side and nothing else, and a source that cannot say what it saw must
+# not be allowed to say what to do about it - the raw-scan guard removed on
+# 2026-08-05 taught that at the cost of three stopped runs and a chair
+# steered at a wall. So the deadlock becomes a named, recorded hold with
+# the gate's own numbers on it, and a person decides.
+GATE_STALL_S = 1.5
+# Only the obstacle-shaped vetoes. CLOUD_STALE, INPUT_STALE and the rest
+# are their own faults with their own handling, and folding them in here
+# would relabel a dead sensor as an object in the road.
+GATE_OBSTACLE_REASONS = ("OBSTACLE", "OBSTACLE_SWEEP")
 
-def diagnostics_suffix(diagnostics):
-    """Stable, bag-friendly candidate counts for a planner refusal."""
-    if not diagnostics:
-        return ""
-    clearance = diagnostics.get("max_clearance_m")
-    if clearance is None:
-        clearance_text = "none"
-    elif np.isinf(clearance):
-        clearance_text = "inf"
-    else:
-        clearance_text = "%.3f" % float(clearance)
-    return (
-        " total=%d band=%d mask=%d geometry=%d obstacle=%d all=%d "
-        "max_clearance_m=%s" % (
-            diagnostics.get("total", 0),
-            diagnostics.get("band_ok", 0),
-            diagnostics.get("mask_ok", 0),
-            diagnostics.get("geometry_ok", 0),
-            diagnostics.get("obstacle_ok", 0),
-            diagnostics.get("all_ok", 0),
-            clearance_text,
-        )
-    )
+
+def gate_stall(reason, blocked_for_s, stall_s=GATE_STALL_S):
+    """True when the gate has been refusing an obstacle we cannot see.
+
+    Pure, and deliberately ignorant of what the follower thinks: the caller
+    reaches it only after its own WAIT has declined to fire, so by then the
+    absence of a threat of our own is established rather than re-tested.
+    """
+    if reason not in GATE_OBSTACLE_REASONS:
+        return False
+    if blocked_for_s is None:
+        return False
+    return float(blocked_for_s) >= float(stall_s)
 
 
 def approach_cap(base_cap, distance_m, stop_m, floor_mps):
@@ -194,10 +224,37 @@ class DwaFollower(WaypointFollower):
         self.dwa_status = ""
         # Carried across cycles so the ramp has a slope to be limited against.
         self.command_accel = 0.0
+        self.gate_reason = ""
+        self.gate_blocked_since = None
+        self.gate_detail = ""
+        rospy.Subscriber("/safety_gate/status", String,
+                         self.on_gate_status, queue_size=1)
         rospy.loginfo(
             "DWA profile: sim %.2f m, %d speeds x %d yaw rates, band and "
             "drivable mask as hard rejects", self.planner.distance_m,
             len(dwa_core.speed_samples()), len(dwa_core.yaw_samples()))
+
+    def on_gate_status(self, message):
+        """Track how long the gate has been refusing, and why."""
+        try:
+            report = json.loads(message.data)
+        except (ValueError, TypeError):
+            return
+        reason = str(report.get("reason") or "")
+        if reason != self.gate_reason:
+            self.gate_reason = reason
+            self.gate_blocked_since = rospy.Time.now() if reason else None
+        nearest = report.get("zone_nearest_m")
+        envelope = report.get("envelope_m")
+        self.gate_detail = "%s at %s m, envelope %s m" % (
+            reason or "clear",
+            "?" if nearest is None else nearest,
+            "?" if envelope is None else envelope)
+
+    def gate_blocked_for(self, now):
+        if self.gate_blocked_since is None:
+            return None
+        return (now - self.gate_blocked_since).to_sec()
 
     def send_stop(self):
         # The jerk limit shapes driving, never braking. Dropping the carried
@@ -309,6 +366,21 @@ class DwaFollower(WaypointFollower):
             self.last_command_stamp = None
             return
 
+        # Past our own WAIT, so whatever the gate is holding, it is not
+        # something the cluster producer gave us. Say so and stop asking.
+        if gate_stall(self.gate_reason, self.gate_blocked_for(now)):
+            if self.dwa_status != "GATE_STALL":
+                rospy.logwarn(
+                    "gate is refusing an obstacle the follower cannot see: "
+                    "%s - the cluster producer reports a clear corridor",
+                    self.gate_detail)
+            self.publish_state("HOLD:GATE_STALL " + self.gate_detail,
+                               "HOLD:GATE_STALL")
+            self.dwa_status = "GATE_STALL"
+            self.send_stop()
+            self.last_command_stamp = None
+            return
+
         # Approach at the pursuit profile's pace, whatever the decision. A
         # planner that only knows stop-or-cruise arrives at what it is about
         # to wait for at full speed and stops there.
@@ -346,10 +418,7 @@ class DwaFollower(WaypointFollower):
                     rospy.logwarn("DWA %s at wp %d/%d", status,
                                   self.nearest_index, len(self.waypoints))
             self.dwa_status = status
-            hold = "HOLD:DWA_" + status
-            detail = diagnostics_suffix(getattr(
-                self.planner, "last_diagnostics", {}))
-            self.publish_state(hold + detail, hold)
+            self.publish_state("HOLD:DWA_" + status, "HOLD:DWA_" + status)
             self.send_stop()
             self.last_command_stamp = None
             return

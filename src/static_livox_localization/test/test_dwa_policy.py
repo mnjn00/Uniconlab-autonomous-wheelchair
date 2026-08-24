@@ -19,6 +19,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
@@ -138,14 +139,12 @@ class RecordingPlanner(object):
 
     def __init__(self):
         self.calls = []
-        self.result = (0.3, 0.0, "OK")
-        self.last_diagnostics = {}
 
     def plan(self, state, obstacles=(), speed_cap=None,
              last_yaw_rate=0.0, last_speed=None):
         self.calls.append({"obstacles": list(obstacles),
                            "speed_cap": speed_cap})
-        return self.result
+        return 0.3, 0.0, "OK"
 
 
 def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
@@ -183,6 +182,13 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.last_command_stamp = None
     follower.dwa_status = ""
     follower.command_accel = 0.0
+    # What safety_gate last said. Nothing by default: a fixture that
+    # silently claimed the gate was blocking would put every test in this
+    # file down the stall branch.
+    follower.gate_reason = ""
+    follower.gate_blocked_since = None
+    follower.gate_detail = ""
+    follower.gate_blocked_for = lambda now: None
     # The base's own report is the only velocity on the bus; the double
     # stands in for it because /Odometry carries no twist.
     follower.measured_speed = 0.0
@@ -294,29 +300,6 @@ def test_a_silent_producer_holds_this_profile_too(monkeypatch):
     assert published == ["HOLD:DWA_WAIT"]
 
 
-def test_planner_refusal_publishes_stage_counts_in_stable_order(monkeypatch):
-    _module, follower, published, commanded = dwa_with(
-        [parked(3.0)], monkeypatch)
-    follower.planner.result = (0.0, 0.0, "OBSTACLE")
-    follower.planner.last_diagnostics = {
-        "total": 105,
-        "band_ok": 75,
-        "mask_ok": 90,
-        "geometry_ok": 75,
-        "obstacle_ok": 80,
-        "all_ok": 0,
-        "max_clearance_m": 0.39,
-    }
-
-    follower.step()
-
-    assert published == [
-        "HOLD:DWA_OBSTACLE total=105 band=75 mask=90 geometry=75 "
-        "obstacle=80 all=0 max_clearance_m=0.390"
-    ]
-    assert commanded == ["STOP"]
-
-
 def test_both_replacement_profiles_ask_the_shared_policy(monkeypatch):
     """The property this file exists for. A profile that replaces step()
     has to reach the same decision through the same function - a second
@@ -327,3 +310,113 @@ def test_both_replacement_profiles_ask_the_shared_policy(monkeypatch):
         assert "== WAIT" in text, name
         assert "avoidance_decision(" not in text, \
             "%s must not re-implement the decision" % name
+
+
+# ------------------------------------------- the gate refusing what we cannot see
+
+def blocking_gate(follower, reason="OBSTACLE", held_s=2.0,
+                  detail="OBSTACLE at 1.6 m, envelope 2.6 m"):
+    follower.gate_reason = reason
+    follower.gate_detail = detail
+    follower.gate_blocked_for = lambda now: held_s
+
+
+def test_a_gate_stall_is_named_rather_than_left_running(monkeypatch):
+    """Two obstacle sources, one world each.
+
+    safety_gate works on raw returns and cannot name anything; the follower
+    works on classified clusters and cannot see what was never clustered.
+    Something in only the first - a bush leaning in, a thin post, clutter
+    filed as outside_band - left the follower reporting a clear corridor and
+    commanding 0.80 m/s into a gate that zeroed every frame. blocked_since
+    never started, because the follower had no threat to start it with, so
+    the chair stood at wp 1218 reading DWA v=0.80 until someone walked over.
+    """
+    _module, follower, published, commanded = dwa_with([], monkeypatch)
+    blocking_gate(follower)
+
+    follower.step()
+
+    assert published and published[0].startswith("HOLD:GATE_STALL")
+    assert commanded == ["STOP"]
+
+
+def test_the_stall_report_carries_the_gate_own_numbers(monkeypatch):
+    """A hold that does not say what stopped it is the state this replaces."""
+    _module, follower, published, _commanded = dwa_with([], monkeypatch)
+    blocking_gate(follower, detail="OBSTACLE at 1.42 m, envelope 2.55 m")
+
+    follower.step()
+
+    assert "1.42" in published[0] and "2.55" in published[0]
+
+
+def test_a_stall_stops_asking_the_planner_for_arcs(monkeypatch):
+    """It used to keep solving and keep commanding, which is what made the
+    deadlock invisible: the status line read like a chair that was driving."""
+    _module, follower, _published, _commanded = dwa_with([], monkeypatch)
+    blocking_gate(follower)
+
+    follower.step()
+
+    assert follower.planner.calls == []
+
+
+def test_a_gate_that_has_only_just_blocked_is_not_a_stall(monkeypatch):
+    """Ordinary vetoes come and go while the chair drives past things. Only
+    a refusal that persists is evidence of a source disagreement."""
+    _module, follower, published, _commanded = dwa_with([], monkeypatch)
+    blocking_gate(follower, held_s=0.4)
+
+    follower.step()
+
+    assert not any(p.startswith("HOLD:GATE_STALL") for p in published)
+
+
+def test_our_own_wait_still_wins_over_the_stall(monkeypatch):
+    """When the cluster producer can see it, the threat rules belong to the
+    threat rules. The stall branch is only for what they cannot see."""
+    _module, follower, published, _commanded = dwa_with(
+        [walking(1.0)], monkeypatch)
+    blocking_gate(follower)
+
+    follower.step()
+
+    assert published == ["HOLD:DWA_WAIT"]
+
+
+def test_the_stall_never_authorises_going_round(monkeypatch):
+    """The 2026-08-05 lesson, kept as a test.
+
+    A raw source has no identity, and the guard that let one authorise a
+    bypass sent the chair at a wall. The gate can offer a distance and a
+    side and nothing else, so what comes out of this branch is a stop and a
+    message for a person - never a manoeuvre.
+    """
+    module, follower, published, commanded = dwa_with([], monkeypatch)
+    blocking_gate(follower)
+    went_round = []
+    follower.take_a_way_round = lambda clear_for_m: went_round.append(clear_for_m)
+
+    follower.step()
+
+    assert went_round == []
+    assert commanded == ["STOP"]
+    assert all(p.startswith("HOLD:GATE_STALL") for p in published)
+
+
+@pytest.mark.parametrize("reason", ["CLOUD_STALE", "INPUT_STALE",
+                                    "INPUT_INVALID", "REVERSE", ""])
+def test_only_obstacle_shaped_vetoes_read_as_something_in_the_road(reason):
+    """Folding a dead sensor in here would relabel it as an object ahead,
+    and those faults have their own handling."""
+    module, _Stamp = load_follower("dwa_follower")
+    assert not module.gate_stall(reason, 10.0)
+
+
+@pytest.mark.parametrize("reason", ["OBSTACLE", "OBSTACLE_SWEEP"])
+def test_both_obstacle_vetoes_count(reason):
+    module, _Stamp = load_follower("dwa_follower")
+    assert module.gate_stall(reason, 2.0)
+    assert not module.gate_stall(reason, 0.1)
+    assert not module.gate_stall(reason, None)

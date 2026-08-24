@@ -177,7 +177,7 @@ esac
 # is worse than no compensation at all. The runbook carries the procedure.
 # Rejected rather than rounded if it is not a plain non-negative number: a
 # typo here becomes a steering phase shift nobody typed.
-LATENCY_S="${LATENCY_S:-0}"
+LATENCY_S="${LATENCY_S:-0.55}"
 case "$LATENCY_S" in
   *[!0-9.]*|*.*.*|'') LATENCY_BAD=1 ;;   # stray characters, or two dots
   *[0-9]*)            LATENCY_BAD=  ;;   # ...and it has to contain a digit
@@ -278,7 +278,7 @@ echo "[1/5] cleaning old processes"
 # alive means /fast_lio_icp/pose has two publishers and the follower believes
 # whichever arrives last.
 if [ "$SHADOW_QA" != "1" ]; then
-for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[s]top_watchdog' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters' '[r]oute_identity_publisher' '[m]oving_icp_localizer' '[b]ounded_cloud_preview' '[m]ap_preview_publisher' '[l]ivox_ros_driver2' '[v]ectornav' '[w]heel_cmd' '[l]ocalization_state_marker' '[r]eference_marker' '[r]viz'; do
+for pattern in '[r]oslaunch' '[r]osbag record' '[f]astlio_mapping' '[a]uto_initial_pose' '[s]afety_gate' '[t]ip_guard' '[w]aypoint_follower' '[m]pc_follower' '[d]wa_follower' '[o]bstacle_clusters' '[r]oute_identity_publisher' '[m]oving_icp_localizer' '[b]ounded_cloud_preview' '[m]ap_preview_publisher' '[l]ivox_ros_driver2' '[v]ectornav' '[w]heel_cmd' '[l]ocalization_state_marker' '[r]eference_marker' '[r]viz'; do
   pkill -f "$pattern" 2>/dev/null || true
 done
 # Confirm they are gone rather than assuming a fixed sleep did it. Same
@@ -293,7 +293,7 @@ if [ -n "$survivors" ]; then
   # a stale pose is worse than a bringup that takes two seconds longer.
   echo "  sweep: forcing $(echo "$survivors" | wc -l) survivor(s)" >&2
   echo "$survivors" >&2
-  pkill -9 -f '[m]oving_icp_localizer|[s]afety_gate|[s]top_watchdog|[o]bstacle_clusters|[w]aypoint_follower|[d]wa_follower|[m]pc_follower' 2>/dev/null || true
+  pkill -9 -f '[m]oving_icp_localizer|[s]afety_gate|[o]bstacle_clusters|[w]aypoint_follower|[d]wa_follower|[m]pc_follower' 2>/dev/null || true
   sleep 1
 fi
 sleep 2
@@ -584,7 +584,7 @@ setsid nohup rosbag record --lz4 \
   /cmd_vel_raw /cmd_vel_gated /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
   /perception/objects_summary /perception/dynamic_boxes /perception/objects \
-  /waypoint_follower/route_identity /uart_tx_diag /stop_watchdog/alarm \
+  /waypoint_follower/route_identity /uart_tx_diag /stop_watchdog/alarm /safety_gate/status \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

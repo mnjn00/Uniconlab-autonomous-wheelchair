@@ -221,6 +221,185 @@ def stopping_envelope(
         reaction + max(linear_stop, angular_stop))
 
 
+# The ground reference, and why heights are not measured from the chair.
+#
+# relative_height used to be points[:, 2] + sensor_height_m, which is a flat
+# plane rigidly attached to the chair. The chair pitches. Wherever its
+# attitude differs from the slope of the ground in front of it, that plane
+# cuts through the road, and the road becomes an obstacle at the range where
+# the wedge between them opens past min_height_m.
+#
+# Measured on 2026-08-23 (blackbox_20260823_200204, t+2253): cresting the
+# hill at 0.8 m/s the chair was still nose-up while the ground ahead had
+# levelled, and an object appeared at 3.30 m, 0.33 m tall - 5.7 degrees of
+# nose-up over that range, exactly. It then wandered from y -0.70 to +0.41
+# to -1.13 in four seconds with its height flickering between 0.22 and 0.49,
+# and vanished when the pitch settled. Nothing physical moves like that. It
+# was the road. The gate stopped the chair twice for 1.3 s each.
+#
+# So the band is taken against the ground the sensor can actually see, in
+# range bins, at a low percentile of each bin. Bins are walked outward from
+# the chair, which is standing on the ground and therefore anchors the
+# nearest one, and each is allowed to differ from the last by no more than a
+# drivable gradient. That clamp is what stops a wall or a parked car from
+# lifting the reference up to its own roofline and erasing itself: a bin
+# full of obstacle can only ever raise the reference by one bin's worth of
+# slope, and everything above that is still an obstacle.
+#
+# Known limit, stated rather than hidden: a step that fills a whole bin and
+# rises less than one bin's slope allowance above the last reads as terrain.
+# A 0.20 m kerb square across the path is near that line. The flat-plane
+# test it replaces caught such a step only when the chair happened to be
+# pitched the right way, and false-stopped on every crest for it.
+GROUND_BIN_M = 0.5
+GROUND_MIN_POINTS = 12
+GROUND_PERCENTILE = 10.0
+# tan(18 degrees), and it has to cover the SLOPE THE SENSOR SEES, not the
+# slope of the road: the reference is built in the chair's own frame, so
+# the chair's attitude adds to the terrain. Route v9 climbs about 6 degrees
+# and the crest transient was 5.7, so 12 is the working number and 18 is the
+# margin over it. Any tighter and the clamp lags the road it is meant to
+# follow, which puts the false obstacle straight back.
+GROUND_SLOPE_LIMIT = 0.325
+GROUND_MAX_RANGE_M = 12.0
+# Only points within this of the centreline shape the reference. Beyond it
+# lie kerbs, planters and the bank the route runs along, none of which are
+# the surface the chair is about to drive over.
+GROUND_CORRIDOR_HALF_WIDTH_M = 2.0
+# A bin has found the ground when a slab this thin above its low percentile
+# holds this many returns. Ground is a dense sheet; the lowest points off a
+# bank, a trunk or a parked car are the bottom of something vertical and
+# are spread out, not stacked in 0.15 m. Without this test a bin that can
+# see no road at all still produced a candidate, and the clamp below turned
+# a sequence of them into a staircase - the 2026-08-23 runaway, +0.1625 per
+# bin all the way to +0.90 m, which is the clamp and not the road.
+GROUND_SHEET_SLAB_M = 0.15
+GROUND_SHEET_POINTS = 6
+# An absolute cap was tried here and removed. It cannot tell a staircase
+# from a real climb: 0.35 m is 5.7 degrees of attitude at 3.5 m and also an
+# 8 degree road at 2.5 m, and capping the second to stop the first turns
+# every genuine slope back into an obstacle.
+
+# STILL OFF, and now for a reason that is about the premise rather than
+# the tuning.
+#
+# The second attempt closed both field failures by construction - the
+# ceiling no longer moves with the reference, so nothing overhead can be
+# admitted however wrong it is, and a bin must look like a ground sheet
+# before the reference will follow it. Then the sheet test was measured
+# against 40 real clouds from aejimum_to_gongsen.bag, outdoors, this
+# sensor on this chair:
+#
+#     per-frame peak reference   median   90th    max
+#     with the sheet test         0.63    0.74    0.79
+#     without it                  0.65    0.91    0.95
+#
+# It filters almost nothing, and the per-bin values are +0.163, +0.325,
+# +0.488 - the clamp, one step at a time, in bins that pass the density
+# test. The MID360 on the armrest does not return enough near-field road
+# for a low percentile to be the ground, so "lowest returns in a range bin"
+# is not a ground estimator on this vehicle. That is a wrong premise, not a
+# wrong constant, and no amount of retuning reaches it.
+#
+# What would: /cloud_registered_body and the pose pitch recorded through
+# the crest, which nothing captures today - the black box carries neither.
+# With those, the transient part of the attitude is measurable directly
+# (current pitch against the pitch the chair has been holding), and that is
+# the quantity the crest false-stop is actually made of.
+#
+# The ceiling change and the sheet test are kept because they are right
+# whatever replaces the estimator. The record of the first attempt follows:
+#
+# What follows is the record of why it went off; the constants above are
+# the answer to it. The ceiling no longer moves, so no reference however
+# wrong can admit something overhead. The reference cannot rise without a
+# bin that looks like a ground sheet, so it no longer climbs the clamp on
+# nothing. And it is capped at GROUND_MAX_OFFSET_M, so what a wrong
+# reference can hide is bounded at 0.50 m rather than open-ended.
+#
+# The original note, kept because the numbers in it are the test data:
+#
+# Measured in the field on 2026-08-23, an hour after it went in: on a
+# -2.2 degree descent at station ~1218 the reference climbed +0.1625 per
+# bin - exactly the slope clamp, not the road - and reached +0.90 m by 4 m
+# of range. It saturates whenever a bin holds no real ground returns, and
+# at this pose the near field has almost none: the 5th percentile of the
+# 0.5-1.0 m bin was already +0.33 m above the chair plane.
+#
+# Two things then go wrong, and the second is the serious one.
+#
+# The band is measured from the reference at BOTH ends, so lifting it by
+# 0.7 m lifts the ceiling with it. Overhead clutter the flat plane
+# correctly ignored comes into range: 13 points at a true 2.10-2.33 m -
+# branches, well above the rider - were called obstacles in the forward
+# corridor where the flat plane found none, and the gate stopped the chair
+# on them. That is the branch problem this stack already solved once.
+#
+# Worse, a reference that high SUPPRESSES real low obstacles at range. A
+# 0.5 m object at 4 m sits under reference + 0.15 and reads as road. An
+# over-eager stop is a nuisance; a missed obstacle is not, and that is why
+# this is off rather than merely retuned.
+#
+# The crest false-stop it was written for is real and still unfixed - see
+# test_ground_reference.py, which keeps the mechanism and its numbers. What
+# is missing is a reference that knows when it has actually found the
+# ground rather than walking upward at the clamp when it has not.
+
+
+def ground_reference(points: np.ndarray,
+                     sensor_height_m: float,
+                     bin_m: float = GROUND_BIN_M,
+                     min_points: int = GROUND_MIN_POINTS,
+                     percentile: float = GROUND_PERCENTILE,
+                     slope_limit: float = GROUND_SLOPE_LIMIT,
+                     max_range_m: float = GROUND_MAX_RANGE_M,
+                     corridor_half_width_m: float =
+                     GROUND_CORRIDOR_HALF_WIDTH_M) -> np.ndarray:
+    """Height of the ground under each point, relative to the chair plane.
+
+    Returns one value per point. A point's own height above the ground is
+    its relative height minus this.
+
+    Binned by forward distance rather than by radial range. The road rises
+    along the direction of travel, so a radial bin mixes ground 5 m ahead
+    with ground 4 m ahead and 3 m to the side, and its low percentile lands
+    on the near-side floor - 0.14 m under the surface straight ahead on an
+    8 degree climb, which is most of a 0.15 m threshold spent before any
+    obstacle exists.
+    """
+    if len(points) == 0:
+        return np.zeros(0, dtype=float)
+    heights = points[:, 2] + float(sensor_height_m)
+    forward = np.maximum(points[:, 0], 0.0)
+    bins = np.minimum(
+        (forward / float(bin_m)).astype(int),
+        max(int(float(max_range_m) / float(bin_m)), 1))
+    near = np.abs(points[:, 1]) <= float(corridor_half_width_m)
+    count = int(bins.max()) + 1
+    # The chair stands on the ground, so the bin it stands in is level with
+    # it by definition. Everything else is reached outward from there.
+    reference = np.zeros(count, dtype=float)
+    allowance = float(slope_limit) * float(bin_m)
+    previous = 0.0
+    for index in range(count):
+        selected = heights[(bins == index) & near]
+        candidate = previous
+        if len(selected) >= int(min_points):
+            low = float(np.percentile(selected, float(percentile)))
+            # Only believe it if it looks like a sheet. A bin that can see
+            # no road has a low percentile too, and taking it is how the
+            # reference walks upward on nothing.
+            sheet = np.count_nonzero(
+                (selected >= low) & (selected <= low + GROUND_SHEET_SLAB_M))
+            if sheet >= GROUND_SHEET_POINTS:
+                candidate = low
+        previous = float(np.clip(candidate,
+                                 previous - allowance,
+                                 previous + allowance))
+        reference[index] = previous
+    return reference[bins]
+
+
 def filter_obstacle_points(
         cloud: np.ndarray,
         sensor_height_m: float,
@@ -229,12 +408,24 @@ def filter_obstacle_points(
         self_x_min_m: float,
         self_x_max_m: float,
         self_half_width_m: float,
-        self_y_centre_m: float = 0.0) -> np.ndarray:
+        self_y_centre_m: float = 0.0,
+        ground_referenced: bool = False) -> np.ndarray:
     points = np.asarray(cloud)
     if points.ndim != 2 or points.shape[1] < 3:
         raise MotionSafetyInputError("cloud must have shape (N, 3+)")
     finite = np.all(np.isfinite(points[:, :3]), axis=1)
     relative_height = points[:, 2] + sensor_height_m
+    floor = float(min_height_m)
+    if ground_referenced and len(points):
+        # The FLOOR moves with the ground; the ceiling never does.
+        #
+        # Measuring both ends from the reference is what put branches at a
+        # true 2.10-2.33 m inside the band on 2026-08-23 and stopped the
+        # chair on them: lifting the reference 0.84 m lifted the ceiling to
+        # 2.34. The ceiling answers a different question - how high the
+        # rider is - and the answer does not change because the road tilted.
+        floor = float(min_height_m) + ground_reference(
+            points[:, :3], sensor_height_m)
     # Centred on the rider, not on the sensor. The sensor is mounted on the
     # left armrest, so the body it is trying to exclude sits 0.173 m to its
     # right; a box centred on the sensor left that much of the rider's right
@@ -245,7 +436,7 @@ def filter_obstacle_points(
                    (np.abs(points[:, 1] - self_y_centre_m)
                     <= self_half_width_m))
     keep = (finite & ~self_return &
-            (relative_height >= min_height_m) &
+            (relative_height >= floor) &
             (relative_height <= max_height_m))
     return points[keep, :2]
 

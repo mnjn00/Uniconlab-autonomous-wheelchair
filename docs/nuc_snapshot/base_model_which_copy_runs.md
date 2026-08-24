@@ -21,20 +21,6 @@
     <node pkg="base_model" type="odom_pub.py"      name="odom_pub"  output="screen"/>
     <node pkg="base_model" type="wheel_cmd_tmp.py" name="wheel_cmd" output="screen"/>
 
-## wheel_cmd 기준 소스와 배포 상태
-
-저장소에서 검토하고 테스트하는 기준 소스는
-`tools/base_model_wheel_cmd_guard.py` 입니다. 이 파일을 커밋하는 것만으로 NUC의
-실행본이 바뀌지는 않습니다. 현장 반영 때는 별도 배포 절차로 아래 파일에 복사하고
-노드를 재시작한 뒤 두 파일의 SHA-256이 같은지 확인해야 합니다.
-
-    repo: tools/base_model_wheel_cmd_guard.py
-    NUC:  ~/catkin_ws/src/base_model/src/wheel_cmd_tmp.py
-
-2026-08-24의 정지 램프·정지 감시·DWA 진단 작업은 사용자의 요청에 따라 로컬에서만
-수행했습니다. NUC 파일 복사, ROS 노드 재시작, GitHub push는 하지 않았습니다.
-따라서 이 로컬 커밋을 NUC에서 이미 실행 중인 것으로 해석하면 안 됩니다.
-
 ## 시리얼 프레임
 
     wheel_cmd     [ll, lv, rr, rv, brk]

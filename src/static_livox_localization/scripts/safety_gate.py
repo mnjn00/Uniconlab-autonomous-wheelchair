@@ -18,6 +18,7 @@ judgements about the world: the stopping envelope, the swept footprint,
 and scan staleness, which only matters because those two read the scan.
 Suppressed blocks are still computed and logged. See drive_policy.py.
 """
+import json
 import math
 import os
 import sys
@@ -27,6 +28,7 @@ import rospy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Odometry
+from std_msgs.msg import String
 
 import sensor_msgs.point_cloud2 as pc2
 # catkin_install_python leaves a relay in devel/lib that exec()s this file,
@@ -42,8 +44,10 @@ from cloud_points import (COLLISION_MAX_HEIGHT_M,
                           COLLISION_MIN_HEIGHT_M)
 from drive_policy import announce
 from motion_safety import (MotionEstimate, PoseMotionEstimator,
-                           filter_obstacle_points, motion_hold_reason,
-                           stopping_envelope, swept_footprint_collision)
+                           filter_obstacle_points,
+                           ground_reference, motion_hold_reason,
+                           stopping_envelope,
+                           swept_footprint_collision)
 from scan_accumulator import CloudAccumulator
 
 
@@ -130,6 +134,28 @@ SWEEP_MIN_SPEED_MPS = 0.35
 SWEEP_CAP_RELEASE_MPS2 = 0.5
 
 
+def status_report(evidence, reason, cap, out_v, out_w, policies):
+    """What the gate decided, and the numbers it decided on.
+
+    Pure so it can be tested: a diagnostic that quietly stops carrying the
+    quantity that settles the argument is worse than none, because the
+    next run is read as if the field had been checked.
+
+    reason is "" when nothing is blocking. Everything else is whatever
+    motion_blocked managed to measure before it returned - an early exit
+    leaves the later fields absent rather than zero, because a missing
+    measurement and a measurement of zero mean different things here.
+    """
+    report = dict(evidence or {})
+    report["reason"] = str(reason or "")
+    report["blocked"] = bool(reason)
+    report["cap"] = round(float(cap), 3)
+    report["out_v"] = round(float(out_v), 3)
+    report["out_w"] = round(float(out_w), 3)
+    report["policies"] = bool(policies)
+    return report
+
+
 class SafetyGate:
     def __init__(self):
         rospy.init_node("safety_gate")
@@ -147,6 +173,7 @@ class SafetyGate:
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
         self.blocked_reason = ""
+        self.evidence = {}
         self.sweep_cap = HARD_V_LIMIT
         self.policies = bool(rospy.get_param("~safety_policies", True))
         if self.policies:
@@ -156,6 +183,21 @@ class SafetyGate:
                 "the stopping envelope", "the swept footprint",
                 "scan staleness", "the motion-estimate gate"]))
         self.pub = rospy.Publisher("/cmd_vel_gated", Twist, queue_size=1)
+        # Why the chair stopped, with the numbers the decision was made on.
+        #
+        # This node used to publish nothing but a Twist, so a stop left no
+        # record of its own reason anywhere - not in the bag, not in a
+        # topic. Every stop then had to be re-derived from what the chair
+        # did afterwards, and on 2026-08-23 two of them cost most of a day:
+        # a 130 s deadlock in front of a parked motorcycle and two 1.3 s
+        # stops on a crest, both diagnosed only by borrowing
+        # /perception/objects_summary as a window onto what the gate might
+        # have been looking at. The reason alone would not have been
+        # enough either - what settled both was the range the envelope
+        # reached and the range the nearest return sat at. So those go out
+        # with it.
+        self.status_pub = rospy.Publisher("/safety_gate/status", String,
+                                          queue_size=1)
         rospy.Subscriber("/cmd_vel_raw", Twist, self.on_raw, queue_size=1)
         rospy.Subscriber("/cloud_registered_body", PointCloud2,
                          self.on_cloud, queue_size=2)
@@ -186,6 +228,10 @@ class SafetyGate:
 
     def motion_blocked(self, now):
         """Check visible obstacles; drop safety remains map-band containment."""
+        self.evidence = {
+            "cloud_points": 0 if self.cloud is None else int(len(self.cloud)),
+            "cloud_age_s": round(max(0.0, (now - self.cloud_stamp).to_sec()), 3),
+        }
         if self.cloud is None or len(self.cloud) < 100:
             return "NO_CLOUD", None
         reason = motion_hold_reason(
@@ -219,6 +265,12 @@ class SafetyGate:
             self_half_width_m=RIDER_EXCLUDE_HALF_WIDTH_M,
             self_y_centre_m=CHAIR_CENTRE_IN_BODY_XYZ[1])
 
+        self.evidence["requested_v"] = round(requested_speed, 3)
+        self.evidence["requested_w"] = round(requested_yaw_rate, 3)
+        self.evidence["measured_v"] = round(self.motion.linear_speed_mps, 3)
+        self.evidence["envelope_m"] = round(float(envelope.distance_m), 3)
+        self.evidence["horizon_s"] = round(float(envelope.horizon_s), 3)
+        self.evidence["obstacle_points"] = int(len(obstacles))
         if len(obstacles):
             azimuth = np.abs(np.degrees(np.arctan2(
                 obstacles[:, 1], obstacles[:, 0])))
@@ -230,8 +282,15 @@ class SafetyGate:
                 (np.abs(obstacles[:, 1]) < HALF_WIDTH_M)]
         else:
             zone = obstacles
-        if len(zone) >= 5 and \
-                np.percentile(zone[:, 0], 5) < envelope.distance_m:
+        self.evidence["zone_points"] = int(len(zone))
+        # The exact quantity the stop test compares, not a summary of it.
+        nearest = (float(np.percentile(zone[:, 0], 5)) if len(zone) >= 5
+                   else None)
+        self.evidence["zone_nearest_m"] = (None if nearest is None
+                                           else round(nearest, 3))
+        if len(zone) >= 5 and nearest < envelope.distance_m:
+            self.evidence["zone_lateral_m"] = round(
+                float(np.abs(zone[:, 1]).min()), 3)
             return "OBSTACLE", None
 
         yaw_rates = [requested_yaw_rate]
@@ -266,6 +325,7 @@ class SafetyGate:
                 high = middle
             else:
                 low = middle
+        self.evidence["sweep_clear_v"] = round(float(low), 3)
         if low < SWEEP_MIN_SPEED_MPS:
             return "OBSTACLE_SWEEP", None
         return "", low
@@ -276,6 +336,13 @@ class SafetyGate:
             now = rospy.Time.now()
             out = Twist()
             reason = ""
+            # Cleared every cycle, not just where motion_blocked refills it.
+            # The reasons raised above it - INPUT_STALE, CLOUD_STALE,
+            # INPUT_INVALID, REVERSE - never call it, and a report that
+            # pairs one of those with the previous cycle's envelope and
+            # nearest range is worse than one that carries no numbers: it
+            # reads as a measurement that was taken.
+            self.evidence = {}
             if (now - self.raw_stamp).to_sec() > INPUT_STALE_S:
                 reason = "INPUT_STALE"
             elif self.policies and \
@@ -325,7 +392,26 @@ class SafetyGate:
                 rospy.logwarn("safety gate stop: %s", reason)
             self.blocked_reason = reason
             self.pub.publish(out)
+            self.publish_status(reason, out)
             rate.sleep()
+
+    def publish_status(self, reason, out):
+        report = status_report(self.evidence, reason, self.sweep_cap,
+                               out.linear.x, out.angular.z, self.policies)
+        if reason and self.cloud is not None and len(self.cloud):
+            # Only on the blocking path. It is a second pass over the cloud
+            # and costs about 10 ms at 100k points, which is affordable when
+            # the chair is standing still and not when it is not. It says how
+            # far the terrain reference has moved off the chair plane, which
+            # is what separates a real object from the road seen at a pitch.
+            try:
+                reference = ground_reference(self.cloud[:, :3],
+                                             SENSOR_HEIGHT_M)
+                report["ground_ref_max_m"] = round(float(reference.max()), 3)
+            except Exception:
+                pass
+        self.status_pub.publish(String(data=json.dumps(report,
+                                                       sort_keys=True)))
 
 
 if __name__ == "__main__":
