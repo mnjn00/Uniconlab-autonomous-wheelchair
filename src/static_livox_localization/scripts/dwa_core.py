@@ -266,6 +266,15 @@ class DwaPlanner:
         self.arc = np.concatenate([[0.0], np.cumsum(seg)])
         self.steps = max(int(steps), 1)
         self.route_mask = route_mask
+        self.last_diagnostics = {
+            "total": 0,
+            "band_ok": 0,
+            "mask_ok": 0,
+            "geometry_ok": 0,
+            "obstacle_ok": 0,
+            "all_ok": 0,
+            "max_clearance_m": None,
+        }
         tangent = np.gradient(self.route, axis=0)
         tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True),
                               1e-9)
@@ -322,6 +331,15 @@ class DwaPlanner:
             # unless it says so - on 2026-08-20 it cost a stall that took an
             # hour to attribute, because the name suggested the geometry had
             # run out. The caller that set the cap is the one to look at.
+            self.last_diagnostics = {
+                "total": 0,
+                "band_ok": 0,
+                "mask_ok": 0,
+                "geometry_ok": 0,
+                "obstacle_ok": 0,
+                "all_ok": 0,
+                "max_clearance_m": None,
+            }
             return 0.0, 0.0, "SPEED_BELOW_FLOOR"
         paths = self._rollouts(np.asarray(state, dtype=float), pairs)
         flat = paths[:, :, :2].reshape(-1, 2)
@@ -332,14 +350,16 @@ class DwaPlanner:
         # 1,785 points twice over - 24.4 ms each on the target NUC, 96 % of a
         # cycle with 100 ms to spend, for one answer computed twice.
         lateral, lo, hi = self.band.margins_many(flat)
-        inside = self.band.contained(lateral, lo, hi, self.grace)
+        band_inside = self.band.contained(lateral, lo, hi, self.grace)
+        band_ok = band_inside.reshape(len(pairs), self.steps).all(axis=1)
         if self.route_mask is not None:
-            inside &= self.route_mask.contains_many(flat)
-        ok = inside.reshape(len(pairs), self.steps).all(axis=1)
-        if self.route_mask is not None:
-            ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
-        if not ok.any():
-            return 0.0, 0.0, "OFF_BAND"
+            mask_inside = self.route_mask.contains_many(flat)
+            mask_ok = mask_inside.reshape(
+                len(pairs), self.steps).all(axis=1)
+            mask_ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
+        else:
+            mask_ok = np.ones(len(pairs), dtype=bool)
+        geometry_ok = band_ok & mask_ok
         if len(obstacles):
             pts = np.asarray(obstacles, dtype=float).reshape(-1, 2)
             clear = np.linalg.norm(
@@ -347,9 +367,25 @@ class DwaPlanner:
                 axis=3).min(axis=(1, 2))
         else:
             clear = np.full(len(pairs), np.inf)
-        ok &= clear >= OBSTACLE_FLOOR_M
-        if not ok.any():
+        obstacle_ok = clear >= OBSTACLE_FLOOR_M
+        all_ok = geometry_ok & obstacle_ok
+        geometry_clearance = clear[geometry_ok]
+        self.last_diagnostics = {
+            "total": len(pairs),
+            "band_ok": int(np.count_nonzero(band_ok)),
+            "mask_ok": int(np.count_nonzero(mask_ok)),
+            "geometry_ok": int(np.count_nonzero(geometry_ok)),
+            "obstacle_ok": int(np.count_nonzero(obstacle_ok)),
+            "all_ok": int(np.count_nonzero(all_ok)),
+            "max_clearance_m": (
+                float(np.max(geometry_clearance))
+                if len(geometry_clearance) else None),
+        }
+        if not geometry_ok.any():
+            return 0.0, 0.0, "OFF_BAND"
+        if not all_ok.any():
             return 0.0, 0.0, "OBSTACLE"
+        ok = all_ok
         d, idx = self.tree.query(flat, workers=-1)
         path_cost = d.reshape(len(pairs), self.steps).mean(axis=1)
         here = self.arc_at(state[:2])

@@ -21,6 +21,7 @@ sys.path.insert(0, str(SCRIPTS))
 try:
     import cluster_guard
     import dwa_core
+    from route_mask import RouteMask
     from safety_band import SafetyBand
 finally:
     sys.path.pop(0)
@@ -250,6 +251,81 @@ def test_a_refusal_says_which_kind_it_was(scene):
     v, w, status = planner.plan(state, obstacles=wall)
     assert (v, w) == (0.0, 0.0)
     assert status == "OBSTACLE"
+
+
+def test_each_rejection_stage_reports_candidate_counts(scene):
+    _band, route, planner = scene
+
+    result = planner.plan(on_route(route, 40))
+
+    assert len(result) == 3
+    diagnostics = planner.last_diagnostics
+    assert set(diagnostics) == {
+        "total", "band_ok", "mask_ok", "geometry_ok", "obstacle_ok",
+        "all_ok", "max_clearance_m",
+    }
+    assert diagnostics["total"] > 0
+    assert diagnostics["mask_ok"] == diagnostics["total"]
+    assert diagnostics["geometry_ok"] == diagnostics["band_ok"]
+    assert diagnostics["obstacle_ok"] == diagnostics["total"]
+    assert diagnostics["all_ok"] == diagnostics["geometry_ok"]
+    assert np.isinf(diagnostics["max_clearance_m"])
+
+
+def test_latest_bag_wp1216_has_room_without_relaxing_clearance():
+    band = SafetyBand(str(shipped("BAND")))
+    route = np.array([[w["x"], w["y"]] for w in
+                      json.load(open(shipped("ROUTE")))["waypoints"]])
+    route_mask = RouteMask(str(shipped("DRIVABLE_MASK")))
+    planner = dwa_core.DwaPlanner(band, route, route_mask=route_mask)
+    # blackbox_20260823_212210.bag, the only DWA_OBSTACLE refusal (0.151 s).
+    state = np.array([
+        152.3169500783, -56.9424279859, 0.9354826159, 0.35, -0.5,
+    ])
+    body_points = np.array([
+        [1.62, 0.50], [1.22, 0.70], [1.00, 0.90],
+        [2.47, -0.70], [2.28, -0.50], [2.04, -0.30],
+    ])
+    heading = np.array([math.cos(state[2]), math.sin(state[2])])
+    left = np.array([-heading[1], heading[0]])
+    obstacles = state[:2] + \
+        body_points[:, :1] * heading + body_points[:, 1:] * left
+
+    v, w, status = planner.plan(
+        state, obstacles, speed_cap=0.35,
+        last_yaw_rate=state[4], last_speed=state[3])
+
+    assert status == "OK"
+    assert (v, w) != (0.0, 0.0)
+    diagnostics = planner.last_diagnostics
+    assert {key: diagnostics[key] for key in (
+        "total", "band_ok", "mask_ok", "geometry_ok", "obstacle_ok",
+        "all_ok",
+    )} == {
+        "total": 105,
+        "band_ok": 75,
+        "mask_ok": 90,
+        "geometry_ok": 75,
+        "obstacle_ok": 80,
+        "all_ok": 50,
+    }
+    assert diagnostics["max_clearance_m"] >= \
+        dwa_core.OBSTACLE_FLOOR_M
+
+
+def test_a_real_wall_still_has_no_valid_candidate(scene):
+    _band, route, planner = scene
+    state = on_route(route, 40)
+    heading = np.array([math.cos(state[2]), math.sin(state[2])])
+    wall = [state[:2] + heading * d for d in np.arange(0.4, 2.0, 0.1)]
+
+    v, w, status = planner.plan(state, obstacles=wall)
+
+    assert (v, w, status) == (0.0, 0.0, "OBSTACLE")
+    assert planner.last_diagnostics["geometry_ok"] > 0
+    assert planner.last_diagnostics["all_ok"] == 0
+    assert planner.last_diagnostics["max_clearance_m"] < \
+        dwa_core.OBSTACLE_FLOOR_M
 
 
 # ------------------------------------------------- what the score looks at

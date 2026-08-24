@@ -138,12 +138,14 @@ class RecordingPlanner(object):
 
     def __init__(self):
         self.calls = []
+        self.result = (0.3, 0.0, "OK")
+        self.last_diagnostics = {}
 
     def plan(self, state, obstacles=(), speed_cap=None,
              last_yaw_rate=0.0, last_speed=None):
         self.calls.append({"obstacles": list(obstacles),
                            "speed_cap": speed_cap})
-        return 0.3, 0.0, "OK"
+        return self.result
 
 
 def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
@@ -290,6 +292,29 @@ def test_a_silent_producer_holds_this_profile_too(monkeypatch):
     follower.step()
 
     assert published == ["HOLD:DWA_WAIT"]
+
+
+def test_planner_refusal_publishes_stage_counts_in_stable_order(monkeypatch):
+    _module, follower, published, commanded = dwa_with(
+        [parked(3.0)], monkeypatch)
+    follower.planner.result = (0.0, 0.0, "OBSTACLE")
+    follower.planner.last_diagnostics = {
+        "total": 105,
+        "band_ok": 75,
+        "mask_ok": 90,
+        "geometry_ok": 75,
+        "obstacle_ok": 80,
+        "all_ok": 0,
+        "max_clearance_m": 0.39,
+    }
+
+    follower.step()
+
+    assert published == [
+        "HOLD:DWA_OBSTACLE total=105 band=75 mask=90 geometry=75 "
+        "obstacle=80 all=0 max_clearance_m=0.390"
+    ]
+    assert commanded == ["STOP"]
 
 
 def test_both_replacement_profiles_ask_the_shared_policy(monkeypatch):

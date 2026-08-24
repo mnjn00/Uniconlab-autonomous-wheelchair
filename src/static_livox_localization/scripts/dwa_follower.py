@@ -121,6 +121,31 @@ LATENCY_S = 0.0
 OBSTACLE_HALF_WIDTH_M = 1.0
 
 
+def diagnostics_suffix(diagnostics):
+    """Stable, bag-friendly candidate counts for a planner refusal."""
+    if not diagnostics:
+        return ""
+    clearance = diagnostics.get("max_clearance_m")
+    if clearance is None:
+        clearance_text = "none"
+    elif np.isinf(clearance):
+        clearance_text = "inf"
+    else:
+        clearance_text = "%.3f" % float(clearance)
+    return (
+        " total=%d band=%d mask=%d geometry=%d obstacle=%d all=%d "
+        "max_clearance_m=%s" % (
+            diagnostics.get("total", 0),
+            diagnostics.get("band_ok", 0),
+            diagnostics.get("mask_ok", 0),
+            diagnostics.get("geometry_ok", 0),
+            diagnostics.get("obstacle_ok", 0),
+            diagnostics.get("all_ok", 0),
+            clearance_text,
+        )
+    )
+
+
 def approach_cap(base_cap, distance_m, stop_m, floor_mps):
     """Speed for closing on something the chair may have to go round.
 
@@ -321,7 +346,10 @@ class DwaFollower(WaypointFollower):
                     rospy.logwarn("DWA %s at wp %d/%d", status,
                                   self.nearest_index, len(self.waypoints))
             self.dwa_status = status
-            self.publish_state("HOLD:DWA_" + status, "HOLD:DWA_" + status)
+            hold = "HOLD:DWA_" + status
+            detail = diagnostics_suffix(getattr(
+                self.planner, "last_diagnostics", {}))
+            self.publish_state(hold + detail, hold)
             self.send_stop()
             self.last_command_stamp = None
             return
