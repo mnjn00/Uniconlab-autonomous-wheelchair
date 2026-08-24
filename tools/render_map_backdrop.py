@@ -64,7 +64,38 @@ def read_pcd_xyz(path, max_points=None):
     return xyz
 
 
-def render(xyz, resolution, bounds, ground_pct, wall_m):
+def load_flatten(path, resolution, bounds):
+    """Cells an operator has marked as level ground despite the point cloud.
+
+    Near the start the cloud is dense with clutter that is not structure -- the
+    chair sat there while the map was built, so parked bikes, people and the
+    plaza furniture all got surveyed from close range and read as walls. The
+    height test cannot tell those from a building; a person who knows the place
+    can. This is that knowledge, as a 1 m cell list in the map frame.
+    """
+    if not path:
+        return None
+    with open(os.path.expanduser(path)) as handle:
+        blob = json.load(handle)
+    cell = float(blob.get("cell_m", 1.0))
+    min_x, min_y, max_x, max_y = bounds
+    width = int(np.ceil((max_x - min_x) / resolution))
+    height = int(np.ceil((max_y - min_y) / resolution))
+    mask = np.zeros((height, width), dtype=bool)
+    span = max(1, int(np.ceil(cell / resolution)))
+    for cx, cy in blob["cells"]:
+        x0 = cx * cell
+        y0 = cy * cell
+        col = int((x0 - min_x) / resolution)
+        row = int((max_y - y0) / resolution) - span
+        if col < -span or row < -span or col >= width or row >= height:
+            continue
+        mask[max(row, 0):row + span, max(col, 0):col + span] = True
+    print("flatten mask: %d cells -> %d pixels" % (len(blob["cells"]), int(mask.sum())))
+    return mask
+
+
+def render(xyz, resolution, bounds, ground_pct, wall_m, flatten=None):
     min_x, min_y, max_x, max_y = bounds
     width = int(np.ceil((max_x - min_x) / resolution))
     height = int(np.ceil((max_y - min_y) / resolution))
@@ -98,6 +129,12 @@ def render(xyz, resolution, bounds, ground_pct, wall_m):
     flat_ground = seen & (relief < wall_m)
     image[flat_ground] = (223, 231, 238)            # ground
     structure = seen & (relief >= wall_m)
+    if flatten is not None:
+        # Marked level: show it as ground the chair could be on, whatever the
+        # height channel says about it.
+        structure &= ~flatten
+        flat_ground |= flatten & seen
+        image[flat_ground] = (223, 231, 238)
     tall = np.clip((relief - wall_m) / 6.0, 0.0, 1.0)
     image[structure] = np.stack([
         (150 - 60 * tall[structure]),
@@ -118,6 +155,7 @@ def main():
     parser.add_argument("--wall-m", type=float, default=1.2,
                         help="height above ground at which a cell counts as structure")
     parser.add_argument("--max-points", type=int, default=0)
+    parser.add_argument("--flatten", help="JSON of map-frame cells to force to ground")
     args = parser.parse_args()
 
     xyz = read_pcd_xyz(os.path.expanduser(args.pcd), args.max_points or None)
@@ -136,8 +174,9 @@ def main():
     else:
         bounds = (xyz[:, 0].min(), xyz[:, 1].min(), xyz[:, 0].max(), xyz[:, 1].max())
 
+    flatten = load_flatten(args.flatten, args.resolution, bounds)
     image, ground, width, height = render(
-        xyz, args.resolution, bounds, args.ground_percentile, args.wall_m)
+        xyz, args.resolution, bounds, args.ground_percentile, args.wall_m, flatten)
     out_png = args.out + ".png"
     image.save(out_png, optimize=True)
     meta = {
@@ -151,6 +190,7 @@ def main():
         "height": height,
         "ground_z": ground,
         "wall_threshold_m": args.wall_m,
+        "flatten": args.flatten or None,
     }
     with open(args.out + ".json", "w") as handle:
         json.dump(meta, handle, indent=2)

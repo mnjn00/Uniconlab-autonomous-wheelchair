@@ -10,5 +10,6 @@
   "width": 1294,
   "height": 774,
   "ground_z": -4.211456298828125,
-  "wall_threshold_m": 1.2
+  "wall_threshold_m": 1.2,
+  "flatten": "/home/mprp3/bt_test_logs/flatten_cells.json"
 }
