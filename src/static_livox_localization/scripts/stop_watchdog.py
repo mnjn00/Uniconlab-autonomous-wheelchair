@@ -118,6 +118,7 @@ class StopHonouredCheck:
         self.baseline_speed_mps = None
         self.pivot_since = None
         self.latched = False
+        self.awaiting_auto_rearm = False
 
     def _disarm(self):
         self.intent_since = None
@@ -173,7 +174,18 @@ class StopHonouredCheck:
     def observe_status(self, data, now_s, mode):
         """Return one structured fault while a fresh stop intent is armed."""
         speeds = reported_wheel_speeds(data)
-        if speeds is None or int(mode) != AUTO_MODE:
+        if speeds is None:
+            return None
+        if int(mode) != AUTO_MODE:
+            self._disarm()
+            self.awaiting_auto_rearm = True
+            return None
+        if self.awaiting_auto_rearm:
+            # Zero commands published while manual was active are not a new
+            # autonomous stop intent. Consume the AUTO transition, then wait
+            # for the next gated command before arming again.
+            self._disarm()
+            self.awaiting_auto_rearm = False
             return None
         if self.intent_since is None or self.last_gated_s is None:
             return None

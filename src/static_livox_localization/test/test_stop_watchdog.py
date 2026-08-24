@@ -189,6 +189,31 @@ def test_manual_stale_malformed_and_unarmed_statuses_do_not_alarm():
         status(STILL, ROLLING), 2.31, sw.AUTO_MODE) is None
 
 
+def test_manual_mode_requires_a_new_stop_intent_after_auto_returns():
+    check = sw.StopHonouredCheck(not_slowing_window_s=10.0)
+    keep_fresh(check, 0.0)
+    check.observe_status(status(STILL, ROLLING), 0.0, sw.AUTO_MODE)
+
+    assert check.observe_status(
+        status(STILL, ROLLING, sw.MANUAL_MODE),
+        0.05,
+        sw.MANUAL_MODE,
+    ) is None
+    # Autonomous publishers may still be emitting zero while manual mode is
+    # active. That is not a fresh post-AUTO stop intent.
+    keep_fresh(check, 0.10)
+    assert check.observe_status(
+        status(STILL, ROLLING), 0.10, sw.AUTO_MODE) is None
+    assert check.intent_since is None
+
+    keep_fresh(check, 0.20)
+    check.observe_status(status(STILL, ROLLING), 0.20, sw.AUTO_MODE)
+    keep_fresh(check, 0.36)
+    fault = check.observe_status(
+        status(STILL, ROLLING), 0.36, sw.AUTO_MODE)
+    assert fault["code"] == "ONE_WHEEL_PIVOT"
+
+
 def test_fault_payload_has_stable_diagnostic_fields():
     check = sw.StopHonouredCheck(not_slowing_window_s=10.0)
     keep_fresh(check, 10.0)
