@@ -127,3 +127,76 @@ def test_invalid_and_out_of_range_requests_are_still_refused():
 
 def test_a_stopped_command_stays_stopped():
     assert guard.compute_wheel_command(0.0, 0.0) == guard.STOP_COMMAND
+
+
+def test_stop_ramp_uses_each_measured_wheel_speed_and_direction():
+    command = guard.stop_ramp_command(0.60, -0.40)
+
+    assert command == (67, 49, 87, 43, 79)
+    left, right = decode(command)
+    assert left / 3.6 == pytest.approx(0.45, abs=0.02)
+    assert right / 3.6 == pytest.approx(-0.27, abs=0.02)
+
+
+def test_stop_ramp_switches_each_wheel_to_stop_at_terminal_speed():
+    assert guard.stop_ramp_command(0.10, -0.06) == guard.STOP_COMMAND
+
+
+def test_invalid_stop_ramp_measurement_fails_safe_per_wheel():
+    command = guard.stop_ramp_command(float("nan"), 0.60)
+    assert command[:2] == guard.STOP_COMMAND[:2]
+    assert command[2:] == (67, 49, 79)
+
+
+def test_zero_velocity_uses_fresh_measured_speed_ramp(monkeypatch):
+    node = guard.WheelCommandGuard.__new__(guard.WheelCommandGuard)
+    node.mode = guard.AUTO_MODE
+    node.fault_latched = False
+    node.measured_left_mps = 0.60
+    node.measured_right_mps = -0.40
+    node.measured_stamp = 9.80
+    published = []
+    node.publish = published.append
+    monkeypatch.setattr(
+        guard.rospy,
+        "Time",
+        types.SimpleNamespace(
+            now=lambda: types.SimpleNamespace(to_sec=lambda: 10.0)),
+        raising=False,
+    )
+    message = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.0),
+        angular=types.SimpleNamespace(z=0.0),
+        _connection_header={"callerid": guard.EXPECTED_CMD_CALLER},
+    )
+
+    node.on_velocity(message)
+
+    assert published == [(67, 49, 87, 43, 79)]
+
+
+def test_zero_velocity_with_stale_measurement_fails_safe(monkeypatch):
+    node = guard.WheelCommandGuard.__new__(guard.WheelCommandGuard)
+    node.mode = guard.AUTO_MODE
+    node.fault_latched = False
+    node.measured_left_mps = 0.60
+    node.measured_right_mps = 0.60
+    node.measured_stamp = 9.60
+    published = []
+    node.publish = published.append
+    monkeypatch.setattr(
+        guard.rospy,
+        "Time",
+        types.SimpleNamespace(
+            now=lambda: types.SimpleNamespace(to_sec=lambda: 10.0)),
+        raising=False,
+    )
+    message = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.0),
+        angular=types.SimpleNamespace(z=0.0),
+        _connection_header={"callerid": guard.EXPECTED_CMD_CALLER},
+    )
+
+    node.on_velocity(message)
+
+    assert published == [guard.STOP_COMMAND]

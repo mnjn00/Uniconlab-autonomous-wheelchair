@@ -20,6 +20,14 @@ STOP_COMMAND = (83, 33, 83, 33, 79)
 COUNTS_PER_KMH = 10.0
 MAGNITUDE_OFFSET = 33
 
+# S is a stopped state on this base, not a brake command.  A stop request
+# therefore ramps from the measured wheel speeds and changes each wheel to S
+# only after that wheel is already close to rest.
+RAMP_DECAY = 0.9
+RAMP_BLEED_MPS = 0.09
+RAMP_TERMINAL_MPS = 0.06
+STATUS_FRESH_S = 0.30
+
 # Below this the wheels were observed not to turn the loaded chair at all.
 # On 2026-07-29 the follower held its maximum +0.5 rad/s for four seconds
 # while the faster wheel sat at 0.9 km/h and the chair rotated at 0.03-0.05
@@ -34,6 +42,43 @@ TURN_AUTHORITY_KMH = 1.3
 # never enough to run away.
 TURN_AUTHORITY_MAX_LINEAR_MPS = 0.30
 YAW_DEADBAND_RAD_S = 0.05
+
+
+def wheel_speed_mps(direction, magnitude):
+    """Decode one wheel from a status frame, negative when reversing."""
+    try:
+        speed = (float(magnitude) - MAGNITUDE_OFFSET) / COUNTS_PER_KMH / 3.6
+        direction = int(direction)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(speed):
+        return 0.0
+    if direction == 67:
+        return speed
+    if direction == 87:
+        return -speed
+    return 0.0
+
+
+def stop_ramp_command(left_mps, right_mps):
+    """Build one measured-speed braking step for the two wheels."""
+    def one(speed):
+        try:
+            speed = float(speed)
+        except (TypeError, ValueError):
+            return 83, MAGNITUDE_OFFSET
+        if not math.isfinite(speed):
+            return 83, MAGNITUDE_OFFSET
+        target = abs(speed) * RAMP_DECAY - RAMP_BLEED_MPS
+        if target < RAMP_TERMINAL_MPS:
+            return 83, MAGNITUDE_OFFSET
+        magnitude = int(round(target * 3.6 * COUNTS_PER_KMH)) + \
+            MAGNITUDE_OFFSET
+        return (67 if speed > 0.0 else 87), min(magnitude, 127)
+
+    left = one(left_mps)
+    right = one(right_mps)
+    return left[0], left[1], right[0], right[1], 79
 
 
 def message_caller_id(message):
@@ -98,6 +143,9 @@ class WheelCommandGuard:
             "wheel_cmd", Int16MultiArray, queue_size=1)
         self.mode = None
         self.fault_latched = False
+        self.measured_left_mps = 0.0
+        self.measured_right_mps = 0.0
+        self.measured_stamp = None
         rospy.Subscriber(
             "cmd_vel", Twist, self.on_velocity, queue_size=1)
         rospy.Subscriber(
@@ -113,7 +161,13 @@ class WheelCommandGuard:
         self.publisher.publish(message)
 
     def publish_stop(self):
-        self.publish(STOP_COMMAND)
+        now = rospy.Time.now().to_sec()
+        if self.measured_stamp is None or \
+                now - self.measured_stamp > STATUS_FRESH_S:
+            self.publish(STOP_COMMAND)
+            return
+        self.publish(stop_ramp_command(
+            self.measured_left_mps, self.measured_right_mps))
 
     def on_velocity(self, message):
         if self.mode != AUTO_MODE:
@@ -128,6 +182,9 @@ class WheelCommandGuard:
         if self.fault_latched:
             self.publish_stop()
             return
+        if command == STOP_COMMAND:
+            self.publish_stop()
+            return
         self.publish(command)
 
     def on_wheel_status(self, message):
@@ -137,6 +194,12 @@ class WheelCommandGuard:
             self.fault_latched = True
             self.publish_stop()
             return
+        if len(message.data) >= 6:
+            self.measured_left_mps = wheel_speed_mps(
+                message.data[2], message.data[3])
+            self.measured_right_mps = wheel_speed_mps(
+                message.data[4], message.data[5])
+            self.measured_stamp = rospy.Time.now().to_sec()
         next_mode = int(message.data[1])
         if next_mode != AUTO_MODE:
             self.fault_latched = False
