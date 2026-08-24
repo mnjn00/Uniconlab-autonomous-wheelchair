@@ -51,6 +51,16 @@ def test_the_window_is_drawn_around_where_the_chair_is():
     assert max(v) < TOP, "a standing start must not be able to pick top speed"
 
 
+def test_standing_start_keeps_offering_only_the_turn_floor():
+    """The final 2026-08-23 drive started with a 0.35 m/s target while the
+    command ramp climbed from 0.01 m/s.  Until that ramp clears the measured
+    wheel deadband, replanning must keep the floor available instead of
+    returning no executable speed and resetting the ramp to zero.
+    """
+    for current in (0.0, 0.01, 0.18, FLOOR - 1e-6):
+        assert moving(samples(TOP, current=current)) == [FLOOR]
+
+
 def test_braking_stays_available_from_any_speed():
     """The window is asymmetric because the chair is. Slowing down must never
     be the thing the window forbids."""

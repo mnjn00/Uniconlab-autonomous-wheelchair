@@ -174,6 +174,15 @@ def speed_samples(max_speed=MAX_SPEED, floor=TURN_FLOOR_SPEED,
     """
     if max_speed < floor:
         return (0.0,)
+    if current is not None and float(current) < floor:
+        # The 2026-08-23 field run left rest by holding a floor-speed target
+        # while the downstream command ramp climbed through the wheel
+        # deadband.  Applying the reachable window below the floor instead
+        # returns only zero (0.0 + 0.18 * 1 s < 0.35), and every replanning
+        # cycle resets that ramp before the wheels can turn.  Keep exactly
+        # one executable bootstrap target until the commanded speed reaches
+        # the range where the ordinary dynamic window is meaningful.
+        return (0.0, float(floor))
     low, high = floor, max_speed
     if current is not None:
         room_up = abs(float(accel)) * float(window_s)
