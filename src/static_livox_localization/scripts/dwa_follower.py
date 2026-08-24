@@ -355,7 +355,7 @@ class DwaFollower(WaypointFollower):
         # to the planner whichever it was, and the planner would clear a
         # walking person by OBSTACLE_FLOOR_M and drive past.
         threat = self.corridor_threat(0.0)
-        stop_m = self.stop_radius()
+        stop_m = self.stop_radius_for(threat)
         decision = self.avoidance_for(
             now, threat,
             threat is not None and threat.distance_m < stop_m)

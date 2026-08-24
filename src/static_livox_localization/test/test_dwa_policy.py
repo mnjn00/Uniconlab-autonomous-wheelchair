@@ -241,6 +241,49 @@ def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
         "the planner was asked to find a way round a person"
 
 
+def test_a_person_gets_the_wider_055m_stop_corridor(monkeypatch):
+    """The 08-24 drive saw a walking person at y=0.8 m with a 0.6 m-wide
+    box.  Its near flank was 0.50 m from the centreline: outside the ordinary
+    0.45 m obstacle corridor, but inside the operator-selected 0.55 m person
+    stop corridor.  It must be waited out rather than handed to the planner.
+    """
+    _module, follower, published, commanded = dwa_with(
+        [walking(1.0, y=0.8)], monkeypatch)
+
+    follower.step()
+
+    assert published == ["HOLD:DWA_WAIT"]
+    assert commanded == ["STOP"]
+    assert follower.planner.calls == []
+
+
+def test_a_person_stops_at_120_percent_of_the_dynamic_radius(monkeypatch):
+    """At x=2.0 m the 0.6 m-long box starts 1.7 m ahead.  That is beyond
+    the 1.5 m base radius but inside its 1.8 m person-only extension.
+    """
+    _module, follower, published, commanded = dwa_with(
+        [walking(2.0)], monkeypatch, threat_distance_stop_radius=1.5)
+
+    follower.step()
+
+    assert published == ["HOLD:DWA_WAIT"]
+    assert commanded == ["STOP"]
+    assert follower.planner.calls == []
+
+
+def test_the_person_extensions_do_not_widen_an_ordinary_moving_object(
+        monkeypatch):
+    moving_object = parked(2.0, y=0.8)
+    moving_object["motion"] = ct.MOVING
+    _module, follower, published, _commanded = dwa_with(
+        [moving_object], monkeypatch, threat_distance_stop_radius=1.5)
+
+    follower.step()
+
+    assert not any(text.startswith("HOLD") for text in published)
+    assert len(follower.planner.calls) == 1
+
+
 def test_it_does_not_sidestep_someone_it_has_not_yet_had_to_stop_for(monkeypatch):
     """Further away than the stop radius the answer is CLEAR, not GO_ROUND.
     The chair keeps driving - but the planner is given no object to bend

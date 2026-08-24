@@ -72,6 +72,7 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            BYPASS_EDGE_KEEP_M, BYPASS_OFFSET_MAX_M,
                            BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
                            BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
+                           PERSON_LABEL,
                            avoidance_decision, bypass_offsets_for_room,
                            is_stale, nearest_threat, parse_summary)
 from cluster_tracking import MOVING
@@ -114,6 +115,14 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
+# A person gets a slightly wider decision corridor than geometry handed to
+# the avoidance planner.  On 2026-08-24 a 0.6 m-wide walking-person box at
+# y=0.8 m put its near flank 0.50 m from the route centre: outside the old
+# 0.45 m corridor, although it was wholly inside the safety band.  Widening
+# every obstacle would also widen bypass decisions, so this applies only to
+# the person-labelled stop decision.
+PERSON_STOP_HALF_WIDTH_M = 0.55
+PERSON_STOP_DISTANCE_SCALE = 1.20
 # The forward-cone and minimum-range constants that used to live here
 # belonged to the raw five-point scan check, removed 2026-08-05. The same
 # geometry still exists in safety_gate.py, which keeps its own independent
@@ -575,6 +584,13 @@ class WaypointFollower:
             radii.append(self.cluster_stop_radius())
         return max(radii) if radii else 0.0
 
+    def stop_radius_for(self, threat):
+        """Dynamic stop radius, with the operator's person-only lead."""
+        radius = self.stop_radius()
+        if threat is not None and threat.is_person:
+            return radius * PERSON_STOP_DISTANCE_SCALE
+        return radius
+
     def cluster_threat(self, lateral_shift=0.0):
         """Nearest classified object overlapping the corridor, or None.
 
@@ -585,8 +601,16 @@ class WaypointFollower:
         """
         if self.cluster_summary is None:
             return Threat(0.0, MOVING, "no summary")
-        return nearest_threat(
+        ordinary = nearest_threat(
             self.cluster_summary, CORRIDOR_HALF_WIDTH, lateral_shift)
+        person = nearest_threat(
+            self.cluster_summary, PERSON_STOP_HALF_WIDTH_M, lateral_shift,
+            labels=(PERSON_LABEL,))
+        if ordinary is None:
+            return person
+        if person is None or ordinary.distance_m <= person.distance_m:
+            return ordinary
+        return person
 
     def corridor_threat(self, lateral_shift=0.0):
         """Nearest classified object in the corridor, or None if clear.
@@ -980,7 +1004,7 @@ class WaypointFollower:
                 allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
-        guard_stop = self.stop_radius()
+        guard_stop = self.stop_radius_for(threat)
         guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
         if obstacle_dist is not None:
             if obstacle_dist < guard_stop:

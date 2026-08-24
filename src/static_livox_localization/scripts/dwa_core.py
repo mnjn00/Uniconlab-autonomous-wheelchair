@@ -126,7 +126,7 @@ YAW_SAMPLES = 21
 # recorded line is ground a person actually drove, so deviation is a cost and
 # not merely a preference. Progress second, obstacles third - an obstacle
 # that is not in the corridor has already been excluded by the band.
-W_PATH = 3.0
+W_PATH = 3.3
 W_PROGRESS = 1.0
 W_OBSTACLE = 2.0
 
