@@ -585,7 +585,6 @@ setsid nohup rosbag record --lz4 \
   /waypoint_follower/status /tip_guard/status /Odometry /livox/imu \
   /perception/objects_summary /perception/dynamic_boxes /perception/objects \
   /waypoint_follower/route_identity /uart_tx_diag /stop_watchdog/alarm /safety_gate/status \
-  /cloud_registered_body \
   > "$LOG/live_blackbox.log" 2>&1 < /dev/null &
 
 echo ""

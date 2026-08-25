@@ -72,11 +72,9 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            BYPASS_EDGE_KEEP_M, BYPASS_OFFSET_MAX_M,
                            BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
                            BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
-                           PERSON_BYPASS_AFTER_S, PERSON_LABEL,
-                           PERSON_MEMORY_S,
                            avoidance_decision, bypass_offsets_for_room,
                            is_stale, nearest_threat, parse_summary)
-from cluster_tracking import MOVING, STATIC
+from cluster_tracking import MOVING
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import SUPPRESSED_WHILE_PARKED
 from localization_policy import localization_hold_reason
@@ -85,7 +83,7 @@ from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
 import mpc_speed
-from safety_band import BAND_EXCURSION_MAX_M, SafetyBand
+from safety_band import SafetyBand
 from route_mask import RouteMask
 from route_assets import validate_asset_binding
 import tf.transformations as tft
@@ -116,14 +114,6 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
-# A person gets a slightly wider decision corridor than geometry handed to
-# the avoidance planner.  On 2026-08-24 a 0.6 m-wide walking-person box at
-# y=0.8 m put its near flank 0.50 m from the route centre: outside the old
-# 0.45 m corridor, although it was wholly inside the safety band.  Widening
-# every obstacle would also widen bypass decisions, so this applies only to
-# the person-labelled stop decision.
-PERSON_STOP_HALF_WIDTH_M = 0.55
-PERSON_STOP_DISTANCE_SCALE = 1.20
 # The forward-cone and minimum-range constants that used to live here
 # belonged to the raw five-point scan check, removed 2026-08-05. The same
 # geometry still exists in safety_gate.py, which keeps its own independent
@@ -180,12 +170,6 @@ LOOKAHEAD_BACKOFF_M = 0.4
 
 
 class WaypointFollower:
-    # Caches, defaulted on the class so that every instance has them
-    # however it was built. They answer "what was seen a moment ago", and
-    # the honest default for that is nothing.
-    person_memory = None
-    person_still_since = None
-
     # Which control law this class turns a pose into a Twist with. Both
     # profiles run as the same node under the same name, so the node alone
     # does not say which one started; subclasses override this and __init__
@@ -303,8 +287,6 @@ class WaypointFollower:
         self.nearest_index = 0
         self.current_speed = 0.0
         self.blocked_since = None
-        self.person_still_since = None
-        self.person_memory = None
         self.lateral_offset = 0.0
         self.chord_speed_cap = MAX_SPEED
         self.chord_safe = True
@@ -593,13 +575,6 @@ class WaypointFollower:
             radii.append(self.cluster_stop_radius())
         return max(radii) if radii else 0.0
 
-    def stop_radius_for(self, threat):
-        """Dynamic stop radius, with the operator's person-only lead."""
-        radius = self.stop_radius()
-        if threat is not None and threat.is_person:
-            return radius * PERSON_STOP_DISTANCE_SCALE
-        return radius
-
     def cluster_threat(self, lateral_shift=0.0):
         """Nearest classified object overlapping the corridor, or None.
 
@@ -610,16 +585,8 @@ class WaypointFollower:
         """
         if self.cluster_summary is None:
             return Threat(0.0, MOVING, "no summary")
-        ordinary = nearest_threat(
+        return nearest_threat(
             self.cluster_summary, CORRIDOR_HALF_WIDTH, lateral_shift)
-        person = nearest_threat(
-            self.cluster_summary, PERSON_STOP_HALF_WIDTH_M, lateral_shift,
-            labels=(PERSON_LABEL,))
-        if ordinary is None:
-            return person
-        if person is None or ordinary.distance_m <= person.distance_m:
-            return ordinary
-        return person
 
     def corridor_threat(self, lateral_shift=0.0):
         """Nearest classified object in the corridor, or None if clear.
@@ -645,31 +612,7 @@ class WaypointFollower:
         """
         if not self.clusters_enabled:
             return None
-        threat = self.cluster_threat(lateral_shift)
-        # A person is held for PERSON_MEMORY_S after the producer drops
-        # them. Every consumer downstream - the stopping radius, the
-        # decision, the points the rollouts are scored against - then sees
-        # the same person for as long as they are actually there, instead
-        # of each re-deciding against a different frame's opinion.
-        #
-        # Only a person, and only a threat that WAS reported: this
-        # remembers, it does not invent. Anything else the producer drops is
-        # dropped.
-        # Timed off the producer's own stamp rather than the node clock:
-        # the question is how long since IT last reported them, and that is
-        # the clock the answer lives on.
-        stamp = None if self.cluster_summary is None \
-            else self.cluster_summary.stamp_s
-        if threat is not None and threat.is_person:
-            self.person_memory = (stamp, threat)
-            return threat
-        if threat is None and self.person_memory is not None:
-            seen, remembered = self.person_memory
-            if seen is not None and stamp is not None and \
-                    (stamp - seen) <= PERSON_MEMORY_S:
-                return remembered
-            self.person_memory = None
-        return threat
+        return self.cluster_threat(lateral_shift)
 
     def avoidance_for(self, now, threat, blocking):
         """Parked or moving, and the blocked-for clock that backs the answer.
@@ -694,25 +637,11 @@ class WaypointFollower:
                 self.blocked_since = now
         else:
             self.blocked_since = None
-        # A second clock, and it deliberately does not wait for blocking.
-        # How long someone has been standing still is the evidence that
-        # they are standing rather than pausing, and it has to be gathered
-        # while they are still far enough off for a sidestep to exist.
-        if threat is not None and threat.is_person and \
-                threat.motion == STATIC:
-            if self.person_still_since is None:
-                self.person_still_since = now
-        else:
-            self.person_still_since = None
         return avoidance_decision(
             threat, blocking,
             None if self.blocked_since is None
             else (now - self.blocked_since).to_sec(),
-            PLAN_AHEAD_M, BYPASS_AFTER_S,
-            person_bypass_after_s=PERSON_BYPASS_AFTER_S,
-            person_still_for_s=(
-                None if self.person_still_since is None
-                else (now - self.person_still_since).to_sec()))
+            PLAN_AHEAD_M, BYPASS_AFTER_S)
 
     def take_a_way_round(self, clear_for_m):
         """Offset far enough to clear the corridor without leaving the band.
@@ -978,17 +907,8 @@ class WaypointFollower:
         if self.route_locked and np.min(np.linalg.norm(
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             yield "OFF_ROUTE", POLICY
-        # The same question the planner asks of every arc it scores, asked
-        # of where the chair actually is. It has to be the same call: the
-        # planner may now step outside the drawn corridor to get round
-        # something, and a hold that still said the corridor was absolute
-        # would stop the chair in the middle of the manoeuvre it had just
-        # been allowed to plan. What neither will pass is an excursion
-        # toward a measured drop, or one further out than the sidestep the
-        # allowance is for.
-        if self.route_locked and not self.band.passable(
-                self.pose_xy, BAND_EXCURSION_MAX_M,
-                grace=BAND_RECOVER_MAX):
+        if self.route_locked and not self.band.contains(
+                self.pose_xy, grace=BAND_RECOVER_MAX):
             yield "OFF_BAND", POLICY
 
     def handled_before_driving(self, now):
@@ -1060,7 +980,7 @@ class WaypointFollower:
                 allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
-        guard_stop = self.stop_radius_for(threat)
+        guard_stop = self.stop_radius()
         guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
         if obstacle_dist is not None:
             if obstacle_dist < guard_stop:

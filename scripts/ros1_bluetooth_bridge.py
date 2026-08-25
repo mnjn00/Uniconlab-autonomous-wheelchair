@@ -134,10 +134,6 @@ def twist_magnitude(twist):
 # captured at 0.2 m spacing; at ~1 m it is visually identical on a phone-sized
 # top-down view and costs a fifth of the link budget.
 ROUTE_MAX_POINTS = 400
-# The drivable corridor is sent as two edge polylines, thinned like the route.
-# Fewer points than the route: the band is a smooth pair of offsets, and its job
-# on a phone-sized view is to show where the room runs out, not every wobble.
-BAND_MAX_POINTS = 200
 
 
 _BRINGUP_ROUTE_RE = re.compile(r'^\s*ROUTE=\"\$\{ROUTE:-(?P<path>[^}]+)\}\"')
@@ -204,58 +200,6 @@ def resolve_route_path(cli_default, script_dir=None):
     return cli_default
 
 
-def load_band(route_path):
-    """Left and right edges of the drivable corridor, in the map frame.
-
-    The route alone is a centreline, which tells an operator where the chair is
-    going but not how much room it has -- and on this route the room is the
-    interesting part: the v9 corridor is what the tight corners are measured
-    against. The band file sits next to the route with the same stem and carries
-    a station every 0.5 m with left_m/right_m clearances, so the edges are just
-    the centreline offset by those, perpendicular to the station heading.
-    """
-    band_path = re.sub(r"_waypoints\.json$", "_safety_band.json", route_path)
-    if band_path == route_path:
-        return None
-    try:
-        with open(os.path.expanduser(band_path), "r") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return None
-    stations = data.get("stations") or []
-    if len(stations) < 2:
-        return None
-
-    left, right = [], []
-    for station in stations:
-        try:
-            x = float(station["x"])
-            y = float(station["y"])
-            heading = math.radians(float(station["heading_deg"]))
-            lm = float(station.get("left_m", 0.0))
-            rm = float(station.get("right_m", 0.0))
-        except (KeyError, TypeError, ValueError):
-            continue
-        # Left of travel is heading + 90 degrees.
-        left.append([round(x - math.sin(heading) * lm, 2),
-                     round(y + math.cos(heading) * lm, 2)])
-        right.append([round(x + math.sin(heading) * rm, 2),
-                      round(y - math.cos(heading) * rm, 2)])
-    if len(left) < 2:
-        return None
-
-    stride = max(1, (len(left) + BAND_MAX_POINTS - 1) // BAND_MAX_POINTS)
-    def thin(points):
-        slim = points[::stride]
-        if slim[-1] != points[-1]:
-            slim.append(points[-1])
-        return slim
-    log("band loaded: %d stations (%d sent) from %s"
-        % (len(left), len(thin(left)), os.path.basename(band_path)))
-    return {"left": thin(left), "right": thin(right),
-            "source": os.path.basename(band_path)}
-
-
 def load_route(path):
     """Read the waypoint JSON the follower is driving, for the app's map view.
 
@@ -293,7 +237,6 @@ def load_route(path):
 
     log("route loaded: %d waypoints (%d sent, stride %d) from %s"
         % (len(full), len(slim), stride, os.path.basename(path)))
-    band = load_band(path)
     return {
         "type": "route",
         "frame": data.get("frame"),
@@ -304,9 +247,6 @@ def load_route(path):
         "points": slim,
         "source": os.path.basename(path),
         "path": path,
-        "band_left": None if band is None else band["left"],
-        "band_right": None if band is None else band["right"],
-        "band_source": None if band is None else band["source"],
     }
 
 
@@ -999,37 +939,14 @@ class RosLink:
                       % ("정지됨" if paused else "정지 실패(%s) — 해제 전에 확인 필요"
                          % pause_detail[:60]))
 
-    def release_estop(self, resume=False):
-        """mode_cmd=65, and optionally resume the follower in the same breath.
-
-        Arming used to be documented as "driving stays stopped until you start
-        it", and that was never reliably true. waypoint_follower.py holds on
-        MANUAL_MODE but stays ``enabled``, so whether mode 65 resumed the drive
-        depended on how the follower had been paused: stop.sh disables it, a
-        joystick failsafe does not. Same button, two different outcomes.
-
-        The operator asked for the resuming one, so it is now what the command
-        does -- explicitly, by calling the start service, rather than by relying
-        on a leftover ``enabled``. One button, one outcome, and the app says the
-        chair will move.
-        """
+    def release_estop(self):
         ok, detail = self._publish_mode(AUTO_MODE)
-        if not ok:
-            return ok, detail
-        with self.state.lock:
-            self.state.estop_requested_at = None
-        if not resume:
-            return True, ("released (mode_cmd=65). A stop frame is sent first, so "
-                          "the chair does not lurch. Driving stays stopped.")
-        # uart.py sends a motor stop frame when it re-enters auto, so the resume
-        # has to land after that; a service call is not instant either, which is
-        # the gap that makes this ordering safe rather than a lurch.
-        started, follower_detail = self.set_follower(True)
-        if not started:
-            return True, ("자동 모드 전환 완료 (mode_cmd=65). 다만 주행 재개는 "
-                          "실패했습니다 — %s. [주행 시작]을 눌러주세요." % follower_detail)
-        return True, ("자동 모드 전환 + 주행 재개 (mode_cmd=65, 팔로워 시작). "
-                      "휠체어가 멈춘 지점의 웨이포인트부터 이어서 주행합니다.")
+        if ok:
+            with self.state.lock:
+                self.state.estop_requested_at = None
+            detail = ("released (mode_cmd=65). A stop frame is sent first, so the "
+                      "chair does not lurch. Driving stays stopped until you start it.")
+        return ok, detail
 
     def set_follower(self, running, ensure_auto=False):
         if not self.allow_commands:
@@ -1178,8 +1095,6 @@ class Session:
                 ok, detail = self.ros.engage_estop()
             elif command in ("estop_release", "release", "rearm", "arm"):
                 ok, detail = self._release(payload)
-            elif command == "arm_and_drive":
-                ok, detail = self._release(payload, resume=True)
             elif command == "drive_start":
                 ok, detail = self._drive(payload, True)
             elif command == "drive_stop":
@@ -1235,7 +1150,7 @@ class Session:
         return True, "경로 %d개 지점 전송 (%s)" % (route.get("count_full", 0),
                                               route.get("source", "?"))
 
-    def _release(self, payload, resume=False):
+    def _release(self, payload):
         """Two-step: the app must send confirm=true, and the chair must be stopped."""
         if not payload.get("confirm"):
             return False, ("confirmation required: resend with \"confirm\": true "
@@ -1254,7 +1169,7 @@ class Session:
         if moving > 0.05:
             return False, ("refusing: chair is still moving (%.2f m/s, %s odometry)"
                            % (moving, source))
-        return self.ros.release_estop(resume=resume)
+        return self.ros.release_estop()
 
     def _halt(self):
         """Stop must never refuse, so fall back to the direct path when the script

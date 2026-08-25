@@ -141,12 +141,9 @@ class RecordingPlanner(object):
         self.calls = []
 
     def plan(self, state, obstacles=(), speed_cap=None,
-             last_yaw_rate=0.0, last_speed=None, wide_obstacles=(),
-             wide_clearance_m=None):
+             last_yaw_rate=0.0, last_speed=None):
         self.calls.append({"obstacles": list(obstacles),
-                           "speed_cap": speed_cap,
-                           "wide_obstacles": list(wide_obstacles),
-                           "wide_clearance_m": wide_clearance_m})
+                           "speed_cap": speed_cap})
         return 0.3, 0.0, "OK"
 
 
@@ -169,8 +166,6 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.cluster_summary = cg.parse_summary(json.dumps(
         {"stamp": 100.0, "status": "OK", "objects": objects}))
     follower.blocked_since = None
-    follower.person_memory = None
-    follower.person_still_since = None
     follower.lateral_offset = 0.0
     follower.pose_xy = np.array([10.0, 0.0])
     follower.pose_yaw = 0.0
@@ -194,7 +189,6 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.gate_blocked_since = None
     follower.gate_detail = ""
     follower.gate_blocked_for = lambda now: None
-    follower.Stamp = Stamp
     # The base's own report is the only velocity on the bus; the double
     # stands in for it because /Odometry carries no twist.
     follower.measured_speed = 0.0
@@ -247,49 +241,6 @@ def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
         "the planner was asked to find a way round a person"
 
 
-def test_a_person_gets_the_wider_055m_stop_corridor(monkeypatch):
-    """The 08-24 drive saw a walking person at y=0.8 m with a 0.6 m-wide
-    box.  Its near flank was 0.50 m from the centreline: outside the ordinary
-    0.45 m obstacle corridor, but inside the operator-selected 0.55 m person
-    stop corridor.  It must be waited out rather than handed to the planner.
-    """
-    _module, follower, published, commanded = dwa_with(
-        [walking(1.0, y=0.8)], monkeypatch)
-
-    follower.step()
-
-    assert published == ["HOLD:DWA_WAIT"]
-    assert commanded == ["STOP"]
-    assert follower.planner.calls == []
-
-
-def test_a_person_stops_at_120_percent_of_the_dynamic_radius(monkeypatch):
-    """At x=2.0 m the 0.6 m-long box starts 1.7 m ahead.  That is beyond
-    the 1.5 m base radius but inside its 1.8 m person-only extension.
-    """
-    _module, follower, published, commanded = dwa_with(
-        [walking(2.0)], monkeypatch, threat_distance_stop_radius=1.5)
-
-    follower.step()
-
-    assert published == ["HOLD:DWA_WAIT"]
-    assert commanded == ["STOP"]
-    assert follower.planner.calls == []
-
-
-def test_the_person_extensions_do_not_widen_an_ordinary_moving_object(
-        monkeypatch):
-    moving_object = parked(2.0, y=0.8)
-    moving_object["motion"] = ct.MOVING
-    _module, follower, published, _commanded = dwa_with(
-        [moving_object], monkeypatch, threat_distance_stop_radius=1.5)
-
-    follower.step()
-
-    assert not any(text.startswith("HOLD") for text in published)
-    assert len(follower.planner.calls) == 1
-
-
 def test_it_does_not_sidestep_someone_it_has_not_yet_had_to_stop_for(monkeypatch):
     """Further away than the stop radius the answer is CLEAR, not GO_ROUND.
     The chair keeps driving - but the planner is given no object to bend
@@ -328,13 +279,7 @@ def test_what_it_goes_round_arrives_as_a_shape(monkeypatch):
 def test_the_approach_slows_the_way_the_pursuit_profile_slows(monkeypatch):
     """A planner that only knows stop-or-cruise arrives at what it is about
     to wait for at full speed."""
-    # Both outside the person stop radius, which is not the plain radius:
-    # stop_radius_for scales it by PERSON_STOP_DISTANCE_SCALE for a
-    # person-labelled threat, so at the fixture's 1.5 m the decision point
-    # is 1.8 m and a person at 2.0 m - near face 1.7 m - is waited for
-    # rather than approached. This test is about the approach ramp, so it
-    # asks about two distances that are both still an approach.
-    _module, near, _p, _c = dwa_with([walking(2.6)], monkeypatch)
+    _module, near, _p, _c = dwa_with([walking(2.0)], monkeypatch)
     _module, far, _p2, _c2 = dwa_with([walking(6.0)], monkeypatch)
 
     near.step()
@@ -475,161 +420,3 @@ def test_both_obstacle_vetoes_count(reason):
     assert module.gate_stall(reason, 2.0)
     assert not module.gate_stall(reason, 0.1)
     assert not module.gate_stall(reason, None)
-
-
-# --------------------------------------- going round someone who is standing
-
-def standing(x, y=0.0, size=(0.6, 0.6, 1.7)):
-    """A person the tracker has watched hold still."""
-    return {"class": "person", "x": x, "y": y, "size": list(size),
-            "points": 40, "motion": ct.STATIC}
-
-
-def standing_for(follower, seconds):
-    """Pretend this person has been watched holding still this long.
-
-    rospy.Time.now() is stubbed at 100.0 in the fixture, so a clock that
-    started `seconds` ago is that much earlier.
-    """
-    follower.person_still_since = follower.Stamp(100.0 - seconds)
-
-
-def test_someone_who_has_just_stopped_is_still_waited_for(monkeypatch):
-    """CONFIRM_S is 1.5 s, so a pause to read a phone makes the tracker say
-    STATIC. That is not enough to drive past someone."""
-    _module, follower, published, commanded = dwa_with(
-        [standing(1.0)], monkeypatch)
-    follower.person_still_since = None
-
-    follower.step()
-
-    assert published == ["HOLD:DWA_WAIT"]
-    assert commanded == ["STOP"]
-
-
-def test_someone_who_has_stood_still_long_enough_is_gone_round(monkeypatch):
-    """The behaviour asked for on 2026-08-25: the operator stood in the
-    corridor and the chair waited them out instead of passing."""
-    module, follower, _published, _commanded = dwa_with(
-        [standing(1.0)], monkeypatch)
-    standing_for(follower, 6.0)
-
-    follower.step()
-
-    assert follower.planner.calls, "it stopped instead of planning"
-    assert follower.planner.calls[0]["obstacles"], \
-        "the planner was given nothing to bend around"
-
-
-def test_it_passes_a_person_at_a_crawl_and_with_a_wider_berth(monkeypatch):
-    """Both conditions travel with the manoeuvre, not just the permission
-    to make it: if they move after all, there has to be time to stop."""
-    module, follower, _published, _commanded = dwa_with(
-        [standing(1.0)], monkeypatch)
-    standing_for(follower, 6.0)
-
-    follower.step()
-
-    call = follower.planner.calls[0]
-    assert call["wide_clearance_m"] == module.PERSON_BYPASS_CLEARANCE_M
-    assert call["speed_cap"] <= module.PERSON_BYPASS_SPEED_MPS
-
-
-def test_a_thing_is_still_passed_at_the_ordinary_clearance(monkeypatch):
-    """The wider berth is for people. A parked object does not get it, and
-    handing every obstacle a 0.80 m berth would close corridors that are
-    known to be passable."""
-    module, follower, _published, _commanded = dwa_with(
-        [parked(1.0)], monkeypatch)
-
-    follower.step()
-
-    assert follower.planner.calls
-    assert follower.planner.calls[0]["wide_clearance_m"] is None
-
-
-def test_the_wider_berth_is_asked_of_the_person_and_not_of_the_wall(monkeypatch):
-    """2026-08-25: the chair turned to pass someone, met a wall in the gap
-    it had turned into, and refused a lane it had 0.5 m of room in - it was
-    asking that wall for 0.80 too, because the berth had been implemented
-    as a floor under the distance to the nearest return of ANYTHING.
-
-    A person needs more space than a wall does because a person can move.
-    A wall only has to be missed.
-    """
-    _module, follower, _published, _commanded = dwa_with(
-        [standing(3.0), parked(3.2, y=0.8)], monkeypatch)
-    standing_for(follower, 6.0)
-
-    follower.step()
-
-    call = follower.planner.calls[0]
-    assert call["wide_obstacles"], "the person's own returns were not passed"
-    assert len(call["wide_obstacles"]) < len(call["obstacles"]), \
-        "the wide set is the person, not everything in the corridor"
-
-
-def test_nothing_gets_the_wider_berth_when_no_person_is_being_passed(monkeypatch):
-    _module, follower, _published, _commanded = dwa_with(
-        [parked(1.0)], monkeypatch)
-
-    follower.step()
-
-    assert follower.planner.calls[0]["wide_obstacles"] == []
-
-
-# ------------------------------------------------ holding a person together
-
-def summary_at(stamp, objects):
-    return cg.parse_summary(json.dumps(
-        {"stamp": stamp, "status": "OK", "objects": objects}))
-
-
-def test_a_person_survives_a_producer_dropout(monkeypatch):
-    """Measured over one 148 s run on 2026-08-25: the nearest person's
-    reported position jumped 0.9 m laterally between consecutive seconds
-    and came back, the motion flickered between static, moving and unknown,
-    and the object vanished from whole frames. The decision was re-made
-    against that every cycle - 17 DWA -> WAIT transitions and 16 back - so
-    the chair accelerated whenever they blinked out and stopped dead when
-    they returned.
-    """
-    _module, follower, _p, _c = dwa_with([standing(2.0)], monkeypatch)
-    assert follower.corridor_threat(0.0) is not None
-
-    follower.cluster_summary = summary_at(100.5, [])
-    assert follower.corridor_threat(0.0) is not None, \
-        "half a second of gap is a dropout, not a person leaving"
-
-
-def test_a_person_who_really_leaves_is_let_go(monkeypatch):
-    """It remembers; it does not invent. Past the window they are gone."""
-    _module, follower, _p, _c = dwa_with([standing(2.0)], monkeypatch)
-    follower.corridor_threat(0.0)
-
-    follower.cluster_summary = summary_at(100.0 + cg.PERSON_MEMORY_S + 0.5, [])
-    assert follower.corridor_threat(0.0) is None
-
-
-def test_only_a_person_is_held(monkeypatch):
-    """A thing that the producer drops is dropped. The memory is for the
-    class whose dropouts were measured and whose consequences are a
-    pedestrian, not a general distrust of the producer."""
-    _module, follower, _p, _c = dwa_with([parked(2.0)], monkeypatch)
-    assert follower.corridor_threat(0.0) is not None
-
-    follower.cluster_summary = summary_at(100.2, [])
-    assert follower.corridor_threat(0.0) is None
-
-
-def test_the_memory_is_timed_off_the_producer_clock(monkeypatch):
-    """Not the node clock. The question is how long since IT last reported
-    them, and a summary that has itself gone stale must not read as a
-    person who is still standing there."""
-    _module, follower, _p, _c = dwa_with([standing(2.0)], monkeypatch)
-    follower.corridor_threat(0.0)
-
-    follower.cluster_summary = summary_at(100.1, [])
-    assert follower.corridor_threat(0.0) is not None
-    follower.cluster_summary = summary_at(140.0, [])
-    assert follower.corridor_threat(0.0) is None

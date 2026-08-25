@@ -87,69 +87,6 @@ MAX_OBSTACLE_OBJECTS = 4
 # because a label this code does not recognise must not silently become
 # something it is willing to drive around.
 PERSON_LABEL = "person"
-# Going round a person, and the three things that have to be true first.
-#
-# On 2026-08-25 the operator stood in the corridor and the chair stopped
-# 1.4 m short and waited until they stepped aside - correct by the rule
-# then in force, which was that a person is never gone round at all. That
-# rule went in the same day because the one before it was worse: the
-# tracker calls someone STATIC after CONFIRM_S, 1.5 s, which is less than
-# a pause to read a phone, and STATIC is parked, so a pedestrian who
-# stopped walking was gone round from 8 m out.
-#
-# So the answer is neither. A person standing still long enough to be
-# standing there rather than pausing mid-stride is gone round, at a crawl,
-# with more room than a thing gets.
-#
-# Five seconds, because it is the difference between the two cases and not
-# a tuning knob: someone checking a phone or waiting for a gap in traffic
-# moves inside it, and someone who has been still for five seconds and is
-# still still is an obstacle who happens to be a person. It is measured
-# from the blocked clock rather than the tracker's own history because
-# that clock already exists and resets the moment they move.
-#
-# STATIC and not merely "not MOVING": UNKNOWN is what a track looks like
-# before it has been watched long enough, and for a person the honest
-# reading of that is someone about to step out.
-PERSON_BYPASS_AFTER_S = 5.0
-# The berth. A thing is cleared by OBSTACLE_FLOOR_M, which is matched to
-# what safety_gate stops for; a person gets more, because the failure mode
-# is them moving while the chair is alongside.
-PERSON_BYPASS_CLEARANCE_M = 0.80
-# And at a crawl, so that if they do move there is time to stop. This is
-# the rotation floor, the slowest speed the wheels actually turn for.
-PERSON_BYPASS_SPEED_MPS = 0.35
-# The smallest a person is allowed to be, whatever the box says.
-#
-# Measured over 3,803 person observations on 2026-08-25: the producer
-# reports 0.44 x 0.45 m on average, and the 5th percentile of the width is
-# 0.18 m. A lidar at armrest height catches a slice of a torso, not a
-# person - the feet are below the band the clusterer keeps and the arms are
-# outside whatever it did catch. Every clearance measured off that box is
-# therefore measured off the wrong body, which is how a 0.80 m berth put
-# the chair against somebody's side.
-#
-# 0.35 m of half-extent is a 0.70 m box, which is a standing adult with
-# their feet and a little sway. It is a FLOOR, so a producer that sees more
-# than that is believed.
-PERSON_MIN_HALF_EXTENT_M = 0.35
-# How long a person stays real after the producer stops reporting them.
-#
-# The producer loses and refinds people constantly. Measured over one 148 s
-# run on 2026-08-25: the nearest person's reported position jumped 0.9 m
-# laterally between consecutive seconds and came back, and 2.1 m on another
-# pass; the label flickered between person and obstacle, the motion between
-# static, moving and unknown, and the object itself vanished from whole
-# frames. The decision was re-litigated against that every cycle - 17
-# DWA -> WAIT transitions and 16 back in the same run - so the chair
-# accelerated whenever they blinked out and stopped dead when they
-# returned. That is the lurching, and it is an input problem wearing a
-# control problem's clothes.
-#
-# A second of memory covers the dropouts without inventing anybody: it only
-# ever holds a threat the producer HAS reported, and only until it has been
-# absent for longer than the gaps it actually leaves.
-PERSON_MEMORY_S = 1.0
 
 
 class Threat(object):
@@ -228,14 +165,7 @@ def parse_summary(payload):
 
 
 def object_box(item):
-    """(x, y, half_x, half_y) for one object, or None if it does not parse.
-
-    A person is never returned smaller than PERSON_MIN_HALF_EXTENT_M. This
-    is the one place to do it: the stopping distance, the threat's lateral
-    offset and the points the planner scores against all come through here,
-    and inflating any one of them alone would leave the others measuring a
-    different body.
-    """
+    """(x, y, half_x, half_y) for one object, or None if it does not parse."""
     try:
         x = float(item["x"])
         y = float(item["y"])
@@ -246,9 +176,6 @@ def object_box(item):
         return None
     if not all(math.isfinite(v) for v in (x, y, half_x, half_y)):
         return None
-    if str(item.get("class", "")).strip().lower() == PERSON_LABEL:
-        half_x = max(half_x, PERSON_MIN_HALF_EXTENT_M)
-        half_y = max(half_y, PERSON_MIN_HALF_EXTENT_M)
     return x, y, half_x, half_y
 
 
@@ -430,8 +357,7 @@ def corridor_reach(item, lateral_shift_m, half_width_m):
     return True, distance, motion
 
 
-def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
-                   labels=None):
+def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
     """The nearest object overlapping the corridor, or None.
 
     None means nothing is in the way. It never means "could not tell": an
@@ -440,13 +366,8 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
     """
     if not summary.usable:
         return Threat(BLOCKED, MOVING, summary.status or "unusable")
-    wanted = None if labels is None else {
-        str(label).strip().lower() for label in labels}
     nearest = None
     for item in summary.objects:
-        label = str(item.get("class", "")).strip().lower()
-        if wanted is not None and label not in wanted:
-            continue
         blocks, distance, motion = corridor_reach(
             item, lateral_shift_m, half_width_m)
         if not blocks:
@@ -461,8 +382,7 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
 
 def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
                              max_distance_m=None,
-                             max_objects=MAX_OBSTACLE_OBJECTS,
-                             only_label=None):
+                             max_objects=MAX_OBSTACLE_OBJECTS):
     """(blocks, points) for everything in the way, as geometry.
 
     The planner-facing companion to nearest_threat. That one answers "is
@@ -488,9 +408,6 @@ def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
         return True, [(BLOCKED, lateral_shift_m)]
     found = []
     for item in summary.objects:
-        if only_label is not None and \
-                str(item.get("class", "")).strip().lower() != only_label:
-            continue
         blocks, points = object_points(item, lateral_shift_m, half_width_m)
         if not blocks or not points:
             continue
@@ -512,9 +429,7 @@ CLEAR = "clear"
 
 
 def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
-                       bypass_after_s,
-                       person_bypass_after_s=PERSON_BYPASS_AFTER_S,
-                       person_still_for_s=None):
+                       bypass_after_s):
     """What to do about the nearest thing in the corridor.
 
     GO_ROUND for something the tracker has watched stand still, and taken
@@ -526,31 +441,13 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     Nothing here resumes the chair explicitly: once they leave the corridor
     the threat is gone, the answer becomes CLEAR, and it drives on.
 
-    A person is waited out, and gone round only after standing still for
-    person_bypass_after_s with the tracker calling them STATIC. The rules
-    below cannot be let near them: CONFIRM_S is 1.5 s, less than a pause to
-    check a phone, and STATIC is parked, so the first would step around a
-    pedestrian from 8 m out without the blocked clock ever starting.
-
-    person_still_for_s is how long THIS person has been standing still,
-    and it is not the blocked clock. The first version of this used the
-    blocked clock and the bypass was granted too late to execute: that
-    clock only starts once they are inside the stop radius, and over the
-    five seconds it takes to run the chair closes from 3.1 m to 1.1 m. At
-    1.1 m, dead ahead, no arc clears anybody by PERSON_BYPASS_CLEARANCE_M,
-    so the planner answered OBSTACLE and the chair stood there anyway -
-    measured 2026-08-25, HOLD:DWA_OBSTACLE with a person at x 1.06.
-
-    Timed from when they are SEEN standing instead, so the decision is made
-    while there is still room to act on it. That is the same reason the
-    parked rule below fires from plan_ahead_m rather than from the stopping
-    distance: a sidestep decided early is a drift past, and one decided
-    late is a stop with a stop's geometry.
-
-    The caller is expected to hold the extra conditions that do not belong
-    in a decision function - the wider berth and the crawl - because they
-    are about how to execute the manoeuvre rather than whether it is
-    allowed.
+    A person is waited out whatever the tracker says about them, which the
+    two rules below did not do. Standing still for CONFIRM_S - 1.5 s, less
+    than a pause to check a phone - made someone STATIC, and STATIC is
+    parked, so the first rule would step around a stationary pedestrian
+    from 8 m out without the blocked clock ever starting. The second rule
+    reached the same place by a slower road. Both now stop short of it: the
+    only thing that clears a person is the person leaving.
 
     blocked_for_s is the fallback for sources that carry no identity. A
     raw-scan return is UNKNOWN forever, so standing in the way is the only
@@ -560,16 +457,6 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     if threat is None:
         return CLEAR
     if threat.is_person:
-        if threat.motion == STATIC and threat.distance_m < plan_ahead_m:
-            if person_still_for_s is not None and \
-                    person_still_for_s > person_bypass_after_s:
-                return GO_ROUND
-            # Stop and watch, even though they are still outside the
-            # stopping radius. Waiting only once they are close enough to
-            # block is what left no room to go round them, and driving up
-            # to somebody and then swerving is not what anyone wants done
-            # around them either.
-            return WAIT
         return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
         return GO_ROUND

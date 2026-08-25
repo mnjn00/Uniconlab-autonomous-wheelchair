@@ -82,9 +82,7 @@ from std_msgs.msg import String
 
 import dwa_core
 import mpc_speed
-from cluster_guard import (GO_ROUND, PERSON_BYPASS_CLEARANCE_M,
-                           PERSON_BYPASS_SPEED_MPS, PERSON_LABEL, WAIT,
-                           corridor_obstacle_points)
+from cluster_guard import GO_ROUND, WAIT, corridor_obstacle_points
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command, jerk_limited
 from route_mask import RouteMask
@@ -270,7 +268,7 @@ class DwaFollower(WaypointFollower):
         self.odom_v = float(message.twist.twist.linear.x)
         self.odom_w = float(message.twist.twist.angular.z)
 
-    def obstacle_points(self, state, only_label=None):
+    def obstacle_points(self, state):
         """The objects ahead, as the returns the rollouts must clear.
 
         Where they actually are, not straight ahead: placing every threat on
@@ -291,7 +289,7 @@ class DwaFollower(WaypointFollower):
             return ()
         blocks, points = corridor_obstacle_points(
             self.cluster_summary, OBSTACLE_HALF_WIDTH_M,
-            max_distance_m=PLAN_AHEAD_M, only_label=only_label)
+            max_distance_m=PLAN_AHEAD_M)
         if not blocks or not points:
             return ()
         heading = np.array([math.cos(state[2]), math.sin(state[2])])
@@ -357,7 +355,7 @@ class DwaFollower(WaypointFollower):
         # to the planner whichever it was, and the planner would clear a
         # walking person by OBSTACLE_FLOOR_M and drive past.
         threat = self.corridor_threat(0.0)
-        stop_m = self.stop_radius_for(threat)
+        stop_m = self.stop_radius()
         decision = self.avoidance_for(
             now, threat,
             threat is not None and threat.distance_m < stop_m)
@@ -394,26 +392,6 @@ class DwaFollower(WaypointFollower):
         # Geometry only when going round it. Handing the planner an object it
         # is not allowed to go round would let it sidestep anyway.
         obstacles = self.obstacle_points(state) if decision == GO_ROUND else ()
-        # Going round a PERSON is the same manoeuvre executed differently:
-        # a wider berth, and slowly enough that if they move after all
-        # there is time to stop rather than to swerve. avoidance_decision
-        # has already established they have stood still long enough to be
-        # standing there rather than pausing.
-        wide = ()
-        clearance = None
-        if decision == GO_ROUND and threat is not None and threat.is_person:
-            # Only THEIR returns get the wider berth. Everything else in the
-            # corridor - the wall the chair is turning towards to make room
-            # - keeps the ordinary one.
-            wide = self.obstacle_points(state, only_label=PERSON_LABEL)
-            clearance = PERSON_BYPASS_CLEARANCE_M
-            cap = min(cap, PERSON_BYPASS_SPEED_MPS)
-            if self.dwa_status != "PERSON_BYPASS":
-                rospy.logwarn(
-                    "going round someone who has stood still: %.2f m ahead, "
-                    "%.2f m berth, %.2f m/s", threat.distance_m,
-                    PERSON_BYPASS_CLEARANCE_M, cap)
-            self.dwa_status = "PERSON_BYPASS"
         # Plan from where the chair will be when the command lands, not from
         # where it is. The gap was measured on 2026-08-11 by cross-correlating
         # commanded angular.z against the yaw rate differentiated from
@@ -426,8 +404,7 @@ class DwaFollower(WaypointFollower):
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate,
-            last_speed=self.current_speed,
-            wide_obstacles=wide, wide_clearance_m=clearance)
+            last_speed=self.current_speed)
         if status != "OK":
             if status != self.dwa_status:
                 if status == "SPEED_BELOW_FLOOR":

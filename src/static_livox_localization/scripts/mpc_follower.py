@@ -188,8 +188,7 @@ class MpcFollower(WaypointFollower):
         threat = self.corridor_threat(0.0) if self.clusters_enabled else None
         decision = self.avoidance_for(
             now, threat,
-            threat is not None and
-            threat.distance_m < self.stop_radius_for(threat))
+            threat is not None and threat.distance_m < self.stop_radius())
         if decision == WAIT:
             self.publish_state("HOLD:MPC_WAIT")
             self.mpc_status = "WAIT"

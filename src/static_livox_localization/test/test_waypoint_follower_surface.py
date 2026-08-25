@@ -39,11 +39,7 @@ def test_follower_holds_on_lost_pose_cloud_or_manual_mode():
 
 def test_follower_keeps_wheelchair_inside_map_safety_band():
     text = follower_text()
-    assert "from safety_band import" in text and "SafetyBand" in text
-    # The corridor is a cost now, not a wall, and the follower has to be
-    # asking the same question the planner asks - see BAND_EXCURSION_MAX_M.
-    assert "self.band.passable(" in text
-    assert "BAND_EXCURSION_MAX_M" in text
+    assert "from safety_band import SafetyBand" in text
     assert "self.band.clamp(target)" in text
     assert '"OFF_BAND"' in text
     band = (ROOT / "scripts" / "safety_band.py").read_text(encoding="utf-8")
