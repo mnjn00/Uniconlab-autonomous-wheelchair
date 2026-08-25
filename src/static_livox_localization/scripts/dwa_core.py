@@ -126,7 +126,7 @@ YAW_SAMPLES = 21
 # recorded line is ground a person actually drove, so deviation is a cost and
 # not merely a preference. Progress second, obstacles third - an obstacle
 # that is not in the corridor has already been excluded by the band.
-W_PATH = 3.3
+W_PATH = 3.0
 W_PROGRESS = 1.0
 W_OBSTACLE = 2.0
 
@@ -201,21 +201,6 @@ W_CENTRE = 2.0
 # authoritative chair-centre region. Outside it is never selectable, and
 # the last 0.5 m inside it gets progressively more expensive.
 W_MASK_BOUNDARY = 3.0
-# What a metre outside the drawn corridor costs.
-#
-# Deliberately off the scale of every other term. The whole rest of this
-# expression lives between roughly -3 and +10, so one CENTIMETRE outside
-# already outweighs any preference the scorer has about speed, heading,
-# progress or where in the corridor to sit. Nothing chooses to leave
-# because it is marginally tidier out there; the only thing that can pay
-# this is the alternative being rejected outright, which is what happens
-# when an obstacle kills every arc that stays inside.
-#
-# That is the behaviour asked for on 2026-08-23: hardly ever, but possible
-# when going round something needs it. The bound on HOW far out is not
-# here - a weight cannot bound anything - it is BAND_EXCURSION_MAX_M in
-# safety_band, enforced as a reject alongside the kerb rule and the mask.
-W_OUTSIDE_BAND = 10000.0
 
 # A candidate whose rollout passes closer than this to a tracked object is
 # discarded outright rather than scored - the same floor mpc_core keeps.
@@ -227,8 +212,6 @@ W_OUTSIDE_BAND = 10000.0
 # again. That is the second entrance to the 2026-08-23 motorcycle deadlock:
 # the nearest surface of it sat 0.47 m off the centreline - clear to the
 # planner, a stop to the gate. A planner must not propose what the gate
-from safety_band import BAND_EXCURSION_MAX_M
-
 # forbids; where they disagree the chair simply stands still.
 OBSTACLE_FLOOR_M = 0.50
 
@@ -416,7 +399,7 @@ class DwaPlanner:
         return np.concatenate([paths, grown], axis=1)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
-             last_speed=None, wide_obstacles=(), wide_clearance_m=None):
+             last_speed=None):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -456,20 +439,11 @@ class DwaPlanner:
         # asking it and then asking margins_many searched 802 stations for
         # 1,785 points twice over - 24.4 ms each on the target NUC, 96 % of a
         # cycle with 100 ms to spend, for one answer computed twice.
-        lateral, lo, hi, severe_lo, severe_hi = self.band.margins_many(
-            flat, with_hazard=True)
-        # How far each sampled point sits outside the drawn corridor, and
-        # whether the edge it left is a measured drop. The corridor is no
-        # longer a wall - see BAND_EXCURSION_MAX_M - but a kerb still is.
-        below = np.maximum((lo - self.grace) - lateral, 0.0)
-        above = np.maximum(lateral - (hi + self.grace), 0.0)
-        excursion = below + above
-        toward_hazard = ((below > 0.0) & severe_lo) | \
-                        ((above > 0.0) & severe_hi)
-        allowed = (excursion <= BAND_EXCURSION_MAX_M) & ~toward_hazard
+        lateral, lo, hi = self.band.margins_many(flat)
+        inside = self.band.contained(lateral, lo, hi, self.grace)
         if self.route_mask is not None:
-            allowed &= self.route_mask.contains_many(flat)
-        ok = allowed.reshape(len(pairs), self.steps).all(axis=1)
+            inside &= self.route_mask.contains_many(flat)
+        ok = inside.reshape(len(pairs), self.steps).all(axis=1)
         if self.route_mask is not None:
             ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
         if not ok.any():
@@ -491,27 +465,6 @@ class DwaPlanner:
         else:
             clear = np.full(len(pairs), np.inf)
         ok &= clear >= OBSTACLE_FLOOR_M
-        # A wider berth for SOME of the obstacles, never a higher floor for
-        # all of them.
-        #
-        # It was a floor first, and that is a different thing: `clear` is
-        # the distance to the NEAREST return of anything, so raising it to
-        # go round a person raised it against the wall on the far side too.
-        # Measured 2026-08-25 - the chair turned to pass someone, met a
-        # wall in the gap it had turned into, and refused a lane it had
-        # 0.5 m of room in because it was asking that wall for 0.80. The
-        # room was there and the arithmetic was not.
-        #
-        # So the berth travels with the points it is about. A person needs
-        # more space than a wall does because a person can move; a wall
-        # only has to be missed.
-        if len(wide_obstacles) and wide_clearance_m is not None:
-            from scipy.spatial import cKDTree as _WideTree
-            wide_pts = np.asarray(wide_obstacles, dtype=float).reshape(-1, 2)
-            wide_distance, _ = _WideTree(wide_pts).query(
-                watched[:, :, :2].reshape(-1, 2), workers=-1)
-            wide_clear = wide_distance.reshape(len(pairs), -1).min(axis=1)
-            ok &= wide_clear >= float(wide_clearance_m)
         if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
         d, idx = self.tree.query(flat, workers=-1)
@@ -544,13 +497,11 @@ class DwaPlanner:
         else:
             mask_boundary = self.route_mask.boundary_cost_many(flat).reshape(
                 len(pairs), self.steps).mean(axis=1)
-        outside = excursion.reshape(len(pairs), self.steps).mean(axis=1)
         cost = (W_SPEED * speed_change
                 - W_VELOCITY * np.asarray([p[0] for p in pairs])
                 + W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
                 + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre
-                + W_MASK_BOUNDARY * mask_boundary
-                + W_OUTSIDE_BAND * outside)
+                + W_MASK_BOUNDARY * mask_boundary)
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
         return float(pairs[best][0]), float(pairs[best][1]), "OK"

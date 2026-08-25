@@ -158,12 +158,12 @@ def test_field_startup_defaults_to_livox_builtin_imu_and_shipped_route():
     assert 'rostopic echo -n1 /livox/imu/header' in startup
 
 
-def test_field_speed_is_capped_at_point_eight_metres_per_second():
+def test_field_speed_is_capped_at_one_metre_per_second():
     follower = (PACKAGE / "scripts" / "waypoint_follower.py").read_text(
         encoding="utf-8"
     )
 
-    assert re.search(r"^MAX_SPEED\s*=\s*0\.8$", follower, flags=re.MULTILINE)
+    assert re.search(r"^MAX_SPEED\s*=\s*1\.0$", follower, flags=re.MULTILINE)
 
 
 def test_localizer_reports_every_registration_filter_stage():

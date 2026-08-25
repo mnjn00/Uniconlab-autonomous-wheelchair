@@ -50,21 +50,6 @@ DROP_SEVERE_M = 0.12
 # the driven line itself is proven safe, so never shrink the usable band
 # below this; narrow stations creep instead of holding
 BAND_FLOOR = 0.15
-# How far outside the drawn corridor an arc may go to get round something.
-#
-# Until 2026-08-23 the band was absolute: a rollout leaving it was rejected
-# whatever else was true, and a parked motorcycle 0.77 m off the centreline
-# could stand the chair up for 130 s inside a corridor open 2.70 m the
-# other way. The corridor is an operator's drawing of where the route runs,
-# and where it has no measured drop under it there is nothing physical at
-# its edge. Leaving it should be expensive, not impossible.
-#
-# Bounded because the argument for allowing it runs out: 0.40 m clears an
-# object sitting at the edge of the chair's own width and is still a
-# sidestep. Past that the chair is not avoiding something, it is driving
-# somewhere else, and the drivable mask - which IS physical - remains an
-# absolute reject at every distance.
-BAND_EXCURSION_MAX_M = 0.40
 NARROW_BAND_WIDTH = 1.2
 # Cap on how far the planned line may be shifted from the recorded one.
 # The recorded line is the only path known to have been driven, so leaving
@@ -265,7 +250,7 @@ class SafetyBand:
         lateral, lo, hi = self.lateral_limits(point)
         return lo - grace - 1e-6 <= lateral <= hi + grace + 1e-6
 
-    def margins_many(self, points, with_hazard=False):
+    def margins_many(self, points):
         """Lateral offset and the limits bracketing it, per point.
 
         Exactly the geometry containment already computes, returned instead
@@ -273,22 +258,12 @@ class SafetyBand:
         corridor needs the distance to each edge, and the alternative -
         recomputing station lookup and normals on its side - is a second
         copy of the band rules that drifts from this one.
-
-        with_hazard adds two more arrays: whether the low and high edges
-        bracketing each point are MEASURED fall hazards. Not every edge is
-        the same kind of edge, and a caller deciding what leaving costs has
-        to be able to tell them apart. Severe if EITHER bracketing station
-        says so, on the same conservative principle as the limits.
         """
         array = np.asarray(points, dtype=float)
         if array.ndim != 2 or array.shape[1] != 2:
             raise ValueError("points must have shape (N, 2)")
         if not len(array):
             empty = np.zeros(0, dtype=float)
-            if with_hazard:
-                flags = np.zeros(0, dtype=bool)
-                return (empty, empty.copy(), empty.copy(),
-                        flags, flags.copy())
             return empty, empty.copy(), empty.copy()
 
         delta = array[:, None, :] - self.xy[None, :, :]
@@ -308,52 +283,7 @@ class SafetyBand:
             "ni,ni->n", array - self.xy[nearest], self.normals[nearest])
         lo = -np.min(self.right[order], axis=1)
         hi = np.min(self.left[order], axis=1)
-        if with_hazard:
-            return (lateral, lo, hi,
-                    np.any(self.severe_right[order], axis=1),
-                    np.any(self.severe_left[order], axis=1))
         return lateral, lo, hi
-
-    def excursion_many(self, points, grace=0.0):
-        """How far outside each point sits, and whether that side is a drop.
-
-        (metres past the nearer edge, zero inside; True when the edge it
-        left is a measured fall hazard).
-        """
-        lateral, lo, hi, severe_lo, severe_hi = self.margins_many(
-            points, with_hazard=True)
-        below = np.maximum((lo - float(grace)) - lateral, 0.0)
-        above = np.maximum(lateral - (hi + float(grace)), 0.0)
-        excursion = below + above
-        toward_hazard = ((below > 0.0) & severe_lo) | \
-                        ((above > 0.0) & severe_hi)
-        return excursion, toward_hazard
-
-    def passable_many(self, points, allowance_m, grace=0.0):
-        """Inside, or outside by little enough on an edge that is not a drop.
-
-        The one place that says what leaving the corridor means, so the
-        planner choosing an arc and the follower judging where the chair
-        actually is cannot answer it differently. They did not used to have
-        to agree, because the answer was the same for both: never.
-
-        The corridor is drawn, and a drawing is not a wall. usable_limit
-        already separates the two - toward a MEASURED hazard there is no
-        floor, so that edge is the kerb itself and stays absolute - and
-        this is the other side of the same distinction. An edge with no
-        measured drop is the end of the route the operator drew, and
-        stepping over it to get round something is a judgement, not a fall.
-
-        allowance_m bounds the judgement. Beyond it the chair is not
-        avoiding an obstacle any more, it is somewhere else.
-        """
-        excursion, toward_hazard = self.excursion_many(points, grace=grace)
-        return (excursion <= float(allowance_m)) & ~toward_hazard
-
-    def passable(self, point, allowance_m, grace=0.0):
-        return bool(self.passable_many(
-            np.asarray(point, dtype=float).reshape(1, 2),
-            allowance_m, grace=grace)[0])
 
     @staticmethod
     def contained(lateral, lo, hi, grace=0.0):
