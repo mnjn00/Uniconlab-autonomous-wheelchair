@@ -87,6 +87,38 @@ MAX_OBSTACLE_OBJECTS = 4
 # because a label this code does not recognise must not silently become
 # something it is willing to drive around.
 PERSON_LABEL = "person"
+# Going round a person, and the three things that have to be true first.
+#
+# On 2026-08-25 the operator stood in the corridor and the chair stopped
+# 1.4 m short and waited until they stepped aside - correct by the rule
+# then in force, which was that a person is never gone round at all. That
+# rule went in the same day because the one before it was worse: the
+# tracker calls someone STATIC after CONFIRM_S, 1.5 s, which is less than
+# a pause to read a phone, and STATIC is parked, so a pedestrian who
+# stopped walking was gone round from 8 m out.
+#
+# So the answer is neither. A person standing still long enough to be
+# standing there rather than pausing mid-stride is gone round, at a crawl,
+# with more room than a thing gets.
+#
+# Five seconds, because it is the difference between the two cases and not
+# a tuning knob: someone checking a phone or waiting for a gap in traffic
+# moves inside it, and someone who has been still for five seconds and is
+# still still is an obstacle who happens to be a person. It is measured
+# from the blocked clock rather than the tracker's own history because
+# that clock already exists and resets the moment they move.
+#
+# STATIC and not merely "not MOVING": UNKNOWN is what a track looks like
+# before it has been watched long enough, and for a person the honest
+# reading of that is someone about to step out.
+PERSON_BYPASS_AFTER_S = 5.0
+# The berth. A thing is cleared by OBSTACLE_FLOOR_M, which is matched to
+# what safety_gate stops for; a person gets more, because the failure mode
+# is them moving while the chair is alongside.
+PERSON_BYPASS_CLEARANCE_M = 0.80
+# And at a crawl, so that if they do move there is time to stop. This is
+# the rotation floor, the slowest speed the wheels actually turn for.
+PERSON_BYPASS_SPEED_MPS = 0.35
 
 
 class Threat(object):
@@ -435,7 +467,8 @@ CLEAR = "clear"
 
 
 def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
-                       bypass_after_s):
+                       bypass_after_s,
+                       person_bypass_after_s=PERSON_BYPASS_AFTER_S):
     """What to do about the nearest thing in the corridor.
 
     GO_ROUND for something the tracker has watched stand still, and taken
@@ -447,13 +480,16 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     Nothing here resumes the chair explicitly: once they leave the corridor
     the threat is gone, the answer becomes CLEAR, and it drives on.
 
-    A person is waited out whatever the tracker says about them, which the
-    two rules below did not do. Standing still for CONFIRM_S - 1.5 s, less
-    than a pause to check a phone - made someone STATIC, and STATIC is
-    parked, so the first rule would step around a stationary pedestrian
-    from 8 m out without the blocked clock ever starting. The second rule
-    reached the same place by a slower road. Both now stop short of it: the
-    only thing that clears a person is the person leaving.
+    A person is waited out, and gone round only after standing still for
+    person_bypass_after_s with the tracker calling them STATIC. The rules
+    below cannot be let near them: CONFIRM_S is 1.5 s, less than a pause to
+    check a phone, and STATIC is parked, so the first would step around a
+    pedestrian from 8 m out without the blocked clock ever starting.
+
+    The caller is expected to hold the extra conditions that do not belong
+    in a decision function - the wider berth and the crawl - because they
+    are about how to execute the manoeuvre rather than whether it is
+    allowed.
 
     blocked_for_s is the fallback for sources that carry no identity. A
     raw-scan return is UNKNOWN forever, so standing in the way is the only
@@ -463,6 +499,10 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     if threat is None:
         return CLEAR
     if threat.is_person:
+        if blocking and blocked_for_s is not None and \
+                blocked_for_s > person_bypass_after_s and \
+                threat.motion == STATIC:
+            return GO_ROUND
         return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
         return GO_ROUND

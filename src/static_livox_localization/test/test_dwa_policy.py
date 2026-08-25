@@ -141,9 +141,10 @@ class RecordingPlanner(object):
         self.calls = []
 
     def plan(self, state, obstacles=(), speed_cap=None,
-             last_yaw_rate=0.0, last_speed=None):
+             last_yaw_rate=0.0, last_speed=None, clearance_m=None):
         self.calls.append({"obstacles": list(obstacles),
-                           "speed_cap": speed_cap})
+                           "speed_cap": speed_cap,
+                           "clearance_m": clearance_m})
         return 0.3, 0.0, "OK"
 
 
@@ -189,6 +190,7 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.gate_blocked_since = None
     follower.gate_detail = ""
     follower.gate_blocked_for = lambda now: None
+    follower.Stamp = Stamp
     # The base's own report is the only velocity on the bus; the double
     # stands in for it because /Odometry carries no twist.
     follower.measured_speed = 0.0
@@ -469,3 +471,74 @@ def test_both_obstacle_vetoes_count(reason):
     assert module.gate_stall(reason, 2.0)
     assert not module.gate_stall(reason, 0.1)
     assert not module.gate_stall(reason, None)
+
+
+# --------------------------------------- going round someone who is standing
+
+def standing(x, y=0.0, size=(0.6, 0.6, 1.7)):
+    """A person the tracker has watched hold still."""
+    return {"class": "person", "x": x, "y": y, "size": list(size),
+            "points": 40, "motion": ct.STATIC}
+
+
+def blocked_for(follower, seconds):
+    """Pretend the corridor has been blocked this long.
+
+    rospy.Time.now() is stubbed at 100.0 in the fixture, so a clock that
+    started `seconds` ago is that much earlier.
+    """
+    follower.blocked_since = follower.Stamp(100.0 - seconds)
+
+
+def test_someone_who_has_just_stopped_is_still_waited_for(monkeypatch):
+    """CONFIRM_S is 1.5 s, so a pause to read a phone makes the tracker say
+    STATIC. That is not enough to drive past someone."""
+    _module, follower, published, commanded = dwa_with(
+        [standing(1.0)], monkeypatch)
+    follower.blocked_since = None
+
+    follower.step()
+
+    assert published == ["HOLD:DWA_WAIT"]
+    assert commanded == ["STOP"]
+
+
+def test_someone_who_has_stood_still_long_enough_is_gone_round(monkeypatch):
+    """The behaviour asked for on 2026-08-25: the operator stood in the
+    corridor and the chair waited them out instead of passing."""
+    module, follower, _published, _commanded = dwa_with(
+        [standing(1.0)], monkeypatch)
+    blocked_for(follower, 6.0)
+
+    follower.step()
+
+    assert follower.planner.calls, "it stopped instead of planning"
+    assert follower.planner.calls[0]["obstacles"], \
+        "the planner was given nothing to bend around"
+
+
+def test_it_passes_a_person_at_a_crawl_and_with_a_wider_berth(monkeypatch):
+    """Both conditions travel with the manoeuvre, not just the permission
+    to make it: if they move after all, there has to be time to stop."""
+    module, follower, _published, _commanded = dwa_with(
+        [standing(1.0)], monkeypatch)
+    blocked_for(follower, 6.0)
+
+    follower.step()
+
+    call = follower.planner.calls[0]
+    assert call["clearance_m"] == module.PERSON_BYPASS_CLEARANCE_M
+    assert call["speed_cap"] <= module.PERSON_BYPASS_SPEED_MPS
+
+
+def test_a_thing_is_still_passed_at_the_ordinary_clearance(monkeypatch):
+    """The wider berth is for people. A parked object does not get it, and
+    handing every obstacle a 0.80 m berth would close corridors that are
+    known to be passable."""
+    module, follower, _published, _commanded = dwa_with(
+        [parked(1.0)], monkeypatch)
+
+    follower.step()
+
+    assert follower.planner.calls
+    assert follower.planner.calls[0]["clearance_m"] is None

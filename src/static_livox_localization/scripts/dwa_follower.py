@@ -82,7 +82,9 @@ from std_msgs.msg import String
 
 import dwa_core
 import mpc_speed
-from cluster_guard import GO_ROUND, WAIT, corridor_obstacle_points
+from cluster_guard import (GO_ROUND, PERSON_BYPASS_CLEARANCE_M,
+                           PERSON_BYPASS_SPEED_MPS, WAIT,
+                           corridor_obstacle_points)
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command, jerk_limited
 from route_mask import RouteMask
@@ -392,6 +394,21 @@ class DwaFollower(WaypointFollower):
         # Geometry only when going round it. Handing the planner an object it
         # is not allowed to go round would let it sidestep anyway.
         obstacles = self.obstacle_points(state) if decision == GO_ROUND else ()
+        # Going round a PERSON is the same manoeuvre executed differently:
+        # a wider berth, and slowly enough that if they move after all
+        # there is time to stop rather than to swerve. avoidance_decision
+        # has already established they have stood still long enough to be
+        # standing there rather than pausing.
+        clearance = None
+        if decision == GO_ROUND and threat is not None and threat.is_person:
+            clearance = PERSON_BYPASS_CLEARANCE_M
+            cap = min(cap, PERSON_BYPASS_SPEED_MPS)
+            if self.dwa_status != "PERSON_BYPASS":
+                rospy.logwarn(
+                    "going round someone who has stood still: %.2f m ahead, "
+                    "%.2f m berth, %.2f m/s", threat.distance_m,
+                    PERSON_BYPASS_CLEARANCE_M, cap)
+            self.dwa_status = "PERSON_BYPASS"
         # Plan from where the chair will be when the command lands, not from
         # where it is. The gap was measured on 2026-08-11 by cross-correlating
         # commanded angular.z against the yaw rate differentiated from
@@ -404,7 +421,8 @@ class DwaFollower(WaypointFollower):
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate,
-            last_speed=self.current_speed)
+            last_speed=self.current_speed,
+            clearance_m=clearance)
         if status != "OK":
             if status != self.dwa_status:
                 if status == "SPEED_BELOW_FLOOR":

@@ -72,7 +72,7 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            BYPASS_EDGE_KEEP_M, BYPASS_OFFSET_MAX_M,
                            BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
                            BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
-                           PERSON_LABEL,
+                           PERSON_BYPASS_AFTER_S, PERSON_LABEL,
                            avoidance_decision, bypass_offsets_for_room,
                            is_stale, nearest_threat, parse_summary)
 from cluster_tracking import MOVING
@@ -665,7 +665,8 @@ class WaypointFollower:
             threat, blocking,
             None if self.blocked_since is None
             else (now - self.blocked_since).to_sec(),
-            PLAN_AHEAD_M, BYPASS_AFTER_S)
+            PLAN_AHEAD_M, BYPASS_AFTER_S,
+            person_bypass_after_s=PERSON_BYPASS_AFTER_S)
 
     def take_a_way_round(self, clear_for_m):
         """Offset far enough to clear the corridor without leaving the band.

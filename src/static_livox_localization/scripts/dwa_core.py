@@ -416,7 +416,7 @@ class DwaPlanner:
         return np.concatenate([paths, grown], axis=1)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
-             last_speed=None):
+             last_speed=None, clearance_m=None):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -490,7 +490,13 @@ class DwaPlanner:
             clear = distance.reshape(len(pairs), -1).min(axis=1)
         else:
             clear = np.full(len(pairs), np.inf)
-        ok &= clear >= OBSTACLE_FLOOR_M
+        # The floor is matched to what safety_gate stops for, and a caller
+        # may ask for more of it - never less. Going round a person is the
+        # case that does: the failure mode is them moving while the chair
+        # is alongside, so the berth is wider than the one a thing gets.
+        floor = OBSTACLE_FLOOR_M if clearance_m is None else \
+            max(OBSTACLE_FLOOR_M, float(clearance_m))
+        ok &= clear >= floor
         if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
         d, idx = self.tree.query(flat, workers=-1)

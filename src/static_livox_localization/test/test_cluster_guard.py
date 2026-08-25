@@ -196,22 +196,55 @@ def person(distance, motion):
     return cg.Threat(distance, motion, cg.PERSON_LABEL)
 
 
-def test_a_person_standing_still_is_waited_for_not_driven_around():
-    """The rule the docstring always claimed and the code only half kept.
+def test_a_person_who_has_stood_still_long_enough_is_gone_round():
+    """2026-08-25: the operator stood in the corridor and the chair waited
+    them out. Five seconds is the line between someone pausing mid-stride
+    and someone who is simply standing there."""
+    assert decide(person(1.0, ct.STATIC), blocked_for_s=6.0) == cg.GO_ROUND
 
-    CONFIRM_S is 1.5 s, so someone who stops to check a phone is STATIC,
+
+def test_the_person_threshold_is_longer_than_the_one_for_a_thing():
+    """decide() passes 3.0 for a thing. A person gets longer, because the
+    evidence has to separate a pause from a stand, and 1.5 s of stillness
+    is all the tracker needs to call someone STATIC."""
+    assert cg.PERSON_BYPASS_AFTER_S >= 5.0
+    assert decide(person(1.0, ct.STATIC), blocked_for_s=4.0) == cg.WAIT
+    assert decide(person(1.0, ct.STATIC), blocked_for_s=6.0) == cg.GO_ROUND
+
+
+def test_an_unconfirmed_person_is_never_gone_round_however_long():
+    """UNKNOWN is what a track looks like before it has been watched long
+    enough, and for a person the honest reading is someone about to step
+    out. Standing in the way is not evidence about them."""
+    assert decide(person(1.0, ct.UNKNOWN), blocked_for_s=60.0) == cg.WAIT
+
+
+def test_a_person_who_is_moving_is_never_gone_round():
+    assert decide(person(1.0, ct.MOVING), blocked_for_s=60.0) == cg.WAIT
+
+
+def test_the_clock_is_the_blocked_clock_so_a_step_resets_it():
+    """avoidance_for clears blocked_since the moment they are no longer
+    blocking, so someone who shifts their feet starts the five seconds
+    again rather than accumulating toward a pass."""
+    assert decide(person(1.0, ct.STATIC), blocking=False,
+                  blocked_for_s=None) == cg.CLEAR
+
+
+def test_a_person_standing_still_is_waited_for_before_the_clock_runs():
+    """CONFIRM_S is 1.5 s, so someone who stops to check a phone is STATIC,
     and STATIC is parked - which sent the chair around a stationary
-    pedestrian from 8 m out without the blocked clock ever starting.
+    pedestrian from 8 m out without the blocked clock ever starting. The
+    distance rule still may not answer for a person; only the clock may.
     """
     assert decide(person(4.0, ct.STATIC), blocking=False) == cg.CLEAR
-    assert decide(person(4.0, ct.STATIC)) == cg.WAIT
+    assert decide(person(4.0, ct.STATIC), blocked_for_s=0.0) == cg.WAIT
 
 
-def test_a_person_is_not_gone_around_by_the_time_rule_either():
-    """The slower road to the same place. Standing in the way for three
-    seconds is evidence of parkedness for a thing; for a person it is
-    evidence of nothing but that they are standing there."""
-    assert decide(person(1.0, ct.STATIC), blocked_for_s=30.0) == cg.WAIT
+def test_the_thing_rule_does_not_reach_a_person():
+    """BYPASS_AFTER_S would let an UNKNOWN through at three seconds. For a
+    person that is the wrong evidence and the wrong threshold, and neither
+    rule below is allowed to answer for one."""
     assert decide(person(1.0, ct.UNKNOWN), blocked_for_s=30.0) == cg.WAIT
 
 
