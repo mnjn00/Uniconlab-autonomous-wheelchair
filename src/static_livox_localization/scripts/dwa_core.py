@@ -416,7 +416,7 @@ class DwaPlanner:
         return np.concatenate([paths, grown], axis=1)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
-             last_speed=None, clearance_m=None):
+             last_speed=None, wide_obstacles=(), wide_clearance_m=None):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -490,13 +490,28 @@ class DwaPlanner:
             clear = distance.reshape(len(pairs), -1).min(axis=1)
         else:
             clear = np.full(len(pairs), np.inf)
-        # The floor is matched to what safety_gate stops for, and a caller
-        # may ask for more of it - never less. Going round a person is the
-        # case that does: the failure mode is them moving while the chair
-        # is alongside, so the berth is wider than the one a thing gets.
-        floor = OBSTACLE_FLOOR_M if clearance_m is None else \
-            max(OBSTACLE_FLOOR_M, float(clearance_m))
-        ok &= clear >= floor
+        ok &= clear >= OBSTACLE_FLOOR_M
+        # A wider berth for SOME of the obstacles, never a higher floor for
+        # all of them.
+        #
+        # It was a floor first, and that is a different thing: `clear` is
+        # the distance to the NEAREST return of anything, so raising it to
+        # go round a person raised it against the wall on the far side too.
+        # Measured 2026-08-25 - the chair turned to pass someone, met a
+        # wall in the gap it had turned into, and refused a lane it had
+        # 0.5 m of room in because it was asking that wall for 0.80. The
+        # room was there and the arithmetic was not.
+        #
+        # So the berth travels with the points it is about. A person needs
+        # more space than a wall does because a person can move; a wall
+        # only has to be missed.
+        if len(wide_obstacles) and wide_clearance_m is not None:
+            from scipy.spatial import cKDTree as _WideTree
+            wide_pts = np.asarray(wide_obstacles, dtype=float).reshape(-1, 2)
+            wide_distance, _ = _WideTree(wide_pts).query(
+                watched[:, :, :2].reshape(-1, 2), workers=-1)
+            wide_clear = wide_distance.reshape(len(pairs), -1).min(axis=1)
+            ok &= wide_clear >= float(wide_clearance_m)
         if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
         d, idx = self.tree.query(flat, workers=-1)

@@ -420,7 +420,8 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
 
 def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
                              max_distance_m=None,
-                             max_objects=MAX_OBSTACLE_OBJECTS):
+                             max_objects=MAX_OBSTACLE_OBJECTS,
+                             only_label=None):
     """(blocks, points) for everything in the way, as geometry.
 
     The planner-facing companion to nearest_threat. That one answers "is
@@ -446,6 +447,9 @@ def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
         return True, [(BLOCKED, lateral_shift_m)]
     found = []
     for item in summary.objects:
+        if only_label is not None and \
+                str(item.get("class", "")).strip().lower() != only_label:
+            continue
         blocks, points = object_points(item, lateral_shift_m, half_width_m)
         if not blocks or not points:
             continue

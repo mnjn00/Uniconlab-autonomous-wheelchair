@@ -83,7 +83,7 @@ from std_msgs.msg import String
 import dwa_core
 import mpc_speed
 from cluster_guard import (GO_ROUND, PERSON_BYPASS_CLEARANCE_M,
-                           PERSON_BYPASS_SPEED_MPS, WAIT,
+                           PERSON_BYPASS_SPEED_MPS, PERSON_LABEL, WAIT,
                            corridor_obstacle_points)
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command, jerk_limited
@@ -270,7 +270,7 @@ class DwaFollower(WaypointFollower):
         self.odom_v = float(message.twist.twist.linear.x)
         self.odom_w = float(message.twist.twist.angular.z)
 
-    def obstacle_points(self, state):
+    def obstacle_points(self, state, only_label=None):
         """The objects ahead, as the returns the rollouts must clear.
 
         Where they actually are, not straight ahead: placing every threat on
@@ -291,7 +291,7 @@ class DwaFollower(WaypointFollower):
             return ()
         blocks, points = corridor_obstacle_points(
             self.cluster_summary, OBSTACLE_HALF_WIDTH_M,
-            max_distance_m=PLAN_AHEAD_M)
+            max_distance_m=PLAN_AHEAD_M, only_label=only_label)
         if not blocks or not points:
             return ()
         heading = np.array([math.cos(state[2]), math.sin(state[2])])
@@ -399,8 +399,13 @@ class DwaFollower(WaypointFollower):
         # there is time to stop rather than to swerve. avoidance_decision
         # has already established they have stood still long enough to be
         # standing there rather than pausing.
+        wide = ()
         clearance = None
         if decision == GO_ROUND and threat is not None and threat.is_person:
+            # Only THEIR returns get the wider berth. Everything else in the
+            # corridor - the wall the chair is turning towards to make room
+            # - keeps the ordinary one.
+            wide = self.obstacle_points(state, only_label=PERSON_LABEL)
             clearance = PERSON_BYPASS_CLEARANCE_M
             cap = min(cap, PERSON_BYPASS_SPEED_MPS)
             if self.dwa_status != "PERSON_BYPASS":
@@ -422,7 +427,7 @@ class DwaFollower(WaypointFollower):
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate,
             last_speed=self.current_speed,
-            clearance_m=clearance)
+            wide_obstacles=wide, wide_clearance_m=clearance)
         if status != "OK":
             if status != self.dwa_status:
                 if status == "SPEED_BELOW_FLOOR":

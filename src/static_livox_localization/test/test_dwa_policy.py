@@ -141,10 +141,12 @@ class RecordingPlanner(object):
         self.calls = []
 
     def plan(self, state, obstacles=(), speed_cap=None,
-             last_yaw_rate=0.0, last_speed=None, clearance_m=None):
+             last_yaw_rate=0.0, last_speed=None, wide_obstacles=(),
+             wide_clearance_m=None):
         self.calls.append({"obstacles": list(obstacles),
                            "speed_cap": speed_cap,
-                           "clearance_m": clearance_m})
+                           "wide_obstacles": list(wide_obstacles),
+                           "wide_clearance_m": wide_clearance_m})
         return 0.3, 0.0, "OK"
 
 
@@ -528,7 +530,7 @@ def test_it_passes_a_person_at_a_crawl_and_with_a_wider_berth(monkeypatch):
     follower.step()
 
     call = follower.planner.calls[0]
-    assert call["clearance_m"] == module.PERSON_BYPASS_CLEARANCE_M
+    assert call["wide_clearance_m"] == module.PERSON_BYPASS_CLEARANCE_M
     assert call["speed_cap"] <= module.PERSON_BYPASS_SPEED_MPS
 
 
@@ -542,4 +544,34 @@ def test_a_thing_is_still_passed_at_the_ordinary_clearance(monkeypatch):
     follower.step()
 
     assert follower.planner.calls
-    assert follower.planner.calls[0]["clearance_m"] is None
+    assert follower.planner.calls[0]["wide_clearance_m"] is None
+
+
+def test_the_wider_berth_is_asked_of_the_person_and_not_of_the_wall(monkeypatch):
+    """2026-08-25: the chair turned to pass someone, met a wall in the gap
+    it had turned into, and refused a lane it had 0.5 m of room in - it was
+    asking that wall for 0.80 too, because the berth had been implemented
+    as a floor under the distance to the nearest return of ANYTHING.
+
+    A person needs more space than a wall does because a person can move.
+    A wall only has to be missed.
+    """
+    _module, follower, _published, _commanded = dwa_with(
+        [standing(3.0), parked(3.2, y=0.8)], monkeypatch)
+    standing_for(follower, 6.0)
+
+    follower.step()
+
+    call = follower.planner.calls[0]
+    assert call["wide_obstacles"], "the person's own returns were not passed"
+    assert len(call["wide_obstacles"]) < len(call["obstacles"]), \
+        "the wide set is the person, not everything in the corridor"
+
+
+def test_nothing_gets_the_wider_berth_when_no_person_is_being_passed(monkeypatch):
+    _module, follower, _published, _commanded = dwa_with(
+        [parked(1.0)], monkeypatch)
+
+    follower.step()
+
+    assert follower.planner.calls[0]["wide_obstacles"] == []
