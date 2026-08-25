@@ -169,6 +169,7 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.cluster_summary = cg.parse_summary(json.dumps(
         {"stamp": 100.0, "status": "OK", "objects": objects}))
     follower.blocked_since = None
+    follower.person_memory = None
     follower.person_still_since = None
     follower.lateral_offset = 0.0
     follower.pose_xy = np.array([10.0, 0.0])
@@ -575,3 +576,60 @@ def test_nothing_gets_the_wider_berth_when_no_person_is_being_passed(monkeypatch
     follower.step()
 
     assert follower.planner.calls[0]["wide_obstacles"] == []
+
+
+# ------------------------------------------------ holding a person together
+
+def summary_at(stamp, objects):
+    return cg.parse_summary(json.dumps(
+        {"stamp": stamp, "status": "OK", "objects": objects}))
+
+
+def test_a_person_survives_a_producer_dropout(monkeypatch):
+    """Measured over one 148 s run on 2026-08-25: the nearest person's
+    reported position jumped 0.9 m laterally between consecutive seconds
+    and came back, the motion flickered between static, moving and unknown,
+    and the object vanished from whole frames. The decision was re-made
+    against that every cycle - 17 DWA -> WAIT transitions and 16 back - so
+    the chair accelerated whenever they blinked out and stopped dead when
+    they returned.
+    """
+    _module, follower, _p, _c = dwa_with([standing(2.0)], monkeypatch)
+    assert follower.corridor_threat(0.0) is not None
+
+    follower.cluster_summary = summary_at(100.5, [])
+    assert follower.corridor_threat(0.0) is not None, \
+        "half a second of gap is a dropout, not a person leaving"
+
+
+def test_a_person_who_really_leaves_is_let_go(monkeypatch):
+    """It remembers; it does not invent. Past the window they are gone."""
+    _module, follower, _p, _c = dwa_with([standing(2.0)], monkeypatch)
+    follower.corridor_threat(0.0)
+
+    follower.cluster_summary = summary_at(100.0 + cg.PERSON_MEMORY_S + 0.5, [])
+    assert follower.corridor_threat(0.0) is None
+
+
+def test_only_a_person_is_held(monkeypatch):
+    """A thing that the producer drops is dropped. The memory is for the
+    class whose dropouts were measured and whose consequences are a
+    pedestrian, not a general distrust of the producer."""
+    _module, follower, _p, _c = dwa_with([parked(2.0)], monkeypatch)
+    assert follower.corridor_threat(0.0) is not None
+
+    follower.cluster_summary = summary_at(100.2, [])
+    assert follower.corridor_threat(0.0) is None
+
+
+def test_the_memory_is_timed_off_the_producer_clock(monkeypatch):
+    """Not the node clock. The question is how long since IT last reported
+    them, and a summary that has itself gone stale must not read as a
+    person who is still standing there."""
+    _module, follower, _p, _c = dwa_with([standing(2.0)], monkeypatch)
+    follower.corridor_threat(0.0)
+
+    follower.cluster_summary = summary_at(100.1, [])
+    assert follower.corridor_threat(0.0) is not None
+    follower.cluster_summary = summary_at(140.0, [])
+    assert follower.corridor_threat(0.0) is None

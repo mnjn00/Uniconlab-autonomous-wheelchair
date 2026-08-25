@@ -133,6 +133,23 @@ PERSON_BYPASS_SPEED_MPS = 0.35
 # their feet and a little sway. It is a FLOOR, so a producer that sees more
 # than that is believed.
 PERSON_MIN_HALF_EXTENT_M = 0.35
+# How long a person stays real after the producer stops reporting them.
+#
+# The producer loses and refinds people constantly. Measured over one 148 s
+# run on 2026-08-25: the nearest person's reported position jumped 0.9 m
+# laterally between consecutive seconds and came back, and 2.1 m on another
+# pass; the label flickered between person and obstacle, the motion between
+# static, moving and unknown, and the object itself vanished from whole
+# frames. The decision was re-litigated against that every cycle - 17
+# DWA -> WAIT transitions and 16 back in the same run - so the chair
+# accelerated whenever they blinked out and stopped dead when they
+# returned. That is the lurching, and it is an input problem wearing a
+# control problem's clothes.
+#
+# A second of memory covers the dropouts without inventing anybody: it only
+# ever holds a threat the producer HAS reported, and only until it has been
+# absent for longer than the gaps it actually leaves.
+PERSON_MEMORY_S = 1.0
 
 
 class Threat(object):

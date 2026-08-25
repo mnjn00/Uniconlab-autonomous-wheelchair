@@ -73,6 +73,7 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
                            BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
                            PERSON_BYPASS_AFTER_S, PERSON_LABEL,
+                           PERSON_MEMORY_S,
                            avoidance_decision, bypass_offsets_for_room,
                            is_stale, nearest_threat, parse_summary)
 from cluster_tracking import MOVING, STATIC
@@ -179,6 +180,12 @@ LOOKAHEAD_BACKOFF_M = 0.4
 
 
 class WaypointFollower:
+    # Caches, defaulted on the class so that every instance has them
+    # however it was built. They answer "what was seen a moment ago", and
+    # the honest default for that is nothing.
+    person_memory = None
+    person_still_since = None
+
     # Which control law this class turns a pose into a Twist with. Both
     # profiles run as the same node under the same name, so the node alone
     # does not say which one started; subclasses override this and __init__
@@ -297,6 +304,7 @@ class WaypointFollower:
         self.current_speed = 0.0
         self.blocked_since = None
         self.person_still_since = None
+        self.person_memory = None
         self.lateral_offset = 0.0
         self.chord_speed_cap = MAX_SPEED
         self.chord_safe = True
@@ -637,7 +645,31 @@ class WaypointFollower:
         """
         if not self.clusters_enabled:
             return None
-        return self.cluster_threat(lateral_shift)
+        threat = self.cluster_threat(lateral_shift)
+        # A person is held for PERSON_MEMORY_S after the producer drops
+        # them. Every consumer downstream - the stopping radius, the
+        # decision, the points the rollouts are scored against - then sees
+        # the same person for as long as they are actually there, instead
+        # of each re-deciding against a different frame's opinion.
+        #
+        # Only a person, and only a threat that WAS reported: this
+        # remembers, it does not invent. Anything else the producer drops is
+        # dropped.
+        # Timed off the producer's own stamp rather than the node clock:
+        # the question is how long since IT last reported them, and that is
+        # the clock the answer lives on.
+        stamp = None if self.cluster_summary is None \
+            else self.cluster_summary.stamp_s
+        if threat is not None and threat.is_person:
+            self.person_memory = (stamp, threat)
+            return threat
+        if threat is None and self.person_memory is not None:
+            seen, remembered = self.person_memory
+            if seen is not None and stamp is not None and \
+                    (stamp - seen) <= PERSON_MEMORY_S:
+                return remembered
+            self.person_memory = None
+        return threat
 
     def avoidance_for(self, now, threat, blocking):
         """Parked or moving, and the blocked-for clock that backs the answer.
