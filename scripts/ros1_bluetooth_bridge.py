@@ -574,6 +574,23 @@ class BridgeState:
         self.localization_stamp = None
         self.objects_summary = None
         self.objects_stamp = None
+        # obstacle_clusters.py publishes far more than the one line the app used
+        # to show. What an operator needs to know is not "2 clusters" but
+        # whether anything is in the corridor and how close it is, so the fields
+        # that answer that are carried through instead of being flattened away.
+        self.objects_status = None
+        self.band_status = None
+        self.objects_counts = None
+        self.objects_in_band = None
+        self.objects_nearest_m = None
+        self.objects_nearest_in_band_m = None
+        self.bloom_filtered = None
+        # Roll and pitch out of the localizer's own pose. FAST-LIO builds the
+        # map gravity-aligned, so tilt in the map frame is the chair's tilt --
+        # and nothing else on this stack publishes an angle at all. tip_guard,
+        # despite the name, only reports OK/STALE and the speed it is passing.
+        self.pose_roll_deg = None
+        self.pose_pitch_deg = None
         self.follower_stamp = None
         self.estop_requested_at = None
         self.last_command_detail = None
@@ -673,6 +690,20 @@ class BridgeState:
                 "localization_status": localization,
                 "localization_tracking": localization == "TRACKING",
                 "objects_summary": objects,
+                "objects_status": self._fresh(self.objects_status,
+                                              self.objects_stamp, now),
+                "band_status": self._fresh(self.band_status,
+                                           self.objects_stamp, now),
+                "objects_counts": self._fresh(self.objects_counts,
+                                              self.objects_stamp, now),
+                "objects_in_band": self._fresh(self.objects_in_band,
+                                               self.objects_stamp, now),
+                "objects_nearest_m": self._fresh(self.objects_nearest_m,
+                                                 self.objects_stamp, now),
+                "objects_nearest_in_band_m": self._fresh(
+                    self.objects_nearest_in_band_m, self.objects_stamp, now),
+                "bloom_filtered": self._fresh(self.bloom_filtered,
+                                              self.objects_stamp, now),
                 "robot_fault": self.robot_fault,
 
                 # Navigation view. Pose is the same /fast_lio_icp/pose the route
@@ -681,6 +712,8 @@ class BridgeState:
                 "pose_x": self.pose_x,
                 "pose_y": self.pose_y,
                 "pose_yaw_deg": self.pose_yaw_deg,
+                "pose_roll_deg": self.pose_roll_deg,
+                "pose_pitch_deg": self.pose_pitch_deg,
                 "pose_age_s": age(self.pose_stamp),
                 "loc_fitness": self._fresh(self.loc_fitness,
                                            self.localization_stamp, now),
@@ -816,10 +849,15 @@ class RosLink:
         # yaw only; the view is top-down so roll/pitch are not wanted
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        sinr = 2.0 * (q.w * q.x + q.y * q.z)
+        cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+        sinp = max(-1.0, min(1.0, 2.0 * (q.w * q.y - q.z * q.x)))
         with self.state.lock:
             self.state.pose_x = round(p.x, 3)
             self.state.pose_y = round(p.y, 3)
             self.state.pose_yaw_deg = round(math.degrees(math.atan2(siny, cosy)), 1)
+            self.state.pose_roll_deg = round(math.degrees(math.atan2(sinr, cosr)), 1)
+            self.state.pose_pitch_deg = round(math.degrees(math.asin(sinp)), 1)
             self.state.pose_stamp = time.time()
 
     # waypoint_follower.py publishes "%s wp=%d/%d v=%.2f%s"; parse it rather than
@@ -884,26 +922,57 @@ class RosLink:
             self.state.tip_guard_stamp = time.time()
 
     def _objects_cb(self, msg):
-        # obstacle_clusters.py publishes a JSON blob, not a sentence. Dumping the
-        # raw string onto a phone line pushes everything useful off screen, so
-        # reduce it to the fields an operator actually reads.
+        """obstacle_clusters.py publishes a JSON blob; keep what steers a decision.
+
+        The old reduction threw away the part that matters. "클러스터 2" says
+        nothing about whether either of them is in the chair's way, and the band
+        relation per object is exactly that: objects whose returns fall inside
+        the safety band are the ones the follower holds for.
+        """
         text = msg.data
+        status = band = counts = None
+        in_band = nearest = nearest_in_band = bloom = None
         try:
             blob = json.loads(text)
-            counts = blob.get("counts") or {}
-            total = sum(v for v in counts.values() if isinstance(v, int)) or None
-            parts = [str(blob.get("status", "?"))]
-            if blob.get("band_status") and blob["band_status"] != blob.get("status"):
-                parts.append("band %s" % blob["band_status"])
-            if total is not None:
-                parts.append("클러스터 %d" % total)
-            if blob.get("bloom_filtered"):
-                parts.append("필터 %s" % blob["bloom_filtered"])
+            status = blob.get("status")
+            band = blob.get("band_status")
+            bloom = blob.get("bloom_filtered")
+            counts = {k: v for k, v in (blob.get("counts") or {}).items()
+                      if isinstance(v, int) and v}
+            objects = blob.get("objects") or []
+            in_band = 0
+            for obj in objects:
+                try:
+                    distance = math.hypot(float(obj["x"]), float(obj["y"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if nearest is None or distance < nearest:
+                    nearest = distance
+                if obj.get("band_relation") in ("inside", "overlap"):
+                    in_band += 1
+                    if nearest_in_band is None or distance < nearest_in_band:
+                        nearest_in_band = distance
+            parts = [str(status or "?")]
+            if band and band != status:
+                parts.append("band %s" % band)
+            if in_band:
+                parts.append("회랑 %d" % in_band)
+            if nearest is not None:
+                parts.append("최근접 %.1fm" % nearest)
             text = " · ".join(parts)
         except (ValueError, TypeError, AttributeError):
             pass
         with self.state.lock:
             self.state.objects_summary = text[:80]
+            self.state.objects_status = status
+            self.state.band_status = band
+            self.state.objects_counts = counts
+            self.state.objects_in_band = in_band
+            self.state.objects_nearest_m = (None if nearest is None
+                                            else round(nearest, 1))
+            self.state.objects_nearest_in_band_m = (
+                None if nearest_in_band is None else round(nearest_in_band, 1))
+            self.state.bloom_filtered = bloom
             self.state.objects_stamp = time.time()
 
     def _diag_cb(self, msg):
