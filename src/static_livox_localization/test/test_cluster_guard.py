@@ -160,8 +160,10 @@ def threat(distance, motion):
     return cg.Threat(distance, motion)
 
 
-def decide(threat_in, blocking=True, blocked_for_s=0.0):
-    return cg.avoidance_decision(threat_in, blocking, blocked_for_s, 5.0, 3.0)
+def decide(threat_in, blocking=True, blocked_for_s=0.0,
+           person_still_for_s=None):
+    return cg.avoidance_decision(threat_in, blocking, blocked_for_s, 5.0, 3.0,
+                                 person_still_for_s=person_still_for_s)
 
 
 def test_something_watched_standing_still_is_gone_around_from_a_distance():
@@ -196,11 +198,42 @@ def person(distance, motion):
     return cg.Threat(distance, motion, cg.PERSON_LABEL)
 
 
+# Where the operator was standing when the bypass was finally granted and
+# the planner could not act on it, 2026-08-25. The status line read
+# HOLD:DWA_OBSTACLE: no arc clears anybody by PERSON_BYPASS_CLEARANCE_M
+# from a metre away, dead ahead.
+FIELD_TOO_LATE_M = 1.06
+# Where they were standing when the chair first saw them holding still.
+FIELD_IN_TIME_M = 3.83
+
+
 def test_a_person_who_has_stood_still_long_enough_is_gone_round():
     """2026-08-25: the operator stood in the corridor and the chair waited
     them out. Five seconds is the line between someone pausing mid-stride
     and someone who is simply standing there."""
-    assert decide(person(1.0, ct.STATIC), blocked_for_s=6.0) == cg.GO_ROUND
+    assert decide(person(FIELD_IN_TIME_M, ct.STATIC),
+                  person_still_for_s=6.0) == cg.GO_ROUND
+
+
+def test_the_decision_is_made_while_there_is_still_room_to_act_on_it():
+    """The first version timed this off the blocked clock, which only
+    starts once they are inside the stopping radius. Over the five seconds
+    it took to run, the chair closed from 3.1 m to 1.1 m, and at 1.1 m dead
+    ahead there is no arc that clears anyone by 0.80 m - the planner said
+    OBSTACLE and the chair stood there having been given permission it
+    could no longer use.
+    """
+    assert FIELD_IN_TIME_M > FIELD_TOO_LATE_M
+    assert decide(person(FIELD_IN_TIME_M, ct.STATIC),
+                  blocking=False, blocked_for_s=None,
+                  person_still_for_s=6.0) == cg.GO_ROUND, \
+        "the clock must run before they are close enough to block"
+
+
+def test_the_blocked_clock_alone_no_longer_grants_it():
+    """Being stood in front of for a long time is not the evidence; having
+    watched them hold still is."""
+    assert decide(person(1.0, ct.STATIC), blocked_for_s=60.0) == cg.WAIT
 
 
 def test_the_person_threshold_is_longer_than_the_one_for_a_thing():
@@ -208,27 +241,35 @@ def test_the_person_threshold_is_longer_than_the_one_for_a_thing():
     evidence has to separate a pause from a stand, and 1.5 s of stillness
     is all the tracker needs to call someone STATIC."""
     assert cg.PERSON_BYPASS_AFTER_S >= 5.0
-    assert decide(person(1.0, ct.STATIC), blocked_for_s=4.0) == cg.WAIT
-    assert decide(person(1.0, ct.STATIC), blocked_for_s=6.0) == cg.GO_ROUND
+    assert decide(person(3.0, ct.STATIC), person_still_for_s=4.0) == cg.WAIT
+    assert decide(person(3.0, ct.STATIC),
+                  person_still_for_s=6.0) == cg.GO_ROUND
+
+
+def test_someone_too_far_off_to_be_in_the_way_is_left_alone():
+    """plan_ahead_m bounds it the way it bounds the parked rule: stepping
+    around something that is not in the way yet is its own hazard."""
+    assert decide(person(9.0, ct.STATIC), blocking=False,
+                  person_still_for_s=60.0) == cg.CLEAR
 
 
 def test_an_unconfirmed_person_is_never_gone_round_however_long():
     """UNKNOWN is what a track looks like before it has been watched long
     enough, and for a person the honest reading is someone about to step
     out. Standing in the way is not evidence about them."""
-    assert decide(person(1.0, ct.UNKNOWN), blocked_for_s=60.0) == cg.WAIT
+    assert decide(person(1.0, ct.UNKNOWN), person_still_for_s=60.0) == cg.WAIT
 
 
 def test_a_person_who_is_moving_is_never_gone_round():
-    assert decide(person(1.0, ct.MOVING), blocked_for_s=60.0) == cg.WAIT
+    assert decide(person(1.0, ct.MOVING), person_still_for_s=60.0) == cg.WAIT
 
 
-def test_the_clock_is_the_blocked_clock_so_a_step_resets_it():
-    """avoidance_for clears blocked_since the moment they are no longer
-    blocking, so someone who shifts their feet starts the five seconds
-    again rather than accumulating toward a pass."""
+def test_a_step_resets_the_clock():
+    """avoidance_for clears person_still_since the moment the tracker stops
+    calling them STATIC, so someone shifting their feet starts the five
+    seconds again rather than accumulating toward a pass."""
     assert decide(person(1.0, ct.STATIC), blocking=False,
-                  blocked_for_s=None) == cg.CLEAR
+                  person_still_for_s=None) == cg.CLEAR
 
 
 def test_a_person_standing_still_is_waited_for_before_the_clock_runs():

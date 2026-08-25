@@ -167,6 +167,7 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.cluster_summary = cg.parse_summary(json.dumps(
         {"stamp": 100.0, "status": "OK", "objects": objects}))
     follower.blocked_since = None
+    follower.person_still_since = None
     follower.lateral_offset = 0.0
     follower.pose_xy = np.array([10.0, 0.0])
     follower.pose_yaw = 0.0
@@ -481,13 +482,13 @@ def standing(x, y=0.0, size=(0.6, 0.6, 1.7)):
             "points": 40, "motion": ct.STATIC}
 
 
-def blocked_for(follower, seconds):
-    """Pretend the corridor has been blocked this long.
+def standing_for(follower, seconds):
+    """Pretend this person has been watched holding still this long.
 
     rospy.Time.now() is stubbed at 100.0 in the fixture, so a clock that
     started `seconds` ago is that much earlier.
     """
-    follower.blocked_since = follower.Stamp(100.0 - seconds)
+    follower.person_still_since = follower.Stamp(100.0 - seconds)
 
 
 def test_someone_who_has_just_stopped_is_still_waited_for(monkeypatch):
@@ -495,7 +496,7 @@ def test_someone_who_has_just_stopped_is_still_waited_for(monkeypatch):
     STATIC. That is not enough to drive past someone."""
     _module, follower, published, commanded = dwa_with(
         [standing(1.0)], monkeypatch)
-    follower.blocked_since = None
+    follower.person_still_since = None
 
     follower.step()
 
@@ -508,7 +509,7 @@ def test_someone_who_has_stood_still_long_enough_is_gone_round(monkeypatch):
     corridor and the chair waited them out instead of passing."""
     module, follower, _published, _commanded = dwa_with(
         [standing(1.0)], monkeypatch)
-    blocked_for(follower, 6.0)
+    standing_for(follower, 6.0)
 
     follower.step()
 
@@ -522,7 +523,7 @@ def test_it_passes_a_person_at_a_crawl_and_with_a_wider_berth(monkeypatch):
     to make it: if they move after all, there has to be time to stop."""
     module, follower, _published, _commanded = dwa_with(
         [standing(1.0)], monkeypatch)
-    blocked_for(follower, 6.0)
+    standing_for(follower, 6.0)
 
     follower.step()
 

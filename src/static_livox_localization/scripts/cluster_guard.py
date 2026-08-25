@@ -468,7 +468,8 @@ CLEAR = "clear"
 
 def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
                        bypass_after_s,
-                       person_bypass_after_s=PERSON_BYPASS_AFTER_S):
+                       person_bypass_after_s=PERSON_BYPASS_AFTER_S,
+                       person_still_for_s=None):
     """What to do about the nearest thing in the corridor.
 
     GO_ROUND for something the tracker has watched stand still, and taken
@@ -486,6 +487,21 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     check a phone, and STATIC is parked, so the first would step around a
     pedestrian from 8 m out without the blocked clock ever starting.
 
+    person_still_for_s is how long THIS person has been standing still,
+    and it is not the blocked clock. The first version of this used the
+    blocked clock and the bypass was granted too late to execute: that
+    clock only starts once they are inside the stop radius, and over the
+    five seconds it takes to run the chair closes from 3.1 m to 1.1 m. At
+    1.1 m, dead ahead, no arc clears anybody by PERSON_BYPASS_CLEARANCE_M,
+    so the planner answered OBSTACLE and the chair stood there anyway -
+    measured 2026-08-25, HOLD:DWA_OBSTACLE with a person at x 1.06.
+
+    Timed from when they are SEEN standing instead, so the decision is made
+    while there is still room to act on it. That is the same reason the
+    parked rule below fires from plan_ahead_m rather than from the stopping
+    distance: a sidestep decided early is a drift past, and one decided
+    late is a stop with a stop's geometry.
+
     The caller is expected to hold the extra conditions that do not belong
     in a decision function - the wider berth and the crawl - because they
     are about how to execute the manoeuvre rather than whether it is
@@ -499,9 +515,10 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     if threat is None:
         return CLEAR
     if threat.is_person:
-        if blocking and blocked_for_s is not None and \
-                blocked_for_s > person_bypass_after_s and \
-                threat.motion == STATIC:
+        if person_still_for_s is not None and \
+                person_still_for_s > person_bypass_after_s and \
+                threat.motion == STATIC and \
+                threat.distance_m < plan_ahead_m:
             return GO_ROUND
         return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:

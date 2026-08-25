@@ -75,7 +75,7 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            PERSON_BYPASS_AFTER_S, PERSON_LABEL,
                            avoidance_decision, bypass_offsets_for_room,
                            is_stale, nearest_threat, parse_summary)
-from cluster_tracking import MOVING
+from cluster_tracking import MOVING, STATIC
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import SUPPRESSED_WHILE_PARKED
 from localization_policy import localization_hold_reason
@@ -296,6 +296,7 @@ class WaypointFollower:
         self.nearest_index = 0
         self.current_speed = 0.0
         self.blocked_since = None
+        self.person_still_since = None
         self.lateral_offset = 0.0
         self.chord_speed_cap = MAX_SPEED
         self.chord_safe = True
@@ -661,12 +662,25 @@ class WaypointFollower:
                 self.blocked_since = now
         else:
             self.blocked_since = None
+        # A second clock, and it deliberately does not wait for blocking.
+        # How long someone has been standing still is the evidence that
+        # they are standing rather than pausing, and it has to be gathered
+        # while they are still far enough off for a sidestep to exist.
+        if threat is not None and threat.is_person and \
+                threat.motion == STATIC:
+            if self.person_still_since is None:
+                self.person_still_since = now
+        else:
+            self.person_still_since = None
         return avoidance_decision(
             threat, blocking,
             None if self.blocked_since is None
             else (now - self.blocked_since).to_sec(),
             PLAN_AHEAD_M, BYPASS_AFTER_S,
-            person_bypass_after_s=PERSON_BYPASS_AFTER_S)
+            person_bypass_after_s=PERSON_BYPASS_AFTER_S,
+            person_still_for_s=(
+                None if self.person_still_since is None
+                else (now - self.person_still_since).to_sec()))
 
     def take_a_way_round(self, clear_for_m):
         """Offset far enough to clear the corridor without leaving the band.
