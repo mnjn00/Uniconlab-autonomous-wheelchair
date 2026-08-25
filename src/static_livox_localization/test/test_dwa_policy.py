@@ -322,7 +322,13 @@ def test_what_it_goes_round_arrives_as_a_shape(monkeypatch):
 def test_the_approach_slows_the_way_the_pursuit_profile_slows(monkeypatch):
     """A planner that only knows stop-or-cruise arrives at what it is about
     to wait for at full speed."""
-    _module, near, _p, _c = dwa_with([walking(2.0)], monkeypatch)
+    # Both outside the person stop radius, which is not the plain radius:
+    # stop_radius_for scales it by PERSON_STOP_DISTANCE_SCALE for a
+    # person-labelled threat, so at the fixture's 1.5 m the decision point
+    # is 1.8 m and a person at 2.0 m - near face 1.7 m - is waited for
+    # rather than approached. This test is about the approach ramp, so it
+    # asks about two distances that are both still an approach.
+    _module, near, _p, _c = dwa_with([walking(2.6)], monkeypatch)
     _module, far, _p2, _c2 = dwa_with([walking(6.0)], monkeypatch)
 
     near.step()

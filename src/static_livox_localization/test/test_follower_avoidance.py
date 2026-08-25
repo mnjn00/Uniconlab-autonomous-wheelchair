@@ -61,6 +61,9 @@ class Band:
         # faces +x, so the offset is the point's y.
         return any(abs(point[1] - o) < 1e-6 for o in self.open_offsets)
 
+    def passable(self, point, allowance_m, grace=0.0):
+        return self.contains(point, grace=grace)
+
     def clamp(self, target):
         return target
 

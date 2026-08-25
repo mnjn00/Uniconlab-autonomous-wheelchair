@@ -177,6 +177,13 @@ class Band:
     def contains(self, xy, grace=0.0):
         return self.inside
 
+    def passable(self, xy, allowance_m, grace=0.0):
+        # The corridor is no longer absolute, so the follower asks this
+        # instead of contains. The double keeps them the same answer: these
+        # tests are about which hold fires, not about how far outside the
+        # allowance reaches.
+        return self.inside
+
     def lateral_limits(self, xy):
         # bypass_room_each_side asks the band how much room each side has.
         # The double answers with a corridor wide enough that the room test

@@ -84,7 +84,7 @@ from motion_safety import (MotionEstimate, PoseMotionEstimator,
                            clamp_pose_step,
                            motion_hold_reason, stopping_envelope)
 import mpc_speed
-from safety_band import SafetyBand
+from safety_band import BAND_EXCURSION_MAX_M, SafetyBand
 from route_mask import RouteMask
 from route_assets import validate_asset_binding
 import tf.transformations as tft
@@ -931,8 +931,17 @@ class WaypointFollower:
         if self.route_locked and np.min(np.linalg.norm(
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             yield "OFF_ROUTE", POLICY
-        if self.route_locked and not self.band.contains(
-                self.pose_xy, grace=BAND_RECOVER_MAX):
+        # The same question the planner asks of every arc it scores, asked
+        # of where the chair actually is. It has to be the same call: the
+        # planner may now step outside the drawn corridor to get round
+        # something, and a hold that still said the corridor was absolute
+        # would stop the chair in the middle of the manoeuvre it had just
+        # been allowed to plan. What neither will pass is an excursion
+        # toward a measured drop, or one further out than the sidestep the
+        # allowance is for.
+        if self.route_locked and not self.band.passable(
+                self.pose_xy, BAND_EXCURSION_MAX_M,
+                grace=BAND_RECOVER_MAX):
             yield "OFF_BAND", POLICY
 
     def handled_before_driving(self, now):

@@ -453,9 +453,13 @@ def test_the_band_geometry_is_walked_once_per_plan(scene):
     calls = []
     real = band.margins_many
 
-    def counting(points):
+    def counting(points, **kwargs):
+        # Forwards the keywords rather than dropping them: plan() asks for
+        # the edge hazard flags in the same pass now, and a stub with the
+        # old signature fails on the argument instead of on the property
+        # this test is about, which is still that ONE pass answers both.
         calls.append(len(points))
-        return real(points)
+        return real(points, **kwargs)
 
     band.margins_many = counting
     try:
