@@ -267,18 +267,23 @@ def test_a_person_who_is_moving_is_never_gone_round():
 def test_a_step_resets_the_clock():
     """avoidance_for clears person_still_since the moment the tracker stops
     calling them STATIC, so someone shifting their feet starts the five
-    seconds again rather than accumulating toward a pass."""
+    seconds again rather than accumulating toward a pass. Without a clock
+    there is no pass on offer, only the wait."""
     assert decide(person(1.0, ct.STATIC), blocking=False,
-                  person_still_for_s=None) == cg.CLEAR
+                  person_still_for_s=None) == cg.WAIT
 
 
-def test_a_person_standing_still_is_waited_for_before_the_clock_runs():
-    """CONFIRM_S is 1.5 s, so someone who stops to check a phone is STATIC,
-    and STATIC is parked - which sent the chair around a stationary
-    pedestrian from 8 m out without the blocked clock ever starting. The
-    distance rule still may not answer for a person; only the clock may.
+def test_the_chair_stops_and_watches_before_it_decides_anything():
+    """It holds station for the five seconds instead of closing the
+    distance, and it does so from outside the stopping radius.
+
+    Waiting only once they are close enough to block is what left no room
+    to go round them - and driving up to somebody and then swerving is not
+    what anyone wants done around them either. So a confirmed-still person
+    inside plan_ahead_m stops the chair whether or not they are blocking
+    yet, and the pass starts from that stop.
     """
-    assert decide(person(4.0, ct.STATIC), blocking=False) == cg.CLEAR
+    assert decide(person(4.0, ct.STATIC), blocking=False) == cg.WAIT
     assert decide(person(4.0, ct.STATIC), blocked_for_s=0.0) == cg.WAIT
 
 
@@ -290,8 +295,16 @@ def test_the_thing_rule_does_not_reach_a_person():
 
 
 def test_a_person_who_leaves_the_corridor_clears_it():
-    """Nothing resumes the chair explicitly, here least of all."""
-    assert decide(person(2.0, ct.STATIC), blocking=False) == cg.CLEAR
+    """Nothing resumes the chair explicitly, here least of all. Out of the
+    corridor there is no threat at all, which is the CLEAR above."""
+    assert decide(None, blocking=False) == cg.CLEAR
+
+
+def test_someone_walking_is_not_stopped_for_from_across_the_car_park():
+    """The stop-and-watch is for a person standing in the way. Someone
+    moving is handled by the blocking rule as before, so the chair does not
+    halt for every pedestrian inside eight metres."""
+    assert decide(person(6.0, ct.MOVING), blocking=False) == cg.CLEAR
 
 
 def test_the_same_geometry_without_the_label_is_still_gone_around():
@@ -321,3 +334,47 @@ def test_the_chair_resumes_by_the_threat_going_away_not_by_a_timer():
     the moment they are not. Nothing has to remember they were there."""
     assert decide(threat(1.5, ct.MOVING)) == cg.WAIT
     assert decide(None, blocking=False) == cg.CLEAR
+
+
+# ------------------------------------------------- how big a person really is
+
+def test_a_person_is_never_modelled_smaller_than_a_person():
+    """3,803 person observations on 2026-08-25: 0.44 x 0.45 m on average,
+    and a 5th-percentile width of 0.18 m. A lidar at armrest height catches
+    a slice of a torso - the feet are under the band the clusterer keeps
+    and the arms are outside whatever it did catch. Every clearance
+    measured off that box is measured off the wrong body, which is how a
+    0.80 m berth put the chair against somebody's side.
+    """
+    narrow = {"class": "person", "x": 2.0, "y": 0.0, "size": [0.18, 0.18, 1.7]}
+    box = cg.object_box(narrow)
+    assert box is not None
+    assert box[2] >= cg.PERSON_MIN_HALF_EXTENT_M
+    assert box[3] >= cg.PERSON_MIN_HALF_EXTENT_M
+
+
+def test_a_producer_that_sees_more_than_that_is_believed():
+    """It is a floor, not a size."""
+    wide = {"class": "person", "x": 2.0, "y": 0.0, "size": [1.2, 1.4, 1.7]}
+    box = cg.object_box(wide)
+    assert box[2] == 0.6 and box[3] == 0.7
+
+
+def test_nothing_else_is_inflated():
+    """A thing is what it measures. Rounding every obstacle up to a person
+    would close corridors that are known to be passable."""
+    thing = {"class": "obstacle", "x": 2.0, "y": 0.0, "size": [0.18, 0.18, 0.5]}
+    box = cg.object_box(thing)
+    assert box[2] == 0.09 and box[3] == 0.09
+
+
+def test_the_inflation_reaches_the_distance_as_well_as_the_shape():
+    """object_box is the one place it happens, so the stopping distance and
+    the planner's points cannot end up measuring different bodies."""
+    narrow = {"class": "person", "x": 2.0, "y": 0.0, "size": [0.18, 0.18, 1.7],
+              "points": 40, "motion": ct.STATIC}
+    summary = cg.parse_summary(json.dumps(
+        {"stamp": 100.0, "status": "OK", "objects": [narrow]}))
+    near = cg.nearest_threat(summary, 1.0)
+    assert near is not None
+    assert near.distance_m <= 2.0 - cg.PERSON_MIN_HALF_EXTENT_M + 1e-9

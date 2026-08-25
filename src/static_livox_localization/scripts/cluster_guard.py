@@ -119,6 +119,20 @@ PERSON_BYPASS_CLEARANCE_M = 0.80
 # And at a crawl, so that if they do move there is time to stop. This is
 # the rotation floor, the slowest speed the wheels actually turn for.
 PERSON_BYPASS_SPEED_MPS = 0.35
+# The smallest a person is allowed to be, whatever the box says.
+#
+# Measured over 3,803 person observations on 2026-08-25: the producer
+# reports 0.44 x 0.45 m on average, and the 5th percentile of the width is
+# 0.18 m. A lidar at armrest height catches a slice of a torso, not a
+# person - the feet are below the band the clusterer keeps and the arms are
+# outside whatever it did catch. Every clearance measured off that box is
+# therefore measured off the wrong body, which is how a 0.80 m berth put
+# the chair against somebody's side.
+#
+# 0.35 m of half-extent is a 0.70 m box, which is a standing adult with
+# their feet and a little sway. It is a FLOOR, so a producer that sees more
+# than that is believed.
+PERSON_MIN_HALF_EXTENT_M = 0.35
 
 
 class Threat(object):
@@ -197,7 +211,14 @@ def parse_summary(payload):
 
 
 def object_box(item):
-    """(x, y, half_x, half_y) for one object, or None if it does not parse."""
+    """(x, y, half_x, half_y) for one object, or None if it does not parse.
+
+    A person is never returned smaller than PERSON_MIN_HALF_EXTENT_M. This
+    is the one place to do it: the stopping distance, the threat's lateral
+    offset and the points the planner scores against all come through here,
+    and inflating any one of them alone would leave the others measuring a
+    different body.
+    """
     try:
         x = float(item["x"])
         y = float(item["y"])
@@ -208,6 +229,9 @@ def object_box(item):
         return None
     if not all(math.isfinite(v) for v in (x, y, half_x, half_y)):
         return None
+    if str(item.get("class", "")).strip().lower() == PERSON_LABEL:
+        half_x = max(half_x, PERSON_MIN_HALF_EXTENT_M)
+        half_y = max(half_y, PERSON_MIN_HALF_EXTENT_M)
     return x, y, half_x, half_y
 
 
@@ -519,11 +543,16 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     if threat is None:
         return CLEAR
     if threat.is_person:
-        if person_still_for_s is not None and \
-                person_still_for_s > person_bypass_after_s and \
-                threat.motion == STATIC and \
-                threat.distance_m < plan_ahead_m:
-            return GO_ROUND
+        if threat.motion == STATIC and threat.distance_m < plan_ahead_m:
+            if person_still_for_s is not None and \
+                    person_still_for_s > person_bypass_after_s:
+                return GO_ROUND
+            # Stop and watch, even though they are still outside the
+            # stopping radius. Waiting only once they are close enough to
+            # block is what left no room to go round them, and driving up
+            # to somebody and then swerving is not what anyone wants done
+            # around them either.
+            return WAIT
         return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
         return GO_ROUND
