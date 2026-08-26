@@ -114,6 +114,9 @@ MAX_DECEL = 0.6
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
+PERSON_CORRIDOR_HALF_WIDTH = 0.55
+PERSON_STOP_RADIUS_SCALE = 1.20
+PERSON_MEMORY_S = 1.0
 # The forward-cone and minimum-range constants that used to live here
 # belonged to the raw five-point scan check, removed 2026-08-05. The same
 # geometry still exists in safety_gate.py, which keeps its own independent
@@ -170,6 +173,8 @@ LOOKAHEAD_BACKOFF_M = 0.4
 
 
 class WaypointFollower:
+    person_memory = None
+
     # Which control law this class turns a pose into a Twist with. Both
     # profiles run as the same node under the same name, so the node alone
     # does not say which one started; subclasses override this and __init__
@@ -293,6 +298,7 @@ class WaypointFollower:
         self.last_yaw_rate = 0.0
         self.status = "PAUSED"
         self.cluster_summary = None
+        self.person_memory = None
         # Deliberately NOT behind ~safety_policies. The raw corridor check is
         # switched off with the rest of the judgements because it stops on
         # five returns and is the loudest false-positive source in the chain;
@@ -576,17 +582,42 @@ class WaypointFollower:
         return max(radii) if radii else 0.0
 
     def cluster_threat(self, lateral_shift=0.0):
-        """Nearest classified object overlapping the corridor, or None.
+        """Nearest classified object overlapping its stop corridor.
 
-        Same corridor half width as the raw check, but measured against each
-        object's box rather than a percentile of loose returns, so a wall
-        alongside contributes its near face instead of its point spread.
-        Nothing received yet reads as blocked, not as clear.
+        People get a slightly wider corridor and survive a single bounded
+        producer dropout. The memory uses the producer stamp, so delayed
+        callback execution cannot extend it. Unusable summaries still fail
+        closed through the ordinary threat query and are never replaced by
+        remembered geometry.
         """
         if self.cluster_summary is None:
             return Threat(0.0, MOVING, "no summary")
-        return nearest_threat(
+        threat = nearest_threat(
             self.cluster_summary, CORRIDOR_HALF_WIDTH, lateral_shift)
+        person = nearest_threat(
+            self.cluster_summary, PERSON_CORRIDOR_HALF_WIDTH, lateral_shift,
+            labels=("person",))
+        if self.cluster_summary.usable:
+            if person is not None:
+                self.person_memory = (self.cluster_summary.stamp_s, person)
+            elif self.person_memory is not None:
+                stamp_s, remembered = self.person_memory
+                age_s = self.cluster_summary.stamp_s - stamp_s
+                if 0.0 <= age_s <= PERSON_MEMORY_S:
+                    person = remembered
+                else:
+                    self.person_memory = None
+        if threat is None:
+            return person
+        if person is None or threat.distance_m <= person.distance_m:
+            return threat
+        return person
+
+    def stop_radius_for(self, threat):
+        """Dynamic stop radius, with the bounded person margin applied."""
+        radius = self.stop_radius()
+        return radius * PERSON_STOP_RADIUS_SCALE \
+            if threat is not None and threat.is_person else radius
 
     def corridor_threat(self, lateral_shift=0.0):
         """Nearest classified object in the corridor, or None if clear.
@@ -980,7 +1011,7 @@ class WaypointFollower:
                 allowed = min(allowed, SLOPE_SPEED)
 
         blocking = None
-        guard_stop = self.stop_radius()
+        guard_stop = self.stop_radius_for(threat)
         guard_slow = guard_stop + GUARD_SLOW_EXTRA_M
         if obstacle_dist is not None:
             if obstacle_dist < guard_stop:
