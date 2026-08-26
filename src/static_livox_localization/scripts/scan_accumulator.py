@@ -12,6 +12,11 @@ every geometry constant in both consumers - sensor height, corridor half
 width, guard distances - was measured in the lidar/chair frame. Inverting the
 extrinsic once here is what keeps those constants meaning what they say.
 
+PointCloud2 is decoded through ``cloud_points.points_xyz``.  The previous
+the old per-point generator path allocated one Python tuple per
+return in both the follower and the safety gate, consuming whole CPU cores and
+making perception/control timestamps stale under load.
+
 Lifted from waypoint_follower and safety_gate, which carried identical copies
 of this: same fields, same method bodies, differing only in a variable name
 and how the docstring was worded. Two copies of a frame conversion is two
@@ -23,6 +28,7 @@ import rospy
 
 import tf.transformations as tft
 from body_frame import body_to_lidar
+from cloud_points import points_xyz
 
 
 class CloudAccumulator:
@@ -50,10 +56,10 @@ class CloudAccumulator:
             return None
         return self.odoms[k][1]
 
-    def add_cloud(self, message, read_points):
-        pts = np.array(list(read_points(
-            message, field_names=("x", "y", "z"), skip_nans=True)),
-            dtype=np.float32)
+    def add_cloud(self, message, read_points=None):
+        # Fast zero-copy/structured-array decoder for the FAST-LIO layout,
+        # with the old reader retained only as the explicit fallback.
+        pts = points_xyz(message, read_points)
         stamp = message.header.stamp.to_sec()
         self.scans.append((stamp, pts))
         self.scans = [s for s in self.scans

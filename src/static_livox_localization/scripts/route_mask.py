@@ -27,6 +27,10 @@ class RouteMask:
 
     def _cells(self, points):
         array = np.asarray(points, dtype=float)
+        if array.ndim == 1:
+            array = array.reshape(1, -1)
+        if array.ndim != 2 or array.shape[1] < 2:
+            raise ValueError("points must have shape (N, 2+)")
         col = np.rint(
             (array[:, 0] - self.origin[0]) / self.resolution).astype(int)
         row = np.rint(
@@ -47,6 +51,23 @@ class RouteMask:
     def contains(self, point):
         """Whether one chair-centre point lies in the authoritative mask."""
         return bool(self.contains_many([point])[0])
+
+    def clearance_many(self, points):
+        """Distance in metres from each chair-centre point to the mask edge.
+
+        Points outside the image or outside the drivable region return zero.
+        This is a safety quantity, unlike ``boundary_cost_many``: callers can
+        enforce a measured reserve rather than infer one back from a score.
+        """
+        row, col, valid = self._cells(points)
+        result = np.zeros(len(row), dtype=float)
+        inside = np.zeros(len(row), dtype=bool)
+        inside[valid] = self.free[row[valid], col[valid]]
+        result[inside] = self.clearance[row[inside], col[inside]]
+        return result
+
+    def clearance_at(self, point):
+        return float(self.clearance_many([point])[0])
 
     def segment_is_contained(self, start, end):
         """Check every raster cell crossed by a chair-centre segment."""

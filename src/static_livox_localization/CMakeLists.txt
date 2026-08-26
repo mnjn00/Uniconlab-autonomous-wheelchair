@@ -9,14 +9,14 @@ if(ENABLE_FAST_GICP_CUDA)
 endif()
 
 add_compile_options(-std=c++14 -Wall -Wextra)
-find_package(catkin REQUIRED COMPONENTS roscpp sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions ${STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS})
+find_package(catkin REQUIRED COMPONENTS roscpp rospy std_msgs sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions ${STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS})
 find_package(PCL REQUIRED COMPONENTS common io filters registration kdtree)
 find_package(OpenSSL REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES static_registration moving_tracker rolling_submap assisted_alignment bounded_cloud_preview
-  CATKIN_DEPENDS roscpp sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions
+  CATKIN_DEPENDS roscpp rospy std_msgs sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions
 )
 include_directories(include ${catkin_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIR})
 add_definitions(${PCL_DEFINITIONS})
@@ -66,6 +66,11 @@ catkin_install_python(
     scripts/dwa_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
+    scripts/hybrid_object_fusion.py
+    scripts/vision_detection_bridge.py
+    scripts/semantic_safety_supervisor.py
+    scripts/terrain_guard.py
+    scripts/hybrid_preflight.py
     scripts/dwa_run_report.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
@@ -75,12 +80,15 @@ install(
     scripts/gpu_voxel_scorer.py
     scripts/body_frame.py
     scripts/dwa_core.py
+    scripts/hybrid_perception.py
+    scripts/semantic_safety_policy.py
+    scripts/terrain_guard_policy.py
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py
     scripts/cluster_guard.py
     scripts/cluster_tracking.py
     scripts/cloud_points.py
-  scripts/fixed_map_filter.py
+    scripts/fixed_map_filter.py
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
