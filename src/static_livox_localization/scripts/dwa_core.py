@@ -140,11 +140,10 @@ W_OBSTACLE = 2.0
 # 2.0 sits in the middle of that plateau.
 W_HEADING = 2.0
 
-# Reversing the steer is not free. Small on its own - the heading term does
-# the real work - but it is what stops the residual chatter between adjacent
-# yaw samples. Above about 2.0 the chair starts cutting corners: at 4.0 the
-# closed-loop replay lost a third of its progress and tripled its cross-track.
-W_STEER = 1.0
+# Reversing the steer is not free. On the 8cca route-tracking base, 1.0 gives
+# 22 reversals over 381.64 m and 1.35 still gives 9; 1.5 clears the 0.02/m
+# limit while staying below the corner-cutting region above about 2.0.
+W_STEER = 1.5
 # Speed is rewarded here and nowhere else, which is not obvious and cost a
 # drive to learn. The rollout is sampled over a fixed DISTANCE, so every
 # candidate walks the same 1.05 m arc: for one yaw rate, path cost, heading,

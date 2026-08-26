@@ -166,6 +166,7 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.cluster_summary = cg.parse_summary(json.dumps(
         {"stamp": 100.0, "status": "OK", "objects": objects}))
     follower.blocked_since = None
+    follower.person_memory = None
     follower.lateral_offset = 0.0
     follower.pose_xy = np.array([10.0, 0.0])
     follower.pose_yaw = 0.0
@@ -226,6 +227,11 @@ def walking(x, y=0.0, size=(0.6, 0.6, 1.7)):
             "points": 40, "motion": ct.MOVING}
 
 
+def summary_at(stamp, objects):
+    return cg.parse_summary(json.dumps(
+        {"stamp": stamp, "status": "OK", "objects": objects}))
+
+
 def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
     """The defect, as the behaviour it produced: a rollout scorer handed a
     moving person picks the arc that clears them by OBSTACLE_FLOOR_M and
@@ -280,6 +286,73 @@ def test_the_person_extensions_do_not_widen_an_ordinary_moving_object(
 
     assert not any(text.startswith("HOLD") for text in published)
     assert len(follower.planner.calls) == 1
+
+
+def test_person_edge_and_dropout_dither_stays_in_wait(monkeypatch):
+    """Measured edge jitter and one missing frame must not restart DWA."""
+    _module, follower, published, commanded = dwa_with(
+        [walking(1.6, y=0.74)], monkeypatch,
+        threat_distance_stop_radius=1.5)
+    frames = (
+        (100.0, [walking(1.6, y=0.74)]),
+        (100.2, [walking(1.6, y=0.76)]),
+        (100.5, []),
+        (100.8, [walking(1.6, y=0.76)]),
+        (101.0, [walking(1.6, y=0.74)]),
+    )
+
+    for stamp, objects in frames:
+        follower.cluster_summary = summary_at(stamp, objects)
+        published[:] = []
+        commanded[:] = []
+        planner_calls = len(follower.planner.calls)
+
+        follower.step()
+
+        assert published == ["HOLD:DWA_WAIT"], (stamp, published)
+        assert commanded == ["STOP"], (stamp, commanded)
+        assert len(follower.planner.calls) == planner_calls
+
+
+def test_a_person_survives_a_producer_dropout(monkeypatch):
+    _module, follower, _published, _commanded = dwa_with(
+        [walking(2.0)], monkeypatch)
+    assert follower.corridor_threat(0.0) is not None
+
+    follower.cluster_summary = summary_at(100.5, [])
+
+    assert follower.corridor_threat(0.0) is not None
+
+
+def test_a_person_who_really_leaves_is_let_go(monkeypatch):
+    _module, follower, _published, _commanded = dwa_with(
+        [walking(2.0)], monkeypatch)
+    follower.corridor_threat(0.0)
+
+    follower.cluster_summary = summary_at(101.5, [])
+
+    assert follower.corridor_threat(0.0) is None
+
+
+def test_only_a_person_is_held(monkeypatch):
+    _module, follower, _published, _commanded = dwa_with(
+        [parked(2.0)], monkeypatch)
+    assert follower.corridor_threat(0.0) is not None
+
+    follower.cluster_summary = summary_at(100.2, [])
+
+    assert follower.corridor_threat(0.0) is None
+
+
+def test_the_memory_is_timed_off_the_producer_clock(monkeypatch):
+    _module, follower, _published, _commanded = dwa_with(
+        [walking(2.0)], monkeypatch)
+    follower.corridor_threat(0.0)
+
+    follower.cluster_summary = summary_at(100.1, [])
+    assert follower.corridor_threat(0.0) is not None
+    follower.cluster_summary = summary_at(140.0, [])
+    assert follower.corridor_threat(0.0) is None
 
 
 def test_it_does_not_sidestep_someone_it_has_not_yet_had_to_stop_for(monkeypatch):
