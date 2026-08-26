@@ -16,7 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 try:
     contract = importlib.import_module("shadow_qa_contract")
     validate_human_aware_replay = cast(
-        Callable[[dict[str, object]], dict[str, object]],
+        "Callable[[dict[str, object]], dict[str, object]]",
         contract.validate_human_aware_replay,
     )
 finally:
@@ -31,7 +31,7 @@ def main():
     input_path = Path(cast(str, args.input))
     output_path = Path(cast(str, args.output))
     replay = cast(
-        dict[str, object],
+        "dict[str, object]",
         json.loads(input_path.read_text(encoding="utf-8")),
     )
     evidence: dict[str, object] = {

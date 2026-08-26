@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import rospy
-from cohan_msgs.msg import TrackedAgents
+from cohan_msgs.msg import AgentPathArray, TrackedAgents
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Path as RosPath
 from std_msgs.msg import Empty, String
@@ -42,6 +42,7 @@ class ReplayCapture:
             "tracked_agents": [],
             "velocity_proposals": [],
             "local_plans": [],
+            "agent_plans": [],
         }
         self.written = False
         rospy.on_shutdown(self.write)
@@ -73,6 +74,12 @@ class ReplayCapture:
             "/human_aware_shadow/move_base/HATebLocalPlannerROS/local_plan",
             RosPath,
             self.on_local_plan,
+            queue_size=100,
+        )
+        rospy.Subscriber(
+            "/human_aware_shadow/move_base/HATebLocalPlannerROS/agents_local_plans",
+            AgentPathArray,
+            self.on_agent_plans,
             queue_size=100,
         )
         rospy.Subscriber(
@@ -137,6 +144,21 @@ class ReplayCapture:
             "stamp": stamp_s(message.header.stamp),
             "validation": validation.value,
             "point_count": len(points),
+        })
+
+    def on_agent_plans(self, message):
+        paths = [
+            {
+                "track_id": int(path.id),
+                "point_count": len(path.path.poses),
+            }
+            for path in message.paths
+        ]
+        if not paths:
+            return
+        self.evidence["agent_plans"].append({
+            "stamp": stamp_s(message.header.stamp),
+            "paths": paths,
         })
 
     def write(self):

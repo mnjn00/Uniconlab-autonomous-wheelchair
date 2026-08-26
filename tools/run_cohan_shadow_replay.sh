@@ -5,6 +5,7 @@ set -euo pipefail
 REPO="${REPO:-$HOME/wheelchair_localization_src}"
 FIELD_WS="${FIELD_WS:-$HOME/livox_static_localization_ws}"
 COHAN_WS="${COHAN_WS:-$HOME/.cache/unicon-cohan-shadow}"
+COHAN_LOCAL_DEPS_ROOT="${COHAN_LOCAL_DEPS_ROOT:-$COHAN_WS/local-deps}"
 BAG="${BAG:-$HOME/localization_trials/blackbox_20260826_220341.bag}"
 ROUTE="${ROUTE:-$REPO/routes/20260816_route_v9_clearance_waypoints.json}"
 BAND="${BAND:-$REPO/routes/20260816_route_v9_clearance_safety_band.json}"
@@ -60,6 +61,21 @@ export ROS_IP=127.0.0.1
 set +u
 source "$COHAN_WS/devel/setup.bash"
 set -u
+LOCAL_ROS_LIB="$COHAN_LOCAL_DEPS_ROOT/opt/ros/noetic/lib"
+LOCAL_OPENBLAS_LIB="$COHAN_LOCAL_DEPS_ROOT/usr/lib/x86_64-linux-gnu/openblas-pthread"
+if [ -d "$LOCAL_ROS_LIB" ]; then
+  export LD_LIBRARY_PATH="$LOCAL_ROS_LIB:${LD_LIBRARY_PATH:-}"
+fi
+if [ -d "$LOCAL_OPENBLAS_LIB" ]; then
+  export LD_LIBRARY_PATH="$LOCAL_OPENBLAS_LIB:${LD_LIBRARY_PATH:-}"
+fi
+HATEB_LDD="$(
+  ldd "$COHAN_WS/devel/lib/libhateb_local_planner.so"
+)"
+if [[ "$HATEB_LDD" == *"not found"* ]]; then
+  printf "%s\n" "$HATEB_LDD" >&2
+  exit 1
+fi
 
 setsid roscore -p "$ROS_MASTER_PORT" > "$OUT/roscore.log" 2>&1 &
 OWNED_PGIDS+=("$!")
@@ -73,6 +89,7 @@ setsid rosrun map_server map_server "$DRIVABLE_MASK" \
   > "$OUT/map-server.log" 2>&1 &
 OWNED_PGIDS+=("$!")
 setsid roslaunch static_livox_localization cohan_shadow.launch \
+  broadcast_robot_tf:=true \
   > "$OUT/cohan-shadow.log" 2>&1 &
 OWNED_PGIDS+=("$!")
 setsid python3 "$REPO/tools/capture_cohan_shadow_replay.py" \
@@ -88,6 +105,10 @@ timeout 30 bash -c \
 python3 "$REPO/tools/check_shadow_ros_graph.py" \
   > "$OUT/ros-graph-before-replay.json"
 
+setsid timeout 30 python3 "$REPO/tools/wait_for_cohan_shadow_commit.py" \
+  > "$OUT/first-commit.json" 2>&1 &
+COMMIT_PID="$!"
+OWNED_PGIDS+=("$COMMIT_PID")
 setsid rosbag play "$BAG" --clock --rate "$RATE" \
   --topics \
   /perception/objects_summary \
@@ -101,11 +122,13 @@ setsid rosbag play "$BAG" --clock --rate "$RATE" \
 PLAYER_PID="$!"
 OWNED_PGIDS+=("$PLAYER_PID")
 
-timeout 30 rostopic echo -n1 /fast_lio_icp/pose > /dev/null
+timeout 30 rostopic echo -n1 -p /fast_lio_icp/pose \
+  > "$OUT/initial-pose.csv"
+wait "$COMMIT_PID"
 read -r GOAL_X GOAL_Y < <(
-  python3 -c \
-    'import json,sys; w=json.load(open(sys.argv[1]))["waypoints"][-1]; print(w["x"], w["y"])' \
-    "$ROUTE"
+  python3 "$REPO/tools/select_cohan_shadow_goal.py" \
+    --pose-csv "$OUT/initial-pose.csv" \
+    --route "$ROUTE"
 )
 rostopic pub -1 /human_aware_shadow/move_base_simple/goal \
   geometry_msgs/PoseStamped \

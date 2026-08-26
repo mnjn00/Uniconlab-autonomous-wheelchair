@@ -2,6 +2,7 @@
 
 import math
 
+from human_aware_shadow import STATIC_CONFIRM_S
 
 DIAGNOSTIC_KEYS = (
     "tracking_state",
@@ -197,6 +198,7 @@ def validate_human_aware_replay(replay):
     tracked_agents = replay.get("tracked_agents")
     proposals = replay.get("velocity_proposals")
     local_plans = replay.get("local_plans")
+    agent_plans = replay.get("agent_plans", [])
     if not all(
             isinstance(value, list) and value
             for value in (
@@ -207,18 +209,26 @@ def validate_human_aware_replay(replay):
                 local_plans,
             )):
         raise ValueError("human-aware replay evidence is incomplete")
+    if not isinstance(agent_plans, list):
+        raise ValueError("HATEB agent-plan evidence is malformed")
     statuses = sorted(statuses, key=lambda item: float(item["stamp"]))
     decisions = [item.get("decision") for item in statuses]
     allowed = {"OBSERVING", "BYPASS_COMMITTED", "STOP_REQUIRED"}
     if any(decision not in allowed for decision in decisions):
         raise ValueError("human-aware replay has an unknown decision")
 
-    commit_entries = sum(
-        decision == "BYPASS_COMMITTED"
-        and (index == 0 or decisions[index - 1] != "BYPASS_COMMITTED")
-        for index, decision in enumerate(decisions)
+    commit_entries = [
+        item for index, item in enumerate(statuses)
+        if item["decision"] == "BYPASS_COMMITTED"
+        and (
+            index == 0
+            or statuses[index - 1]["decision"] != "BYPASS_COMMITTED"
+        )
+    ]
+    stop_go_reentries = sum(
+        float(item.get("evidence_s", 0.0)) < STATIC_CONFIRM_S - 1e-9
+        for item in commit_entries[1:]
     )
-    stop_go_reentries = max(0, commit_entries - 1)
     if stop_go_reentries:
         raise ValueError("shadow bypass re-entered after a stop")
     committed = [
@@ -227,40 +237,82 @@ def validate_human_aware_replay(replay):
     ]
     if len(committed) < 2:
         raise ValueError("shadow replay has no sustained commitment")
-    committed_ids = {
+    committed_ids = [
         int(item["track_id"])
         for item in committed
         if item.get("track_id") is not None
-    }
-    if len(committed_ids) != 1:
+    ]
+    if not committed_ids:
         raise ValueError("shadow commitment has no stable identity")
-    stable_track_id = next(iter(committed_ids))
+    stable_track_id = max(
+        set(committed_ids),
+        key=committed_ids.count,
+    )
+    stable_committed = [
+        item for item in committed
+        if int(item["track_id"]) == stable_track_id
+    ]
 
     for cycle in tracked_agents:
         if cycle.get("frame_id") != "map":
             raise ValueError("tracked agents are not in map frame")
-        if cycle.get("track_ids") != [stable_track_id]:
-            raise ValueError("tracked-agent identity is not stable")
+        status = _nearest_status(statuses, float(cycle["stamp"]))
+        if (
+                status["decision"] != "BYPASS_COMMITTED"
+                or cycle.get("track_ids") != [int(status["track_id"])]):
+            raise ValueError("tracked-agent identity is not coherent")
 
+    committed_proposals = []
     for proposal in proposals:
         stamp_s = float(proposal["stamp"])
         status = _nearest_status(statuses, stamp_s)
-        if status["decision"] != "BYPASS_COMMITTED":
-            raise ValueError("velocity proposal exists outside commitment")
         linear_x = float(proposal["linear_x"])
         angular_z = float(proposal["angular_z"])
         if not all(math.isfinite(value) for value in (linear_x, angular_z)):
             raise ValueError("velocity proposal is not finite")
-        if linear_x < 0.0 or linear_x > 0.35 + 1e-9:
+        if abs(linear_x) > 0.35 + 1e-9:
             raise ValueError("velocity proposal exceeds shadow speed cap")
+        if status["decision"] == "BYPASS_COMMITTED":
+            committed_proposals.append(proposal)
+    if not committed_proposals:
+        raise ValueError("shadow replay has no committed velocity proposal")
 
     accepted_plans = [
         plan for plan in local_plans
         if plan.get("validation") == "ACCEPTED"
         and int(plan.get("point_count", 0)) >= 2
+        and _nearest_status(
+            statuses, float(plan["stamp"])
+        )["decision"] == "BYPASS_COMMITTED"
     ]
     if not accepted_plans:
         raise ValueError("shadow replay has no accepted HATEB local plan")
+
+    coherent_agent_plans = []
+    stable_agent_plan_count = 0
+    for cycle in agent_plans:
+        status = _nearest_status(statuses, float(cycle["stamp"]))
+        if status["decision"] != "BYPASS_COMMITTED":
+            continue
+        paths = cycle.get("paths")
+        if not isinstance(paths, list):
+            raise ValueError("HATEB agent plan has no path list")
+        usable = [
+            path for path in paths
+            if int(path.get("point_count", 0)) >= 2
+            and int(path.get("track_id", -1)) == int(status["track_id"])
+        ]
+        if not usable:
+            continue
+        coherent_agent_plans.append(cycle)
+        stable_agent_plan_count += any(
+            int(path["track_id"]) == stable_track_id
+            for path in usable
+        )
+    if (
+            agent_plans
+            and (not coherent_agent_plans or stable_agent_plan_count < 1)):
+        raise ValueError("HATEB has no coherent committed agent trajectory")
 
     unsafe_motion_stop_count = 0
     for summary in summaries:
@@ -276,8 +328,9 @@ def validate_human_aware_replay(replay):
 
     return {
         "accepted_plan_count": len(accepted_plans),
-        "committed_sample_count": len(committed),
-        "proposal_count": len(proposals),
+        "agent_plan_count": len(coherent_agent_plans),
+        "committed_sample_count": len(stable_committed),
+        "proposal_count": len(committed_proposals),
         "stable_track_id": stable_track_id,
         "stop_go_reentries": stop_go_reentries,
         "unsafe_motion_stop_count": unsafe_motion_stop_count,

@@ -1,6 +1,7 @@
 """Machine contracts for the isolated CoHAN/HATEB shadow graph."""
 
 import ast
+import importlib.util
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import yaml
 
 PACKAGE = Path(__file__).parents[1]
 SCRIPTS = PACKAGE / "scripts"
+ROOT = PACKAGE.parents[1]
 
 
 def publisher_topics(path):
@@ -80,6 +82,7 @@ def test_shadow_launch_sinks_every_hateb_velocity_command():
 
     # When: launch nodes, params, and remaps are parsed.
     root = ET.fromstring(path.read_text(encoding="utf-8"))
+    args = root.findall("./arg")
     nodes = root.findall(".//node")
     remaps = root.findall(".//remap")
     params = root.findall(".//param")
@@ -108,6 +111,33 @@ def test_shadow_launch_sinks_every_hateb_velocity_command():
         for param in params
     )
     assert any(
+        param.get("name") == "goals_file"
+        and param.get("value")
+        == "$(find agent_path_prediction)/cfg/goals_adream.yaml"
+        for param in params
+    )
+    assert any(
+        arg.get("name") == "broadcast_robot_tf"
+        and arg.get("default") == "false"
+        for arg in args
+    )
+    assert any(
+        param.get("name") == "broadcast_robot_tf"
+        and param.get("value") == "$(arg broadcast_robot_tf)"
+        for param in params
+    )
+    assert any(
+        param.get("name") == "local_costmap/global_frame"
+        and param.get("value") == "$(arg global_frame)"
+        for param in params
+    )
+    for namespace in ("global_costmap", "local_costmap"):
+        assert any(
+            param.get("name") == f"{namespace}/obstacle_layer/enabled"
+            and param.get("value") == "false"
+            for param in params
+        )
+    assert any(
         remap.get("from") == "cmd_vel"
         and remap.get("to")
         == "/human_aware_shadow/velocity_proposal"
@@ -134,3 +164,60 @@ def test_shadow_launch_sinks_every_hateb_velocity_command():
         "global_costmap",
         "local_costmap",
     }
+    hateb = yaml.safe_load(
+        (PACKAGE / "config" / "cohan_shadow_hateb.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert hateb["odom_topic"] == "/Odometry"
+    assert hateb["max_vel_x_backwards"] > hateb["penalty_epsilon"]
+    runner = (ROOT / "tools" / "run_cohan_shadow_replay.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "broadcast_robot_tf:=true" in runner
+
+
+def test_replay_validator_imports_under_python38_builtins():
+    # Given: Python 3.8, where builtin collections are not subscriptable.
+    path = ROOT / "tools" / "validate_cohan_shadow_replay.py"
+    spec = importlib.util.spec_from_file_location("cohan_replay_validator", path)
+    module = importlib.util.module_from_spec(spec)
+
+    class Python38Dict:
+        pass
+
+    module.__dict__["dict"] = Python38Dict
+
+    # When/Then: importing the shipped CLI must not evaluate dict[...] at runtime.
+    spec.loader.exec_module(module)
+
+
+def test_replay_runner_loads_isolated_native_dependencies_before_hateb():
+    runner = (ROOT / "tools" / "run_cohan_shadow_replay.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'COHAN_LOCAL_DEPS_ROOT="${COHAN_LOCAL_DEPS_ROOT:-' in runner
+    assert "openblas-pthread" in runner
+    assert 'ldd "$COHAN_WS/devel/lib/libhateb_local_planner.so"' in runner
+
+
+def test_replay_goal_is_nearby_instead_of_route_endpoint(tmp_path):
+    path = ROOT / "tools" / "select_cohan_shadow_goal.py"
+    spec = importlib.util.spec_from_file_location("cohan_goal_selector", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    waypoints = [{"x": float(index), "y": 0.0} for index in range(20)]
+    assert module.select_goal(waypoints, 0.1, 0.0) == (5.0, 0.0)
+    pose_csv = tmp_path / "pose.csv"
+    pose_csv.write_text(
+        "%time,field.pose.pose.position.x,field.pose.pose.position.y\n"
+        "1000000000,-0.4,0.15\n",
+        encoding="utf-8",
+    )
+    assert module.pose_from_csv(pose_csv) == (-0.4, 0.15)
+
+    runner = (ROOT / "tools" / "run_cohan_shadow_replay.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "select_cohan_shadow_goal.py" in runner
+    assert '["waypoints"][-1]' not in runner

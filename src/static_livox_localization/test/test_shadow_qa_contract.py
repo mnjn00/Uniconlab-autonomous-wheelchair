@@ -1,7 +1,7 @@
 """Contract tests for the non-driving NUC shadow-QA evidence."""
 
-import sys
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -226,12 +226,21 @@ def test_shadow_runner_builds_fully_and_never_launches_motion_nodes():
     assert 'SHADOW_QA=1 LOCALIZATION_WS="$WS"' in runner
     assert '"$REPO/tools/start_wheelchair_localization.sh"' in runner
     assert 'REPO="${REPO:-$HOME/wheelchair_localization_src}"' in runner
-    assert 'MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"' \
+    assert (
+        'MAP_SHA256="${MAP_SHA256:-'
+        'ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"'
         in runner
-    assert 'ROUTE="${ROUTE:-$REPO/routes/20260814_route_algorithm_waypoints.json}"' \
+    )
+    assert (
+        'ROUTE="${ROUTE:-'
+        '$REPO/routes/20260814_route_algorithm_waypoints.json}"'
         in runner
-    assert 'DRIVABLE_MASK="${DRIVABLE_MASK:-$REPO/routes/route_2d_map_algorithm.yaml}"' \
+    )
+    assert (
+        'DRIVABLE_MASK="${DRIVABLE_MASK:-'
+        '$REPO/routes/route_2d_map_algorithm.yaml}"'
         in runner
+    )
     startup = runner[runner.index("setsid env SHADOW_QA=1"):runner.index(
         "wait \"$STACK_PID\"")]
     for variable in (
@@ -402,6 +411,12 @@ def human_aware_replay():
         "local_plans": [
             {"stamp": 110.2, "validation": "ACCEPTED", "point_count": 12},
         ],
+        "agent_plans": [
+            {
+                "stamp": 110.2,
+                "paths": [{"track_id": 1641, "point_count": 10}],
+            },
+        ],
     }
 
 
@@ -416,12 +431,24 @@ def test_human_aware_replay_proves_one_stable_safe_commitment():
 
     assert evidence == {
         "accepted_plan_count": 1,
+        "agent_plan_count": 1,
         "committed_sample_count": 3,
         "proposal_count": 1,
         "stable_track_id": 1641,
         "stop_go_reentries": 0,
         "unsafe_motion_stop_count": 1,
     }
+
+
+def test_human_aware_replay_allows_optional_agent_plan_evidence():
+    import shadow_qa_contract
+
+    replay = human_aware_replay()
+    replay["agent_plans"] = []
+
+    evidence = shadow_qa_contract.validate_human_aware_replay(replay)
+
+    assert evidence["agent_plan_count"] == 0
 
 
 def test_human_aware_replay_rejects_stop_go_reentry():
@@ -439,6 +466,56 @@ def test_human_aware_replay_rejects_stop_go_reentry():
         shadow_qa_contract.validate_human_aware_replay(replay)
 
 
+def test_human_aware_replay_allows_recommit_after_full_new_evidence():
+    import shadow_qa_contract
+
+    replay = human_aware_replay()
+    replay["statuses"].extend([
+        {
+            "stamp": 120.0,
+            "decision": "OBSERVING",
+            "track_id": 1642,
+            "evidence_s": 0.0,
+        },
+        {
+            "stamp": 130.0,
+            "decision": "BYPASS_COMMITTED",
+            "track_id": 1642,
+            "evidence_s": 10.0,
+        },
+        {
+            "stamp": 130.2,
+            "decision": "BYPASS_COMMITTED",
+            "track_id": 1642,
+            "evidence_s": 10.2,
+        },
+    ])
+    replay["tracked_agents"].extend([
+        {"stamp": 130.0, "frame_id": "map", "track_ids": [1642]},
+        {"stamp": 130.2, "frame_id": "map", "track_ids": [1642]},
+    ])
+    replay["velocity_proposals"].extend([
+        {"stamp": 111.2, "linear_x": 0.1, "angular_z": 0.0},
+        {"stamp": 130.2, "linear_x": 0.2, "angular_z": 0.0},
+    ])
+    replay["local_plans"].append({
+        "stamp": 130.2,
+        "validation": "ACCEPTED",
+        "point_count": 8,
+    })
+    replay["agent_plans"].append({
+        "stamp": 130.2,
+        "paths": [{"track_id": 1642, "point_count": 10}],
+    })
+
+    evidence = shadow_qa_contract.validate_human_aware_replay(replay)
+
+    assert evidence["stop_go_reentries"] == 0
+    assert evidence["proposal_count"] == 2
+    assert evidence["accepted_plan_count"] == 2
+    assert evidence["agent_plan_count"] == 2
+
+
 def test_cohan_replay_runner_isolated_and_cleans_every_process():
     runner = (
         Path(__file__).parents[3] / "tools" / "run_cohan_shadow_replay.sh"
@@ -453,6 +530,11 @@ def test_cohan_replay_runner_isolated_and_cleans_every_process():
     assert "ROS_MASTER_PORT" in text
     assert "trap finish EXIT HUP INT TERM" in text
     assert "/human_aware_shadow/velocity_proposal" in text
+    watcher = text.index("wait_for_cohan_shadow_commit.py")
+    replay = text.index('setsid rosbag play "$BAG"')
+    goal = text.index("geometry_msgs/PoseStamped")
+    assert watcher < replay < goal
+    assert 'wait "$COMMIT_PID"' in text[replay:goal]
     for forbidden in (
         "/cmd_vel_raw",
         "/cmd_vel_gated",
@@ -477,6 +559,7 @@ def test_cohan_replay_capture_uses_advisory_topics_and_done_signal():
         '"/human_aware_shadow/tracked_agents"',
         '"/human_aware_shadow/velocity_proposal"',
         '"/human_aware_shadow/move_base/HATebLocalPlannerROS/local_plan"',
+        '"/human_aware_shadow/move_base/HATebLocalPlannerROS/agents_local_plans"',
         '"/human_aware_shadow/replay_done"',
     ):
         assert topic in capture
