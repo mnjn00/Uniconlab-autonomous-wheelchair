@@ -438,25 +438,65 @@ class ObstacleClusters:
         matrix[:3, 3] = (p.x, p.y, p.z)
         self.map_poses.add(stamp_s, matrix)
 
-    def track(self, boxes):
-        """Follow each box in the odom frame and return its Track, or [].
+    def track(self, boxes, band_context=None):
+        """Follow boxes in odom and return (measured, coasting) tracks.
 
         Motion is only a question in a frame that does not move with the
         chair, so this needs the pose the merged cloud was expressed about.
         Without one there is nothing to say, and the caller reports saying
         nothing as UNKNOWN rather than as standing still.
+
+        The payload is opaque to cluster_tracking.  It keeps the last 3-D
+        geometry so a short unmatched track can be transformed back into the
+        current lidar frame and published as a conservative predicted box.
         """
         reference = self.accumulator.reference
-        if reference is None or not boxes:
-            return []
+        if reference is None:
+            return [], []
         stamp_s, T_ref = reference
-        centres = np.array([box[1] for box in boxes], dtype=np.float64)
-        in_body = lidar_to_body(centres, self.lidar_in_body,
-                                self.lidar_to_body_rotation)
-        in_odom = in_body @ T_ref[:3, :3].T + T_ref[:3, 3]
-        return self.tracker.update(
-            [(float(point[0]), float(point[1]), boxes[i][0])
-             for i, point in enumerate(in_odom)], stamp_s)
+        detections = []
+        if boxes:
+            centres = np.array([box[1] for box in boxes], dtype=np.float64)
+            in_body = lidar_to_body(centres, self.lidar_in_body,
+                                    self.lidar_to_body_rotation)
+            in_odom = in_body @ T_ref[:3, :3].T + T_ref[:3, 3]
+            for i, point in enumerate(in_odom):
+                context = None if band_context is None else band_context[i]
+                payload = {
+                    "z_odom": float(point[2]),
+                    "size": np.asarray(boxes[i][2], dtype=np.float64).tolist(),
+                    "raw_label": boxes[i][0] if context is None else context[0],
+                    "band_relation": None if context is None else context[1],
+                }
+                semantic_label = boxes[i][0] if context is None else context[0]
+                detections.append((float(point[0]), float(point[1]),
+                                   semantic_label, payload))
+        measured = self.tracker.update(detections, stamp_s)
+        return measured, self.tracker.coasting(stamp_s)
+
+    def predicted_lidar_box(self, track):
+        """Return a coasting track as an uncertainty-inflated lidar box."""
+        reference = self.accumulator.reference
+        payload = track.payload if isinstance(track.payload, dict) else {}
+        if reference is None or "z_odom" not in payload or "size" not in payload:
+            return None
+        _stamp_s, T_ref = reference
+        odom_center = np.array([
+            track.position[0], track.position[1], float(payload["z_odom"])
+        ], dtype=np.float64)
+        body_center = (odom_center - T_ref[:3, 3]) @ T_ref[:3, :3]
+        lidar_center = body_to_lidar(
+            np.asarray([body_center]), self.lidar_in_body,
+            self.lidar_to_body_rotation)[0]
+        size = np.asarray(payload["size"], dtype=np.float64).reshape(-1)
+        if len(size) != 3 or not np.isfinite(size).all():
+            return None
+        # Two sigma, capped so a stale track stops safely without consuming
+        # the entire route corridor solely because covariance grew.
+        inflation = min(0.60, 2.0 * track.uncertainty_m())
+        size = np.maximum(size, 0.1)
+        size[:2] += 2.0 * inflation
+        return lidar_center, size, inflation
 
     def publish_empty(self, source_stamp, status):
         delete_all = Marker()
@@ -547,7 +587,7 @@ class ObstacleClusters:
                           np.maximum(hi - lo, 0.1), len(cluster)))
             band_context.append((raw_label, relation, inside_fraction,
                                  lateral_profile(cluster)))
-        tracks = self.track(boxes)
+        tracks, coasting_tracks = self.track(boxes, band_context)
 
         markers, objects = MarkerArray(), []
         dynamic = MarkerArray()
@@ -567,8 +607,14 @@ class ObstacleClusters:
             raw_label, band_relation, inside_fraction, profile = context
             track = tracks[i] if tracks else None
             object_id = i if track is None else int(track.id)
+            stable_label = label if track is None else track.label
+            # A current geometric outside-band verdict is authoritative.  In
+            # every other case use the track's voted semantic label so one
+            # flickering footprint does not make a person disappear.
+            published_label = OUTSIDE_BAND if label == OUTSIDE_BAND else \
+                              stable_label
             objects.append({
-                "class": label,
+                "class": published_label,
                 "raw_class": raw_label,
                 "band_relation": band_relation,
                 "band_inside_fraction": None if inside_fraction is None else
@@ -593,6 +639,14 @@ class ObstacleClusters:
                              round(float(track.speed_mps()), 2),
                 "age_s": 0.0 if track is None else
                          round(float(track.age_s(stamp.to_sec())), 1),
+                "predicted_only": False,
+                "miss_age_s": 0.0,
+                "velocity_odom": [0.0, 0.0] if track is None else [
+                    round(float(track.velocity[0]), 2),
+                    round(float(track.velocity[1]), 2),
+                ],
+                "position_uncertainty_m": 0.0 if track is None else
+                    round(float(track.uncertainty_m()), 3),
             })
             # Every map-novel object is excluded from registration. Motion
             # only controls avoidance policy; a stationary person or parked
@@ -616,7 +670,7 @@ class ObstacleClusters:
             m = Marker()
             m.header.frame_id = "body"
             m.header.stamp = rospy.Time.from_sec(newest_stamp)
-            m.ns = label
+            m.ns = published_label
             m.id = object_id
             m.type = Marker.CUBE
             m.action = Marker.ADD
@@ -624,10 +678,68 @@ class ObstacleClusters:
             m.pose.orientation.w = 1.0
             m.scale.x, m.scale.y, m.scale.z = (
                 float(v) for v in body_size)
-            r, g, b = CLASS_COLORS[label]
+            r, g, b = CLASS_COLORS[published_label]
             m.color.r, m.color.g, m.color.b, m.color.a = r, g, b, 0.55
             m.lifetime = rospy.Duration(1.0 / PROCESS_HZ * 3.0)
             markers.markers.append(m)
+
+        # AB3DMOT's useful property is not merely keeping an ID internally:
+        # a planner must still receive the predicted obstacle while the
+        # detector misses it.  Publish an inflated box without a stale point
+        # profile; cluster_guard then uses its conservative box fallback.
+        for track in coasting_tracks:
+            predicted = self.predicted_lidar_box(track)
+            if predicted is None:
+                continue
+            center, size, inflation = predicted
+            payload = track.payload if isinstance(track.payload, dict) else {}
+            last_outside = payload.get("band_relation") == "outside"
+            label = OUTSIDE_BAND if last_outside else track.label
+            label = label if label in CLASS_COLORS else "obstacle"
+            objects.append({
+                "class": label,
+                "raw_class": str(payload.get("raw_label", label)),
+                "band_relation": "predicted",
+                "band_inside_fraction": None,
+                "x": round(float(center[0]), 2),
+                "y": round(float(center[1]), 2),
+                "size": [round(float(v), 2) for v in size],
+                "profile": None,
+                "points": 0,
+                "id": int(track.id),
+                # A coasting track is never promoted to parked.  UNKNOWN is
+                # already treated conservatively by every current consumer.
+                "motion": UNKNOWN,
+                "speed_mps": round(float(track.speed_mps()), 2),
+                "age_s": round(float(track.age_s(stamp.to_sec())), 1),
+                "predicted_only": True,
+                "miss_age_s": round(float(track.miss_age_s(newest_stamp)), 2),
+                "velocity_odom": [round(float(v), 2)
+                                  for v in track.velocity],
+                "position_uncertainty_m": round(float(inflation), 3),
+            })
+
+            body_center = lidar_to_body(
+                np.asarray([center], dtype=np.float64), self.lidar_in_body,
+                self.lidar_to_body_rotation)[0]
+            body_size = np.abs(np.asarray(
+                self.lidar_to_body_rotation)) @ size
+            marker = Marker()
+            marker.header.frame_id = "body"
+            marker.header.stamp = rospy.Time.from_sec(newest_stamp)
+            marker.ns = "predicted_%s" % label
+            marker.id = int(track.id)
+            marker.type = Marker.CUBE
+            marker.action = Marker.ADD
+            marker.pose.position = Point(*[float(v) for v in body_center])
+            marker.pose.orientation.w = 1.0
+            marker.scale.x, marker.scale.y, marker.scale.z = (
+                float(v) for v in body_size)
+            r, g, b = CLASS_COLORS[label]
+            marker.color.r, marker.color.g, marker.color.b = r, g, b
+            marker.color.a = 0.25
+            marker.lifetime = rospy.Duration(1.0 / PROCESS_HZ * 3.0)
+            markers.markers.append(marker)
         self.marker_pub.publish(markers)
         self.dynamic_pub.publish(dynamic)
         self.summary_pub.publish(String(data=json.dumps({

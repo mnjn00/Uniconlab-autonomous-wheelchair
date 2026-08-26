@@ -406,6 +406,49 @@ def test_novel_person_is_published_with_valid_box():
     assert (size > 0.0).all()
 
 
+def test_short_detector_dropout_publishes_same_id_as_predicted_box():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    person = box_of_points(2.0, 0.0, half=0.22, height=1.55)
+    node.fixed_map_filter = FixedMapFilter(person)
+    first = run(node, module, person, now_s, 0.0, 100.0)
+    original = first.objects[0]
+
+    # The cloud remains healthy but map subtraction/cluster formation misses
+    # this object for one cycle, as happens when the chair turns.
+    node.fixed_map_filter.novel_points = np.empty((0, 3))
+    coast = run(node, module, person, now_s, 0.0, 100.2)
+
+    assert len(coast.objects) == 1
+    predicted = coast.objects[0]
+    assert predicted["id"] == original["id"]
+    assert predicted["class"] == "person"
+    assert predicted["predicted_only"] is True
+    assert predicted["motion"] == ct.UNKNOWN
+    assert predicted["position_uncertainty_m"] > 0.0
+    blocks, points = cg.corridor_obstacle_points(coast, half_width_m=1.0)
+    assert blocks and points, "DWA lost the track the producer kept"
+
+
+def test_current_outside_band_verdict_remains_authoritative_with_tracking():
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    node.band = ConstantBand(False)
+    wall = wall_of_points()
+
+    first = run(node, module, wall, now_s, 0.0, 100.0)
+    second = run(node, module, wall, now_s, 0.0, 100.2)
+
+    assert first.objects[0]["class"] == module.OUTSIDE_BAND
+    assert second.objects[0]["class"] == module.OUTSIDE_BAND
+    assert second.objects[0]["predicted_only"] is False
+
+    node.fixed_map_filter = FixedMapFilter(np.empty((0, 3)))
+    predicted = run(node, module, wall, now_s, 0.0, 100.4)
+    assert predicted.objects[0]["class"] == module.OUTSIDE_BAND
+    assert predicted.objects[0]["predicted_only"] is True
+
+
 def test_no_new_cloud_cannot_publish_fresh_ok_summary():
     now_s = [100.0]
     module, node = producer_at(now_s)
