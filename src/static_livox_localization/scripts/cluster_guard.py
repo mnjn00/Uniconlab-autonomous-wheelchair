@@ -359,11 +359,12 @@ def corridor_reach(item, lateral_shift_m, half_width_m):
 
 def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
                    labels=None):
-    """The nearest object overlapping the corridor, or None.
+    """The nearest matching object overlapping the corridor, or None.
 
     None means nothing is in the way. It never means "could not tell": an
     unusable summary reports a blocking threat, so a caller treating None
-    as clear road is right to.
+    as clear road is right to. When labels is provided, only objects whose
+    normalized class is in it are considered.
     """
     if not summary.usable:
         return Threat(BLOCKED, MOVING, summary.status or "unusable")

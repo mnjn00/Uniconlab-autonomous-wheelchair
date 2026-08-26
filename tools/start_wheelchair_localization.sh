@@ -111,9 +111,10 @@ fi
 #
 # pursuit  the validated one. Two complete autonomous runs of the 0727 route
 #          on 2026-07-31. This is the default and should stay the default.
-# dwa      Trajectory rollout with the band as a hard reject. Simulated,
-#          never driven. This is the one to reach for when the run is about
-#          getting past something, not about following the line.
+# dwa      Trajectory rollout that strongly prefers the recorded band, but
+#          may leave it to pass an obstacle only where the authoritative
+#          drivable mask proves the whole rollout physically safe. The mask,
+#          including mapped kerbs and drops, remains a hard reject.
 # mpc      Completes the route in simulation, at a jitter measured to be
 #          harsher than the chair's own, without leaving the band. Has never
 #          driven the chair. Those are different things: it is here to be
@@ -161,12 +162,10 @@ esac
 case "$PROFILE" in
   pursuit) FOLLOWER_NODE=waypoint_follower.py ;;
   mpc)     FOLLOWER_NODE=mpc_follower.py ;;
-  # dwa     rolls candidate velocities out and rejects the ones that leave
-  #         the safety band. The only profile that avoids an obstacle by
-  #         choosing a velocity the chair can hold, rather than by pushing
-  #         the pursuit target 0.6 m sideways - which from a standstill is a
-  #         34 degree demand and put the chair at a wall three times on
-  #         2026-08-04. Simulated, never driven.
+  # dwa     rolls candidate velocities out, prices leaving the preferred
+  #         band heavily, and still rejects every point outside the physical
+  #         drivable mask. It avoids by choosing a velocity the chair can
+  #         hold rather than pushing the pursuit target sideways.
   dwa)     FOLLOWER_NODE=dwa_follower.py ;;
   *) echo "ERROR: PROFILE must be pursuit, mpc or dwa, got '$PROFILE'" >&2
      exit 65 ;;
