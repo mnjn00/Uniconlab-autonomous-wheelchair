@@ -66,6 +66,7 @@ catkin_install_python(
     scripts/dwa_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
+    scripts/human_aware_shadow_node.py
     scripts/dwa_run_report.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
@@ -74,6 +75,7 @@ install(
     scripts/array_backend.py
     scripts/gpu_voxel_scorer.py
     scripts/body_frame.py
+    scripts/human_aware_shadow.py
     scripts/dwa_core.py
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py

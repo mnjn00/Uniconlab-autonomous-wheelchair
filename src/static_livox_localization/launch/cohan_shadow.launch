@@ -1,0 +1,55 @@
+<launch>
+  <arg name="global_frame" default="map"/>
+  <arg name="base_frame" default="base_footprint"/>
+
+  <node pkg="static_livox_localization"
+        type="human_aware_shadow_node.py"
+        name="human_adapter"
+        output="screen">
+    <param name="global_frame" value="$(arg global_frame)"/>
+  </node>
+
+  <group ns="human_aware_shadow">
+    <node pkg="agent_path_prediction"
+          type="agent_path_predict"
+          name="agent_path_predict"
+          output="screen">
+      <param name="tracked_agents_sub_topic"
+             value="/human_aware_shadow/tracked_agents"/>
+      <param name="robot_frame_id" value="$(arg base_frame)"/>
+    </node>
+
+    <node pkg="move_base"
+          type="move_base"
+          name="move_base"
+          output="screen">
+      <param name="base_global_planner"
+             value="global_planner/GlobalPlanner"/>
+      <param name="base_local_planner"
+             value="hateb_local_planner/HATebLocalPlannerROS"/>
+      <param name="bt_xml_path"
+             value="$(find hateb_local_planner)/behavior_trees/all_modes.xml"/>
+      <rosparam command="load"
+                file="$(find static_livox_localization)/config/cohan_shadow_move_base.yaml"/>
+      <rosparam command="load"
+                ns="global_costmap"
+                file="$(find wheelchair_navigation)/config/costmap_common.yaml"/>
+      <rosparam command="load"
+                ns="local_costmap"
+                file="$(find wheelchair_navigation)/config/costmap_common.yaml"/>
+      <rosparam command="load"
+                file="$(find wheelchair_navigation)/config/global_costmap.yaml"/>
+      <rosparam command="load"
+                file="$(find wheelchair_navigation)/config/local_costmap.yaml"/>
+      <rosparam command="load"
+                ns="HATebLocalPlannerROS"
+                file="$(find static_livox_localization)/config/cohan_shadow_hateb.yaml"/>
+      <remap from="cmd_vel"
+             to="/human_aware_shadow/velocity_proposal"/>
+      <remap from="/agent_path_predict/predict_agent_poses"
+             to="/human_aware_shadow/agent_path_predict/predict_agent_poses"/>
+      <remap from="/agent_path_predict/reset_prediction_services"
+             to="/human_aware_shadow/agent_path_predict/reset_prediction_services"/>
+    </node>
+  </group>
+</launch>

@@ -178,3 +178,107 @@ def validate_snapshot(summary, dynamic_boxes, diagnostics,
         "post_box_points": post_box,
         "post_map_points": post_map,
     }
+
+
+def _nearest_status(statuses, stamp_s, max_skew_s=0.25):
+    selected = min(
+        statuses,
+        key=lambda item: abs(float(item["stamp"]) - stamp_s),
+    )
+    if abs(float(selected["stamp"]) - stamp_s) > max_skew_s:
+        raise ValueError("shadow evidence has no coherent status")
+    return selected
+
+
+def validate_human_aware_replay(replay):
+    """Validate one isolated CoHAN/HATEB shadow replay summary."""
+    statuses = replay.get("statuses")
+    summaries = replay.get("summaries")
+    tracked_agents = replay.get("tracked_agents")
+    proposals = replay.get("velocity_proposals")
+    local_plans = replay.get("local_plans")
+    if not all(
+            isinstance(value, list) and value
+            for value in (
+                statuses,
+                summaries,
+                tracked_agents,
+                proposals,
+                local_plans,
+            )):
+        raise ValueError("human-aware replay evidence is incomplete")
+    statuses = sorted(statuses, key=lambda item: float(item["stamp"]))
+    decisions = [item.get("decision") for item in statuses]
+    allowed = {"OBSERVING", "BYPASS_COMMITTED", "STOP_REQUIRED"}
+    if any(decision not in allowed for decision in decisions):
+        raise ValueError("human-aware replay has an unknown decision")
+
+    commit_entries = sum(
+        decision == "BYPASS_COMMITTED"
+        and (index == 0 or decisions[index - 1] != "BYPASS_COMMITTED")
+        for index, decision in enumerate(decisions)
+    )
+    stop_go_reentries = max(0, commit_entries - 1)
+    if stop_go_reentries:
+        raise ValueError("shadow bypass re-entered after a stop")
+    committed = [
+        item for item in statuses
+        if item["decision"] == "BYPASS_COMMITTED"
+    ]
+    if len(committed) < 2:
+        raise ValueError("shadow replay has no sustained commitment")
+    committed_ids = {
+        int(item["track_id"])
+        for item in committed
+        if item.get("track_id") is not None
+    }
+    if len(committed_ids) != 1:
+        raise ValueError("shadow commitment has no stable identity")
+    stable_track_id = next(iter(committed_ids))
+
+    for cycle in tracked_agents:
+        if cycle.get("frame_id") != "map":
+            raise ValueError("tracked agents are not in map frame")
+        if cycle.get("track_ids") != [stable_track_id]:
+            raise ValueError("tracked-agent identity is not stable")
+
+    for proposal in proposals:
+        stamp_s = float(proposal["stamp"])
+        status = _nearest_status(statuses, stamp_s)
+        if status["decision"] != "BYPASS_COMMITTED":
+            raise ValueError("velocity proposal exists outside commitment")
+        linear_x = float(proposal["linear_x"])
+        angular_z = float(proposal["angular_z"])
+        if not all(math.isfinite(value) for value in (linear_x, angular_z)):
+            raise ValueError("velocity proposal is not finite")
+        if linear_x < 0.0 or linear_x > 0.35 + 1e-9:
+            raise ValueError("velocity proposal exceeds shadow speed cap")
+
+    accepted_plans = [
+        plan for plan in local_plans
+        if plan.get("validation") == "ACCEPTED"
+        and int(plan.get("point_count", 0)) >= 2
+    ]
+    if not accepted_plans:
+        raise ValueError("shadow replay has no accepted HATEB local plan")
+
+    unsafe_motion_stop_count = 0
+    for summary in summaries:
+        people = summary.get("people")
+        if not isinstance(people, list):
+            raise ValueError("shadow summary has no people list")
+        if not any(person.get("motion") == "moving" for person in people):
+            continue
+        status = _nearest_status(statuses, float(summary["stamp"]))
+        unsafe_motion_stop_count += status["decision"] == "STOP_REQUIRED"
+    if unsafe_motion_stop_count < 1:
+        raise ValueError("moving-person replay never became stop-required")
+
+    return {
+        "accepted_plan_count": len(accepted_plans),
+        "committed_sample_count": len(committed),
+        "proposal_count": len(proposals),
+        "stable_track_id": stable_track_id,
+        "stop_go_reentries": stop_go_reentries,
+        "unsafe_motion_stop_count": unsafe_motion_stop_count,
+    }

@@ -1,0 +1,10 @@
+upstream:
+  repository: https://github.com/LAAS-HRI/CoHAN2.0.git
+  commit: bdfc5240b2128347bf6fe501d392d14768754a9d
+tracked_agents_topic: /human_aware_shadow/tracked_agents
+velocity_sink_topic: /human_aware_shadow/velocity_proposal
+status_topic: /human_aware_shadow/status
+planner_plugin: hateb_local_planner/HATebLocalPlannerROS
+global_frame: map
+robot_base_frame: base_footprint
+motion_authority: false

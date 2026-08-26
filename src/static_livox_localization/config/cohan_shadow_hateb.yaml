@@ -1,0 +1,88 @@
+odom_topic: /odom
+map_frame: map
+planning_mode: 1
+
+teb_autosize: true
+dt_ref: 0.125
+dt_hysteresis: 0.0125
+global_plan_overwrite_orientation: true
+allow_init_with_backwards_motion: false
+max_global_plan_lookahead_dist: 8.0
+feasibility_check_no_poses: 5
+global_plan_viapoint_sep: 0.2
+disable_warm_start: false
+shrink_horizon_backup: true
+
+holonomic_robot: false
+type: 0
+max_vel_x: 0.35
+min_vel_x: 0.0
+max_vel_x_backwards: 0.0
+max_vel_theta: 0.5
+min_vel_theta: 0.0
+acc_lim_x: 0.3
+acc_lim_theta: 0.4
+min_turning_radius: 0.0
+footprint_model:
+  type: polygon
+  vertices:
+    - [0.485, 0.300]
+    - [0.485, -0.300]
+    - [-0.485, -0.300]
+    - [-0.485, 0.300]
+
+agent_radius: 0.35
+max_agent_vel_x: 1.5
+max_agent_vel_y: 1.5
+max_agent_vel_x_backwards: 0.0
+max_agent_vel_theta: 1.2
+agent_acc_lim_x: 0.8
+agent_acc_lim_y: 0.8
+agent_acc_lim_theta: 1.0
+use_agent_agent_safety_c: true
+use_agent_robot_safety_c: true
+use_agent_robot_rel_vel_c: true
+use_agent_robot_visi_c: false
+add_invisible_humans: false
+min_agent_agent_dist: 0.8
+min_agent_robot_dist: 0.8
+rel_vel_cost_threshold: 1.0
+
+xy_goal_tolerance: 0.2
+yaw_goal_tolerance: 0.2
+free_goal_vel: false
+
+min_obstacle_dist: 0.45
+include_costmap_obstacles: true
+costmap_obstacles_behind_robot_dist: 1.0
+obstacle_poses_affected: 5
+obstacle_cost_mult: 1.0
+use_nonlinear_obstacle_penalty: true
+
+no_inner_iterations: 8
+no_outer_iterations: 4
+optimization_activate: true
+optimization_verbose: false
+penalty_epsilon: 0.05
+weight_max_vel_x: 2.0
+weight_max_vel_theta: 2.0
+weight_acc_lim_x: 2.0
+weight_acc_lim_theta: 2.0
+weight_kinematics_nh: 1000.0
+weight_kinematics_forward_drive: 100.0
+weight_kinematics_turning_radius: 0.0
+weight_optimaltime: 1.0
+weight_agent_optimaltime: 3.0
+weight_obstacle: 50.0
+weight_dynamic_obstacle: 50.0
+weight_viapoint: 1.0
+weight_agent_viapoint: 1.0
+weight_shortest_path: 1.0
+weight_agent_robot_safety: 10.0
+weight_agent_agent_safety: 5.0
+weight_agent_robot_rel_vel: 5.0
+
+publish_agents_global_plans: true
+publish_agents_local_plans: true
+publish_robot_global_plan: true
+publish_robot_local_plan: true

@@ -362,3 +362,125 @@ def test_field_startup_has_sensor_only_shadow_exit_before_wheel_launch():
     assert "SHADOW_QA_READY" in shadow_block
     cleanup = startup[startup.index('echo "[1/5] cleaning old processes"'):]
     assert 'if [ "$SHADOW_QA" != "1" ]; then' in cleanup
+
+
+def human_aware_replay():
+    return {
+        "statuses": [
+            {"stamp": 109.8, "decision": "OBSERVING", "track_id": 1641},
+            {
+                "stamp": 110.0,
+                "decision": "BYPASS_COMMITTED",
+                "track_id": 1641,
+            },
+            {
+                "stamp": 110.2,
+                "decision": "BYPASS_COMMITTED",
+                "track_id": 1641,
+            },
+            {
+                "stamp": 110.4,
+                "decision": "BYPASS_COMMITTED",
+                "track_id": 1641,
+            },
+            {"stamp": 111.2, "decision": "STOP_REQUIRED", "track_id": None},
+        ],
+        "summaries": [
+            {"stamp": 110.0, "people": [{"id": 1641, "motion": "static"}]},
+            {"stamp": 110.2, "people": [{"id": 1641, "motion": "moving"}]},
+            {"stamp": 110.4, "people": [{"id": 1641, "motion": "static"}]},
+            {"stamp": 111.2, "people": [{"id": 1641, "motion": "moving"}]},
+        ],
+        "tracked_agents": [
+            {"stamp": 110.0, "frame_id": "map", "track_ids": [1641]},
+            {"stamp": 110.2, "frame_id": "map", "track_ids": [1641]},
+            {"stamp": 110.4, "frame_id": "map", "track_ids": [1641]},
+        ],
+        "velocity_proposals": [
+            {"stamp": 110.2, "linear_x": 0.2, "angular_z": 0.1},
+        ],
+        "local_plans": [
+            {"stamp": 110.2, "validation": "ACCEPTED", "point_count": 12},
+        ],
+    }
+
+
+def test_human_aware_replay_proves_one_stable_safe_commitment():
+    import shadow_qa_contract
+
+    assert hasattr(shadow_qa_contract, "validate_human_aware_replay"), \
+        "shadow QA cannot validate CoHAN/HATEB replay evidence"
+
+    evidence = shadow_qa_contract.validate_human_aware_replay(
+        human_aware_replay())
+
+    assert evidence == {
+        "accepted_plan_count": 1,
+        "committed_sample_count": 3,
+        "proposal_count": 1,
+        "stable_track_id": 1641,
+        "stop_go_reentries": 0,
+        "unsafe_motion_stop_count": 1,
+    }
+
+
+def test_human_aware_replay_rejects_stop_go_reentry():
+    import shadow_qa_contract
+
+    assert hasattr(shadow_qa_contract, "validate_human_aware_replay"), \
+        "shadow QA cannot reject STOP-GO replay"
+    replay = human_aware_replay()
+    replay["statuses"].insert(
+        3,
+        {"stamp": 110.3, "decision": "STOP_REQUIRED", "track_id": None},
+    )
+
+    with pytest.raises(ValueError, match="re-entered"):
+        shadow_qa_contract.validate_human_aware_replay(replay)
+
+
+def test_cohan_replay_runner_isolated_and_cleans_every_process():
+    runner = (
+        Path(__file__).parents[3] / "tools" / "run_cohan_shadow_replay.sh"
+    )
+    assert runner.exists(), "no isolated CoHAN bag-replay runner exists"
+    text = runner.read_text(encoding="utf-8")
+
+    assert "blackbox_20260826_220341.bag" in text
+    assert "cohan_shadow.launch" in text
+    assert "check_shadow_ros_graph.py" in text
+    assert "validate_cohan_shadow_replay.py" in text
+    assert "ROS_MASTER_PORT" in text
+    assert "trap finish EXIT HUP INT TERM" in text
+    assert "/human_aware_shadow/velocity_proposal" in text
+    for forbidden in (
+        "/cmd_vel_raw",
+        "/cmd_vel_gated",
+        "/cmd_vel ",
+        "/wheel_cmd",
+        "/mode_cmd",
+    ):
+        assert forbidden not in text
+
+
+def test_cohan_replay_capture_uses_advisory_topics_and_done_signal():
+    root = Path(__file__).parents[3]
+    capture_path = root / "tools" / "capture_cohan_shadow_replay.py"
+    validator_path = root / "tools" / "validate_cohan_shadow_replay.py"
+    assert capture_path.exists(), "no coherent CoHAN replay capture exists"
+    assert validator_path.exists(), "no offline CoHAN replay validator exists"
+
+    capture = capture_path.read_text(encoding="utf-8")
+    for topic in (
+        '"/perception/objects_summary"',
+        '"/human_aware_shadow/status"',
+        '"/human_aware_shadow/tracked_agents"',
+        '"/human_aware_shadow/velocity_proposal"',
+        '"/human_aware_shadow/move_base/HATebLocalPlannerROS/local_plan"',
+        '"/human_aware_shadow/replay_done"',
+    ):
+        assert topic in capture
+    assert "ShadowTrajectoryValidator" in capture
+    assert "rospy.on_shutdown" in capture
+    validator = validator_path.read_text(encoding="utf-8")
+    assert "validate_human_aware_replay" in validator
