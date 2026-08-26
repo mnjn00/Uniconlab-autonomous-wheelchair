@@ -15,78 +15,18 @@ MAX_ANGULAR_RAD_S = 0.6
 WHEEL_SEPARATION_M = 0.54
 STOP_COMMAND = (83, 33, 83, 33, 79)
 
-# Stopping, and why a bare STOP_COMMAND is not how this base is stopped.
-#
-# S is not a brake on this hardware. It is the state the wheels are put into
-# once they are already at rest. The 2023 authors of this stack never sent
-# it from speed: wheel_cmd.py's ObstacleStop re-commanded a fraction of the
-# MEASURED wheel speed every cycle, kept the direction byte at C while it
-# did, and only swapped in S once the count had fallen under 35 - about
-# 0.06 m/s. WheelSmoothChanger enforced the same rule through every
-# direction change.
-#
-# This node dropped all of that. encode() emits S the moment cmd_vel
-# reaches zero, whatever the chair is carrying, and it reads wheel_status
-# for the mode alone - never for the speeds the ramp was built on. The base
-# has been receiving an input it was never driven with, and its answer is
-# not symmetric: measured 2026-08-23 over every cruise stop of the evening,
-# four for four, the right wheel braked at 0.67-0.89 m/s^2 while the left
-# held its last setpoint at -0.06 to 0.22. A chair with one wheel driving
-# and one stopped pivots - 0.67 m/s across the 0.54 m track is 71 deg/s -
-# and it pivots toward the wheel that stopped, which is the sudden right
-# turn on descents that has been in the logs for weeks.
-#
-# So the ramp comes back, in real units this time. The fraction is taken
-# off the MEASURED speed rather than the commanded one, which is what makes
-# it safe to run at 50 Hz: the command sits about a fifth under whatever
-# the wheels are actually doing, so it asks for braking continuously
-# without ever running away from what they can deliver.
-RAMP_DECAY = 0.9
-RAMP_BLEED_MPS = 0.09
-RAMP_TERMINAL_MPS = 0.06
-
-
-def wheel_speed_mps(direction, magnitude):
-    """Decode one wheel from a status frame. Negative when reversing."""
-    speed = (float(magnitude) - MAGNITUDE_OFFSET) / COUNTS_PER_KMH / 3.6
-    letter = int(direction)
-    if letter == 67:
-        return speed
-    if letter == 87:
-        return -speed
-    return 0.0
-
-
-def stop_ramp_command(left_mps, right_mps,
-                      decay=RAMP_DECAY, bleed_mps=RAMP_BLEED_MPS,
-                      terminal_mps=RAMP_TERMINAL_MPS):
-    """One step of the ramp toward rest, from what the wheels are doing.
-
-    Returns the ordinary five-byte command. Once a wheel is under the
-    terminal speed its own bytes become S, so a chair already at rest is
-    sent exactly the STOP_COMMAND it would have been sent before.
-    """
-    def one(speed):
-        try:
-            speed = float(speed)
-        except (TypeError, ValueError):
-            return 83, MAGNITUDE_OFFSET
-        if not math.isfinite(speed):
-            return 83, MAGNITUDE_OFFSET
-        target = abs(speed) * float(decay) - float(bleed_mps)
-        if target < float(terminal_mps):
-            return 83, MAGNITUDE_OFFSET
-        magnitude = int(round(target * 3.6 * COUNTS_PER_KMH)) + MAGNITUDE_OFFSET
-        return (67 if speed > 0.0 else 87), min(magnitude, 127)
-
-    left = one(left_mps)
-    right = one(right_mps)
-    return (left[0], left[1], right[0], right[1], 79)
-
 # Wheel speeds are sent as tenths of a km/h on top of a 33 offset, so one
 # count is 0.1 km/h (0.028 m/s).
 COUNTS_PER_KMH = 10.0
 MAGNITUDE_OFFSET = 33
+
+# S is a stopped state on this base, not a brake command. A stop request
+# therefore ramps from measured wheel speeds and changes each wheel to S
+# only after that wheel is already close to rest.
+RAMP_DECAY = 0.9
+RAMP_BLEED_MPS = 0.09
+RAMP_TERMINAL_MPS = 0.06
+STATUS_FRESH_S = 0.30
 
 # Below this the wheels were observed not to turn the loaded chair at all.
 # On 2026-07-29 the follower held its maximum +0.5 rad/s for four seconds
@@ -102,9 +42,53 @@ TURN_AUTHORITY_KMH = 1.3
 # never enough to run away.
 TURN_AUTHORITY_MAX_LINEAR_MPS = 0.30
 YAW_DEADBAND_RAD_S = 0.05
-# A wheel report older than this says nothing about the speed the chair is
-# carrying now, so there is nothing to ramp from.
-STATUS_FRESH_S = 0.3
+
+
+def wheel_speed_mps(direction, magnitude):
+    """Decode one wheel from a status frame, negative when reversing."""
+    try:
+        speed = (float(magnitude) - MAGNITUDE_OFFSET) / COUNTS_PER_KMH / 3.6
+        direction = int(direction)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(speed):
+        return 0.0
+    if direction == 67:
+        return speed
+    if direction == 87:
+        return -speed
+    return 0.0
+
+
+def stop_ramp_command(left_mps, right_mps):
+    """Build a straight measured-speed braking step for both wheels.
+
+    Decaying each wheel independently preserves whatever yaw moment existed
+    when the stop arrived. The 2026-08-25 field stop entered at C55/C51;
+    that ramp reached left-forward/right-stop and rotated the chair another
+    43 degrees toward a wall after the gate had already requested zero.
+
+    Collapse to the slower wheel first, then decay both together. No wheel
+    is accelerated, linear braking stays gradual, and commanded yaw becomes
+    zero in the first stop frame. A pivot or one-wheel motion stops
+    immediately because there is no non-zero straight speed common to both.
+    """
+    try:
+        left = float(left_mps)
+        right = float(right_mps)
+    except (TypeError, ValueError):
+        return STOP_COMMAND
+    if not math.isfinite(left) or not math.isfinite(right) or \
+            left == 0.0 or right == 0.0 or left * right < 0.0:
+        return STOP_COMMAND
+    target = min(abs(left), abs(right)) * RAMP_DECAY - RAMP_BLEED_MPS
+    if target < RAMP_TERMINAL_MPS:
+        return STOP_COMMAND
+    direction = 67 if left > 0.0 else 87
+    magnitude = int(round(target * 3.6 * COUNTS_PER_KMH)) + \
+        MAGNITUDE_OFFSET
+    magnitude = min(magnitude, 127)
+    return direction, magnitude, direction, magnitude, 79
 
 
 def message_caller_id(message):
@@ -187,12 +171,6 @@ class WheelCommandGuard:
         self.publisher.publish(message)
 
     def publish_stop(self):
-        """Ramp the wheels down rather than declaring them stopped.
-
-        Falls back to the bare STOP_COMMAND when there is no fresh report
-        to ramp from - an unknown speed is not something to guess at, and
-        that is the behaviour this node has always had.
-        """
         now = rospy.Time.now().to_sec()
         if self.measured_stamp is None or \
                 now - self.measured_stamp > STATUS_FRESH_S:
@@ -212,6 +190,9 @@ class WheelCommandGuard:
         if command is None:
             self.fault_latched = True
         if self.fault_latched:
+            self.publish_stop()
+            return
+        if command == STOP_COMMAND:
             self.publish_stop()
             return
         self.publish(command)

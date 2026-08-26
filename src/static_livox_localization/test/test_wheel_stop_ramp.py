@@ -9,6 +9,16 @@ Measured 2026-08-23 over every cruise stop of the evening, four for four:
 the right wheel braked at 0.67-0.89 m/s^2, the left held its last setpoint
 at -0.06 to 0.22, and the chair pivoted at about 71 deg/s toward the wheel
 that had stopped.
+
+The first ramp decayed each wheel from its own measured speed, which kept
+whatever yaw moment existed when the stop arrived. On 2026-08-25 a stop
+entered at C55/C51 reached left-forward/right-stop and rotated the chair a
+further 43 degrees toward a wall, after the gate had already asked for
+zero. The ramp now collapses to the SLOWER wheel and decays both together,
+so one direction and one magnitude go out and commanded yaw is zero from
+the first stop frame. Wheels that share no straight speed - a pivot, or
+one already at rest - stop outright rather than being averaged into
+forward motion.
 """
 import importlib.util
 import os
@@ -18,8 +28,26 @@ from pathlib import Path
 
 import pytest
 
-SNAPSHOT = (Path(__file__).parents[1] / "docs" / "nuc_snapshot" /
-            "base_model_wheel_cmd_tmp.py")
+
+def find_snapshot():
+    """Locate docs/nuc_snapshot/ by walking up, not by counting parents.
+
+    The package used to *be* the repository root, so parents[1] landed on
+    docs/. The snapshot restores moved it under src/, which put docs/ three
+    levels up instead and left this module raising FileNotFoundError at
+    import time - one collection error takes the whole suite down with it.
+    Either layout can come back, so search for the file rather than pin a
+    depth.
+    """
+    tail = Path("docs") / "nuc_snapshot" / "base_model_wheel_cmd_tmp.py"
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / tail
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+SNAPSHOT = find_snapshot()
 RUNNING = Path("/home/mprp3/catkin_ws/src/base_model/src/wheel_cmd_tmp.py")
 
 
@@ -45,6 +73,10 @@ def load_snapshot():
     spec.loader.exec_module(module)
     return module
 
+
+if SNAPSHOT is None:
+    pytest.skip("docs/nuc_snapshot/base_model_wheel_cmd_tmp.py is not in this "
+                "tree - re-snapshot it from the NUC", allow_module_level=True)
 
 wheel = load_snapshot()
 
@@ -96,12 +128,53 @@ def test_a_reversing_wheel_is_ramped_in_its_own_direction():
     assert -0.60 < speed < 0.0
 
 
-def test_one_wheel_may_finish_before_the_other():
-    """The split this exists to prevent is the two wheels ending up on
-    different sides of the terminal speed, so that case has to encode."""
-    left, right = commanded(0.70, 0.05)
-    assert left[0] == 67
-    assert right[0] == 83
+def test_both_wheels_are_always_asked_for_the_same_thing():
+    """The 43 degrees was commanded yaw, not momentum.
+
+    Whatever the wheels were doing when the stop arrived, one direction and
+    one magnitude go out, so the yaw being asked for is zero immediately.
+    """
+    for left, right in ((0.70, 0.05), (0.80, 0.20), (0.30, 0.75),
+                        (-0.60, -0.35)):
+        out = wheel.stop_ramp_command(left, right)
+        assert out[0] == out[2], (left, right)
+        assert out[1] == out[3], (left, right)
+
+
+def test_the_ramp_follows_the_slower_wheel():
+    """Collapsing onto the faster one would ask the slower to speed up."""
+    slower, faster = 0.40, 0.80
+    (_, speed), _ = commanded(faster, slower)
+    assert 0.0 < speed < slower
+
+
+def test_a_pivot_stops_instead_of_ramping():
+    """Wheels on opposite sides of zero share no straight speed, and a ramp
+    that split the difference would drive the chair out of the spin."""
+    assert tuple(wheel.stop_ramp_command(0.50, -0.50)) == wheel.STOP_COMMAND
+
+
+def test_one_wheel_already_at_rest_stops_the_other_too():
+    """This is the shape the 2026-08-25 stop ended in: one wheel driving,
+    one stopped, the chair pivoting toward the stopped one."""
+    assert tuple(wheel.stop_ramp_command(0.70, 0.0)) == wheel.STOP_COMMAND
+    assert tuple(wheel.stop_ramp_command(0.0, 0.70)) == wheel.STOP_COMMAND
+
+
+def test_the_field_stop_that_rotated_the_chair_cannot_split_again():
+    """Replay 2026-08-25's entry speeds, letting the wheels take whatever
+    the previous command asked of them, and check the two never part."""
+    left = wheel.wheel_speed_mps(67, 55)
+    right = wheel.wheel_speed_mps(67, 51)
+    for _ in range(100):
+        out = wheel.stop_ramp_command(left, right)
+        assert out[0] == out[2] and out[1] == out[3], (left, right)
+        if tuple(out) == wheel.STOP_COMMAND:
+            break
+        left = decode(out[0], out[1])
+        right = decode(out[2], out[3])
+    else:
+        raise AssertionError("never reached the stop byte")
 
 
 def test_it_reaches_rest_from_cruise_in_a_reasonable_time():
