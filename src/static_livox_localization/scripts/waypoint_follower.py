@@ -121,6 +121,12 @@ CORRIDOR_HALF_WIDTH = 0.45
 PERSON_STOP_HALF_WIDTH_M = 0.55
 PERSON_STOP_DISTANCE_SCALE = 1.20
 PERSON_MEMORY_S = 1.0
+# Once a person has required a stop, do not let the stopped chair's smaller
+# dynamic envelope immediately authorize motion again. The field bag showed
+# one unchanged person at 1.2 m producing 58 WAIT/DWA pairs. Thirty
+# centimetres is wider than that envelope swing while still releasing a
+# person who actually clears the corridor or moves away.
+PERSON_STOP_RELEASE_MARGIN_M = 0.30
 # The forward-cone and minimum-range constants that used to live here
 # belonged to the raw five-point scan check, removed 2026-08-05. The same
 # geometry still exists in safety_gate.py, which keeps its own independent
@@ -178,6 +184,7 @@ LOOKAHEAD_BACKOFF_M = 0.4
 
 class WaypointFollower:
     person_memory = None
+    person_stop_release_m = None
 
     # Which control law this class turns a pose into a Twist with. Both
     # profiles run as the same node under the same name, so the node alone
@@ -303,6 +310,7 @@ class WaypointFollower:
         self.status = "PAUSED"
         self.cluster_summary = None
         self.person_memory = None
+        self.person_stop_release_m = None
         # Deliberately NOT behind ~safety_policies. The raw corridor check is
         # switched off with the rest of the judgements because it stops on
         # five returns and is the loudest false-positive source in the chain;
@@ -591,6 +599,24 @@ class WaypointFollower:
         if threat is not None and threat.is_person:
             return radius * PERSON_STOP_DISTANCE_SCALE
         return radius
+
+    def threat_blocks(self, threat, stop_m):
+        """Apply person-stop hysteresis around the dynamic braking radius."""
+        blocking = threat is not None and threat.distance_m < stop_m
+        if threat is None or not threat.is_person:
+            self.person_stop_release_m = None
+            return blocking
+        if self.person_stop_release_m is not None:
+            self.person_stop_release_m = max(
+                self.person_stop_release_m,
+                stop_m + PERSON_STOP_RELEASE_MARGIN_M)
+            if threat.distance_m <= self.person_stop_release_m:
+                return True
+            self.person_stop_release_m = None
+        if blocking:
+            self.person_stop_release_m = \
+                stop_m + PERSON_STOP_RELEASE_MARGIN_M
+        return blocking
 
     def cluster_threat(self, lateral_shift=0.0):
         """Nearest classified object overlapping its stop corridor.
@@ -1027,7 +1053,8 @@ class WaypointFollower:
                 allowed = min(allowed,
                               CREEP_SPEED + ratio * (MAX_SPEED - CREEP_SPEED))
 
-        decision = self.avoidance_for(now, threat, blocking == "OBSTACLE")
+        decision = self.avoidance_for(
+            now, threat, self.threat_blocks(threat, guard_stop))
         if decision == GO_ROUND and abs(self.lateral_offset) < 0.01:
             self.take_a_way_round(max(guard_slow, PLAN_AHEAD_M))
         if blocking is None:

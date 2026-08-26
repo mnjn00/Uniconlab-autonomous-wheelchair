@@ -314,6 +314,60 @@ def test_person_edge_and_dropout_dither_stays_in_wait(monkeypatch):
         assert len(follower.planner.calls) == planner_calls
 
 
+def test_a_person_stop_survives_the_dynamic_radius_shrinking(monkeypatch):
+    """Recorded failure: braking shrinks the next cycle's stopping envelope.
+
+    One unchanged person at 1.10 m alternated DWA and WAIT as the person-
+    scaled radius moved between 0.96 m and 1.20 m. Once the larger envelope
+    has required a stop, a smaller stopped-chair envelope must not restart
+    the planner while that same person remains at the boundary.
+    """
+    _module, follower, published, commanded = dwa_with(
+        [walking(1.4)], monkeypatch)
+    radii = iter((0.80, 1.00, 0.80, 0.80))
+    follower.stop_radius = lambda: next(radii)
+    outcomes = []
+
+    for _ in range(4):
+        published[:] = []
+        commanded[:] = []
+        planner_calls = len(follower.planner.calls)
+
+        follower.step()
+
+        outcomes.append((
+            commanded == ["STOP"],
+            len(follower.planner.calls) - planner_calls,
+        ))
+
+    assert outcomes == [
+        (False, 1),
+        (True, 0),
+        (True, 0),
+        (True, 0),
+    ]
+
+
+def test_a_latched_person_releases_after_moving_away(monkeypatch):
+    _module, follower, published, commanded = dwa_with(
+        [walking(1.4)], monkeypatch)
+    radii = iter((1.00, 0.80))
+    follower.stop_radius = lambda: next(radii)
+
+    follower.step()
+
+    assert commanded == ["STOP"]
+    follower.cluster_summary = summary_at(100.2, [walking(2.0)])
+    published[:] = []
+    commanded[:] = []
+    planner_calls = len(follower.planner.calls)
+
+    follower.step()
+
+    assert commanded != ["STOP"]
+    assert len(follower.planner.calls) == planner_calls + 1
+
+
 def test_a_person_survives_a_producer_dropout(monkeypatch):
     _module, follower, _published, _commanded = dwa_with(
         [walking(2.0)], monkeypatch)
@@ -424,6 +478,8 @@ def test_both_replacement_profiles_ask_the_shared_policy(monkeypatch):
         assert "self.avoidance_for(" in text, name
         assert "self.stop_radius_for(threat)" in text, \
             "%s must apply the shared person-aware stop radius" % name
+        assert "self.threat_blocks(threat," in text, \
+            "%s must apply the shared person-stop hysteresis" % name
         assert "== WAIT" in text, name
         assert "avoidance_decision(" not in text, \
             "%s must not re-implement the decision" % name

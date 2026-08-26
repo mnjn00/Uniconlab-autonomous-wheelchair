@@ -186,10 +186,9 @@ class MpcFollower(WaypointFollower):
         # Same policy, same clock, same module as the pursuit profile - see
         # WaypointFollower.avoidance_for for why it is not restated here.
         threat = self.corridor_threat(0.0) if self.clusters_enabled else None
+        stop_m = self.stop_radius_for(threat)
         decision = self.avoidance_for(
-            now, threat,
-            threat is not None and
-            threat.distance_m < self.stop_radius_for(threat))
+            now, threat, self.threat_blocks(threat, stop_m))
         if decision == WAIT:
             self.publish_state("HOLD:MPC_WAIT")
             self.mpc_status = "WAIT"

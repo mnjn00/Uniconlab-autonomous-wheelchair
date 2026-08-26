@@ -357,8 +357,7 @@ class DwaFollower(WaypointFollower):
         threat = self.corridor_threat(0.0)
         stop_m = self.stop_radius_for(threat)
         decision = self.avoidance_for(
-            now, threat,
-            threat is not None and threat.distance_m < stop_m)
+            now, threat, self.threat_blocks(threat, stop_m))
         if decision == WAIT:
             self.publish_state("HOLD:DWA_WAIT", "HOLD:DWA_WAIT")
             self.dwa_status = "WAIT"
