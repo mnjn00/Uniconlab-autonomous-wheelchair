@@ -150,10 +150,11 @@ def test_speed_cannot_buy_more_than_a_hands_width_off_the_line():
     its line, or it pays for speed with position. At 2.0 it bought 0.3 m and
     the chair wove with a growing amplitude - 0.15 m, 0.24, 0.53 - saturating
     the yaw rate three times in thirteen seconds before the gate stopped it.
-    The bound is what that run cost, so it is pinned."""
+    The 2026-08-24 tracking pass tightened that trade to 0.11 m so the
+    recorded route wins before the old weave can build again."""
     span = dwa_core.W_VELOCITY * (dwa_core.MAX_SPEED - FLOOR)
     tolerated_error_m = span / dwa_core.W_PATH
-    assert tolerated_error_m <= 0.15
+    assert tolerated_error_m <= 0.11
 
 
 def test_going_faster_beats_holding_when_the_geometry_is_tied():

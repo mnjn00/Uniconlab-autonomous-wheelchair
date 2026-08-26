@@ -126,7 +126,7 @@ YAW_SAMPLES = 21
 # recorded line is ground a person actually drove, so deviation is a cost and
 # not merely a preference. Progress second, obstacles third - an obstacle
 # that is not in the corridor has already been excluded by the band.
-W_PATH = 3.0
+W_PATH = 3.3
 W_PROGRESS = 1.0
 W_OBSTACLE = 2.0
 
@@ -163,7 +163,7 @@ W_STEER = 1.0
 # +/-0.50 three times in thirteen seconds before the gate stopped it.
 #
 # At 0.8 the reward spans 0.36 across the same range, which W_PATH matches at
-# 0.12 m of error. That is the trade this is allowed to make: a hand's width,
+# 0.11 m of error. That is the trade this is allowed to make: a hand's width,
 # not half a metre.
 W_VELOCITY = 0.8
 # ...and a smaller penalty for changing, which is the W_STEER idea on the

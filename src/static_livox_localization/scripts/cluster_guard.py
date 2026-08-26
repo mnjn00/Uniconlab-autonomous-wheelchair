@@ -357,7 +357,8 @@ def corridor_reach(item, lateral_shift_m, half_width_m):
     return True, distance, motion
 
 
-def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
+def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
+                   labels=None):
     """The nearest object overlapping the corridor, or None.
 
     None means nothing is in the way. It never means "could not tell": an
@@ -366,8 +367,13 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0):
     """
     if not summary.usable:
         return Threat(BLOCKED, MOVING, summary.status or "unusable")
+    wanted = None if labels is None else {
+        str(label).strip().lower() for label in labels}
     nearest = None
     for item in summary.objects:
+        label = str(item.get("class", "")).strip().lower()
+        if wanted is not None and label not in wanted:
+            continue
         blocks, distance, motion = corridor_reach(
             item, lateral_shift_m, half_width_m)
         if not blocks:

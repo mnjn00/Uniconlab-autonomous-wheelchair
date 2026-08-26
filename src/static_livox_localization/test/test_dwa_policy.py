@@ -241,6 +241,47 @@ def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
         "the planner was asked to find a way round a person"
 
 
+def test_a_person_gets_the_wider_055m_stop_corridor(monkeypatch):
+    """A walking person's near flank at 0.50 m must still stop the chair.
+
+    The ordinary obstacle corridor ends at 0.45 m.  The person-only stop
+    corridor extends to 0.55 m without widening the geometry handed to DWA.
+    """
+    _module, follower, published, commanded = dwa_with(
+        [walking(1.0, y=0.8)], monkeypatch)
+
+    follower.step()
+
+    assert published == ["HOLD:DWA_WAIT"]
+    assert commanded == ["STOP"]
+    assert follower.planner.calls == []
+
+
+def test_a_person_stops_at_120_percent_of_the_dynamic_radius(monkeypatch):
+    """A person 1.7 m ahead is inside the 1.8 m person-only radius."""
+    _module, follower, published, commanded = dwa_with(
+        [walking(2.0)], monkeypatch, threat_distance_stop_radius=1.5)
+
+    follower.step()
+
+    assert published == ["HOLD:DWA_WAIT"]
+    assert commanded == ["STOP"]
+    assert follower.planner.calls == []
+
+
+def test_the_person_extensions_do_not_widen_an_ordinary_moving_object(
+        monkeypatch):
+    moving_object = parked(2.0, y=0.8)
+    moving_object["motion"] = ct.MOVING
+    _module, follower, published, _commanded = dwa_with(
+        [moving_object], monkeypatch, threat_distance_stop_radius=1.5)
+
+    follower.step()
+
+    assert not any(text.startswith("HOLD") for text in published)
+    assert len(follower.planner.calls) == 1
+
+
 def test_it_does_not_sidestep_someone_it_has_not_yet_had_to_stop_for(monkeypatch):
     """Further away than the stop radius the answer is CLEAR, not GO_ROUND.
     The chair keeps driving - but the planner is given no object to bend
@@ -278,8 +319,9 @@ def test_what_it_goes_round_arrives_as_a_shape(monkeypatch):
 
 def test_the_approach_slows_the_way_the_pursuit_profile_slows(monkeypatch):
     """A planner that only knows stop-or-cruise arrives at what it is about
-    to wait for at full speed."""
-    _module, near, _p, _c = dwa_with([walking(2.0)], monkeypatch)
+    to wait for at full speed.  The near fixture stays just outside the
+    person-only stop radius so this test measures slowing, not stopping."""
+    _module, near, _p, _c = dwa_with([walking(2.2)], monkeypatch)
     _module, far, _p2, _c2 = dwa_with([walking(6.0)], monkeypatch)
 
     near.step()
@@ -307,6 +349,8 @@ def test_both_replacement_profiles_ask_the_shared_policy(monkeypatch):
     for name in ("dwa_follower", "mpc_follower"):
         text = (SCRIPTS / ("%s.py" % name)).read_text(encoding="utf-8")
         assert "self.avoidance_for(" in text, name
+        assert "self.stop_radius_for(threat)" in text, \
+            "%s must apply the shared person-aware stop radius" % name
         assert "== WAIT" in text, name
         assert "avoidance_decision(" not in text, \
             "%s must not re-implement the decision" % name
