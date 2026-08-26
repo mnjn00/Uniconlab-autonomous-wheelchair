@@ -1,4 +1,4 @@
-"""Trajectory-rollout local planning with the safety band as a hard reject.
+"""Trajectory-rollout planning with a preferred band and hard drivable mask.
 
 The third control law, and the reason it exists is narrow: pure pursuit and
 the MPC both follow a line, and neither of them avoids anything well. What
@@ -8,7 +8,8 @@ a standstill where the lookahead has collapsed to MIN_LOOKAHEAD_M, demanded
 atan(0.6 / 0.9) = 34 degrees and steered the chair at a wall three times in
 one evening. Rolling out candidate velocities and scoring them cannot
 produce that: every candidate is a velocity pair the chair can actually
-hold, and one that leaves the corridor is discarded rather than commanded.
+hold. The recorded band is strongly preferred, while the raster drivable
+mask remains the physical boundary no candidate may cross.
 
 WHY THE BAND IS A CRITIC AND NOT A COSTMAP LAYER
 ------------------------------------------------
@@ -140,10 +141,10 @@ W_OBSTACLE = 2.0
 # 2.0 sits in the middle of that plateau.
 W_HEADING = 2.0
 
-# Reversing the steer is not free. On the 8cca route-tracking base, 1.0 gives
-# 22 reversals over 381.64 m and 1.35 still gives 9; 1.5 clears the 0.02/m
-# limit while staying below the corner-cutting region above about 2.0.
-W_STEER = 1.5
+# Reversing the steer is not free. With the quadratic preferred-route cost,
+# 1.61 gives 9 reversals over 381.64 m; 1.62 is the first centesimal value
+# below the 0.02/m limit at 7. It remains below the corner-cutting region.
+W_STEER = 1.62
 # Speed is rewarded here and nowhere else, which is not obvious and cost a
 # drive to learn. The rollout is sampled over a fixed DISTANCE, so every
 # candidate walks the same 1.05 m arc: for one yaw rate, path cost, heading,
@@ -196,6 +197,17 @@ W_SPEED = 0.25
 # were measured on a chair that never leaves the middle, where the term has
 # nothing to do, and they said nothing about the case it exists for.
 W_CENTRE = 2.0
+# Leaving the recorded band is a last-resort manoeuvre, not ordinary path
+# tracking. The fixed surcharge makes every in-band candidate cheaper before
+# distance is considered; the quadratic term then prices how far and how long
+# the rollout leaves it. Both remain finite only when route_mask independently
+# proves every point and crossed raster cell physically drivable.
+BAND_ESCAPE_BASE_COST = 1000.0
+W_BAND_OVERFLOW = 1000.0
+# W_PATH is the ordinary line-following term. This second, quadratic term
+# makes a large route excursion disproportionately expensive without turning
+# it into another hard boundary: an obstacle can still force the choice.
+W_ROUTE_DEVIATION = 25.0
 # Separate from the station band: the v8 raster is the operator's
 # authoritative chair-centre region. Outside it is never selectable, and
 # the last 0.5 m inside it gets progressively more expensive.
@@ -305,7 +317,7 @@ def obstacle_clearance(path, obstacles):
 
 
 class DwaPlanner:
-    """Scores rollouts against the recorded line, inside the band.
+    """Scores rollouts against the route and its preferred safety band.
 
     Every candidate is evaluated in one batch rather than one at a time.
     That is not tidiness: scored singly, 126 candidates x a 17-step rollout
@@ -439,11 +451,16 @@ class DwaPlanner:
         # 1,785 points twice over - 24.4 ms each on the target NUC, 96 % of a
         # cycle with 100 ms to spend, for one answer computed twice.
         lateral, lo, hi = self.band.margins_many(flat)
-        inside = self.band.contained(lateral, lo, hi, self.grace)
-        if self.route_mask is not None:
-            inside &= self.route_mask.contains_many(flat)
-        ok = inside.reshape(len(pairs), self.steps).all(axis=1)
-        if self.route_mask is not None:
+        band_inside = self.band.contained(lateral, lo, hi, self.grace)
+        if self.route_mask is None:
+            # Without an independent physical map there is no authority for
+            # deciding that an off-band point is safe, so retain the original
+            # hard-band behavior.
+            ok = band_inside.reshape(len(pairs), self.steps).all(axis=1)
+        else:
+            # The mask, not the preferred band, is the immutable boundary.
+            ok = self.route_mask.contains_many(flat).reshape(
+                len(pairs), self.steps).all(axis=1)
             ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
         if not ok.any():
             return 0.0, 0.0, "OFF_BAND"
@@ -467,7 +484,9 @@ class DwaPlanner:
         if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
         d, idx = self.tree.query(flat, workers=-1)
-        path_cost = d.reshape(len(pairs), self.steps).mean(axis=1)
+        route_distance = d.reshape(len(pairs), self.steps)
+        path_cost = route_distance.mean(axis=1)
+        route_deviation = np.square(route_distance).mean(axis=1)
         here = self.arc_at(state[:2])
         ends = self.tree.query(paths[:, -1, :2])[1]
         progress = self.arc[ends] - here
@@ -491,6 +510,15 @@ class DwaPlanner:
         edge = np.abs(lateral - (hi + lo) / 2.0) / half
         centre = np.square(np.minimum(edge, 1.0)).reshape(
             len(pairs), self.steps).mean(axis=1)
+        overflow = np.maximum(lo - lateral, 0.0) + \
+            np.maximum(lateral - hi, 0.0)
+        escaped = (~band_inside).reshape(
+            len(pairs), self.steps).any(axis=1)
+        band_escape = (
+            BAND_ESCAPE_BASE_COST * escaped.astype(float)
+            + W_BAND_OVERFLOW * np.square(overflow).reshape(
+                len(pairs), self.steps).mean(axis=1)
+        )
         if self.route_mask is None:
             mask_boundary = np.zeros(len(pairs), dtype=float)
         else:
@@ -498,9 +526,10 @@ class DwaPlanner:
                 len(pairs), self.steps).mean(axis=1)
         cost = (W_SPEED * speed_change
                 - W_VELOCITY * np.asarray([p[0] for p in pairs])
-                + W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
+                + W_PATH * path_cost + W_ROUTE_DEVIATION * route_deviation
+                + W_HEADING * aim - W_PROGRESS * progress
                 + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre
-                + W_MASK_BOUNDARY * mask_boundary)
+                + band_escape + W_MASK_BOUNDARY * mask_boundary)
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
         return float(pairs[best][0]), float(pairs[best][1]), "OK"

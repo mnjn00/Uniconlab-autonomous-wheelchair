@@ -49,6 +49,52 @@ def on_route(route, k):
     return np.array([route[k][0], route[k][1], heading, 0.0, 0.0])
 
 
+class OpenDrivableMask:
+    """A test mask that declares every sampled point physically drivable."""
+
+    def contains_many(self, points):
+        return np.ones(len(points), dtype=bool)
+
+    def paths_are_contained(self, paths):
+        return np.ones(len(paths), dtype=bool)
+
+    def boundary_cost_many(self, points):
+        return np.zeros(len(points), dtype=float)
+
+
+class BandBoundDrivableMask(OpenDrivableMask):
+    """A hard mask whose physical boundary matches the preferred band."""
+
+    def __init__(self, band):
+        self.band = band
+
+    def contains_many(self, points):
+        return self.band.contains_many(points)
+
+    def paths_are_contained(self, paths):
+        return np.array([
+            self.band.contains_many(path[:, :2]).all()
+            for path in paths
+        ])
+
+
+def narrow_straight_scene(tmp_path, route_mask):
+    route = np.array([[index * 0.25, 0.0] for index in range(33)])
+    stations = [{
+        "x": float(x),
+        "y": float(y),
+        "heading_deg": 0.0,
+        "left_m": 0.22,
+        "right_m": 0.22,
+    } for x, y in route]
+    path = tmp_path / "narrow-band.json"
+    path.write_text(json.dumps({"stations": stations}))
+    band = SafetyBand(str(path))
+    mask = route_mask(band) if callable(route_mask) else route_mask
+    return band, route, dwa_core.DwaPlanner(
+        band, route, route_mask=mask)
+
+
 def test_route_centre_requires_clearance_on_each_side(tmp_path):
     stations = []
     for index, (left, right) in enumerate((
@@ -206,6 +252,53 @@ def test_a_chair_pointed_out_of_the_corridor_stops(scene):
     else:
         assert (v, w) == (0.0, 0.0)
         assert status in ("OFF_BAND", "OBSTACLE", "NO_CANDIDATE")
+
+
+def test_an_obstacle_can_force_escape_from_the_preferred_band(tmp_path):
+    """The band is preferred, not lethal, when the hard mask says drivable."""
+    band, route, planner = narrow_straight_scene(
+        tmp_path, OpenDrivableMask())
+    state = on_route(route, 4)
+    heading = np.array([math.cos(state[2]), math.sin(state[2])])
+    blocker = state[:2] + heading * 1.2
+
+    v, w, status = planner.plan(
+        state, obstacles=(blocker,), last_speed=0.35)
+
+    assert status == "OK" and v > 0.0
+    path = dwa_core.rollout(
+        state, v, w, planner.preview_distance(0.35), planner.steps)
+    assert not dwa_core.stays_in_band(band, path)
+
+
+def test_escape_never_overrules_the_hard_drivable_mask(tmp_path):
+    """The identical obstacle remains a refusal across a physical boundary."""
+    band, route, planner = narrow_straight_scene(
+        tmp_path, BandBoundDrivableMask)
+    state = on_route(route, 4)
+    heading = np.array([math.cos(state[2]), math.sin(state[2])])
+    blocker = state[:2] + heading * 1.2
+
+    v, w, status = planner.plan(
+        state, obstacles=(blocker,), last_speed=0.35)
+
+    assert (v, w) == (0.0, 0.0)
+    assert status in ("OFF_BAND", "OBSTACLE")
+    assert band.contains(state[:2])
+
+
+def test_clear_road_stays_in_the_preferred_band_when_escape_is_open(tmp_path):
+    """Finite escape cost must never make ordinary off-band driving normal."""
+    band, route, planner = narrow_straight_scene(
+        tmp_path, OpenDrivableMask())
+    state = on_route(route, 4)
+
+    v, w, status = planner.plan(state, last_speed=0.35)
+
+    assert status == "OK" and v > 0.0
+    path = dwa_core.rollout(
+        state, v, w, planner.preview_distance(0.35), planner.steps)
+    assert dwa_core.stays_in_band(band, path)
 
 
 # -------------------------------------------------------------- obstacles
