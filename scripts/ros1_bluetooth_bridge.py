@@ -753,6 +753,42 @@ class RosLink:
         self.node_name = node_name
         self.connected = False
         self.mode_pub = None
+        self._blackbox = None
+        self._blackbox_stamp = 0.0
+
+    # rosbag record names itself /record_<stamp> and subscribes to every topic
+    # it writes, so the master's own tables are the cheapest place to see it --
+    # no extra topic, and nothing to keep in step with the bring-up script's
+    # record line. Polled rather than watched: it is an XML-RPC round trip and
+    # the answer changes about once a session.
+    BLACKBOX_POLL_S = 5.0
+
+    def blackbox_recording(self):
+        """True, False, or None when the question cannot be answered.
+
+        None rather than False on any failure. "No recording" and "could not
+        ask" look identical on a dashboard and mean opposite things: the first
+        is worth acting on before a run, the second is worth ignoring.
+        """
+        if not (ROS_AVAILABLE and self.connected):
+            return None
+        now = time.time()
+        if now - self._blackbox_stamp < self.BLACKBOX_POLL_S:
+            return self._blackbox
+        self._blackbox_stamp = now
+        try:
+            code, _, state = rospy.get_master().getSystemState(self.node_name)
+            if code != 1:
+                return self._blackbox
+            nodes = set()
+            for section in state:          # publishers, subscribers, services
+                for _name, owners in section:
+                    nodes.update(owners)
+            self._blackbox = any(n.startswith("/record_") for n in nodes)
+        except Exception:
+            # A master that will not answer is not evidence of no recording.
+            return self._blackbox
+        return self._blackbox
 
     # ------------------------------------------------------------------ setup
     @staticmethod
@@ -1162,6 +1198,9 @@ class Session:
             frame = self.state.snapshot(self.ros.connected, self.ttl_s,
                                         self._follower_available())
             frame["type"] = "telemetry"
+            # Whether this run is being recorded. Finding out afterwards that
+            # it was not is the one thing that cannot be fixed afterwards.
+            frame["blackbox_recording"] = self.ros.blackbox_recording()
             if self.jobs is not None:
                 frame.update(self.jobs.snapshot())
                 frame["jobs_available"] = self.jobs.available()
