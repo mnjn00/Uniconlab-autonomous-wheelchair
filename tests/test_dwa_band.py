@@ -49,6 +49,41 @@ def on_route(route, k):
     return np.array([route[k][0], route[k][1], heading, 0.0, 0.0])
 
 
+class StripBand(object):
+    def __init__(self, half_width):
+        self.half_width = float(half_width)
+
+    def margins_many(self, points):
+        points = np.asarray(points, dtype=float)
+        count = len(points)
+        return (points[:, 1],
+                np.full(count, -self.half_width),
+                np.full(count, self.half_width))
+
+    @staticmethod
+    def contained(lateral, lo, hi, grace=0.0):
+        return (lateral >= lo - grace) & (lateral <= hi + grace)
+
+    def contains_many(self, points, grace=0.0):
+        lateral, lo, hi = self.margins_many(points)
+        return self.contained(lateral, lo, hi, grace)
+
+
+class RectangularMask(object):
+    def __init__(self, half_width):
+        self.half_width = float(half_width)
+
+    def contains_many(self, points):
+        return np.abs(np.asarray(points)[:, 1]) <= self.half_width
+
+    def paths_are_contained(self, paths):
+        return np.abs(np.asarray(paths)[:, :, 1]).max(axis=1) <= \
+            self.half_width
+
+    def boundary_cost_many(self, points):
+        return np.zeros(len(points), dtype=float)
+
+
 def test_route_centre_requires_clearance_on_each_side(tmp_path):
     stations = []
     for index, (left, right) in enumerate((
@@ -170,6 +205,51 @@ def test_a_chair_pointed_well_off_the_corridor_still_turns_back(scene):
 
 
 # ----------------------------------------------------------- the band veto
+
+def soft_band_scene(mask_half_width=1.5):
+    route = np.column_stack((np.linspace(0.0, 12.0, 241),
+                             np.zeros(241)))
+    band = StripBand(0.25)
+    mask = RectangularMask(mask_half_width)
+    return band, route, dwa_core.DwaPlanner(
+        band, route, route_mask=mask, steps=21)
+
+
+def test_an_available_in_band_rollout_always_beats_a_soft_excursion():
+    band, _route, planner = soft_band_scene()
+    state = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+
+    v, w, status = planner.plan(state)
+
+    assert status == "OK"
+    assert not planner.selected_outside_band
+    path = dwa_core.rollout(state, v, w, planner.distance_m, planner.steps)
+    assert dwa_core.stays_in_band(band, path)
+
+
+def test_band_exit_is_available_only_as_a_last_resort_around_an_obstacle():
+    _band, _route, planner = soft_band_scene()
+    state = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+    wall = [(1.30, 0.0)]
+
+    v, _w, status = planner.plan(state, obstacles=wall)
+
+    assert status == "OK"
+    assert v > 0.0
+    assert planner.selected_outside_band
+    assert 0.0 < planner.selected_max_outside_m < 0.75
+
+
+def test_the_2d_mask_remains_a_hard_reject_when_the_band_is_soft():
+    _band, _route, planner = soft_band_scene(mask_half_width=0.25)
+    state = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+    wall = [(1.30, 0.0)]
+
+    v, w, status = planner.plan(state, obstacles=wall)
+
+    assert (v, w) == (0.0, 0.0)
+    assert status == "OBSTACLE"
+    assert not planner.selected_outside_band
 
 def test_a_rollout_that_leaves_the_band_is_rejected(scene):
     """Not scored badly - rejected. The corridor is not a preference."""

@@ -1,4 +1,4 @@
-"""Trajectory-rollout local planning with the safety band as a hard reject.
+"""Trajectory-rollout local planning with a strongly preferred safety band.
 
 The third control law, and the reason it exists is narrow: pure pursuit and
 the MPC both follow a line, and neither of them avoids anything well. What
@@ -8,7 +8,9 @@ a standstill where the lookahead has collapsed to MIN_LOOKAHEAD_M, demanded
 atan(0.6 / 0.9) = 34 degrees and steered the chair at a wall three times in
 one evening. Rolling out candidate velocities and scoring them cannot
 produce that: every candidate is a velocity pair the chair can actually
-hold, and one that leaves the corridor is discarded rather than commanded.
+hold, and the 2-D drivable map still discards anything that leaves mapped
+ground. The narrower station band is a near-lethal preference, so DWA can
+cross it only when every contained avoidance arc is blocked.
 
 WHY THE BAND IS A CRITIC AND NOT A COSTMAP LAYER
 ------------------------------------------------
@@ -125,7 +127,7 @@ YAW_SAMPLES = 21
 # Scoring weights. Path first: this stack's whole safety argument is that the
 # recorded line is ground a person actually drove, so deviation is a cost and
 # not merely a preference. Progress second, obstacles third - an obstacle
-# that is not in the corridor has already been excluded by the band.
+# outside the hard 2-D route mask has already been excluded.
 W_PATH = 3.3
 W_PROGRESS = 1.0
 W_OBSTACLE = 2.0
@@ -173,9 +175,10 @@ W_VELOCITY = 0.8
 # longer to climb out of than it took to fall into.
 W_SPEED = 0.25
 
-# How dearly the corridor's edge is bought. Containment is a hard reject, so
-# without this the middle of the band and a hair inside its edge score the
-# same and the chair has no reason to prefer either. On 2026-08-09 it settled
+# How dearly the corridor's edge is bought. Even when containment is a hard
+# reject because no route mask is available, without this the middle of the
+# band and a hair inside its edge score the same and the chair has no reason
+# to prefer either. On 2026-08-09 it settled
 # at a steady -0.12 m and a bend put it 6 mm outside a corridor with 0.58 m
 # of room each way. Squared rather than linear: the centre has to be nearly
 # free and the last few centimetres nearly unaffordable, or a term that is
@@ -197,6 +200,14 @@ W_SPEED = 0.25
 # were measured on a chair that never leaves the middle, where the term has
 # nothing to do, and they said nothing about the case it exists for.
 W_CENTRE = 2.0
+# Leaving the station safety band is a last-resort choice, not a normal lane.
+# A fixed charge makes the preference lexicographic in practice: one fully
+# band-contained collision-free rollout always beats an excursion. The
+# distance term chooses the smallest excursion when every contained arc is
+# blocked. This is enabled only when an authoritative route mask is present;
+# without that hard map boundary the band remains a veto.
+BAND_EXIT_BASE_COST = 10000.0
+W_BAND_OUTSIDE = 10000.0
 # Separate from the station band: the v8 raster is the operator's
 # authoritative chair-centre region. Outside it is never selectable, and
 # the last 0.5 m inside it gets progressively more expensive.
@@ -306,7 +317,7 @@ def obstacle_clearance(path, obstacles):
 
 
 class DwaPlanner:
-    """Scores rollouts against the recorded line, inside the band.
+    """Scores rollouts against the recorded line and route constraints.
 
     Every candidate is evaluated in one batch rather than one at a time.
     That is not tidiness: scored singly, 126 candidates x a 17-step rollout
@@ -329,6 +340,8 @@ class DwaPlanner:
         self.arc = np.concatenate([[0.0], np.cumsum(seg)])
         self.steps = max(int(steps), 1)
         self.route_mask = route_mask
+        self.selected_outside_band = False
+        self.selected_max_outside_m = 0.0
         tangent = np.gradient(self.route, axis=0)
         tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True),
                               1e-9)
@@ -414,6 +427,8 @@ class DwaPlanner:
         here, never a choice - it is what the caller does when this returns
         a reason instead of a command.
         """
+        self.selected_outside_band = False
+        self.selected_max_outside_m = 0.0
         cap = self.max_speed if speed_cap is None else min(self.max_speed,
                                                            float(speed_cap))
         pairs = [(v, w) for v in speed_samples(cap, current=last_speed)
@@ -433,18 +448,23 @@ class DwaPlanner:
         span = self.preview_distance(last_speed)
         paths = self._rollouts(np.asarray(state, dtype=float), pairs, span)
         flat = paths[:, :, :2].reshape(-1, 2)
-        # ONE pass over the band geometry, used twice: to reject the arcs that
-        # leave the corridor, and below to score how near its edge the rest of
-        # them run. contains_many recomputes margins_many internally, so
+        # ONE pass over the band geometry, used twice: to classify arcs as
+        # contained/excursions, and below to score how near its edge they run.
+        # contains_many recomputes margins_many internally, so
         # asking it and then asking margins_many searched 802 stations for
         # 1,785 points twice over - 24.4 ms each on the target NUC, 96 % of a
         # cycle with 100 ms to spend, for one answer computed twice.
         lateral, lo, hi = self.band.margins_many(flat)
         inside = self.band.contained(lateral, lo, hi, self.grace)
-        if self.route_mask is not None:
-            inside &= self.route_mask.contains_many(flat)
-        ok = inside.reshape(len(pairs), self.steps).all(axis=1)
-        if self.route_mask is not None:
+        band_inside_path = inside.reshape(len(pairs), self.steps).all(axis=1)
+        # The raster map remains authoritative. Only the hand-authored
+        # station band is softened, and only when this hard outer boundary
+        # exists. With no mask, preserve the historical fail-closed veto.
+        if self.route_mask is None:
+            ok = band_inside_path.copy()
+        else:
+            ok = self.route_mask.contains_many(flat).reshape(
+                len(pairs), self.steps).all(axis=1)
             ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
         if not ok.any():
             return 0.0, 0.0, "OFF_BAND"
@@ -492,6 +512,14 @@ class DwaPlanner:
         edge = np.abs(lateral - (hi + lo) / 2.0) / half
         centre = np.square(np.minimum(edge, 1.0)).reshape(
             len(pairs), self.steps).mean(axis=1)
+        outside = np.maximum(
+            np.maximum((lo - self.grace) - lateral,
+                       lateral - (hi + self.grace)), 0.0)
+        outside = outside.reshape(len(pairs), self.steps)
+        band_exit = (
+            BAND_EXIT_BASE_COST * (~band_inside_path).astype(float)
+            + W_BAND_OUTSIDE * np.square(outside).mean(axis=1)
+        )
         if self.route_mask is None:
             mask_boundary = np.zeros(len(pairs), dtype=float)
         else:
@@ -501,7 +529,9 @@ class DwaPlanner:
                 - W_VELOCITY * np.asarray([p[0] for p in pairs])
                 + W_PATH * path_cost + W_HEADING * aim - W_PROGRESS * progress
                 + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre
-                + W_MASK_BOUNDARY * mask_boundary)
+                + W_MASK_BOUNDARY * mask_boundary + band_exit)
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
+        self.selected_outside_band = not bool(band_inside_path[best])
+        self.selected_max_outside_m = float(np.max(outside[best]))
         return float(pairs[best][0]), float(pairs[best][1]), "OK"

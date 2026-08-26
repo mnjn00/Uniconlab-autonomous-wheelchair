@@ -929,8 +929,19 @@ class WaypointFollower:
                 self.waypoints - self.pose_xy, axis=1)) > GEOFENCE_M:
             yield "OFF_ROUTE", POLICY
         if self.route_locked and not self.band.contains(
-                self.pose_xy, grace=BAND_RECOVER_MAX):
+                self.pose_xy, grace=BAND_RECOVER_MAX) and \
+                not self.off_band_recovery_authorized(now):
             yield "OFF_BAND", POLICY
+
+    def off_band_recovery_authorized(self, now):
+        """Whether a control law explicitly owns this OFF_BAND recovery.
+
+        Fail closed for pursuit, MPC, and any future profile. DWA overrides
+        only this narrow question after its masked rollout planner has
+        selected a bounded soft-band excursion; the hold ladder itself stays
+        shared here.
+        """
+        return False
 
     def handled_before_driving(self, now):
         """Run every hold and the goal test, and say whether one of them has

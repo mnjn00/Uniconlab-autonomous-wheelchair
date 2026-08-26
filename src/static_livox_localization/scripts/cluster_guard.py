@@ -447,13 +447,11 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     Nothing here resumes the chair explicitly: once they leave the corridor
     the threat is gone, the answer becomes CLEAR, and it drives on.
 
-    A person is waited out whatever the tracker says about them, which the
-    two rules below did not do. Standing still for CONFIRM_S - 1.5 s, less
-    than a pause to check a phone - made someone STATIC, and STATIC is
-    parked, so the first rule would step around a stationary pedestrian
-    from 8 m out without the blocked clock ever starting. The second rule
-    reached the same place by a slower road. Both now stop short of it: the
-    only thing that clears a person is the person leaving.
+    A person is treated like any other object only after the tracker has
+    positively watched them stand still. MOVING and UNKNOWN people are
+    still waited out; a predicted-only track is UNKNOWN by construction.
+    This permits a path around a stationary pedestrian without ever turning
+    a detector dropout into permission to move.
 
     blocked_for_s is the fallback for sources that carry no identity. A
     raw-scan return is UNKNOWN forever, so standing in the way is the only
@@ -463,6 +461,8 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     if threat is None:
         return CLEAR
     if threat.is_person:
+        if threat.parked and threat.distance_m < plan_ahead_m:
+            return GO_ROUND
         return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
         return GO_ROUND

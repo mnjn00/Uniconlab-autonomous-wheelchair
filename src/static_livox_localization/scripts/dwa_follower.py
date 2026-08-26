@@ -96,6 +96,8 @@ from waypoint_follower import (WaypointFollower, CONTROL_HZ, CREEP_SPEED,
 # acceleration for the same reason the pursuit follower allows it: stopping
 # sooner is never the unsafe direction.
 YAW_SLEW_RPS2 = 1.5
+SOFT_BAND_AUTHORIZATION_S = 2.0
+MAX_SOFT_BAND_EXCURSION_M = 0.75
 
 # Actuation lag, measured 2026-08-11 (see led_state). Overridable with
 # ~latency_s for a vehicle this has not been measured on; at 0.0 the lead is
@@ -222,6 +224,7 @@ class DwaFollower(WaypointFollower):
         self.odom_v = 0.0
         self.odom_w = 0.0
         self.dwa_status = ""
+        self.soft_band_authorized_until_s = 0.0
         # Carried across cycles so the ramp has a slope to be limited against.
         self.command_accel = 0.0
         self.gate_reason = ""
@@ -230,9 +233,28 @@ class DwaFollower(WaypointFollower):
         rospy.Subscriber("/safety_gate/status", String,
                          self.on_gate_status, queue_size=1)
         rospy.loginfo(
-            "DWA profile: sim %.2f m, %d speeds x %d yaw rates, band and "
-            "drivable mask as hard rejects", self.planner.distance_m,
+            "DWA profile: sim %.2f m, %d speeds x %d yaw rates, band as "
+            "near-lethal cost and drivable mask as hard reject",
+            self.planner.distance_m,
             len(dwa_core.speed_samples()), len(dwa_core.yaw_samples()))
+
+    def off_band_recovery_authorized(self, now):
+        """Permit only a recent, bounded, planner-authorized band excursion.
+
+        An arbitrary OFF_BAND pose still holds. The inherited guard is
+        suppressed only briefly after this planner selected a soft-band
+        rollout, while the chair centre remains inside the hard 2-D mask and
+        no farther outside the band than the bounded allowance.
+        """
+        if now.to_sec() > self.soft_band_authorized_until_s or \
+                self.pose_xy is None or \
+                not self.drivable_mask.contains(self.pose_xy):
+            return False
+        lateral, lo, hi = self.band.margins_many(
+            np.asarray([self.pose_xy], dtype=float))
+        outside_m = max(float(lo[0] - lateral[0]),
+                        float(lateral[0] - hi[0]), 0.0)
+        return outside_m <= MAX_SOFT_BAND_EXCURSION_M
 
     def on_gate_status(self, message):
         """Track how long the gate has been refusing, and why."""
@@ -423,6 +445,17 @@ class DwaFollower(WaypointFollower):
             self.last_command_stamp = None
             return
         self.dwa_status = status
+        selected_outside_band = bool(getattr(
+            self.planner, "selected_outside_band", False))
+        if selected_outside_band:
+            self.soft_band_authorized_until_s = (
+                now.to_sec() + SOFT_BAND_AUTHORIZATION_S)
+            rospy.logwarn_throttle(
+                2.0, "DWA last-resort safety-band excursion %.2f m "
+                "(2-D drivable mask still enforced)",
+                float(getattr(self.planner, "selected_max_outside_m", 0.0)))
+        elif self.band is not None and self.band.contains(self.pose_xy):
+            self.soft_band_authorized_until_s = 0.0
 
         elapsed = 1.0 / CONTROL_HZ
         if self.last_command_stamp is not None:
@@ -457,7 +490,8 @@ class DwaFollower(WaypointFollower):
             "DWA wp=%d/%d v=%.2f w=%+.2f target %.2f/%+.2f%s" % (
                 self.nearest_index, len(self.waypoints), speed, yaw_rate,
                 target_v, target_w,
-                "" if self.policies else " POLICIES_OFF"), "DWA:OK")
+                (" SOFT_BAND" if selected_outside_band else "")
+                + ("" if self.policies else " POLICIES_OFF")), "DWA:OK")
 
     def publish_state(self, text, state=None):
         """Publish every cycle, log only on a change of state.

@@ -406,6 +406,31 @@ def test_novel_person_is_published_with_valid_box():
     assert (size > 0.0).all()
 
 
+def test_partially_visible_person_is_not_demoted_to_generic_obstacle():
+    """A torso-height return is common beside cars and at chair lidar height."""
+    now_s = [100.0]
+    module, node = producer_at(now_s)
+    partial_person = points_at_ground_heights(
+        [0.20, 0.40, 0.60, 0.80, 0.95], centre_x=2.0)
+    node.fixed_map_filter = FixedMapFilter(partial_person)
+    node.map_poses.add(100.0, np.eye(4))
+
+    result = run(node, module, partial_person, now_s, 0.0, 100.0)
+
+    assert result.objects[0]["class"] == "person"
+
+
+def test_a_thin_upright_pole_is_not_called_a_person():
+    now_s = [100.0]
+    module, _node = producer_at(now_s)
+    xs = np.arange(1.96, 2.04, 0.02)
+    ys = np.arange(-0.04, 0.04, 0.02)
+    zs = np.arange(0.20, 1.70, 0.10) - module.SENSOR_HEIGHT_M
+    pole = np.array([(x, y, z) for x in xs for y in ys for z in zs])
+
+    assert module.classify(pole) == "obstacle"
+
+
 def test_short_detector_dropout_publishes_same_id_as_predicted_box():
     now_s = [100.0]
     module, node = producer_at(now_s)

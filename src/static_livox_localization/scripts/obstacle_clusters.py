@@ -15,7 +15,7 @@ the body frame), accumulated over a short window because a single 0.1 s
 MID360 sweep is too sparse to cluster. Clustering is connected
 components over a 2D occupancy grid - O(n) and fully deterministic, no
 learned components. Classification is a footprint/height heuristic:
-  person   small footprint, 1.1-2.0 m tall
+  person   upright human-sized footprint, including a partially visible body
   vehicle  footprint over 1.5 m with a 0.9-2.5 m body
   obstacle everything else that stands above ground
 
@@ -125,8 +125,15 @@ PROFILE_BIN_M = 0.2
 # which costs resolution and stays conservative.
 MAX_PROFILE_BINS = 64
 
-PERSON_MAX_FOOTPRINT_M = 0.9
-PERSON_HEIGHT_M = (1.1, 2.0)
+# A single scan often sees only a pedestrian's torso: map subtraction,
+# occlusion by a parked vehicle, and the chair-height lidar can all remove
+# the legs. The old 1.1 m lower bound therefore labelled a real 0.9 m-tall
+# partial return as a generic obstacle. Admit partial bodies, but require a
+# human-sized horizontal extent so thin poles do not become people.
+PERSON_MIN_PLANAR_SPAN_M = 0.18
+PERSON_MAX_PLANAR_SPAN_M = 0.95
+PERSON_MAX_FOOTPRINT_M = 1.15
+PERSON_HEIGHT_M = (0.80, 2.20)
 VEHICLE_MIN_FOOTPRINT_M = 1.5
 VEHICLE_HEIGHT_M = (0.9, 2.5)
 
@@ -374,7 +381,10 @@ def classify(cluster):
     height = float(rel.max())
     span = cluster[:, :2].max(axis=0) - cluster[:, :2].min(axis=0)
     footprint = float(np.hypot(span[0], span[1]))
-    if footprint <= PERSON_MAX_FOOTPRINT_M and \
+    major_span = float(np.max(span))
+    if PERSON_MIN_PLANAR_SPAN_M <= major_span <= \
+            PERSON_MAX_PLANAR_SPAN_M and \
+            footprint <= PERSON_MAX_FOOTPRINT_M and \
             PERSON_HEIGHT_M[0] <= height <= PERSON_HEIGHT_M[1]:
         return "person"
     if footprint >= VEHICLE_MIN_FOOTPRINT_M and \

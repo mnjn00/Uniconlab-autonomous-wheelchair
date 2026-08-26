@@ -226,6 +226,33 @@ def walking(x, y=0.0, size=(0.6, 0.6, 1.7)):
             "points": 40, "motion": ct.MOVING}
 
 
+def standing_person(x, y=0.0, size=(0.6, 0.6, 1.7)):
+    item = walking(x, y, size)
+    item["motion"] = ct.STATIC
+    return item
+
+
+def test_soft_band_permission_is_recent_bounded_and_inside_the_2d_map():
+    module, Stamp = load_follower("dwa_follower")
+    follower = module.DwaFollower.__new__(module.DwaFollower)
+    follower.pose_xy = np.array([0.0, 0.55])
+    follower.soft_band_authorized_until_s = 102.0
+    follower.drivable_mask = types.SimpleNamespace(
+        contains=lambda point: abs(float(point[1])) <= 1.0)
+    follower.band = types.SimpleNamespace(
+        margins_many=lambda points: (
+            np.asarray(points)[:, 1],
+            np.full(len(points), -0.25),
+            np.full(len(points), 0.25)))
+
+    assert follower.off_band_recovery_authorized(Stamp(101.0))
+    assert not follower.off_band_recovery_authorized(Stamp(103.0))
+
+    follower.soft_band_authorized_until_s = 104.0
+    follower.pose_xy[1] = 1.05
+    assert not follower.off_band_recovery_authorized(Stamp(103.0))
+
+
 def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
     """The defect, as the behaviour it produced: a rollout scorer handed a
     moving person picks the arc that clears them by OBSTACLE_FLOOR_M and
@@ -239,6 +266,18 @@ def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
     assert commanded == ["STOP"]
     assert follower.planner.calls == [], \
         "the planner was asked to find a way round a person"
+
+
+def test_the_dwa_profile_plans_around_a_confirmed_stationary_person(
+        monkeypatch):
+    _module, follower, published, _commanded = dwa_with(
+        [standing_person(3.0)], monkeypatch)
+
+    follower.step()
+
+    assert not any(text.startswith("HOLD:DWA_WAIT") for text in published)
+    assert follower.planner.calls[0]["obstacles"], \
+        "the stationary person was not handed to the rollout planner"
 
 
 def test_a_person_gets_the_wider_055m_stop_corridor(monkeypatch):
