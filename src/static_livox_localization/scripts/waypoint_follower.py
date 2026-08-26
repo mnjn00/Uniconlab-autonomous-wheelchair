@@ -72,9 +72,10 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            BYPASS_EDGE_KEEP_M, BYPASS_OFFSET_MAX_M,
                            BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
                            BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
-                           PERSON_LABEL,
+                           PERSON_BYPASS, PERSON_LABEL,
                            avoidance_decision, bypass_offsets_for_room,
-                           is_stale, nearest_threat, parse_summary)
+                           is_stale, matching_threats, nearest_threat,
+                           parse_summary)
 from cluster_tracking import MOVING
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import SUPPRESSED_WHILE_PARKED
@@ -119,6 +120,10 @@ CORRIDOR_HALF_WIDTH = 0.45
 # avoidance planner.  This keeps the DWA obstacle corridor unchanged while
 # catching a walking person's body at the edge of the route.
 PERSON_STOP_HALF_WIDTH_M = 0.55
+# DWA may bend beyond the stop corridor while passing. A second person in
+# that maneuver region vetoes authorization even when they do not overlap
+# the route centreline.
+PERSON_BYPASS_HALF_WIDTH_M = 1.0
 PERSON_STOP_DISTANCE_SCALE = 1.20
 PERSON_MEMORY_S = 1.0
 # Once a person has required a stop, do not let the stopped chair's smaller
@@ -127,6 +132,11 @@ PERSON_MEMORY_S = 1.0
 # centimetres is wider than that envelope swing while still releasing a
 # person who actually clears the corridor or moves away.
 PERSON_STOP_RELEASE_MARGIN_M = 0.30
+# A tracked person is not a parked object after the producer's 1.5-second
+# STATIC confirmation. Bypass is a separate, longer authorization based on
+# direct same-track producer evidence; any missed 5 Hz frame resets it.
+PERSON_BYPASS_CONFIRM_S = 10.0
+PERSON_BYPASS_MAX_GAP_S = 0.35
 # The forward-cone and minimum-range constants that used to live here
 # belonged to the raw five-point scan check, removed 2026-08-05. The same
 # geometry still exists in safety_gate.py, which keeps its own independent
@@ -185,6 +195,10 @@ LOOKAHEAD_BACKOFF_M = 0.4
 class WaypointFollower:
     person_memory = None
     person_stop_release_m = None
+    direct_person_threats = ()
+    person_static_track_id = None
+    person_static_since_s = None
+    person_static_last_stamp_s = None
 
     # Which control law this class turns a pose into a Twist with. Both
     # profiles run as the same node under the same name, so the node alone
@@ -311,6 +325,10 @@ class WaypointFollower:
         self.cluster_summary = None
         self.person_memory = None
         self.person_stop_release_m = None
+        self.direct_person_threats = ()
+        self.person_static_track_id = None
+        self.person_static_since_s = None
+        self.person_static_last_stamp_s = None
         # Deliberately NOT behind ~safety_policies. The raw corridor check is
         # switched off with the rest of the judgements because it stops on
         # five returns and is the loudest false-positive source in the chain;
@@ -628,12 +646,18 @@ class WaypointFollower:
         remembered geometry.
         """
         if self.cluster_summary is None:
+            self.direct_person_threats = ()
             return Threat(0.0, MOVING, "no summary")
         ordinary = nearest_threat(
             self.cluster_summary, CORRIDOR_HALF_WIDTH, lateral_shift)
         person = nearest_threat(
             self.cluster_summary, PERSON_STOP_HALF_WIDTH_M, lateral_shift,
             labels=(PERSON_LABEL,))
+        bypass_people = matching_threats(
+            self.cluster_summary, PERSON_BYPASS_HALF_WIDTH_M, lateral_shift,
+            labels=(PERSON_LABEL,))
+        self.direct_person_threats = tuple(
+            bypass_people if self.cluster_summary.usable else ())
         if self.cluster_summary.usable:
             if person is not None:
                 self.person_memory = (self.cluster_summary.stamp_s, person)
@@ -641,7 +665,13 @@ class WaypointFollower:
                 stamp_s, remembered = self.person_memory
                 age_s = self.cluster_summary.stamp_s - stamp_s
                 if 0.0 <= age_s <= PERSON_MEMORY_S:
-                    person = remembered
+                    person = Threat(
+                        remembered.distance_m, remembered.motion,
+                        remembered.label, remembered.lateral_m,
+                        track_id=remembered.track_id,
+                        observed_stamp_s=remembered.observed_stamp_s,
+                        directly_observed=False,
+                        geometry_valid=remembered.geometry_valid)
                 else:
                     self.person_memory = None
         if ordinary is None:
@@ -703,7 +733,52 @@ class WaypointFollower:
             threat, blocking,
             None if self.blocked_since is None
             else (now - self.blocked_since).to_sec(),
-            PLAN_AHEAD_M, BYPASS_AFTER_S)
+            PLAN_AHEAD_M, BYPASS_AFTER_S,
+            person_bypass_ready=self.person_bypass_ready(threat, blocking))
+
+    def reset_person_bypass_evidence(self):
+        self.person_static_track_id = None
+        self.person_static_since_s = None
+        self.person_static_last_stamp_s = None
+
+    def person_bypass_ready(self, threat, _blocking):
+        """Direct same-track STATIC evidence required before a person arc."""
+        people = self.direct_person_threats
+        eligible = (
+            threat is not None
+            and threat.is_person
+            and threat.parked
+            and threat.distance_m < PLAN_AHEAD_M
+            and threat.directly_observed
+            and threat.track_id is not None
+            and threat.observed_stamp_s is not None
+            and threat.geometry_valid
+            and self.tracking_state == "TRACKING"
+            and len(people) == 1
+            and people[0].track_id == threat.track_id
+            and people[0].parked
+            and people[0].directly_observed
+            and people[0].geometry_valid
+        )
+        if not eligible:
+            self.reset_person_bypass_evidence()
+            return False
+        stamp_s = threat.observed_stamp_s
+        if self.person_static_track_id != threat.track_id or \
+                self.person_static_last_stamp_s is None:
+            self.person_static_track_id = threat.track_id
+            self.person_static_since_s = stamp_s
+            self.person_static_last_stamp_s = stamp_s
+            return False
+        gap_s = stamp_s - self.person_static_last_stamp_s
+        if gap_s < 0.0 or gap_s > PERSON_BYPASS_MAX_GAP_S:
+            self.person_static_since_s = stamp_s
+            self.person_static_last_stamp_s = stamp_s
+            return False
+        if gap_s > 0.0:
+            self.person_static_last_stamp_s = stamp_s
+        return stamp_s - self.person_static_since_s >= \
+            PERSON_BYPASS_CONFIRM_S
 
     def take_a_way_round(self, clear_for_m):
         """Offset far enough to clear the corridor without leaving the band.
@@ -1055,6 +1130,10 @@ class WaypointFollower:
 
         decision = self.avoidance_for(
             now, threat, self.threat_blocks(threat, guard_stop))
+        if decision == PERSON_BYPASS:
+            self.status_pub.publish(String(data="HOLD:PERSON_BYPASS_DWA_ONLY"))
+            self.send_stop()
+            return
         if decision == GO_ROUND and abs(self.lateral_offset) < 0.01:
             self.take_a_way_round(max(guard_slow, PLAN_AHEAD_M))
         if blocking is None:

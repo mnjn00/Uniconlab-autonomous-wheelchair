@@ -410,7 +410,7 @@ class DwaPlanner:
         return np.concatenate([paths, grown], axis=1)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
-             last_speed=None):
+             last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -480,7 +480,7 @@ class DwaPlanner:
             clear = distance.reshape(len(pairs), -1).min(axis=1)
         else:
             clear = np.full(len(pairs), np.inf)
-        ok &= clear >= OBSTACLE_FLOOR_M
+        ok &= clear >= float(obstacle_floor_m)
         if not ok.any():
             return 0.0, 0.0, "OBSTACLE"
         d, idx = self.tree.query(flat, workers=-1)

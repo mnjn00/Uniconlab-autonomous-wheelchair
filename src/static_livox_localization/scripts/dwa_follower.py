@@ -82,7 +82,10 @@ from std_msgs.msg import String
 
 import dwa_core
 import mpc_speed
-from cluster_guard import GO_ROUND, WAIT, corridor_obstacle_points
+from cluster_guard import (GO_ROUND, PERSON_BYPASS,
+                           PERSON_BYPASS_CLEARANCE_M,
+                           PERSON_BYPASS_SPEED_MPS, WAIT,
+                           corridor_obstacle_points)
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command, jerk_limited
 from route_mask import RouteMask
@@ -364,6 +367,11 @@ class DwaFollower(WaypointFollower):
             self.send_stop()
             self.last_command_stamp = None
             return
+        if decision == PERSON_BYPASS and self.tracking_state != "TRACKING":
+            self.publish_state("HOLD:PERSON_BYPASS_TRACKING", "HOLD")
+            self.send_stop()
+            self.last_command_stamp = None
+            return
 
         # Past our own WAIT, so whatever the gate is holding, it is not
         # something the cluster producer gave us. Say so and stop asking.
@@ -387,10 +395,13 @@ class DwaFollower(WaypointFollower):
         if threat is not None:
             cap = approach_cap(cap, threat.distance_m, stop_m,
                                dwa_core.TURN_FLOOR_SPEED)
+        if decision == PERSON_BYPASS:
+            cap = min(cap, PERSON_BYPASS_SPEED_MPS)
 
         # Geometry only when going round it. Handing the planner an object it
         # is not allowed to go round would let it sidestep anyway.
-        obstacles = self.obstacle_points(state) if decision == GO_ROUND else ()
+        obstacles = self.obstacle_points(state) if decision in (
+            GO_ROUND, PERSON_BYPASS) else ()
         # Plan from where the chair will be when the command lands, not from
         # where it is. The gap was measured on 2026-08-11 by cross-correlating
         # commanded angular.z against the yaw rate differentiated from
@@ -403,7 +414,11 @@ class DwaFollower(WaypointFollower):
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate,
-            last_speed=self.current_speed)
+            last_speed=self.current_speed,
+            obstacle_floor_m=(
+                PERSON_BYPASS_CLEARANCE_M
+                if decision == PERSON_BYPASS
+                else dwa_core.OBSTACLE_FLOOR_M))
         if status != "OK":
             if status != self.dwa_status:
                 if status == "SPEED_BELOW_FLOOR":

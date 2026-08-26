@@ -87,15 +87,30 @@ MAX_OBSTACLE_OBJECTS = 4
 # because a label this code does not recognise must not silently become
 # something it is willing to drive around.
 PERSON_LABEL = "person"
+# The lidar sees a torso slice rather than a complete person. On 2026-08-25
+# the earlier bypass measured its berth from those narrow boxes, clipped the
+# operator's side and went for their feet. Model at least a 0.70 m standing
+# footprint, while believing any larger observation.
+PERSON_MIN_HALF_EXTENT_M = 0.35
+# The field repair for that clipping used 0.80 m from the inflated body and
+# the slowest speed at which the loaded chair can still turn.
+PERSON_BYPASS_CLEARANCE_M = 0.80
+PERSON_BYPASS_SPEED_MPS = 0.35
 
 
 class Threat(object):
     """The nearest thing in the corridor, and whether it is going to move."""
 
-    def __init__(self, distance_m, motion, label="", lateral_m=None):
+    def __init__(self, distance_m, motion, label="", lateral_m=None,
+                 track_id=None, observed_stamp_s=None,
+                 directly_observed=True, geometry_valid=True):
         self.distance_m = distance_m
         self.motion = motion
         self.label = label
+        self.track_id = track_id
+        self.observed_stamp_s = observed_stamp_s
+        self.directly_observed = directly_observed
+        self.geometry_valid = geometry_valid
         # Signed offset from the corridor centreline, chair frame, left
         # positive. None when the producer did not give a parseable box.
         #
@@ -176,6 +191,9 @@ def object_box(item):
         return None
     if not all(math.isfinite(v) for v in (x, y, half_x, half_y)):
         return None
+    if str(item.get("class", "")).strip().lower() == PERSON_LABEL:
+        half_x = max(half_x, PERSON_MIN_HALF_EXTENT_M)
+        half_y = max(half_y, PERSON_MIN_HALF_EXTENT_M)
     return x, y, half_x, half_y
 
 
@@ -235,6 +253,23 @@ def parsed_profile(item):
             not math.isfinite(bin_m) or bin_m <= 0.0 or not math.isfinite(y0):
         return BROKEN
     return bin_m, y0, slices
+
+
+def object_geometry_valid(item):
+    """Whether current box/profile geometry can authorize a maneuver."""
+    if object_box(item) is None:
+        return False
+    profile = parsed_profile(item)
+    if profile is BROKEN:
+        return False
+    if profile is None:
+        return True
+    try:
+        return all(
+            value is None or math.isfinite(float(value))
+            for value in profile[2])
+    except (TypeError, ValueError):
+        return False
 
 
 def slices_in(profile, low, high):
@@ -357,6 +392,36 @@ def corridor_reach(item, lateral_shift_m, half_width_m):
     return True, distance, motion
 
 
+def matching_threats(summary, half_width_m, lateral_shift_m=0.0,
+                     labels=None):
+    """Every matching object overlapping the corridor, nearest first."""
+    if not summary.usable:
+        return [Threat(BLOCKED, MOVING, summary.status or "unusable",
+                       directly_observed=False, geometry_valid=False)]
+    wanted = None if labels is None else {
+        str(label).strip().lower() for label in labels}
+    found = []
+    for item in summary.objects:
+        label = str(item.get("class", "")).strip().lower()
+        if wanted is not None and label not in wanted:
+            continue
+        blocks, distance, motion = corridor_reach(
+            item, lateral_shift_m, half_width_m)
+        if not blocks:
+            continue
+        box = object_box(item)
+        lateral = None if box is None else float(box[1]) - lateral_shift_m
+        track_id = item.get("id")
+        if not isinstance(track_id, int) or isinstance(track_id, bool):
+            track_id = None
+        found.append(Threat(
+            distance, motion, str(item.get("class", "")),
+            lateral_m=lateral, track_id=track_id,
+            observed_stamp_s=summary.stamp_s,
+            geometry_valid=object_geometry_valid(item)))
+    return sorted(found, key=lambda threat: threat.distance_m)
+
+
 def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
                    labels=None):
     """The nearest matching object overlapping the corridor, or None.
@@ -366,25 +431,9 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
     as clear road is right to. When labels is provided, only objects whose
     normalized class is in it are considered.
     """
-    if not summary.usable:
-        return Threat(BLOCKED, MOVING, summary.status or "unusable")
-    wanted = None if labels is None else {
-        str(label).strip().lower() for label in labels}
-    nearest = None
-    for item in summary.objects:
-        label = str(item.get("class", "")).strip().lower()
-        if wanted is not None and label not in wanted:
-            continue
-        blocks, distance, motion = corridor_reach(
-            item, lateral_shift_m, half_width_m)
-        if not blocks:
-            continue
-        if nearest is None or distance < nearest.distance_m:
-            box = object_box(item)
-            lateral = None if box is None else float(box[1]) - lateral_shift_m
-            nearest = Threat(distance, motion, str(item.get("class", "")),
-                             lateral_m=lateral)
-    return nearest
+    threats = matching_threats(
+        summary, half_width_m, lateral_shift_m, labels)
+    return threats[0] if threats else None
 
 
 def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
@@ -431,12 +480,13 @@ def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
 
 
 GO_ROUND = "go_round"
+PERSON_BYPASS = "person_bypass"
 WAIT = "wait"
 CLEAR = "clear"
 
 
 def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
-                       bypass_after_s):
+                       bypass_after_s, person_bypass_ready=False):
     """What to do about the nearest thing in the corridor.
 
     GO_ROUND for something the tracker has watched stand still, and taken
@@ -448,13 +498,11 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     Nothing here resumes the chair explicitly: once they leave the corridor
     the threat is gone, the answer becomes CLEAR, and it drives on.
 
-    A person is waited out whatever the tracker says about them, which the
-    two rules below did not do. Standing still for CONFIRM_S - 1.5 s, less
-    than a pause to check a phone - made someone STATIC, and STATIC is
-    parked, so the first rule would step around a stationary pedestrian
-    from 8 m out without the blocked clock ever starting. The second rule
-    reached the same place by a slower road. Both now stop short of it: the
-    only thing that clears a person is the person leaving.
+    A person is waited out by default. The caller may supply a separate
+    person_bypass_ready authorization only after longer, direct same-track
+    STATIC evidence; that produces a distinct result so only a controller
+    with current geometry and hard-mask rollout checks can execute it.
+    Standing still for the tracker's CONFIRM_S alone is never enough.
 
     blocked_for_s is the fallback for sources that carry no identity. A
     raw-scan return is UNKNOWN forever, so standing in the way is the only
@@ -464,6 +512,8 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     if threat is None:
         return CLEAR
     if threat.is_person:
+        if threat.parked and threat.distance_m < plan_ahead_m:
+            return PERSON_BYPASS if person_bypass_ready else WAIT
         return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
         return GO_ROUND

@@ -75,6 +75,43 @@ def test_the_nearest_of_several_wins():
     assert threat.distance_m == pytest.approx(2.75)
 
 
+def test_a_threat_preserves_direct_track_identity_and_producer_stamp():
+    tracked = obj(3.0, 0.1, label="person")
+    tracked["id"] = 1641
+
+    threat = cg.nearest_threat(summary([tracked], stamp=123.4), 0.45)
+
+    assert threat.track_id == 1641
+    assert threat.observed_stamp_s == 123.4
+    assert threat.directly_observed
+
+
+def test_a_person_is_never_modelled_smaller_than_a_person():
+    narrow = {
+        "class": "person",
+        "x": 2.0,
+        "y": 0.0,
+        "size": [0.18, 0.18, 1.7],
+    }
+
+    box = cg.object_box(narrow)
+
+    assert box is not None
+    assert box[2] >= 0.35
+    assert box[3] >= 0.35
+
+
+def test_person_size_floor_does_not_inflate_other_objects():
+    thing = {
+        "class": "obstacle",
+        "x": 2.0,
+        "y": 0.0,
+        "size": [0.18, 0.18, 0.5],
+    }
+
+    assert cg.object_box(thing)[2:] == (0.09, 0.09)
+
+
 def test_a_lateral_shift_moves_the_corridor_it_is_measured_against():
     """What the bypass probe rests on: stepping 0.6 m aside has to change
     which objects are in the way, or every offset looks equally blocked."""
@@ -160,8 +197,11 @@ def threat(distance, motion):
     return cg.Threat(distance, motion)
 
 
-def decide(threat_in, blocking=True, blocked_for_s=0.0):
-    return cg.avoidance_decision(threat_in, blocking, blocked_for_s, 5.0, 3.0)
+def decide(threat_in, blocking=True, blocked_for_s=0.0,
+           person_bypass_ready=False):
+    return cg.avoidance_decision(
+        threat_in, blocking, blocked_for_s, 5.0, 3.0,
+        person_bypass_ready=person_bypass_ready)
 
 
 def test_something_watched_standing_still_is_gone_around_from_a_distance():
@@ -203,7 +243,7 @@ def test_a_person_standing_still_is_waited_for_not_driven_around():
     and STATIC is parked - which sent the chair around a stationary
     pedestrian from 8 m out without the blocked clock ever starting.
     """
-    assert decide(person(4.0, ct.STATIC), blocking=False) == cg.CLEAR
+    assert decide(person(4.0, ct.STATIC), blocking=False) == cg.WAIT
     assert decide(person(4.0, ct.STATIC)) == cg.WAIT
 
 
@@ -215,9 +255,31 @@ def test_a_person_is_not_gone_around_by_the_time_rule_either():
     assert decide(person(1.0, ct.UNKNOWN), blocked_for_s=30.0) == cg.WAIT
 
 
+def test_a_person_needs_explicit_static_bypass_authorization():
+    assert decide(
+        person(1.0, ct.STATIC),
+        blocked_for_s=30.0,
+        person_bypass_ready=True) == cg.PERSON_BYPASS
+    assert decide(
+        person(1.0, ct.MOVING),
+        blocked_for_s=30.0,
+        person_bypass_ready=True) == cg.WAIT
+
+
+def test_a_static_person_is_stopped_and_watched_before_blocking():
+    assert decide(
+        person(4.0, ct.STATIC),
+        blocking=False,
+        person_bypass_ready=False) == cg.WAIT
+    assert decide(
+        person(4.0, ct.STATIC),
+        blocking=False,
+        person_bypass_ready=True) == cg.PERSON_BYPASS
+
+
 def test_a_person_who_leaves_the_corridor_clears_it():
-    """Nothing resumes the chair explicitly, here least of all."""
-    assert decide(person(2.0, ct.STATIC), blocking=False) == cg.CLEAR
+    """Outside the corridor there is no threat; distance is not absence."""
+    assert decide(None, blocking=False) == cg.CLEAR
 
 
 def test_the_same_geometry_without_the_label_is_still_gone_around():

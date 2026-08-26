@@ -141,9 +141,11 @@ class RecordingPlanner(object):
         self.calls = []
 
     def plan(self, state, obstacles=(), speed_cap=None,
-             last_yaw_rate=0.0, last_speed=None):
+             last_yaw_rate=0.0, last_speed=None,
+             obstacle_floor_m=None):
         self.calls.append({"obstacles": list(obstacles),
-                           "speed_cap": speed_cap})
+                           "speed_cap": speed_cap,
+                           "obstacle_floor_m": obstacle_floor_m})
         return 0.3, 0.0, "OK"
 
 
@@ -167,6 +169,10 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
         {"stamp": 100.0, "status": "OK", "objects": objects}))
     follower.blocked_since = None
     follower.person_memory = None
+    follower.direct_person_threats = ()
+    follower.person_static_track_id = None
+    follower.person_static_since_s = None
+    follower.person_static_last_stamp_s = None
     follower.lateral_offset = 0.0
     follower.pose_xy = np.array([10.0, 0.0])
     follower.pose_yaw = 0.0
@@ -245,6 +251,239 @@ def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
     assert commanded == ["STOP"]
     assert follower.planner.calls == [], \
         "the planner was asked to find a way round a person"
+
+
+def test_recorded_stationary_person_eventually_allows_safe_bypass(monkeypatch):
+    """The 220341 bag held the same STATIC person for 28.2 seconds.
+
+    DWA had hard-mask-contained arcs at every recorded waypoint checked, but
+    the person label withheld their geometry from the planner forever. Ten
+    seconds of direct same-track STATIC evidence must authorize DWA to test
+    those arcs, without authorizing on the tracker's first STATIC frame.
+    """
+    person = walking(1.6)
+    person.update({"id": 1641, "motion": ct.STATIC})
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch)
+
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+    follower.cluster_summary = summary_at(110.0, [person])
+    follower.step()
+
+    assert len(follower.planner.calls) == 1
+    assert follower.planner.calls[0]["obstacles"], \
+        "the recorded stationary person never reached DWA geometry planning"
+    assert follower.planner.calls[0]["obstacle_floor_m"] == 0.80
+    assert follower.planner.calls[0]["speed_cap"] <= 0.35
+
+
+def test_stationary_person_is_watched_from_plan_ahead_before_bypass(
+        monkeypatch):
+    person = walking(4.0)
+    person.update({"id": 1641, "motion": ct.STATIC})
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch, threat_distance_stop_radius=1.0)
+
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+    follower.cluster_summary = summary_at(110.0, [person])
+    follower.step()
+
+    assert len(follower.planner.calls) == 1
+    assert follower.planner.calls[0]["obstacles"]
+
+
+def test_one_static_frame_after_long_motion_does_not_authorize_bypass(
+        monkeypatch):
+    person = walking(1.6)
+    person["id"] = 1641
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch)
+
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+    person["motion"] = ct.STATIC
+    follower.cluster_summary = summary_at(110.0, [person])
+    follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+
+def test_a_person_dropout_restarts_static_bypass_qualification(monkeypatch):
+    person = walking(1.6)
+    person.update({"id": 1641, "motion": ct.STATIC})
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch)
+
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+    follower.cluster_summary = summary_at(110.0, [])
+    follower.step()
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            110.2 + index * 0.2, [person])
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+    follower.cluster_summary = summary_at(120.2, [person])
+    follower.step()
+
+    assert len(follower.planner.calls) == 1
+
+
+def test_a_producer_stamp_gap_restarts_static_bypass_qualification(
+        monkeypatch):
+    person = walking(1.6)
+    person.update({"id": 1641, "motion": ct.STATIC})
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch)
+
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            110.4 + index * 0.2, [person])
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+    follower.cluster_summary = summary_at(120.4, [person])
+    follower.step()
+
+    assert len(follower.planner.calls) == 1
+
+
+def test_a_replacement_person_id_restarts_bypass_qualification(monkeypatch):
+    first = walking(1.6)
+    first.update({"id": 1641, "motion": ct.STATIC})
+    replacement = walking(1.6)
+    replacement.update({"id": 1689, "motion": ct.STATIC})
+    _module, follower, published, commanded = dwa_with(
+        [first], monkeypatch)
+
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [first])
+        follower.step()
+    for index in range(50):
+        follower.cluster_summary = summary_at(
+            110.0 + index * 0.2, [replacement])
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+    follower.cluster_summary = summary_at(120.0, [replacement])
+    follower.step()
+
+    assert len(follower.planner.calls) == 1
+
+
+def test_a_moving_person_revokes_an_authorized_bypass(monkeypatch):
+    person = walking(1.6)
+    person.update({"id": 1641, "motion": ct.STATIC})
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch)
+
+    for index in range(51):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+    assert len(follower.planner.calls) == 1
+
+    person["motion"] = ct.MOVING
+    follower.cluster_summary = summary_at(110.2, [person])
+    follower.step()
+
+    assert len(follower.planner.calls) == 1
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+
+def test_a_second_moving_person_prevents_static_person_bypass(monkeypatch):
+    stationary = walking(1.6)
+    stationary.update({"id": 1641, "motion": ct.STATIC})
+    moving = walking(2.0, y=1.2)
+    moving["id"] = 1642
+    people = [stationary, moving]
+    _module, follower, published, commanded = dwa_with(
+        people, monkeypatch)
+
+    for index in range(51):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, people)
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+
+def test_a_person_without_valid_track_identity_never_authorizes_bypass(
+        monkeypatch):
+    person = walking(1.6)
+    person["motion"] = ct.STATIC
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch)
+
+    for index in range(60):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
+
+
+def test_a_person_with_malformed_geometry_never_authorizes_bypass(
+        monkeypatch):
+    person = walking(1.6)
+    person.update({
+        "id": 1641,
+        "motion": ct.STATIC,
+        "profile": {"bin_m": 0.2, "y0": -0.2, "min_x": ["broken"]},
+    })
+    _module, follower, published, commanded = dwa_with(
+        [person], monkeypatch)
+
+    for index in range(60):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+
+    assert follower.planner.calls == []
+    assert published[-1] == "HOLD:DWA_WAIT"
+    assert commanded[-1] == "STOP"
 
 
 def test_a_person_gets_the_wider_055m_stop_corridor(monkeypatch):
@@ -480,7 +719,11 @@ def test_both_replacement_profiles_ask_the_shared_policy(monkeypatch):
             "%s must apply the shared person-aware stop radius" % name
         assert "self.threat_blocks(threat," in text, \
             "%s must apply the shared person-stop hysteresis" % name
-        assert "== WAIT" in text, name
+        if name == "dwa_follower":
+            assert "decision == WAIT" in text
+            assert "GO_ROUND, PERSON_BYPASS" in text
+        else:
+            assert "decision in (WAIT, PERSON_BYPASS)" in text
         assert "avoidance_decision(" not in text, \
             "%s must not re-implement the decision" % name
 
