@@ -777,7 +777,10 @@ class RosLink:
             return self._blackbox
         self._blackbox_stamp = now
         try:
-            code, _, state = rospy.get_master().getSystemState(self.node_name)
+            # MasterProxy injects the caller id itself; passing one is a
+            # "bad call arity" fault that returns code -1, which the
+            # except-less path below reads as "cannot tell" forever.
+            code, _, state = rospy.get_master().getSystemState()
             if code != 1:
                 return self._blackbox
             nodes = set()
