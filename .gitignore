@@ -39,3 +39,6 @@ artifacts/
 .omc/
 .omo/
 .claude/
+
+# Android: machine-specific SDK path, never the same on two machines
+local.properties

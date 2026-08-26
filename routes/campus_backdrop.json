@@ -1,0 +1,15 @@
+{
+  "frame": "map",
+  "source_pcd": "merged_0707_0725_0p20m_xyzi.pcd",
+  "resolution_m_per_pixel": 0.25,
+  "origin": [
+    -47.827,
+    -129.20999999999998,
+    0.0
+  ],
+  "width": 1294,
+  "height": 774,
+  "ground_z": -4.211456298828125,
+  "wall_threshold_m": 1.2,
+  "flatten": "/home/mprp3/bt_test_logs/flatten_cells.json"
+}
