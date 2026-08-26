@@ -97,9 +97,6 @@ MODE_LABELS = {AUTO_MODE: "auto", MANUAL_MODE: "manual"}
 
 FOLLOWER_START_SERVICE = "/waypoint_follower/start"
 MOTION_EPS = 0.02       # m/s and rad/s below which a Twist counts as zero
-# /wheel_status data[7] at full charge. The gauge moves in steps of 11, so this
-# is 8 bars; every value seen in the field has been a multiple of 11.
-BATTERY_FULL = 88
 # How long a subsystem reading stays believable after its topic goes quiet.
 # /wheel_status already had a TTL, which is why the wheel link reported 끊김 the
 # moment the stack came down -- while localization went on claiming TRACKING and
@@ -134,6 +131,10 @@ def twist_magnitude(twist):
 # captured at 0.2 m spacing; at ~1 m it is visually identical on a phone-sized
 # top-down view and costs a fifth of the link budget.
 ROUTE_MAX_POINTS = 400
+# The drivable corridor is sent as two edge polylines, thinned like the route.
+# Fewer points than the route: the band is a smooth pair of offsets, and its job
+# on a phone-sized view is to show where the room runs out, not every wobble.
+BAND_MAX_POINTS = 200
 
 
 _BRINGUP_ROUTE_RE = re.compile(r'^\s*ROUTE=\"\$\{ROUTE:-(?P<path>[^}]+)\}\"')
@@ -200,6 +201,58 @@ def resolve_route_path(cli_default, script_dir=None):
     return cli_default
 
 
+def load_band(route_path):
+    """Left and right edges of the drivable corridor, in the map frame.
+
+    The route alone is a centreline, which tells an operator where the chair is
+    going but not how much room it has -- and on this route the room is the
+    interesting part: the v9 corridor is what the tight corners are measured
+    against. The band file sits next to the route with the same stem and carries
+    a station every 0.5 m with left_m/right_m clearances, so the edges are just
+    the centreline offset by those, perpendicular to the station heading.
+    """
+    band_path = re.sub(r"_waypoints\.json$", "_safety_band.json", route_path)
+    if band_path == route_path:
+        return None
+    try:
+        with open(os.path.expanduser(band_path), "r") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    stations = data.get("stations") or []
+    if len(stations) < 2:
+        return None
+
+    left, right = [], []
+    for station in stations:
+        try:
+            x = float(station["x"])
+            y = float(station["y"])
+            heading = math.radians(float(station["heading_deg"]))
+            lm = float(station.get("left_m", 0.0))
+            rm = float(station.get("right_m", 0.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Left of travel is heading + 90 degrees.
+        left.append([round(x - math.sin(heading) * lm, 2),
+                     round(y + math.cos(heading) * lm, 2)])
+        right.append([round(x + math.sin(heading) * rm, 2),
+                      round(y - math.cos(heading) * rm, 2)])
+    if len(left) < 2:
+        return None
+
+    stride = max(1, (len(left) + BAND_MAX_POINTS - 1) // BAND_MAX_POINTS)
+    def thin(points):
+        slim = points[::stride]
+        if slim[-1] != points[-1]:
+            slim.append(points[-1])
+        return slim
+    log("band loaded: %d stations (%d sent) from %s"
+        % (len(left), len(thin(left)), os.path.basename(band_path)))
+    return {"left": thin(left), "right": thin(right),
+            "source": os.path.basename(band_path)}
+
+
 def load_route(path):
     """Read the waypoint JSON the follower is driving, for the app's map view.
 
@@ -237,6 +290,7 @@ def load_route(path):
 
     log("route loaded: %d waypoints (%d sent, stride %d) from %s"
         % (len(full), len(slim), stride, os.path.basename(path)))
+    band = load_band(path)
     return {
         "type": "route",
         "frame": data.get("frame"),
@@ -247,6 +301,9 @@ def load_route(path):
         "points": slim,
         "source": os.path.basename(path),
         "path": path,
+        "band_left": None if band is None else band["left"],
+        "band_right": None if band is None else band["right"],
+        "band_source": None if band is None else band["source"],
     }
 
 
@@ -465,27 +522,23 @@ class BridgeState:
         self.started_at = time.time()
 
         self.drive_mode = None          # 65 / 77, echoed by the motor controller
-        # /wheel_status data[7]. A coarse battery level, almost certainly:
-        # every value observed is a multiple of 11 -- 88, 77, 66 -- which reads
-        # as an 8-step gauge at ~12.5% per step rather than a percentage.
+        # /wheel_status data[7], which base_model republishes as wheel_battery
+        # and this bridge briefly believed. It is not a charge level.
         #
-        # It was briefly reported here as not-a-battery on the strength of a
-        # 55 s sample that happened to hold only 88 and 77. A longer look
-        # settled it: at rest it read 88 early in the session and 77 two and a
-        # half hours of driving later, and it dips one step (to 66) under load
-        # and comes back. That is a discharge trend with load sag, not a flag.
+        # Sniffed straight off the UART on 2026-08-25 while the chair was being
+        # driven on the joystick: 2505 good frames, and data[7] took exactly two
+        # values, 88 and 99. Not a slow drift between them -- it sat at 88 and
+        # pulsed to 99 for about half a second, three times in twenty seconds.
+        # Nothing that reports remaining charge does that. Earlier sessions add
+        # 66 and 77, so the set so far is 11 x {6, 7, 8, 9}: a small status or
+        # level code, changing on a sub-second timescale.
         #
-        # Which is why only the at-rest reading is reported as the level. Under
-        # motor current the gauge sits a step low, and a number that drops 12%
-        # every time the chair sets off is worse than no number.
-        #
-        # 88 is full, confirmed by the team 2026-08-23, so the gauge is 8 steps
-        # of 11 over a 0..88 range and a percentage is 100 * level / 88. It is
-        # the wheel-base battery -- the motor controller's own reading, not the
-        # NUC's. The step is coarse: one bar is 12.5%, so 88/77/66 show as
-        # 100/88/75% and nothing in between exists.
-        self.battery_raw = None
-        self.battery_at_rest = None
+        # base_model calls it a battery and differences it into a "consumption"
+        # (bridge_to_server.py), but nothing there scales it, documents a unit
+        # or bounds it -- the name is an assumption, and the data does not
+        # support it. Reported as a diagnostic byte only; what it actually means
+        # needs the motor controller's manual.
+        self.wheel_status_byte7 = None
         self.wheel_status_stamp = None
         self.follower_status = None
         self.robot_fault = None
@@ -521,6 +574,23 @@ class BridgeState:
         self.localization_stamp = None
         self.objects_summary = None
         self.objects_stamp = None
+        # obstacle_clusters.py publishes far more than the one line the app used
+        # to show. What an operator needs to know is not "2 clusters" but
+        # whether anything is in the corridor and how close it is, so the fields
+        # that answer that are carried through instead of being flattened away.
+        self.objects_status = None
+        self.band_status = None
+        self.objects_counts = None
+        self.objects_in_band = None
+        self.objects_nearest_m = None
+        self.objects_nearest_in_band_m = None
+        self.bloom_filtered = None
+        # Roll and pitch out of the localizer's own pose. FAST-LIO builds the
+        # map gravity-aligned, so tilt in the map frame is the chair's tilt --
+        # and nothing else on this stack publishes an angle at all. tip_guard,
+        # despite the name, only reports OK/STALE and the speed it is passing.
+        self.pose_roll_deg = None
+        self.pose_pitch_deg = None
         self.follower_stamp = None
         self.estop_requested_at = None
         self.last_command_detail = None
@@ -570,13 +640,6 @@ class BridgeState:
             tip_guard = self._fresh(self.tip_guard_status, self.tip_guard_stamp, now)
             follower = self._fresh(self.follower_status, self.follower_stamp, now)
             follower_live = follower is not None
-            stopped = speed is not None and speed <= 0.05
-            if stopped and self.battery_raw is not None:
-                self.battery_at_rest = self.battery_raw
-            battery_under_load = (not stopped
-                                  and self.battery_raw is not None
-                                  and self.battery_at_rest is not None
-                                  and self.battery_raw < self.battery_at_rest)
 
             # safety_gate holds motion by zeroing its output while the follower is
             # still asking for movement. The gate does not publish its reason, so
@@ -627,6 +690,20 @@ class BridgeState:
                 "localization_status": localization,
                 "localization_tracking": localization == "TRACKING",
                 "objects_summary": objects,
+                "objects_status": self._fresh(self.objects_status,
+                                              self.objects_stamp, now),
+                "band_status": self._fresh(self.band_status,
+                                           self.objects_stamp, now),
+                "objects_counts": self._fresh(self.objects_counts,
+                                              self.objects_stamp, now),
+                "objects_in_band": self._fresh(self.objects_in_band,
+                                               self.objects_stamp, now),
+                "objects_nearest_m": self._fresh(self.objects_nearest_m,
+                                                 self.objects_stamp, now),
+                "objects_nearest_in_band_m": self._fresh(
+                    self.objects_nearest_in_band_m, self.objects_stamp, now),
+                "bloom_filtered": self._fresh(self.bloom_filtered,
+                                              self.objects_stamp, now),
                 "robot_fault": self.robot_fault,
 
                 # Navigation view. Pose is the same /fast_lio_icp/pose the route
@@ -635,6 +712,8 @@ class BridgeState:
                 "pose_x": self.pose_x,
                 "pose_y": self.pose_y,
                 "pose_yaw_deg": self.pose_yaw_deg,
+                "pose_roll_deg": self.pose_roll_deg,
+                "pose_pitch_deg": self.pose_pitch_deg,
                 "pose_age_s": age(self.pose_stamp),
                 "loc_fitness": self._fresh(self.loc_fitness,
                                            self.localization_stamp, now),
@@ -647,17 +726,9 @@ class BridgeState:
                 "follower_state": self.follower_state if follower_live else None,
                 "last_command_detail": self.last_command_detail,
 
-                # Level, not percent -- see the note on battery_raw. The
-                # at-rest reading is the one worth showing; battery_raw is what
-                # the frame says right now, which sags a step under load.
-                "battery_percent": (None if self.battery_at_rest is None else
-                                    int(round(100.0 * self.battery_at_rest
-                                              / BATTERY_FULL))),
-                "battery_level": self.battery_at_rest,
-                "battery_level_full": BATTERY_FULL,
-                "battery_raw": self.battery_raw,
-                "battery_under_load": battery_under_load,
-                # No step-level concept exists in this stack.
+                # No node on this stack measures charge; see battery note above.
+                "battery_percent": None,
+                "wheel_status_byte7": self.wheel_status_byte7,
                 "step_level": None,
             }
             # go.sh refuses to start unless all of these hold. Mirror it so the
@@ -770,7 +841,7 @@ class RosLink:
             if len(msg.data) > 1:
                 self.state.drive_mode = int(msg.data[1])
             if len(msg.data) > 7:
-                self.state.battery_raw = int(msg.data[7])
+                self.state.wheel_status_byte7 = int(msg.data[7])
 
     def _pose_cb(self, msg):
         p = msg.pose.pose.position
@@ -778,10 +849,15 @@ class RosLink:
         # yaw only; the view is top-down so roll/pitch are not wanted
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        sinr = 2.0 * (q.w * q.x + q.y * q.z)
+        cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
+        sinp = max(-1.0, min(1.0, 2.0 * (q.w * q.y - q.z * q.x)))
         with self.state.lock:
             self.state.pose_x = round(p.x, 3)
             self.state.pose_y = round(p.y, 3)
             self.state.pose_yaw_deg = round(math.degrees(math.atan2(siny, cosy)), 1)
+            self.state.pose_roll_deg = round(math.degrees(math.atan2(sinr, cosr)), 1)
+            self.state.pose_pitch_deg = round(math.degrees(math.asin(sinp)), 1)
             self.state.pose_stamp = time.time()
 
     # waypoint_follower.py publishes "%s wp=%d/%d v=%.2f%s"; parse it rather than
@@ -846,26 +922,57 @@ class RosLink:
             self.state.tip_guard_stamp = time.time()
 
     def _objects_cb(self, msg):
-        # obstacle_clusters.py publishes a JSON blob, not a sentence. Dumping the
-        # raw string onto a phone line pushes everything useful off screen, so
-        # reduce it to the fields an operator actually reads.
+        """obstacle_clusters.py publishes a JSON blob; keep what steers a decision.
+
+        The old reduction threw away the part that matters. "클러스터 2" says
+        nothing about whether either of them is in the chair's way, and the band
+        relation per object is exactly that: objects whose returns fall inside
+        the safety band are the ones the follower holds for.
+        """
         text = msg.data
+        status = band = counts = None
+        in_band = nearest = nearest_in_band = bloom = None
         try:
             blob = json.loads(text)
-            counts = blob.get("counts") or {}
-            total = sum(v for v in counts.values() if isinstance(v, int)) or None
-            parts = [str(blob.get("status", "?"))]
-            if blob.get("band_status") and blob["band_status"] != blob.get("status"):
-                parts.append("band %s" % blob["band_status"])
-            if total is not None:
-                parts.append("클러스터 %d" % total)
-            if blob.get("bloom_filtered"):
-                parts.append("필터 %s" % blob["bloom_filtered"])
+            status = blob.get("status")
+            band = blob.get("band_status")
+            bloom = blob.get("bloom_filtered")
+            counts = {k: v for k, v in (blob.get("counts") or {}).items()
+                      if isinstance(v, int) and v}
+            objects = blob.get("objects") or []
+            in_band = 0
+            for obj in objects:
+                try:
+                    distance = math.hypot(float(obj["x"]), float(obj["y"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if nearest is None or distance < nearest:
+                    nearest = distance
+                if obj.get("band_relation") in ("inside", "overlap"):
+                    in_band += 1
+                    if nearest_in_band is None or distance < nearest_in_band:
+                        nearest_in_band = distance
+            parts = [str(status or "?")]
+            if band and band != status:
+                parts.append("band %s" % band)
+            if in_band:
+                parts.append("회랑 %d" % in_band)
+            if nearest is not None:
+                parts.append("최근접 %.1fm" % nearest)
             text = " · ".join(parts)
         except (ValueError, TypeError, AttributeError):
             pass
         with self.state.lock:
             self.state.objects_summary = text[:80]
+            self.state.objects_status = status
+            self.state.band_status = band
+            self.state.objects_counts = counts
+            self.state.objects_in_band = in_band
+            self.state.objects_nearest_m = (None if nearest is None
+                                            else round(nearest, 1))
+            self.state.objects_nearest_in_band_m = (
+                None if nearest_in_band is None else round(nearest_in_band, 1))
+            self.state.bloom_filtered = bloom
             self.state.objects_stamp = time.time()
 
     def _diag_cb(self, msg):
@@ -939,14 +1046,37 @@ class RosLink:
                       % ("정지됨" if paused else "정지 실패(%s) — 해제 전에 확인 필요"
                          % pause_detail[:60]))
 
-    def release_estop(self):
+    def release_estop(self, resume=False):
+        """mode_cmd=65, and optionally resume the follower in the same breath.
+
+        Arming used to be documented as "driving stays stopped until you start
+        it", and that was never reliably true. waypoint_follower.py holds on
+        MANUAL_MODE but stays ``enabled``, so whether mode 65 resumed the drive
+        depended on how the follower had been paused: stop.sh disables it, a
+        joystick failsafe does not. Same button, two different outcomes.
+
+        The operator asked for the resuming one, so it is now what the command
+        does -- explicitly, by calling the start service, rather than by relying
+        on a leftover ``enabled``. One button, one outcome, and the app says the
+        chair will move.
+        """
         ok, detail = self._publish_mode(AUTO_MODE)
-        if ok:
-            with self.state.lock:
-                self.state.estop_requested_at = None
-            detail = ("released (mode_cmd=65). A stop frame is sent first, so the "
-                      "chair does not lurch. Driving stays stopped until you start it.")
-        return ok, detail
+        if not ok:
+            return ok, detail
+        with self.state.lock:
+            self.state.estop_requested_at = None
+        if not resume:
+            return True, ("released (mode_cmd=65). A stop frame is sent first, so "
+                          "the chair does not lurch. Driving stays stopped.")
+        # uart.py sends a motor stop frame when it re-enters auto, so the resume
+        # has to land after that; a service call is not instant either, which is
+        # the gap that makes this ordering safe rather than a lurch.
+        started, follower_detail = self.set_follower(True)
+        if not started:
+            return True, ("자동 모드 전환 완료 (mode_cmd=65). 다만 주행 재개는 "
+                          "실패했습니다 — %s. [주행 시작]을 눌러주세요." % follower_detail)
+        return True, ("자동 모드 전환 + 주행 재개 (mode_cmd=65, 팔로워 시작). "
+                      "휠체어가 멈춘 지점의 웨이포인트부터 이어서 주행합니다.")
 
     def set_follower(self, running, ensure_auto=False):
         if not self.allow_commands:
@@ -1095,6 +1225,8 @@ class Session:
                 ok, detail = self.ros.engage_estop()
             elif command in ("estop_release", "release", "rearm", "arm"):
                 ok, detail = self._release(payload)
+            elif command == "arm_and_drive":
+                ok, detail = self._release(payload, resume=True)
             elif command == "drive_start":
                 ok, detail = self._drive(payload, True)
             elif command == "drive_stop":
@@ -1150,7 +1282,7 @@ class Session:
         return True, "경로 %d개 지점 전송 (%s)" % (route.get("count_full", 0),
                                               route.get("source", "?"))
 
-    def _release(self, payload):
+    def _release(self, payload, resume=False):
         """Two-step: the app must send confirm=true, and the chair must be stopped."""
         if not payload.get("confirm"):
             return False, ("confirmation required: resend with \"confirm\": true "
@@ -1169,7 +1301,7 @@ class Session:
         if moving > 0.05:
             return False, ("refusing: chair is still moving (%.2f m/s, %s odometry)"
                            % (moving, source))
-        return self.ros.release_estop()
+        return self.ros.release_estop(resume=resume)
 
     def _halt(self):
         """Stop must never refuse, so fall back to the direct path when the script
