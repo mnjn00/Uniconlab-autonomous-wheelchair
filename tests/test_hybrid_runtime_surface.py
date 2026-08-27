@@ -11,18 +11,23 @@ def test_start_wrapper_keeps_original_stack_as_rollback():
     assert '/cmd_vel_gated:=/cmd_vel_terrain_safe' in text
 
 
-def test_geometric_summary_is_remapped_before_fusion():
+def test_geometric_summary_is_unfiltered_and_remapped_before_fusion():
     text = (ROOT / 'tools/start_hybrid_avoidance.sh').read_text()
+    assert 'hybrid_geometric_objects.py' in text
     assert '/perception/objects_summary:=/perception/geometric_objects_summary' in text
+    assert '/perception/dynamic_boxes:=/perception/geometric_exclusion_candidates' in text
     assert 'hybrid_object_fusion.py' in text
+    assert 'localization_exclusion_boxes.py' in text
 
 
 def test_new_nodes_are_installed_by_catkin():
     cmake = (ROOT / 'src/static_livox_localization/CMakeLists.txt').read_text()
     for name in (
-        'hybrid_object_fusion.py', 'vision_detection_bridge.py',
+        'hybrid_geometric_objects.py', 'hybrid_object_fusion.py',
+        'vision_detection_bridge.py', 'localization_exclusion_boxes.py',
         'semantic_safety_supervisor.py', 'terrain_guard.py',
         'hybrid_preflight.py', 'hybrid_perception.py',
+        'localization_exclusion_policy.py',
         'semantic_safety_policy.py', 'terrain_guard_policy.py',
     ):
         assert name in cmake
@@ -30,6 +35,9 @@ def test_new_nodes_are_installed_by_catkin():
 
 def test_go_checks_everything_before_delegating_to_go():
     text = (ROOT / 'tools/go_hybrid.sh').read_text()
+    for node in ('hybrid_geometric_objects', 'localization_exclusion_boxes',
+                 'semantic_safety_supervisor', 'terrain_guard'):
+        assert node in text
     check = text.index('hybrid_preflight.py')
     delegate = text.index('exec "$GO"')
     assert check < delegate
