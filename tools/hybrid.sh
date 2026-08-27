@@ -2,7 +2,7 @@
 # Canonical field entry point for the hybrid profile.
 #
 # ROS Noetic setup scripts read variables before defining them and can abort
-# under `set -u`.  The underlying reviewed scripts intentionally remain
+# under `set -u`. The underlying reviewed scripts intentionally remain
 # ordinary bash files; this launcher executes a temporary same-directory copy
 # with nounset relaxed, preserving their SCRIPT_DIR/repository resolution.
 set -eo pipefail
@@ -14,14 +14,18 @@ COMMAND="${1:-}"
 usage() {
   cat <<'EOF'
 Usage:
-  bash tools/hybrid.sh start [start_hybrid_avoidance.sh options]
-  bash tools/hybrid.sh go    [go_hybrid.sh options]
+  bash tools/hybrid.sh start
+  bash tools/hybrid.sh go
   bash tools/hybrid.sh stop
 
-Environment is passed through unchanged.  Important variables:
+Environment is passed through unchanged. Important variables:
+  REQUIRE_GPU=true|false              # default true; requires RTX/CuPy
   REQUIRE_LEARNED=false|true
   LEARNED_VISION_TOPIC=/pointpillars/detections
   CLIFF_REQUIRED=false|true
+
+One-time RTX setup:
+  bash tools/install_nuc_gpu_runtime.sh
 EOF
 }
 
