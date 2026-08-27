@@ -1,0 +1,26 @@
+# Runtime parameters for NVIDIA CUDA-PointPillars on the Phantom Canyon NUC.
+# The model_path is overwritten by start_hybrid_avoidance.sh from
+# POINTPILLARS_MODEL or ~/.config/unicon/pointpillars.env.
+
+gpu_device: 0
+model_path: /home/mprp3/opt/CUDA-PointPillars/model/pointpillar.plan
+input_topic: /cloud_registered_body
+detections_topic: /pointpillars/detections
+status_topic: /pointpillars/status
+expected_frame: body
+require_rtx2060: true
+
+# The official KITTI PointPillars engine uses this fixed point range and up to
+# 300k points. The ROS node rejects incompatible inputs instead of silently
+# resizing the network geometry.
+max_points: 300000
+minimum_points: 800
+max_cloud_age_s: 0.50
+max_inference_ms: 90.0
+normalize_livox_intensity: true
+
+# NVIDIA's bundled model class IDs are 0=car, 1=pedestrian, 2=cyclist.
+car_score_threshold: 0.45
+person_score_threshold: 0.30
+cyclist_score_threshold: 0.35
+other_score_threshold: 0.50
