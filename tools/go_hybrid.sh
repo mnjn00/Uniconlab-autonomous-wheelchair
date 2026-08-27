@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start motion only after the running hybrid graph proves it is ready.
-set -euo pipefail
+set -eo pipefail
 
 source /opt/ros/noetic/setup.bash >/dev/null 2>&1
 export ROS_MASTER_URI="${ROS_MASTER_URI:-http://127.0.0.1:11311}"
@@ -12,7 +12,8 @@ source "$LOCALIZATION_WS/devel/setup.bash"
 
 fail() { echo "REFUSING TO START: $*" >&2; exit 1; }
 
-for node in /waypoint_follower /hybrid_object_fusion \
+for node in /waypoint_follower /hybrid_geometric_objects \
+            /hybrid_object_fusion /localization_exclusion_boxes \
             /semantic_safety_supervisor /terrain_guard /tip_guard; do
   rosnode ping -c1 "$node" >/dev/null 2>&1 || fail "$node is not running"
 done
