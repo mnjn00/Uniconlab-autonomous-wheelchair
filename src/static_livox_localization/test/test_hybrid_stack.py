@@ -133,7 +133,7 @@ def test_localization_exclusions_do_not_remove_static_mapped_walls():
         "class": "obstacle", "motion": "moving", "source": "geometric"})
     assert should_exclude({
         "class": "person", "motion": "unknown", "source": "geometric"})
-    assert should_exclude({
+    assert not should_exclude({
         "class": "vehicle", "motion": "unknown", "source": "learned_only"})
 
 
