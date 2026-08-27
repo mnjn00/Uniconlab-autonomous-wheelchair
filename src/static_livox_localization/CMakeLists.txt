@@ -116,6 +116,7 @@ catkin_install_python(
     scripts/mpc_follower.py
     scripts/dwa_follower.py
     scripts/gpu_dwa_follower.py
+    scripts/mppi_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
     scripts/hybrid_geometric_objects.py
@@ -136,6 +137,7 @@ install(
     scripts/scipy_ckdtree_compat.py
     scripts/body_frame.py
     scripts/dwa_core.py
+    scripts/mppi_core.py
     scripts/hybrid_perception.py
     scripts/localization_exclusion_policy.py
     scripts/semantic_safety_policy.py
