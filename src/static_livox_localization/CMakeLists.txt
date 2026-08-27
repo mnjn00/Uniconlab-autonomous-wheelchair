@@ -82,6 +82,7 @@ install(
     scripts/array_backend.py
     scripts/gpu_voxel_scorer.py
     scripts/gpu_dwa_backend.py
+    scripts/scipy_ckdtree_compat.py
     scripts/body_frame.py
     scripts/dwa_core.py
     scripts/hybrid_perception.py
