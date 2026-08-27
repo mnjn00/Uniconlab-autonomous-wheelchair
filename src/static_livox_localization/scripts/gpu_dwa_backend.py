@@ -1,21 +1,20 @@
-"""CuPy acceleration for the heavy nearest-neighbour parts of DWA.
+"""CuPy acceleration for the heavy obstacle-clearance part of DWA.
 
-The planner geometry and cost function remain in ``dwa_core``.  This module
-moves only the two large nearest-neighbour batches to the RTX GPU:
+The route critic deliberately remains on the existing CPU ``cKDTree``. A
+closed route can contain duplicate or crossing points; changing nearest-index
+tie-breaking changes route heading and progress even when the distance is the
+same. The GPU is therefore used where the target NUC actually needs it and
+where the result is unambiguous: thousands of extended rollout samples against
+all current obstacle samples.
 
-* every rollout point against the fixed route;
-* every extended rollout point against the current obstacle samples.
-
-The CPU cKDTree path remains the numerical fallback.  A hybrid field launch
-may set ``~require_gpu:=true``; then a missing or failed CUDA device produces a
-planner hold instead of silently running the high-load CPU path.
+The CPU path remains the numerical fallback. A hybrid field launch may set
+``~require_gpu:=true``; then a missing or failed CUDA device produces a planner
+hold instead of silently returning to the high-load CPU obstacle query.
 """
 
 from __future__ import annotations
 
-import math
 import os
-from typing import Callable, Optional
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -55,17 +54,16 @@ def _ros_log(message):
         import rospy
         if rospy.core.is_initialized():
             rospy.loginfo(message)
-            return
     except Exception:
         pass
 
 
 class DwaDistanceBackend(object):
-    """Nearest-neighbour queries with an RTX/CuPy fast path and CPU fallback."""
+    """RTX obstacle queries with an exact CPU route-query contract."""
 
     def __init__(self, route_points, prefer_gpu=True, require_gpu=False,
                  log=None, query_chunk=1024, reference_chunk=2048):
-        route = np.asarray(route_points, dtype=np.float32)
+        route = np.asarray(route_points, dtype=np.float64)
         if route.ndim != 2 or route.shape[1] != 2 or not len(route):
             raise ValueError("route_points must be a non-empty Nx2 array")
         if not np.isfinite(route).all():
@@ -78,26 +76,18 @@ class DwaDistanceBackend(object):
         self.route_tree = cKDTree(route)
         self.backend = resolve(prefer_gpu=bool(prefer_gpu), log=self.log)
         self.backend_name = self.backend.name
-        self.route_device = None
         self.failure_reason = ""
-        if self.backend.on_gpu:
-            try:
-                self.route_device = self.backend.asarray(route)
-                self.backend.xp.cuda.Device().synchronize()
-            except Exception as error:
-                self._gpu_failed(error)
-        if self.require_gpu and self.backend_name != "cupy":
+        if self.require_gpu and not self.backend.on_gpu:
             raise GpuRequiredError(
                 "RTX/CuPy DWA backend unavailable: %s" %
-                (self.failure_reason or self.backend.reason or "unknown"))
+                (self.backend.reason or "unknown"))
 
     @property
     def on_gpu(self):
-        return self.backend_name == "cupy" and self.route_device is not None
+        return self.backend_name == "cupy"
 
     def _gpu_failed(self, error):
         self.failure_reason = "%s: %s" % (type(error).__name__, error)
-        self.route_device = None
         self.backend_name = "numpy"
         self.log("DWA GPU backend failed; CPU fallback: %s" % self.failure_reason)
         if self.require_gpu:
@@ -153,12 +143,11 @@ class DwaDistanceBackend(object):
         return distances, indices
 
     def route_query(self, query_points):
-        query = self._validated(query_points, "route query")
-        if self.on_gpu:
-            try:
-                return self._gpu_query(query, self.route_device)
-            except Exception as error:
-                self._gpu_failed(error)
+        # Intentionally CPU: preserve cKDTree's existing duplicate/crossing
+        # route-index behavior exactly. Only obstacle clearance is offloaded.
+        query = np.asarray(query_points, dtype=np.float64).reshape(-1, 2)
+        if not np.isfinite(query).all():
+            raise ValueError("route query must contain finite xy points")
         return self.route_tree.query(query, workers=-1)
 
     def obstacle_query(self, query_points, obstacle_points):
@@ -172,7 +161,9 @@ class DwaDistanceBackend(object):
         if self.on_gpu:
             try:
                 obstacle_device = self.backend.asarray(obstacles)
-                return self._gpu_query(query, obstacle_device)
+                result = self._gpu_query(query, obstacle_device)
+                self.backend.xp.cuda.Device().synchronize()
+                return result
             except Exception as error:
                 self._gpu_failed(error)
         return cKDTree(obstacles).query(query, workers=-1)
@@ -197,20 +188,11 @@ def make_gpu_planner(base_class, core_module):
             require_gpu = _as_bool(
                 explicit_require if explicit_require is not None else
                 _ros_option("require_gpu", require_default), require_default)
-            log = explicit_log or _ros_log
             self.distance_backend = DwaDistanceBackend(
                 self.route, prefer_gpu=prefer_gpu, require_gpu=require_gpu,
-                log=log)
+                log=explicit_log or _ros_log)
             self.distance_backend_name = self.distance_backend.backend_name
-            try:
-                import rospy
-                if rospy.core.is_initialized():
-                    rospy.set_param("~distance_backend",
-                                    self.distance_backend_name)
-                    rospy.set_param("~gpu_active",
-                                    self.distance_backend.on_gpu)
-            except Exception:
-                pass
+            self._publish_backend_state()
 
         def _publish_backend_state(self):
             self.distance_backend_name = self.distance_backend.backend_name
@@ -265,6 +247,7 @@ def make_gpu_planner(base_class, core_module):
                 ok &= clear >= core_module.OBSTACLE_FLOOR_M
                 if not ok.any():
                     return 0.0, 0.0, "OBSTACLE"
+                # Route lookup stays on the exact reference cKDTree contract.
                 distance, index = self.distance_backend.route_query(flat)
                 self._publish_backend_state()
             except GpuRequiredError:
