@@ -41,9 +41,13 @@ class HybridObjectFusion:
         self.geometric_receipt_s = 0.0
         self.learned_receipt_s = 0.0
 
+        follower_profile = str(rospy.get_param(
+            "/waypoint_follower/body_frame_profile", "builtin"))
         running_profile = str(rospy.get_param(
-            "~body_frame_profile", "builtin"))
-        route_path = str(rospy.get_param("~route", ""))
+            "~body_frame_profile", follower_profile))
+        follower_route = str(rospy.get_param(
+            "/waypoint_follower/route", ""))
+        route_path = str(rospy.get_param("~route", follower_route))
         route_profile = str(rospy.get_param(
             "~output_body_frame_profile", running_profile))
         chair_centre = tuple(CHAIR_CENTRE_IN_BODY_XYZ)
@@ -57,19 +61,21 @@ class HybridObjectFusion:
                 raise rospy.ROSInitException(
                     "cannot derive hybrid output frame from route %s: %s"
                     % (route_path, error))
+        elif running_profile != route_profile:
+            raise rospy.ROSInitException(
+                "hybrid fusion needs ~route when running and output body "
+                "profiles differ")
 
         lidar_in_route_body, lidar_to_route_body_rotation = \
             lidar_extrinsics(route_profile)
         self.rotation = np.asarray(
             lidar_to_route_body_rotation, dtype=float)
-        # route_chair_T_lidar: p_route_chair = route_body_R_lidar p_lidar
-        #                                 + route_body_p_lidar
-        #                                 - route_body_p_chair
         self.translation = np.asarray(lidar_in_route_body, dtype=float) - \
             np.asarray(chair_centre, dtype=float)
         self.running_profile = running_profile
         self.output_profile = route_profile
         self.output_chair_centre = tuple(float(value) for value in chair_centre)
+        self.route_path = route_path
 
         self.require_learned = bool(rospy.get_param("~require_learned", False))
         self.geometric_max_age_s = float(rospy.get_param(
@@ -120,9 +126,9 @@ class HybridObjectFusion:
 
         rospy.loginfo(
             "hybrid fusion: geometric=%s learned=%s required=%s output=%s "
-            "frame=chair_centre running_profile=%s route_profile=%s",
+            "frame=chair_centre running_profile=%s route_profile=%s route=%s",
             geometric_topic, learned_topic, self.require_learned,
-            output_topic, running_profile, route_profile)
+            output_topic, running_profile, route_profile, route_path or "none")
 
     @staticmethod
     def _parse(message):
@@ -185,6 +191,7 @@ class HybridObjectFusion:
             "sources": result.get("sources", {}),
             "running_body_frame_profile": self.running_profile,
             "output_body_frame_profile": self.output_profile,
+            "route": self.route_path,
             "geometric_receipt_age_s": None if geometric_receipt <= 0.0 else
                 round(max(0.0, now_s - geometric_receipt), 3),
             "learned_receipt_age_s": None if learned_receipt <= 0.0 else
