@@ -31,6 +31,24 @@ def wait(topic, message_type, timeout_s):
         raise PreflightFailure("%s is silent" % topic)
 
 
+def route_contract():
+    route_path = str(rospy.get_param("/waypoint_follower/route", ""))
+    if not route_path:
+        raise PreflightFailure("running follower publishes no route path")
+    try:
+        with open(route_path, encoding="utf-8") as stream:
+            route = json.load(stream)
+        profile = str(route["body_frame_profile"])
+        centre = route["chair_centre_in_body_xyz"]
+        centre = [float(value) for value in centre]
+    except (IOError, OSError, KeyError, TypeError, ValueError) as error:
+        raise PreflightFailure(
+            "cannot read running route frame contract: %s" % error)
+    if len(centre) != 3 or not all(math.isfinite(value) for value in centre):
+        raise PreflightFailure("running route chair centre is invalid")
+    return route_path, profile, centre
+
+
 def main():
     rospy.init_node("hybrid_preflight", anonymous=True, disable_signals=True)
     timeout_s = float(rospy.get_param("~timeout_s", 5.0))
@@ -40,6 +58,7 @@ def main():
     if law != "dwa":
         raise PreflightFailure(
             "running control law is %r, expected 'dwa'" % law)
+    route_path, expected_profile, expected_centre = route_contract()
 
     summary = payload(wait(
         "/perception/objects_summary", String, timeout_s),
@@ -50,6 +69,22 @@ def main():
     if summary.get("frame") != "chair_centre":
         raise PreflightFailure(
             "fused perception frame is %r" % summary.get("frame"))
+    if summary.get("body_frame_profile") != expected_profile:
+        raise PreflightFailure(
+            "fused object profile %r does not match route profile %r"
+            % (summary.get("body_frame_profile"), expected_profile))
+    observed_centre = summary.get("chair_centre_in_body_xyz")
+    try:
+        observed_centre = [float(value) for value in observed_centre]
+    except (TypeError, ValueError):
+        raise PreflightFailure("fused summary has no chair-centre contract")
+    if len(observed_centre) != 3 or any(
+            abs(observed - expected) > 1e-6
+            for observed, expected in zip(observed_centre, expected_centre)):
+        raise PreflightFailure(
+            "fused chair centre %r does not match route %r"
+            % (observed_centre, expected_centre))
+
     stamp = summary.get("stamp")
     if not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
         raise PreflightFailure("fused perception has no finite stamp")
@@ -67,6 +102,9 @@ def main():
     if hybrid.get("status") != "OK":
         raise PreflightFailure(
             "hybrid fusion is not ready: %r" % hybrid.get("status"))
+    if hybrid.get("output_body_frame_profile") != expected_profile:
+        raise PreflightFailure(
+            "hybrid health profile does not match the route")
 
     semantic = payload(wait(
         "/semantic_safety/status", String, timeout_s),
@@ -94,6 +132,8 @@ def main():
 
     print("HYBRID_PREFLIGHT_OK")
     print("  control law : dwa")
+    print("  route       : %s" % route_path)
+    print("  object frame: chair_centre/%s" % expected_profile)
     print("  perception  : %s (%d objects)" % (
         summary.get("mode"), len(summary.get("objects", []))))
     print("  semantic    : ready")
