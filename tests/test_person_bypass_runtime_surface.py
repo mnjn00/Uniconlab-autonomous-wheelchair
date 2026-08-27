@@ -36,7 +36,7 @@ def test_hybrid_start_activates_branch_and_go_refuses_old_graph():
     assert "__name:=safety_gate" in activate
 
 
-def test_dwa_keeps_rtx_and_publishes_a_short_lived_permit():
+def test_dwa_keeps_rtx_qualifies_while_paused_and_publishes_short_permit():
     follower = text(SCRIPTS / "person_bypass_dwa_follower.py")
     assert "install_gpu_planner(dwa_core)" in follower
     assert '"/person_bypass/permit"' in follower
@@ -45,6 +45,11 @@ def test_dwa_keeps_rtx_and_publishes_a_short_lived_permit():
     assert "self.planner.max_speed" in follower
     assert "dwa_core.OBSTACLE_FLOOR_M" in follower
     assert "return GO_ROUND" in follower
+    # Permit qualification happens before the inherited hold ladder can
+    # return for PAUSED, otherwise a person already in front makes `go`
+    # impossible forever.
+    assert follower.index("self.publish_permit(self.observed_person_permit(now))") \
+        < follower.index("super(PersonBypassDwaFollower, self).step()")
 
 
 def test_semantic_exception_is_same_track_static_only():
@@ -68,6 +73,12 @@ def test_raw_gate_replaces_only_fixed_corridor_obstacle_with_clear_curve():
     assert "immediate_collision" in gate
     assert 'return "", decision.speed_cap_mps' in gate
     assert 'reason != "OBSTACLE_SWEEP"' not in gate
+    # SWEEP_MARGIN_M is already the protected current footprint. The branch
+    # must not silently re-create the old ~0.75 m straight box with an extra
+    # 0.10 m margin or a lower three-point threshold.
+    assert '"~person_bypass_immediate_front_margin_m", 0.0' in gate
+    assert '"~person_bypass_immediate_side_margin_m", 0.0' in gate
+    assert '"~person_bypass_immediate_point_count", 5' in gate
 
 
 def test_branch_preflight_proves_new_implementations_not_only_node_names():
