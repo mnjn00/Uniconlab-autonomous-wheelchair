@@ -54,10 +54,7 @@ class CloudAccumulator:
     def add_cloud(self, message, read_points=None):
         # Fast zero-copy/structured-array decoder for the FAST-LIO layout,
         # with the old reader retained only as the explicit fallback.
-        points = points_xyz(message, read_points)
-        # ``pts`` is retained as the local short name used by older replay
-        # instrumentation; both names reference the same NumPy array.
-        pts = points
+        pts = points_xyz(message, read_points)
         stamp = message.header.stamp.to_sec()
         self.scans.append((stamp, pts))
         self.scans = [s for s in self.scans
