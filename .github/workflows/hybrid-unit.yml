@@ -11,7 +11,7 @@ on:
       - 'tools/install_nuc_gpu_runtime.sh'
       - 'tests/test_hybrid_runtime_surface.py'
   push:
-    branches: [fix/hybrid-perception-avoidance]
+    branches: [main, fix/hybrid-perception-avoidance]
 
 permissions:
   contents: read
