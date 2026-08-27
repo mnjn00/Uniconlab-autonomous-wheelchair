@@ -21,6 +21,9 @@ Environment:
   POINTPILLARS_ENV=~/.config/unicon/pointpillars.env
   POINTPILLARS_MODEL=/path/to/pointpillar.plan
   POINTPILLARS_REQUIRE_RTX2060=true|false
+  GEOMETRIC_MIN_CELL_POINTS=1             # preserve thin objects
+  GEOMETRIC_MIN_CLUSTER_POINTS=5          # match raw gate's 5-point floor
+  GEOMETRIC_MAX_CLUSTERS=80
   CLIFF_REQUIRED=false|true
   CLIFF_TOPIC=/terrain/cliff_status
   SAFETY_POLICIES=true|false
@@ -69,6 +72,19 @@ for pair in "START_POINTPILLARS:$START_POINTPILLARS" \
 done
 [ "$REQUIRE_GPU" = "false" ] || PREFER_DWA_GPU=true
 
+GEOMETRIC_MIN_CELL_POINTS="${GEOMETRIC_MIN_CELL_POINTS:-1}"
+GEOMETRIC_MIN_CLUSTER_POINTS="${GEOMETRIC_MIN_CLUSTER_POINTS:-5}"
+GEOMETRIC_MAX_CLUSTERS="${GEOMETRIC_MAX_CLUSTERS:-80}"
+for pair in "GEOMETRIC_MIN_CELL_POINTS:$GEOMETRIC_MIN_CELL_POINTS" \
+            "GEOMETRIC_MIN_CLUSTER_POINTS:$GEOMETRIC_MIN_CLUSTER_POINTS" \
+            "GEOMETRIC_MAX_CLUSTERS:$GEOMETRIC_MAX_CLUSTERS"; do
+  name="${pair%%:*}"; value="${pair#*:}"
+  case "$value" in ''|*[!0-9]*) fail "$name must be a positive integer" ;; esac
+  [ "$value" -gt 0 ] || fail "$name must be a positive integer"
+done
+[ "$GEOMETRIC_MIN_CLUSTER_POINTS" -ge "$GEOMETRIC_MIN_CELL_POINTS" ] || \
+  fail "GEOMETRIC_MIN_CLUSTER_POINTS must be >= GEOMETRIC_MIN_CELL_POINTS"
+
 POINTPILLARS_ENV="${POINTPILLARS_ENV:-$HOME/.config/unicon/pointpillars.env}"
 if [ "$START_POINTPILLARS" = "true" ]; then
   [ -f "$POINTPILLARS_ENV" ] || \
@@ -91,6 +107,34 @@ for asset in "$MAP" "$ROUTE" "$BAND" "$DRIVABLE_MASK"; do
 done
 actual_map_sha="$(sha256sum "$MAP" | awk '{print $1}')"
 [ "$actual_map_sha" = "$MAP_SHA256" ] || fail "runtime map SHA-256 mismatch"
+
+if [ "$PREFER_DWA_GPU" = "true" ]; then
+  say "probing the Phantom Canyon CuPy runtime"
+  if command -v nvidia-smi >/dev/null 2>&1 && python3 - <<'PY'
+import cupy as cp
+props = cp.cuda.runtime.getDeviceProperties(0)
+name = props["name"]
+if isinstance(name, bytes):
+    name = name.decode("utf-8", "replace")
+x = cp.arange(4096, dtype=cp.float32)
+value = float((x * 2.0).sum())
+expected = 4095.0 * 4096.0
+if abs(value - expected) / expected > 2e-6:
+    raise SystemExit("CUDA arithmetic mismatch")
+cp.cuda.Device().synchronize()
+print("  CUDA device: %s" % name)
+PY
+  then
+    GPU_READY=true
+  else
+    GPU_READY=false
+  fi
+  if [ "$GPU_READY" != "true" ]; then
+    [ "$REQUIRE_GPU" = "false" ] || \
+      fail "RTX/CuPy runtime unavailable; run: bash $REPO_ROOT/tools/hybrid.sh setup-gpu"
+    echo "WARNING: GPU unavailable; DWA may use the CPU diagnostic fallback" >&2
+  fi
+fi
 
 # Base startup predates these nodes and cannot clean them. Remove orphaned
 # GPU contexts and publishers before it starts.
@@ -149,6 +193,9 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _safety_band:="$BAND" \
   _map_path:="$MAP" \
   _map_sha256:="$MAP_SHA256" \
+  _min_cell_points:="$GEOMETRIC_MIN_CELL_POINTS" \
+  _min_cluster_points:="$GEOMETRIC_MIN_CLUSTER_POINTS" \
+  _max_clusters:="$GEOMETRIC_MAX_CLUSTERS" \
   /perception/objects_summary:=/perception/geometric_objects_summary \
   /perception/dynamic_boxes:=/perception/geometric_exclusion_candidates \
   > "$LOG/live_geometric_objects.log" 2>&1 < /dev/null &
