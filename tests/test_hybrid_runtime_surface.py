@@ -41,3 +41,23 @@ def test_go_checks_everything_before_delegating_to_go():
     check = text.index('hybrid_preflight.py')
     delegate = text.index('exec "$GO"')
     assert check < delegate
+
+
+def test_fusion_and_preflight_are_bound_to_the_route_frame_contract():
+    fusion = (ROOT / 'src/static_livox_localization/scripts/'
+              'hybrid_object_fusion.py').read_text()
+    preflight = (ROOT / 'src/static_livox_localization/scripts/'
+                 'hybrid_preflight.py').read_text()
+    assert '/waypoint_follower/route' in fusion
+    assert 'route_chair_centre' in fusion
+    assert 'body_frame_profile' in preflight
+    assert 'chair_centre_in_body_xyz' in preflight
+
+
+def test_terrain_guard_checks_carried_wheel_motion_not_only_the_command():
+    text = (ROOT / 'src/static_livox_localization/scripts/'
+            'terrain_guard.py').read_text()
+    assert 'Int16MultiArray' in text
+    assert 'self.measured_speed' in text
+    assert 'self.measured_yaw_rate' in text
+    assert 'CARRIED_' in text
