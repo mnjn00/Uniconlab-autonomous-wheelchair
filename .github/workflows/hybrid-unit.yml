@@ -29,10 +29,18 @@ jobs:
       - name: Python syntax
         run: |
           python -m py_compile \
+            src/static_livox_localization/scripts/hybrid_geometric_objects.py \
+            src/static_livox_localization/scripts/hybrid_object_fusion.py \
             src/static_livox_localization/scripts/hybrid_perception.py \
+            src/static_livox_localization/scripts/hybrid_preflight.py \
+            src/static_livox_localization/scripts/localization_exclusion_boxes.py \
             src/static_livox_localization/scripts/localization_exclusion_policy.py \
             src/static_livox_localization/scripts/semantic_safety_policy.py \
+            src/static_livox_localization/scripts/semantic_safety_supervisor.py \
+            src/static_livox_localization/scripts/terrain_guard.py \
             src/static_livox_localization/scripts/terrain_guard_policy.py \
+            src/static_livox_localization/scripts/vision_detection_bridge.py \
+            src/static_livox_localization/scripts/scan_accumulator.py \
             src/static_livox_localization/scripts/route_mask.py
       - name: Shell syntax
         run: bash -n tools/hybrid.sh tools/start_hybrid_avoidance.sh tools/go_hybrid.sh
