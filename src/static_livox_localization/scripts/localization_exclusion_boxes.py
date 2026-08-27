@@ -5,8 +5,8 @@
 so its complete MarkerArray is remapped away from the localizer. This node
 joins those accurate body-frame boxes with the fused semantic summary and
 republishes only the subset selected by ``localization_exclusion_policy``.
-Learned-only boxes, which have no geometric marker, are reconstructed from the
-chair-centred fused box.
+Learned-only boxes, which have no geometric marker, are transformed from the
+route chair frame back to the running FAST-LIO body frame.
 """
 
 import copy
@@ -16,13 +16,14 @@ import os
 import sys
 import threading
 
+import numpy as np
 import rospy
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from body_frame import CHAIR_CENTRE_IN_BODY_XYZ
+from body_frame import lidar_extrinsics
 from localization_exclusion_policy import should_exclude
 
 
@@ -36,6 +37,17 @@ class LocalizationExclusionBoxes:
         self.candidates = {}
         self.summary = None
         self.summary_receipt_s = 0.0
+        follower_profile = str(rospy.get_param(
+            "/waypoint_follower/body_frame_profile", "builtin"))
+        self.running_profile = str(rospy.get_param(
+            "~body_frame_profile", follower_profile))
+        running_offset, running_rotation = lidar_extrinsics(
+            self.running_profile)
+        self.running_lidar_in_body = np.asarray(running_offset, dtype=float)
+        self.running_lidar_to_body_rotation = np.asarray(
+            running_rotation, dtype=float)
+        self.transform_cache = {}
+
         self.maximum_age_s = float(rospy.get_param("~maximum_age_s", 1.5))
         if not math.isfinite(self.maximum_age_s) or self.maximum_age_s <= 0.0:
             raise rospy.ROSInitException(
@@ -53,8 +65,10 @@ class LocalizationExclusionBoxes:
         rospy.Subscriber(summary_topic, String,
                          self.on_summary, queue_size=2)
         rospy.loginfo(
-            "localization exclusions: candidates=%s summary=%s output=%s",
-            candidates_topic, summary_topic, output_topic)
+            "localization exclusions: candidates=%s summary=%s output=%s "
+            "running_profile=%s",
+            candidates_topic, summary_topic, output_topic,
+            self.running_profile)
 
     def on_candidates(self, message):
         with self.lock:
@@ -77,21 +91,57 @@ class LocalizationExclusionBoxes:
             self.summary = data
             self.summary_receipt_s = rospy.Time.now().to_sec()
 
-    @staticmethod
-    def _learned_marker(item, stamp, marker_id):
+    def _route_chair_to_running_body(self, summary, point, size):
+        profile = str(summary.get("body_frame_profile", ""))
+        centre = summary.get("chair_centre_in_body_xyz")
+        if not profile or not isinstance(centre, list) or len(centre) != 3:
+            raise ValueError("fused summary has no route frame contract")
+        centre = np.asarray([float(value) for value in centre], dtype=float)
+        if not np.isfinite(centre).all():
+            raise ValueError("route chair centre is not finite")
+
+        key = (profile, tuple(float(value) for value in centre))
+        cached = self.transform_cache.get(key)
+        if cached is None:
+            route_offset, route_rotation = lidar_extrinsics(profile)
+            route_offset = np.asarray(route_offset, dtype=float)
+            route_rotation = np.asarray(route_rotation, dtype=float)
+            route_chair_translation = route_offset - centre
+            route_chair_to_running_body_rotation = \
+                self.running_lidar_to_body_rotation @ route_rotation.T
+            cached = (
+                route_chair_translation,
+                route_rotation,
+                route_chair_to_running_body_rotation,
+            )
+            self.transform_cache[key] = cached
+        route_chair_translation, route_rotation, body_R_route_chair = cached
+
+        point = np.asarray(point, dtype=float)
+        size = np.asarray(size, dtype=float)
+        point_in_lidar = route_rotation.T @ (
+            point - route_chair_translation)
+        point_in_running_body = self.running_lidar_to_body_rotation @ \
+            point_in_lidar + self.running_lidar_in_body
+        size_in_running_body = np.abs(body_R_route_chair) @ size
+        return point_in_running_body, size_in_running_body
+
+    def _learned_marker(self, summary, item, stamp, marker_id):
         try:
-            size = item["size"]
-            x = float(item["x"])
-            y = float(item["y"])
-            z = float(item.get("z", 0.0))
-            sx = abs(float(size[0]))
-            sy = abs(float(size[1]))
-            sz = abs(float(size[2]) if len(size) > 2 else 0.1)
+            raw_size = item["size"]
+            point = np.asarray((
+                float(item["x"]), float(item["y"]),
+                float(item.get("z", 0.0))), dtype=float)
+            size = np.asarray((
+                abs(float(raw_size[0])), abs(float(raw_size[1])),
+                abs(float(raw_size[2]) if len(raw_size) > 2 else 0.1)),
+                dtype=float)
+            point, size = self._route_chair_to_running_body(
+                summary, point, size)
         except (KeyError, IndexError, TypeError, ValueError):
             return None
-        values = (x, y, z, sx, sy, sz)
-        if not all(math.isfinite(value) for value in values) or \
-                min(sx, sy, sz) <= 0.0:
+        if not np.isfinite(point).all() or not np.isfinite(size).all() or \
+                (size <= 0.0).any():
             return None
 
         marker = Marker()
@@ -101,13 +151,13 @@ class LocalizationExclusionBoxes:
         marker.id = int(marker_id)
         marker.type = Marker.CUBE
         marker.action = Marker.ADD
-        marker.pose.position.x = x + CHAIR_CENTRE_IN_BODY_XYZ[0]
-        marker.pose.position.y = y + CHAIR_CENTRE_IN_BODY_XYZ[1]
-        marker.pose.position.z = z + CHAIR_CENTRE_IN_BODY_XYZ[2]
+        marker.pose.position.x = float(point[0])
+        marker.pose.position.y = float(point[1])
+        marker.pose.position.z = float(point[2])
         marker.pose.orientation.w = 1.0
-        marker.scale.x = sx
-        marker.scale.y = sy
-        marker.scale.z = sz
+        marker.scale.x = float(size[0])
+        marker.scale.y = float(size[1])
+        marker.scale.z = float(size[2])
         marker.color.r = 1.0
         marker.color.g = 0.2
         marker.color.b = 0.8
@@ -178,7 +228,7 @@ class LocalizationExclusionBoxes:
             while marker_id in used_ids:
                 marker_id -= 1
             next_learned_id = min(next_learned_id, marker_id - 1)
-            marker = self._learned_marker(item, stamp, marker_id)
+            marker = self._learned_marker(summary, item, stamp, marker_id)
             if marker is not None:
                 result.markers.append(marker)
                 used_ids.add(marker_id)
