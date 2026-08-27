@@ -55,10 +55,10 @@ def test_cpu_distance_fallback_matches_nearest_points():
     distance, index = backend.route_query([
         (0.04, 0.0),
         (2.06, 0.0),
-        (11.95, 0.0),
+        (11.96, 0.0),
     ])
     assert backend.backend_name == "numpy"
-    assert np.allclose(distance, (0.04, 0.04, 0.05), atol=1e-6)
+    assert np.allclose(distance, (0.04, 0.04, 0.04), atol=1e-6)
     assert np.allclose(route()[index, 0], (0.0, 2.1, 12.0))
 
     distance, _ = backend.obstacle_query(
