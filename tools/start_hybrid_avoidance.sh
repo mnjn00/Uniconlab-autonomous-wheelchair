@@ -17,7 +17,7 @@ Environment:
   START_POINTPILLARS=true|false
   REQUIRE_LEARNED=true|false              # default follows START_POINTPILLARS
   PREFER_DWA_GPU=true|false
-  REQUIRE_DWA_GPU=true|false              # default true
+  REQUIRE_GPU=true|false                  # DWA CUDA backend; default true
   POINTPILLARS_ENV=~/.config/unicon/pointpillars.env
   POINTPILLARS_MODEL=/path/to/pointpillar.plan
   POINTPILLARS_REQUIRE_RTX2060=true|false
@@ -48,7 +48,7 @@ BASE_START="${BASE_START:-$HOME/start_wheelchair_localization.sh}"
 
 START_POINTPILLARS="${START_POINTPILLARS:-true}"
 PREFER_DWA_GPU="${PREFER_DWA_GPU:-true}"
-REQUIRE_DWA_GPU="${REQUIRE_DWA_GPU:-true}"
+REQUIRE_GPU="${REQUIRE_GPU:-true}"
 POINTPILLARS_REQUIRE_RTX2060="${POINTPILLARS_REQUIRE_RTX2060:-true}"
 CLIFF_REQUIRED="${CLIFF_REQUIRED:-false}"
 SAFETY_POLICIES="${SAFETY_POLICIES:-true}"
@@ -60,14 +60,14 @@ fi
 for pair in "START_POINTPILLARS:$START_POINTPILLARS" \
             "REQUIRE_LEARNED:$REQUIRE_LEARNED" \
             "PREFER_DWA_GPU:$PREFER_DWA_GPU" \
-            "REQUIRE_DWA_GPU:$REQUIRE_DWA_GPU" \
+            "REQUIRE_GPU:$REQUIRE_GPU" \
             "POINTPILLARS_REQUIRE_RTX2060:$POINTPILLARS_REQUIRE_RTX2060" \
             "CLIFF_REQUIRED:$CLIFF_REQUIRED" \
             "SAFETY_POLICIES:$SAFETY_POLICIES"; do
   name="${pair%%:*}"; value="${pair#*:}"
   case "$value" in true|false) ;; *) fail "$name must be true or false" ;; esac
 done
-[ "$REQUIRE_DWA_GPU" = "false" ] || PREFER_DWA_GPU=true
+[ "$REQUIRE_GPU" = "false" ] || PREFER_DWA_GPU=true
 
 POINTPILLARS_ENV="${POINTPILLARS_ENV:-$HOME/.config/unicon/pointpillars.env}"
 if [ "$START_POINTPILLARS" = "true" ]; then
@@ -239,33 +239,36 @@ setsid nohup env $SINGLE_THREAD_ENV \
   > "$LOG/live_localization_exclusions.log" 2>&1 < /dev/null &
 
 if [ "$PREFER_DWA_GPU" = "true" ]; then
-  FOLLOWER_NODE=gpu_dwa_follower.py
-  DWA_GPU_ENV=1
+  say "DWA proposal with RTX/CuPy nearest-neighbour backend"
+  setsid nohup env $SINGLE_THREAD_ENV \
+    WHEELCHAIR_DWA_GPU=1 \
+    WHEELCHAIR_REQUIRE_GPU="$([ "$REQUIRE_GPU" = true ] && echo 1 || echo 0)" \
+    rosrun static_livox_localization gpu_dwa_follower.py \
+    _route:="$ROUTE" \
+    _safety_band:="$BAND" \
+    _drivable_mask:="$DRIVABLE_MASK" \
+    _body_frame_profile:="$BODY_FRAME_PROFILE" \
+    _safety_policies:="$SAFETY_POLICIES" \
+    _latency_s:="$LATENCY_S" \
+    _prefer_gpu:=true \
+    _require_gpu:="$REQUIRE_GPU" \
+    _cmd_topic:=/cmd_vel_planned \
+    > "$LOG/live_hybrid_dwa.log" 2>&1 < /dev/null &
 else
-  FOLLOWER_NODE=dwa_follower.py
-  DWA_GPU_ENV=0
+  say "DWA proposal with CPU backend (diagnostic override)"
+  setsid nohup env $SINGLE_THREAD_ENV \
+    WHEELCHAIR_DWA_GPU=0 WHEELCHAIR_REQUIRE_GPU=0 \
+    rosrun static_livox_localization dwa_follower.py \
+    _route:="$ROUTE" \
+    _safety_band:="$BAND" \
+    _drivable_mask:="$DRIVABLE_MASK" \
+    _body_frame_profile:="$BODY_FRAME_PROFILE" \
+    _safety_policies:="$SAFETY_POLICIES" \
+    _latency_s:="$LATENCY_S" \
+    _prefer_gpu:=false _require_gpu:=false \
+    _cmd_topic:=/cmd_vel_planned \
+    > "$LOG/live_hybrid_dwa.log" 2>&1 < /dev/null &
 fi
-if [ "$REQUIRE_DWA_GPU" = "true" ]; then
-  DWA_REQUIRE_ENV=1
-else
-  DWA_REQUIRE_ENV=0
-fi
-
-say "DWA proposal with RTX/CuPy nearest-neighbour backend"
-setsid nohup env $SINGLE_THREAD_ENV \
-  WHEELCHAIR_DWA_GPU="$DWA_GPU_ENV" \
-  WHEELCHAIR_REQUIRE_GPU="$DWA_REQUIRE_ENV" \
-  rosrun static_livox_localization "$FOLLOWER_NODE" \
-  _route:="$ROUTE" \
-  _safety_band:="$BAND" \
-  _drivable_mask:="$DRIVABLE_MASK" \
-  _body_frame_profile:="$BODY_FRAME_PROFILE" \
-  _safety_policies:="$SAFETY_POLICIES" \
-  _latency_s:="$LATENCY_S" \
-  _prefer_gpu:="$PREFER_DWA_GPU" \
-  _require_gpu:="$REQUIRE_DWA_GPU" \
-  _cmd_topic:=/cmd_vel_planned \
-  > "$LOG/live_hybrid_dwa.log" 2>&1 < /dev/null &
 
 for _ in $(seq 1 20); do
   rosnode ping -c1 /waypoint_follower >/dev/null 2>&1 && break
@@ -273,7 +276,7 @@ for _ in $(seq 1 20); do
 done
 rosnode ping -c1 /waypoint_follower >/dev/null 2>&1 || \
   fail "hybrid DWA follower did not start"
-if [ "$REQUIRE_DWA_GPU" = "true" ]; then
+if [ "$REQUIRE_GPU" = "true" ]; then
   REQUIRE_RTX2060="$POINTPILLARS_REQUIRE_RTX2060" \
     "$SCRIPT_DIR/check_nuc_gpu_dwa.sh" 20 || {
       tail -80 "$LOG/live_hybrid_dwa.log" >&2 || true
@@ -322,7 +325,7 @@ for _ in $(seq 1 30); do
       _require_learned:="$REQUIRE_LEARNED" \
       _require_gpu_detector:="$START_POINTPILLARS" \
       _require_rtx2060:="$POINTPILLARS_REQUIRE_RTX2060" \
-      _require_gpu_dwa:="$REQUIRE_DWA_GPU" \
+      _require_gpu_dwa:="$REQUIRE_GPU" \
       _timeout_s:=3.0; then
     READY=1
     break
