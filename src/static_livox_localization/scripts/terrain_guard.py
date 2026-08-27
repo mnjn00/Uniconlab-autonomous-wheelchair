@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Independent map-boundary and optional cliff guard before ``tip_guard``.
 
-The MID-360 cannot see the pavement directly in front of the chair.  This
-node therefore treats the reviewed route mask and safety band as hard motion
-boundaries, simulates the commanded arc through the stopping horizon, and
-stops before that arc can enter an unapproved region.  An external downward
-cliff sensor may be made mandatory with ``~cliff_required:=true``; absent or
-stale evidence then also stops the chair.
+The MID-360 cannot see the pavement directly in front of the chair. This node
+therefore treats the reviewed route mask and safety band as hard motion
+boundaries. It checks both the incoming command arc and the trajectory already
+being carried by the wheels; a zero command must not make a still-moving chair
+look stationary. An external downward cliff sensor may be made mandatory with
+``~cliff_required:=true``.
 """
 
 import json
@@ -18,12 +18,11 @@ import numpy as np
 import rospy
 import tf.transformations as tft
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
-from std_msgs.msg import String
+from std_msgs.msg import Int16MultiArray, String
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, REFERENCE_BODY,
-                        pose_correction, reference_correction,
+from body_frame import (pose_correction, reference_correction,
                         route_chair_centre)
 from route_mask import RouteMask
 from safety_band import SafetyBand
@@ -31,6 +30,8 @@ from terrain_guard_policy import evaluate_terrain_command, stopping_horizon
 
 
 GUARD_HZ = 30.0
+WHEEL_SEPARATION_M = 0.54
+MEASURED_MOTION_EPSILON = 0.02
 
 
 class TerrainGuard:
@@ -55,6 +56,7 @@ class TerrainGuard:
 
         self.input_stale_s = float(rospy.get_param("~input_stale_s", 0.6))
         self.pose_stale_s = float(rospy.get_param("~pose_stale_s", 1.0))
+        self.wheel_stale_s = float(rospy.get_param("~wheel_stale_s", 1.5))
         self.hard_clearance_m = float(rospy.get_param(
             "~hard_clearance_m", 0.12))
         self.slow_clearance_m = float(rospy.get_param(
@@ -75,8 +77,8 @@ class TerrainGuard:
         self.cliff_stale_s = float(rospy.get_param("~cliff_stale_s", 0.5))
 
         for name in (
-                "input_stale_s", "pose_stale_s", "hard_clearance_m",
-                "slow_clearance_m", "edge_speed_mps",
+                "input_stale_s", "pose_stale_s", "wheel_stale_s",
+                "hard_clearance_m", "slow_clearance_m", "edge_speed_mps",
                 "minimum_deceleration_mps2", "reaction_s", "reserve_s",
                 "minimum_horizon_s", "maximum_horizon_s", "rollout_step_s",
                 "cliff_stale_s"):
@@ -94,6 +96,9 @@ class TerrainGuard:
         self.command_stamp = rospy.Time(0)
         self.pose = None
         self.pose_stamp = rospy.Time(0)
+        self.measured_speed = 0.0
+        self.measured_yaw_rate = 0.0
+        self.wheel_stamp = rospy.Time(0)
         self.cliff_safe = not self.cliff_required
         self.cliff_reason = "NOT_REQUIRED" if not self.cliff_required else "NEVER_SEEN"
         self.cliff_stamp = rospy.Time(0)
@@ -112,6 +117,8 @@ class TerrainGuard:
         rospy.Subscriber(input_topic, Twist, self.on_command, queue_size=1)
         rospy.Subscriber("/fast_lio_icp/pose", PoseWithCovarianceStamped,
                          self.on_pose, queue_size=5)
+        rospy.Subscriber("/wheel_status", Int16MultiArray,
+                         self.on_wheel_status, queue_size=5)
         rospy.Subscriber(cliff_topic, String, self.on_cliff, queue_size=2)
         rospy.on_shutdown(lambda: self.pub.publish(Twist()))
         rospy.loginfo(
@@ -140,6 +147,29 @@ class TerrainGuard:
             corrected[0, 3], corrected[1, 3], yaw], dtype=float)
         self.pose_stamp = message.header.stamp \
             if not message.header.stamp.isZero() else rospy.Time.now()
+
+    @staticmethod
+    def _reported_wheel_speeds(data):
+        def one(direction, magnitude):
+            try:
+                speed = (float(magnitude) - 0x21) / 10.0 / 3.6
+                letter = chr(int(direction))
+            except (TypeError, ValueError, OverflowError):
+                return 0.0
+            if letter == "C":
+                return speed
+            if letter == "W":
+                return -speed
+            return 0.0
+        if len(data) < 6:
+            return 0.0, 0.0
+        return one(data[2], data[3]), one(data[4], data[5])
+
+    def on_wheel_status(self, message):
+        left, right = self._reported_wheel_speeds(message.data)
+        self.measured_speed = (left + right) * 0.5
+        self.measured_yaw_rate = (right - left) / WHEEL_SEPARATION_M
+        self.wheel_stamp = rospy.Time.now()
 
     def on_cliff(self, message):
         now = rospy.Time.now()
@@ -170,6 +200,32 @@ class TerrainGuard:
             return "CLIFF_" + self.cliff_reason
         return ""
 
+    def _decision(self, linear_speed, angular_speed, horizon):
+        return evaluate_terrain_command(
+            self.mask, self.pose, linear_speed, angular_speed,
+            self.hard_clearance_m, self.slow_clearance_m,
+            self.edge_speed_mps, safety_band=self.band,
+            horizon_s=horizon, step_s=self.rollout_step_s)
+
+    @staticmethod
+    def _combine_decisions(command_decision, carried_decision):
+        if carried_decision is not None and carried_decision.blocked:
+            return "CARRIED_" + carried_decision.reason, carried_decision
+        if command_decision.blocked:
+            return command_decision.reason, command_decision
+        if carried_decision is None:
+            return "", command_decision
+        clearances = [value for value in (
+            command_decision.minimum_clearance_m,
+            carried_decision.minimum_clearance_m) if value is not None]
+        minimum = min(clearances) if clearances else None
+        caps = [value for value in (
+            command_decision.speed_cap_mps,
+            carried_decision.speed_cap_mps) if value is not None]
+        cap = min(caps) if caps else None
+        horizon = max(command_decision.horizon_s, carried_decision.horizon_s)
+        return "", type(command_decision)("", minimum, cap, horizon)
+
     def step(self):
         now = rospy.Time.now()
         reason = ""
@@ -177,27 +233,36 @@ class TerrainGuard:
         command_age = (now - self.command_stamp).to_sec()
         pose_age = math.inf if self.pose is None else \
             (now - self.pose_stamp).to_sec()
+        wheel_age = (now - self.wheel_stamp).to_sec()
 
         if command_age > self.input_stale_s:
             reason = "INPUT_STALE"
         elif self.pose is None or pose_age > self.pose_stale_s:
             reason = "POSE_STALE"
+        elif self.wheel_stamp.isZero() or wheel_age > self.wheel_stale_s:
+            reason = "WHEEL_STALE"
         else:
             values = (
                 self.command.linear.x, self.command.linear.y,
                 self.command.linear.z, self.command.angular.x,
                 self.command.angular.y, self.command.angular.z,
+                self.measured_speed, self.measured_yaw_rate,
             )
             if not all(math.isfinite(value) for value in values):
                 reason = "INPUT_INVALID"
+            elif self.measured_speed < -MEASURED_MOTION_EPSILON:
+                reason = "MEASURED_REVERSE"
             else:
                 cliff = self._cliff_block(now)
                 if cliff:
                     reason = cliff
                 else:
+                    carried_speed = max(0.0, self.measured_speed)
+                    horizon_speed = max(
+                        abs(self.command.linear.x), carried_speed)
                     try:
                         horizon = stopping_horizon(
-                            self.command.linear.x,
+                            horizon_speed,
                             reaction_s=self.reaction_s,
                             minimum_deceleration_mps2=
                                 self.minimum_deceleration_mps2,
@@ -209,19 +274,16 @@ class TerrainGuard:
                         horizon = 0.0
                         reason = "CONFIG_INVALID"
                     if not reason:
-                        decision = evaluate_terrain_command(
-                            self.mask,
-                            self.pose,
+                        commanded = self._decision(
                             self.command.linear.x,
-                            self.command.angular.z,
-                            self.hard_clearance_m,
-                            self.slow_clearance_m,
-                            self.edge_speed_mps,
-                            safety_band=self.band,
-                            horizon_s=horizon,
-                            step_s=self.rollout_step_s,
-                        )
-                        reason = decision.reason
+                            self.command.angular.z, horizon)
+                        carried = None
+                        if carried_speed > MEASURED_MOTION_EPSILON or \
+                                abs(self.measured_yaw_rate) > 0.05:
+                            carried = self._decision(
+                                carried_speed, self.measured_yaw_rate, horizon)
+                        reason, decision = self._combine_decisions(
+                            commanded, carried)
 
         out = Twist()
         if not reason:
@@ -241,6 +303,7 @@ class TerrainGuard:
             "command_age_s": round(command_age, 3),
             "pose_age_s": None if not math.isfinite(pose_age)
                           else round(pose_age, 3),
+            "wheel_age_s": round(wheel_age, 3),
             "minimum_clearance_m": None if decision is None
                 or decision.minimum_clearance_m is None
                 else round(decision.minimum_clearance_m, 3),
@@ -251,6 +314,8 @@ class TerrainGuard:
                 else round(decision.speed_cap_mps, 3),
             "in_v": round(float(self.command.linear.x), 3),
             "in_w": round(float(self.command.angular.z), 3),
+            "measured_v": round(float(self.measured_speed), 3),
+            "measured_w": round(float(self.measured_yaw_rate), 3),
             "out_v": round(float(out.linear.x), 3),
             "out_w": round(float(out.angular.z), 3),
             "cliff_required": self.cliff_required,
