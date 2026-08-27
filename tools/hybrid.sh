@@ -22,7 +22,7 @@ Usage:
 Important environment variables:
   START_POINTPILLARS=true|false
   REQUIRE_LEARNED=true|false
-  REQUIRE_DWA_GPU=true|false
+  REQUIRE_GPU=true|false
   POINTPILLARS_MODEL=/path/to/pointpillar.plan
   POINTPILLARS_REQUIRE_RTX2060=true|false
   CLIFF_REQUIRED=false|true
