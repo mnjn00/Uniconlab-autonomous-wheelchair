@@ -118,14 +118,15 @@ def decide_semantic_stop(
         person: Optional[ThreatView],
         nearest: Optional[ThreatView],
         person_latch: PersonStopLatch) -> SemanticDecision:
+    # Upstream outages are already stop conditions. Keep any latched person
+    # identity through them so a one-frame perception or command gap cannot
+    # erase the larger release radius and immediately authorize motion when
+    # the stream returns.
     if not summary_usable:
-        person_latch.reset()
         return SemanticDecision("PERCEPTION_UNUSABLE", stop_distance_m, None)
     if not math.isfinite(summary_age_s) or summary_age_s > maximum_summary_age_s:
-        person_latch.reset()
         return SemanticDecision("PERCEPTION_STALE", stop_distance_m, None)
     if not math.isfinite(command_age_s) or command_age_s > maximum_command_age_s:
-        person_latch.reset()
         return SemanticDecision("INPUT_STALE", stop_distance_m, None)
     if person_latch.update(person, stop_distance_m):
         return SemanticDecision(
