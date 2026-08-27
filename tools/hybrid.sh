@@ -14,10 +14,15 @@ Usage:
   bash tools/hybrid.sh go    [go_hybrid.sh options]
   bash tools/hybrid.sh stop
   bash tools/hybrid.sh gpu-status
+  bash tools/hybrid.sh person-bypass-status
 
 `setup-gpu` installs/verifies both RTX paths:
   1. CuPy nearest-neighbour acceleration for DWA
   2. NVIDIA CUDA-PointPillars + FP16 TensorRT object detection
+
+`start` first brings up the ordinary paused hybrid graph, then replaces the
+stop-only person policy and fixed-corridor raw gate with the reviewed
+stationary-person trajectory-bypass nodes. Moving/unknown people still stop.
 
 Important environment variables:
   START_POINTPILLARS=true|false
@@ -26,6 +31,9 @@ Important environment variables:
   POINTPILLARS_MODEL=/path/to/pointpillar.plan
   POINTPILLARS_REQUIRE_RTX2060=true|false
   CLIFF_REQUIRED=false|true
+  PERSON_BYPASS_CONFIRM_S=3.0
+  PERSON_BYPASS_SPEED_MPS=0.35
+  PERSON_BYPASS_CLEARANCE_M=0.80
 EOF
 }
 
@@ -54,10 +62,14 @@ case "$COMMAND" in
       run_without_nounset "$SCRIPT_DIR/setup_rtx2060_pointpillars.sh" "$@"
     ;;
   start)
-    run_without_nounset "$SCRIPT_DIR/start_hybrid_avoidance.sh" "$@"
+    run_without_nounset "$SCRIPT_DIR/start_hybrid_avoidance.sh" "$@" &&
+      run_without_nounset "$SCRIPT_DIR/activate_person_bypass.sh" activate
     ;;
   go)
     run_without_nounset "$SCRIPT_DIR/go_hybrid.sh" "$@"
+    ;;
+  person-bypass-status)
+    run_without_nounset "$SCRIPT_DIR/activate_person_bypass.sh" --check
     ;;
   gpu-status)
     run_without_nounset "$SCRIPT_DIR/check_nuc_gpu_dwa.sh" "${1:-0}" &&
