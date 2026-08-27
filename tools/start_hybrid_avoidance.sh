@@ -17,6 +17,9 @@ Environment:
   REQUIRE_LEARNED=false|true
   LEARNED_VISION_TOPIC=/pointpillars/detections # optional vision_msgs input
   LEARNED_MODEL_ID=pointpillars-mid360-v1
+  GEOMETRIC_MIN_CELL_POINTS=1                   # raw-gate-aligned thin objects
+  GEOMETRIC_MIN_CLUSTER_POINTS=5                # safety gate also requires 5
+  GEOMETRIC_MAX_CLUSTERS=80
   CLIFF_REQUIRED=false|true                     # downward sensor contract
   CLIFF_TOPIC=/terrain/cliff_status
   SAFETY_POLICIES=true|false
@@ -52,6 +55,21 @@ for pair in "REQUIRE_GPU:$REQUIRE_GPU" \
   name="${pair%%:*}"; value="${pair#*:}"
   case "$value" in true|false) ;; *) fail "$name must be true or false" ;; esac
 done
+
+GEOMETRIC_MIN_CELL_POINTS="${GEOMETRIC_MIN_CELL_POINTS:-1}"
+GEOMETRIC_MIN_CLUSTER_POINTS="${GEOMETRIC_MIN_CLUSTER_POINTS:-5}"
+GEOMETRIC_MAX_CLUSTERS="${GEOMETRIC_MAX_CLUSTERS:-80}"
+for pair in "GEOMETRIC_MIN_CELL_POINTS:$GEOMETRIC_MIN_CELL_POINTS" \
+            "GEOMETRIC_MIN_CLUSTER_POINTS:$GEOMETRIC_MIN_CLUSTER_POINTS" \
+            "GEOMETRIC_MAX_CLUSTERS:$GEOMETRIC_MAX_CLUSTERS"; do
+  name="${pair%%:*}"; value="${pair#*:}"
+  case "$value" in
+    ''|*[!0-9]*) fail "$name must be a positive integer" ;;
+  esac
+  [ "$value" -gt 0 ] || fail "$name must be a positive integer"
+done
+[ "$GEOMETRIC_MIN_CLUSTER_POINTS" -ge "$GEOMETRIC_MIN_CELL_POINTS" ] || \
+  fail "GEOMETRIC_MIN_CLUSTER_POINTS must be >= GEOMETRIC_MIN_CELL_POINTS"
 
 MAP="${MAP:-$HOME/wheelchair_localization_maps/merged_0707_0725_v1/merged_0707_0725_0p20m_xyzi.pcd}"
 MAP_SHA256="${MAP_SHA256:-ee317581328d3eaeee86ba448b0068c1016ca1452664b6cdaba2d874320d0431}"
@@ -151,6 +169,9 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _safety_band:="$BAND" \
   _map_path:="$MAP" \
   _map_sha256:="$MAP_SHA256" \
+  _min_cell_points:="$GEOMETRIC_MIN_CELL_POINTS" \
+  _min_cluster_points:="$GEOMETRIC_MIN_CLUSTER_POINTS" \
+  _max_clusters:="$GEOMETRIC_MAX_CLUSTERS" \
   /perception/objects_summary:=/perception/geometric_objects_summary \
   /perception/dynamic_boxes:=/perception/geometric_exclusion_candidates \
   > "$LOG/live_geometric_objects.log" 2>&1 < /dev/null &
@@ -271,6 +292,7 @@ echo "=============================================================="
 echo " HYBRID AVOIDANCE READY - PAUSED"
 echo ""
 echo "  geometry : all non-ground MID-360 clusters; map subtraction disabled"
+echo "  threshold: cell=$GEOMETRIC_MIN_CELL_POINTS cluster=$GEOMETRIC_MIN_CLUSTER_POINTS max=$GEOMETRIC_MAX_CLUSTERS"
 echo "  semantics: ${LEARNED_VISION_TOPIC:-geometric-only}"
 echo "  planner  : RTX/CuPy DWA -> /cmd_vel_planned (required=$REQUIRE_GPU)"
 echo "  guards   : semantic -> raw gate -> terrain -> tip_guard"
