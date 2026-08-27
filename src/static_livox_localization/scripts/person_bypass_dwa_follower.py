@@ -85,6 +85,28 @@ class PersonBypassDwaFollower(DwaFollower):
     def inactive_permit(self, now, reason):
         return self.qualifier.inactive(now.to_sec(), reason)
 
+    def observed_person_permit(self, now):
+        """Update qualification even while the motion service is paused.
+
+        The base follower returns from its hold ladder before asking
+        ``avoidance_for`` when it is paused. If qualification lived only in
+        that method, a person already standing in front of the chair would
+        make ``go`` impossible forever: the permit needs motion to start and
+        semantic preflight needs the permit before motion may start. Reading
+        perception here breaks that cycle without sending any command.
+        """
+        threat = self.corridor_threat(0.0)
+        if threat is None or not threat.is_person:
+            self.qualifier.reset()
+            return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
+        observations = person_observations(
+            self.cluster_summary,
+            maximum_forward_m=self.person_bypass_maximum_forward_m,
+            maximum_lateral_m=self.person_bypass_maximum_lateral_m,
+        )
+        return self.qualifier.update(
+            observations, now.to_sec(), self.tracking_state == "TRACKING")
+
     def avoidance_for(self, now, threat, blocking):
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
             now, threat, blocking)
@@ -94,13 +116,7 @@ class PersonBypassDwaFollower(DwaFollower):
                 now, "NEAREST_THREAT_NOT_PERSON"))
             return ordinary
 
-        observations = person_observations(
-            self.cluster_summary,
-            maximum_forward_m=self.person_bypass_maximum_forward_m,
-            maximum_lateral_m=self.person_bypass_maximum_lateral_m,
-        )
-        permit = self.qualifier.update(
-            observations, now.to_sec(), self.tracking_state == "TRACKING")
+        permit = self.observed_person_permit(now)
         self.publish_permit(permit)
         if not permit.active:
             return ordinary
@@ -128,6 +144,11 @@ class PersonBypassDwaFollower(DwaFollower):
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
         now = rospy.Time.now()
+        # Publish a continuously refreshed qualification heartbeat before the
+        # base hold ladder can return for PAUSED/MANUAL/STARTUP. This does not
+        # bypass any guard; it only lets the later preflight distinguish a
+        # stable person from a moving or unknown one before enabling motion.
+        self.publish_permit(self.observed_person_permit(now))
         try:
             super(PersonBypassDwaFollower, self).step()
         finally:
