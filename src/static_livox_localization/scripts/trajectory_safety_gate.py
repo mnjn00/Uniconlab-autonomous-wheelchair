@@ -6,12 +6,15 @@ fixed straight forward-corridor ``OBSTACLE`` verdict. A fresh, independently
 qualified static-person permit may replace that one verdict only when:
 
 * the command is a real curved DWA proposal,
-* the person is not already inside the expanded current footprint,
+* the person is not already inside the protected current footprint,
 * the motion the chair is still carrying is collision-free (or stopped), and
 * the requested curved swept footprint is clear against all raw points.
 
 Stale sensors, invalid input, reverse, unknown/moving people, straight motion,
-and ``OBSTACLE_SWEEP`` are never overridden.
+and ``OBSTACLE_SWEEP`` are never overridden. The old roughly 0.75 m expanded
+straight box is deliberately not recreated here: the current footprint and
+the requested curve are measured separately, so a clear curve can actually
+recover from the fixed-corridor deadlock this node exists to remove.
 """
 
 import json
@@ -41,19 +44,25 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             "~maximum_person_bypass_permit_age_s", 0.45))
         self.minimum_bypass_turn_rps = float(rospy.get_param(
             "~minimum_person_bypass_turn_rps", 0.08))
+        # Zero by default: SWEEP_MARGIN_M already expands the measured chair
+        # footprint by 0.15 m. Adding the previous extra 0.10 m recreated the
+        # 0.75 m straight gate that made a valid curved bypass impossible.
         self.immediate_front_margin_m = float(rospy.get_param(
-            "~person_bypass_immediate_front_margin_m", 0.10))
+            "~person_bypass_immediate_front_margin_m", 0.0))
         self.immediate_side_margin_m = float(rospy.get_param(
-            "~person_bypass_immediate_side_margin_m", 0.10))
+            "~person_bypass_immediate_side_margin_m", 0.0))
         self.immediate_point_count = int(rospy.get_param(
-            "~person_bypass_immediate_point_count", 3))
-        for name in (
-                "maximum_permit_age_s", "minimum_bypass_turn_rps",
-                "immediate_front_margin_m", "immediate_side_margin_m"):
+            "~person_bypass_immediate_point_count", 5))
+        for name in ("maximum_permit_age_s", "minimum_bypass_turn_rps"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0.0:
                 raise rospy.ROSInitException(
                     "~%s must be finite and positive" % name)
+        for name in ("immediate_front_margin_m", "immediate_side_margin_m"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0.0:
+                raise rospy.ROSInitException(
+                    "~%s must be finite and non-negative" % name)
         if self.immediate_point_count <= 0:
             raise rospy.ROSInitException(
                 "~person_bypass_immediate_point_count must be positive")
@@ -115,14 +124,19 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             self.evidence["trajectory_override_reason"] = "HORIZON_MISSING"
             return reason, cap
 
+        # Current pose only, using the same protected dimensions as the raw
+        # swept-footprint check. The requested sweep below also samples t=0;
+        # this explicit count is retained only for a named diagnostic and a
+        # separate fail-closed reason, not as a larger straight corridor.
         front = (base_gate.FOOTPRINT_FRONT_M + base_gate.SWEEP_MARGIN_M
                  + self.immediate_front_margin_m)
         side = (base_gate.FOOTPRINT_HALF_WIDTH_M + base_gate.SWEEP_MARGIN_M
                 + self.immediate_side_margin_m)
         immediate = obstacles[
-            (obstacles[:, 0] > -0.05) &
-            (obstacles[:, 0] < front) &
-            (np.abs(obstacles[:, 1]) < side)
+            (obstacles[:, 0] >= -base_gate.FOOTPRINT_REAR_M
+             - base_gate.SWEEP_MARGIN_M) &
+            (obstacles[:, 0] <= front) &
+            (np.abs(obstacles[:, 1]) <= side)
         ] if len(obstacles) else obstacles
         immediate_collision = len(immediate) >= self.immediate_point_count
 
@@ -169,7 +183,7 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             "person_bypass_permit_age_s": round(now_s - permit.stamp_s, 3),
             "trajectory_requested_collision": bool(requested_collision),
             "trajectory_carried_collision": bool(carried_collision),
-            "trajectory_immediate_points": int(len(immediate)),
+            "trajectory_current_footprint_points": int(len(immediate)),
             "trajectory_requested_v": round(requested_speed, 3),
             "trajectory_requested_w": round(requested_yaw, 3),
         })
