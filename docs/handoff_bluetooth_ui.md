@@ -76,8 +76,16 @@ uart.py              모드 게이트 + 0.6초 명령 기아 워치독
 | `77` `'M'` | **Manual** | 모터 정지 프레임 송신 후 **모든 `wheel_cmd` 무시** |
 
 `/wheel_status`(`Int16MultiArray`)는 원본 UART 프레임입니다. `data[0]==72`(`'H'`)가 헤더,
-**`data[1]`이 모터 컨트롤러가 되돌려주는 모드 echo**, `data[7]`이 배터리입니다. 이 echo가
-명령이 실제로 먹혔는지 확인할 유일한 근거입니다.
+**`data[1]`이 모터 컨트롤러가 되돌려주는 모드 echo**입니다. 이 echo가 명령이 실제로
+먹혔는지 확인할 유일한 근거입니다.
+
+> **⚠ 정정 (2026-08-23)** — 이전 판의 "`data[7]`이 배터리"는 **틀렸습니다.** §6-1 참조.
+
+프레임 구조는 TX와 대칭입니다. `uart.py`는 `[72] + wheel_cmd + [checksum,13,10]`을 보내고
+`wheel_cmd`는 `wheel_cmd_tmp.compute_wheel_command`가 만드는
+`(dir_L, mag_L, dir_R, mag_R, 79)` — 방향은 `'C'`(전진)/`'W'`(후진)/`'S'`(정지),
+크기는 `counts + 33`입니다. RX는 여기에 모드 echo가 끼어든 모양이라
+`data[2..6]`이 바퀴 방향·크기 필드이고 `data[7]`은 컨트롤러가 덧붙이는 **상태 바이트 1개**입니다.
 
 ### 브릿지가 지키는 규칙
 
@@ -109,7 +117,8 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
 | :--- | :--- |
 | 명시적 확인 | `{"command":"estop_release"}`는 거부. `"confirm": true` 필요 |
 | 링크 신선도 | `/wheel_status`가 `--ttl`보다 오래됐으면 거부 |
-| 실제 정지 여부 | `/Odometry`가 0.05 m/s를 넘으면 거부 |
+| 실제 정지 여부 | 접지 속도가 0.05 m/s를 넘으면 거부. **`/odom`(엔코더) 1순위, `/Odometry` 폴백** — §6-1 참조 |
+| 속도 판독 없음 | 신선한 속도 소스가 하나도 없으면 거부 (fail-closed) |
 | 주행은 그대로 정지 | 해제해도 follower를 재시작하지 **않음** |
 
 > **⚠ 정정** — 이전 판에서 "E-STOP은 `mode_cmd 77` 하나면 된다"고 썼는데 **틀렸습니다.**
@@ -153,7 +162,8 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
  "tip_guard_status":"OK","follower_status":"RUN wp=4/31 v=0.40",
  "localization_status":"TRACKING","localization_tracking":true,
  "objects_summary":"clusters=3 nearest=2.4m","robot_fault":"none",
- "battery_percent":87,"step_level":null,
+ "speed_source":"wheel",
+ "battery_percent":null,"wheel_status_byte7":88,"step_level":null,
  "unavailable":["step_level"]}
 ```
 
@@ -161,6 +171,8 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
   요청과 echo 사이의 구간에서는 `estop_pending`이 true입니다.
 - `display_safe_to_drive`와 `ready_to_drive`는 fail-closed입니다. 모르면 false입니다.
 - `unavailable`에 들어간 필드는 회색 처리하세요. `0`으로 표시하면 안 됩니다.
+- `speed_source`는 속도가 어디서 왔는지입니다 — `wheel`(`/odom`, 엔코더) /
+  `lio`(`/Odometry`) / `null`(신선한 소스 없음). `null`이면 속도는 `--`입니다.
 
 ### 폰 → NUC
 
@@ -169,9 +181,11 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
 | `{"command":"estop"}` | `/mode_cmd=77` 직접 발행. 확인 없음 — 비상 정지는 한 번에 걸려야 합니다 |
 | `{"command":"estop_release","confirm":true}` | `/mode_cmd=65`, §3 가드 적용 |
 | `{"command":"stack_start","confirm":true}` | **`start_wheelchair_localization.sh` 실행** |
+| `{"command":"stack_stop","confirm":true}` | **`stop_stack.sh` 실행** — 주행 정지 후 스택 전체를 내립니다. 기동이 도는 중에도 대기 없이 실행됩니다 |
 | `{"command":"drive_start","confirm":true}` | **`go.sh` 실행** (없으면 mode 65 + 서비스로 폴백) |
 | `{"command":"drive_stop"}` | **`stop.sh` 실행.** 기동이 도는 중에도 대기 없이 실행됩니다 |
 | `{"command":"job_cancel"}` | 실행 중인 스크립트에 SIGTERM (프로세스 그룹 전체) |
+| `{"command":"route"}` | 경로를 **다시 해석해서** 재전송. 앱이 지도를 못 받았으면 자동으로 보냅니다 |
 | `{"command":"ping"}` | 생존 확인 |
 
 모든 명령은 `{"type":"ack","ok":…,"detail":…}` 응답을 정확히 하나 받습니다. `detail`은
@@ -190,6 +204,7 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
 | 이름 | 스크립트 |
 | :--- | :--- |
 | `stack` | `start_wheelchair_localization.sh` |
+| `stack_stop` | `stop_stack.sh` |
 | `drive` | `go.sh` |
 | `halt` | `stop.sh` |
 
@@ -207,10 +222,13 @@ base가 auto 모드에서 빠지고 follower가 한 제어 주기 안에 홀드�
 E-STOP은 스크립트를 쓰지 않고 `/mode_cmd 77`을 직접 발행합니다 — 가장 빠르고, 스크립트가
 없거나 슬롯이 막혀 있어도 동작합니다.
 
-**`drive_start`/`drive_stop`은 pursuit 프로파일에서만 동작합니다.**
-`/waypoint_follower/start` 서비스를 제공하는 건 `waypoint_follower.py` 뿐이고
-`mpc_follower.py`, `dwa_follower.py`에는 없습니다. 텔레메트리의
-`follower_start_available`로 앱이 버튼을 비활성화합니다.
+**`drive_start`/`drive_stop`은 DWA 프로파일에서도 동작합니다.**
+> **⚠ 정정 (2026-08-23)** — 이전 판에서 "pursuit 프로파일에서만 동작한다"고 썼는데
+> **틀렸습니다.** `dwa_follower.py`는 `WaypointFollower`를 **상속**하므로
+> `/waypoint_follower/start` 서비스를 그대로 물려받습니다. DWA 주행 중
+> `rosservice info /waypoint_follower/start`로 확인했습니다.
+> 앱은 어차피 서비스 존재 여부(`follower_start_available`)로 판단하므로 동작은
+> 옳았고, 틀린 것은 설명뿐이었습니다.
 
 `drive_start`는 `go.sh`의 거부 조건을 그대로 따릅니다 — 휠 베이스 침묵, 객체 추적 침묵,
 측위가 `TRACKING`이 아님. `go.sh` 주석의 표현이 정확합니다:
@@ -315,10 +333,132 @@ NUC를 페어링하고, 앱에서 `mprp3`를 선택해 SPP로 연결한 뒤 대�
 
 ### 아직 남은 것
 
-- [ ] **실제 `uart.py`를 붙인 상태에서의 E-STOP 확인.** 테스트에서는 모터 컨트롤러가
-      `77`을 echo하는 것을 픽스처로 흉내 냈습니다. 현장에서
-      `rostopic echo /wheel_status`로 `data[1]`이 실제로 77로 바뀌는지 보세요.
-- [ ] 거리·재접속 동작 (범위를 벗어났다 돌아왔을 때)
+- [x] **실제 `uart.py`를 붙인 상태에서의 E-STOP 확인 — 2026-08-23 완료.**
+      실제 모터 컨트롤러를 붙이고 앱에서 왕복시켰습니다. `/mode_cmd`와
+      `/wheel_status data[1]`을 동시에 로깅한 결과:
+
+      ```
+        0.14s  ECHO  data[1] None -> 77 (MANUAL)   speed=0.000 m/s
+       71.73s  CMD   /mode_cmd = 65 (AUTO)          <- 앱 [자동 모드 전환]
+       71.74s  ECHO  data[1] 77 -> 65 (AUTO)        speed=0.000 m/s
+      114.26s  CMD   /mode_cmd = 77 (MANUAL)        <- 앱 [E-STOP]
+      114.26s  ECHO  data[1] 65 -> 77 (MANUAL)      speed=0.000 m/s
+      ```
+
+      echo 지연은 양방향 모두 **10 ms 이내**. 자동 전환 동안 휠체어는 움직이지
+      않았고(팔로워 `HOLD:PAUSED` 유지, 속도 0.000), 앱 표시도
+      수동 대기 → 정상 → E-STOP 작동 중으로 정확히 따라왔습니다.
+      로깅에 쓴 스크립트는 `tools/` 밖(임시)이었으니, 다시 할 일이 있으면
+      `/mode_cmd` + `/wheel_status data[1]`을 같이 찍으면 됩니다.
+- [x] 재접속 — 자동 재연결을 붙였습니다 (2→4→8→15초 백오프). 브릿지 재시작으로
+      끊고 확인했습니다. 거리(범위 이탈)는 아직 안 해봤습니다.
+
+---
+
+## 6-1. 2026-08-23 실주행 스택 대상 검증에서 나온 것
+
+라이브 스택(라이다·FAST-LIO·측위·`uart.py`·`tip_guard`·DWA 팔로워 전부 기동)에
+붙여서 확인했습니다. 픽스처만으로는 하나도 나오지 않았을 것들입니다.
+
+1. **속도가 항상 0이었습니다.** 브릿지가 `/Odometry`에서 속도를 읽는데
+   FAST-LIO(`laserMapping`)는 **twist를 전부 0으로 채웁니다.** 주행 중
+   대시보드 `0.0 km/h` / 실제 `/odom` 0.31 m/s를 직접 대조해 확인했습니다.
+   표시 문제로 끝나지 않습니다 — **"움직이는 중에는 E-STOP 해제 거부" 가드가
+   현장에서 한 번도 발동할 수 없었습니다.** 지난 23/23 통과는 픽스처가 twist를
+   채워줬기 때문입니다.
+   → `/odom`(`base_model/odom_pub.py`, 엔코더, 100 Hz)을 1순위로, `/Odometry`를
+   폴백으로 씁니다. 텔레메트리에 `speed_source`(`wheel`/`lio`/`null`)를 실었고,
+   **속도 판독이 아예 없으면 해제를 거부**합니다(fail-closed).
+2. **기동 직후 시동을 걸 방법이 없었습니다.** 베이스가 수동으로 쉬는 정상 상태에서
+   `drive_start`는 *"E-STOP이 걸려 있으니 해제하라"* 고 거부하는데, 앱은 그 상태에서
+   [E-STOP 해제]를 **비활성화**합니다. 막다른 길이었습니다.
+   → 거부 문구를 앱-E-STOP / 수동 대기로 분리하고, 앱 버튼을 상태에 따라
+   **[자동 모드 전환 (시동)]** 으로 바꿔 수동 대기에서도 눌리게 했습니다.
+3. **비활성화된 버튼이 활성화된 것처럼 보였습니다.** 모든 제어 버튼이
+   `android:textColor` / `backgroundTint`를 단색으로 박아둬서 `setEnabled(false)`가
+   화면에 아무 변화도 주지 않았습니다. "로봇이 받을 수 없는 명령은 버튼 비활성화"라는
+   설계가 통째로 안 보이던 셈입니다.
+   → `res/color/`에 상태 리스트를 만들어 연결했습니다.
+4. **속도 단위가 뒤바뀌어 있었습니다.** 큰 숫자(m/s) 옆 단위가 `km/h`, 그 아래
+   보조 줄도 `km/h`. → 큰 숫자 `m/s`, 보조 줄 `km/h`.
+5. **스택이 꺼져 있을 때 경로 기본값이 낡아 있었습니다.** `--route` 기본값이
+   `20260814_algorithm`(1897점)인데 현장 기본은 v9(1917점)입니다. 팔로워 param이
+   없는 상태 — 즉 [로컬 켜기]를 누르기 직전 — 가 정확히 그 상황입니다.
+   → `start_wheelchair_localization.sh`의 `ROUTE=` 기본값을 읽습니다.
+   앱도 그려진 경로 점수 ≠ `wp_total`이면 진행 마커를 숨기고 경고합니다.
+6. **`/robot_fault`에는 publisher가 없습니다.** `fault_check`는 기동 스크립트에
+   등장하지 않습니다. 앱이 `null`을 "없음"으로 찍어서 *결함 없음* 처럼 읽혔습니다.
+   → `데이터 없음`으로 구분하고, 미수신 항목이 있으면 서브시스템 줄 전체를 회색 처리.
+7. `--debug-tcp` accept 루프가 일시적 `OSError` 한 번에 조용히 죽어 프로브 포트가
+   그 프로세스 수명 내내 사라졌습니다. → 리스너가 실제로 닫혔을 때만 종료.
+8. **[로컬 켜기]가 마지막 주행과 다른 컨트롤러를 띄웠습니다.**
+   `start_wheelchair_localization.sh`는 `$PROFILE`로 컨트롤러를 고르고 **기본값이
+   `pursuit`** 입니다(155행). 현장 DWA 주행은
+   `PROFILE=dwa SAFETY_POLICIES=true /home/mprp3/start_wheelchair_localization.sh`로
+   띄웁니다. 브릿지는 자기 환경을 그대로 물려주므로, 평범한 셸에서 띄운 브릿지의
+   [로컬 켜기]는 **pursuit**을 기동합니다 — 같은 버튼, 같은 스크립트, 다른 로봇.
+   → `--job-env KEY=VALUE`(반복 가능)로 운용 환경을 명시하고, 텔레메트리
+   `stack_profile`로 그 버튼이 실제로 띄울 컨트롤러를 표시합니다. 현장 기동 예:
+   `nuc_bridge_restart.sh --allow-commands --allow-scripts --job-env PROFILE=dwa --job-env SAFETY_POLICIES=true`
+   반면 **[주행 시작]/[주행 정지]는 프로파일과 무관**합니다. `go.sh`는
+   `rosservice call /waypoint_follower/start "data: true"` 한 줄이고,
+   `stop.sh`도 마찬가지라 지금 떠 있는 팔로워가 무엇이든 그대로 동작합니다.
+9. **`data[7]`은 배터리가 아닙니다.** 주행 중 샘플링해 보니 값이 **88(`'X'`)과
+   77(`'M'`) 딱 두 개**뿐이고 주행 상태에 따라 토글합니다
+   (0.94 m/s에서 77, 0.74에서 88, 0.53에서 77, 정지에서 88). 중간값이 전혀 없으므로
+   방전 곡선일 수 없습니다. 프레임 구조상으로도 컨트롤러가 덧붙이는 상태 바이트
+   자리입니다(§2). `base_model` 어디에도 이 바이트를 스케일하거나 문서화한 곳이 없고,
+   `bridge_to_server.py`는 이걸 그냥 재발행하면서 차분으로 "소비량"을 만드는데
+   두 값짜리 신호로는 성립하지 않습니다.
+   → `battery_percent`는 이제 항상 `null`이고(따라서 `unavailable`),
+   원시 바이트만 `wheel_status_byte7`로 진단용 노출합니다. 앱은 배터리를
+   `측정 안 됨 · data[7]=88 (용도 미확인)`으로 표시합니다.
+   **이 바이트의 진짜 의미는 아직 모릅니다** — 모터 컨트롤러 매뉴얼로 디코딩하기
+   전에는 탑승자에게 어떤 의미로도 보여주지 마세요. 이 스택에는 배터리 잔량을
+   측정하는 노드가 없습니다.
+10. **지도가 세션 내내 빈 채로 남았습니다.** 경로 프레임은 연결당 한 번, 텔레메트리보다
+    먼저 나갑니다. 그런데 그 순간 공유 블루투스 콜백을 쥔 건 아직 기기 선택 화면이고
+    `WifiSetupActivity.onLineReceived`는 **빈 함수**입니다. 대시보드가 콜백을 넘겨받는
+    건 그 다음이라 유일한 사본이 그대로 버려집니다. 텔레메트리는 2 Hz로 계속 오니
+    나머지는 멀쩡해 보이고 지도만 비어 있었습니다.
+    → `{"command":"route"}` 추가. 앱은 지도가 비어 있는 동안 4초마다 자동 요청합니다.
+    재요청 시 **경로를 다시 해석**하므로 앱을 먼저 붙이고 [로컬 켜기]를 누른 경우에도
+    팔로워의 실제 param으로 갱신됩니다 (예전엔 세션 내내 첫 해석값에 고정).
+11. 경로 진행이 `921/1917`뿐이었습니다. → **퍼센트 우선** (`경로 진행 48%  (921/1917)`).
+    팔로워 상태 문자열에 `wp=`가 있어야 나오므로 정지·수동 상태에서는 표시되지 않습니다.
+12. **[로컬 켜기]의 프로파일을 `nuc_bridge_restart.sh`가 박아줍니다.** 브릿지를 어떻게
+    띄웠는지에 의존하지 않도록 기본값을 `PROFILE=dwa SAFETY_POLICIES=true`로 두고,
+    기동 로그 끝에 그 값을 찍습니다. 다른 프로파일은 `PROFILE=pursuit ./scripts/nuc_bridge_restart.sh ...`.
+
+### 로컬 끄기 — `tools/stop_stack.sh`
+
+[로컬 켜기]의 짝입니다. 설계에서 중요한 점 네 가지:
+
+1. **노드 목록을 복사하지 않습니다.** `start_wheelchair_localization.sh`가 이미
+   `for pattern in '[r]oslaunch' ... ; do` 한 줄로 스윕 목록을 들고 있고, 그 목록은
+   현장에서 여러 번 고쳐졌으며 `test_every_detached_node_is_also_cleaned_up`이
+   고정합니다. 두 벌이 되면 반드시 갈라지고, 하나를 놓친 teardown은
+   **이름 충돌로 마스터에서만 쫓겨나고 프로세스는 살아 있는 고아 노드**를 남깁니다
+   (`moving_icp_localizer`가 둘이면 `/fast_lio_icp/pose` publisher가 둘). 그래서
+   그 줄을 **읽어서** 씁니다. 못 찾으면 추측으로 죽이지 않고 **거부합니다.**
+2. **페일세이프가 먼저입니다.** 노드를 하나라도 내리기 전에 `stop.sh`로 팔로워를
+   세우고 `mode_cmd 77`을 겁니다. 그 뒤로 무슨 일이 나든 휠체어는 이미 조종간입니다.
+3. **블랙박스는 SIGINT로 닫습니다.** `rosbag record`는 클린 인터럽트에서만 인덱스를
+   쓰고, 더 센 신호에는 `.active`가 남습니다. 기동 스윕은 어차피 새 bag을 시작하니
+   상관없지만, teardown이 방금 끝난 주행의 기록을 깨뜨리면 곤란합니다.
+4. **roscore는 살려둡니다.** 브릿지가 rospy 노드를 물고 있어서, 마스터를 내리면
+   스택과 함께 운용자의 링크도 같이 꺼집니다. 꺼진 대시보드에서는 [로컬 켜기]를
+   누를 수 없습니다. 기동 스크립트는 roscore가 없을 때만 띄우므로 남겨도 손해가
+   없습니다.
+
+`stack_stop`은 `halt`와 함께 **슬롯 대기를 하지 않습니다.** 기동이 도는 중인 스택을
+실제로 중단시킬 수 있는 유일한 수단이기 때문입니다 — `job_cancel`은 추적 중인
+프로세스 그룹에만 신호를 보내는데, 기동 스크립트는 노드를 `setsid`로 떼어 놓아
+이미 올라간 센서에는 그 신호가 닿지 않습니다.
+
+한 가지 주의: 스윕의 `[r]oslaunch` 패턴은 이 머신의 **모든** roslaunch를 내립니다
+(기동 스크립트가 원래 그렇게 동작합니다). foxglove 브릿지 등 다른 걸 roslaunch로
+띄워 뒀다면 같이 내려갑니다.
 
 ---
 
@@ -358,6 +498,11 @@ NUC를 페어링하고, 앱에서 `mprp3`를 선택해 SPP로 연결한 뒤 대�
 - 레이아웃에 한국어 문자열이 하드코딩된 곳이 있습니다 (원래는 `@string/` 리소스)
 - `LoginActivity` / `RegisterActivity` / 프리셋 코드가 아직 트리에 남아 있습니다.
   플래그로 비활성화만 해둔 상태이므로, Wi-Fi 빌드를 유지할 필요가 없다면 삭제하세요
+- 가로 화면에서는 한 칸짜리 세로 배치가 그대로 늘어나 스크롤이 많이 필요합니다.
+  운용은 세로로 하지만, 손에 쥐고 회전이 걸리면 불편합니다
+- `scripts/ros1_wifi_bridge.py` / `scripts/setup_nuc_wifi_ap.sh`는 WP0 어휘
+  (`armed`, `step_level`, `geofence`)로 쓰인 **버려진 Wi-Fi 경로**입니다. 커밋되지
+  않은 채 트리에 남아 있으니, 되살릴 계획이 없으면 지우세요
 
 ---
 

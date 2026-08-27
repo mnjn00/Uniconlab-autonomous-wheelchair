@@ -88,7 +88,7 @@ failsafe이고, follower는 한 제어 주기 안에 `MANUAL_MODE`로 홀드합�
 | :--- | :--- |
 | `data[0]` | `72` = `'H'`, 프레임 헤더 |
 | `data[1]` | **모터 컨트롤러가 되돌려주는 모드** (65/77) — 유일하게 신뢰할 수 있는 확인 |
-| `data[7]` | **배터리** (`bridge_to_server.py`가 이 바이트를 `wheel_battery`로 재발행) |
+| `data[7]` | 컨트롤러 상태 바이트 1개. **배터리가 아닙니다** — 값이 88/77 두 개뿐이고 주행에 따라 토글합니다 (2026-08-23 실측). `bridge_to_server.py`가 `wheel_battery`로 재발행하지만 용도는 미확인. `docs/handoff_bluetooth_ui.md` §6-1 참조 |
 | `data[-3]` | 체크섬. 프레임은 `13, 10`으로 끝남 |
 
 ---

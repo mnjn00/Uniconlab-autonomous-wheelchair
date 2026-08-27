@@ -92,6 +92,10 @@ class Fixture(object):
 
         self.pub_wheel = self._publisher("/wheel_status", Int16MultiArray, 5)
         self.pub_odom = self._publisher("/Odometry", Odometry, 1)
+        # The bridge takes speed from /odom (wheel encoders) and only falls back
+        # to /Odometry, whose twist FAST-LIO leaves at zero. A fixture that
+        # publishes only /Odometry therefore shows 0 m/s no matter what it does.
+        self.pub_wheel_odom = self._publisher("/odom", Odometry, 1)
         self.pub_raw = self._publisher("/cmd_vel_raw", Twist, 1)
         self.pub_gated = self._publisher("/cmd_vel_gated", Twist, 1)
         self.pub_out = self._publisher("/cmd_vel", Twist, 1)
@@ -192,12 +196,22 @@ class Fixture(object):
                 self.pub_wheel.publish(frame)
 
             speed = 0.40 if (moving and what == "nominal") else 0.0
+            x, y, yaw = self.pose_at(self.wp)
             odom = Odometry()
             odom.header.stamp = rospy.Time.now()
             odom.header.frame_id = "map"
             odom.twist.twist.linear.x = speed
             odom.twist.twist.angular.z = 0.01 if speed else 0.0
             self.pub_odom.publish(odom)
+            # odom_pub.py integrates in the world frame, so both x and y carry
+            # the speed; mirror that rather than putting it all on x.
+            wheel_odom = Odometry()
+            wheel_odom.header.stamp = odom.header.stamp
+            wheel_odom.header.frame_id = "odom"
+            wheel_odom.twist.twist.linear.x = speed * math.cos(yaw)
+            wheel_odom.twist.twist.linear.y = speed * math.sin(yaw)
+            wheel_odom.twist.twist.angular.z = odom.twist.twist.angular.z
+            self.pub_wheel_odom.publish(wheel_odom)
 
             # The gate publishes a zero Twist while holding; it does not go
             # silent. Inferring the hold depends on both being present.
@@ -235,7 +249,6 @@ class Fixture(object):
             fault.data = [0, 0, 1, 0, 0] if what == "fault" else [0, 0, 0, 0, 0]
             self.pub_fault.publish(fault)
 
-            x, y, yaw = self.pose_at(self.wp)
             self.publish_pose(x, y, yaw)
 
             if what == "loc_lost":
@@ -260,7 +273,7 @@ def already_published(topic):
 
 
 REAL_STACK_TOPICS = ("/fast_lio_icp/pose", "/fast_lio_icp/localization_diagnostics",
-                     "/Odometry", "/cmd_vel_raw", "/cmd_vel_gated", "/cmd_vel",
+                     "/Odometry", "/odom", "/cmd_vel_raw", "/cmd_vel_gated", "/cmd_vel",
                      "/tip_guard/status", "/waypoint_follower/status",
                      "/perception/objects_summary", "/robot_fault", "/wheel_status")
 
