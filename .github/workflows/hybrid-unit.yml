@@ -10,6 +10,7 @@ on:
       - 'tools/go_hybrid.sh'
       - 'tools/install_nuc_gpu_runtime.sh'
       - 'tests/test_hybrid_runtime_surface.py'
+      - 'conftest.py'
   push:
     branches: [main, fix/hybrid-perception-avoidance]
 
@@ -30,6 +31,7 @@ jobs:
       - name: Python syntax
         run: |
           python -m py_compile \
+            src/static_livox_localization/scripts/scipy_ckdtree_compat.py \
             src/static_livox_localization/scripts/gpu_dwa_backend.py \
             src/static_livox_localization/scripts/gpu_dwa_follower.py \
             src/static_livox_localization/scripts/hybrid_geometric_objects.py \
@@ -44,7 +46,8 @@ jobs:
             src/static_livox_localization/scripts/terrain_guard_policy.py \
             src/static_livox_localization/scripts/vision_detection_bridge.py \
             src/static_livox_localization/scripts/scan_accumulator.py \
-            src/static_livox_localization/scripts/route_mask.py
+            src/static_livox_localization/scripts/route_mask.py \
+            conftest.py
       - name: Shell syntax
         run: |
           bash -n tools/hybrid.sh tools/start_hybrid_avoidance.sh \
