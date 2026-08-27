@@ -8,19 +8,21 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 Usage: start_hybrid_avoidance.sh
 
 Starts the existing ROS1 field stack with PROFILE=dwa, then installs:
-  all non-ground geometry -> optional learned fusion -> DWA planned command
+  all non-ground geometry -> optional learned fusion -> RTX DWA planned command
   -> semantic stop supervisor -> raw safety gate -> terrain guard
   -> tip_guard -> wheelchair base
 
 Environment:
+  REQUIRE_GPU=true|false                         # default true on Phantom Canyon
   REQUIRE_LEARNED=false|true
-  LEARNED_VISION_TOPIC=/pointpillars/detections   # optional vision_msgs input
+  LEARNED_VISION_TOPIC=/pointpillars/detections # optional vision_msgs input
   LEARNED_MODEL_ID=pointpillars-mid360-v1
-  CLIFF_REQUIRED=false|true                       # downward sensor contract
+  CLIFF_REQUIRED=false|true                     # downward sensor contract
   CLIFF_TOPIC=/terrain/cliff_status
   SAFETY_POLICIES=true|false
   VN_IMU=0|1
 
+Run tools/install_nuc_gpu_runtime.sh once if CuPy is not installed.
 Nothing moves until go_hybrid.sh is run. Existing stop.sh remains authoritative.
 EOF
   exit 0
@@ -39,10 +41,12 @@ BASE_START="${BASE_START:-$HOME/start_wheelchair_localization.sh}"
 [ -f "$LOCALIZATION_WS/devel/setup.bash" ] || \
   fail "localization workspace is not built: $LOCALIZATION_WS"
 
+REQUIRE_GPU="${REQUIRE_GPU:-true}"
 REQUIRE_LEARNED="${REQUIRE_LEARNED:-false}"
 CLIFF_REQUIRED="${CLIFF_REQUIRED:-false}"
 SAFETY_POLICIES="${SAFETY_POLICIES:-true}"
-for pair in "REQUIRE_LEARNED:$REQUIRE_LEARNED" \
+for pair in "REQUIRE_GPU:$REQUIRE_GPU" \
+            "REQUIRE_LEARNED:$REQUIRE_LEARNED" \
             "CLIFF_REQUIRED:$CLIFF_REQUIRED" \
             "SAFETY_POLICIES:$SAFETY_POLICIES"; do
   name="${pair%%:*}"; value="${pair#*:}"
@@ -64,9 +68,37 @@ done
 actual_map_sha="$(sha256sum "$MAP" | awk '{print $1}')"
 [ "$actual_map_sha" = "$MAP_SHA256" ] || fail "runtime map SHA-256 mismatch"
 
+say "probing the Phantom Canyon RTX runtime"
+if command -v nvidia-smi >/dev/null 2>&1 && python3 - <<'PY'
+import cupy as cp
+props = cp.cuda.runtime.getDeviceProperties(0)
+name = props["name"]
+if isinstance(name, bytes):
+    name = name.decode("utf-8", "replace")
+x = cp.arange(4096, dtype=cp.float32)
+value = float((x * 2.0).sum())
+expected = 4095.0 * 4096.0
+if abs(value - expected) / expected > 2e-6:
+    raise SystemExit("CUDA arithmetic mismatch")
+cp.cuda.Device().synchronize()
+print("  CUDA device: %s" % name)
+PY
+then
+  GPU_READY=true
+else
+  GPU_READY=false
+fi
+if [ "$GPU_READY" != "true" ]; then
+  if [ "$REQUIRE_GPU" = "true" ]; then
+    fail "RTX/CuPy runtime unavailable; run $REPO_ROOT/tools/install_nuc_gpu_runtime.sh"
+  fi
+  echo "WARNING: GPU unavailable; DWA will use its slower CPU fallback" >&2
+fi
+
 # Base startup predates these nodes and cannot clean them. Remove orphaned
 # hybrid processes before it starts; otherwise an old supervisor or terrain
 # guard may keep publishing under an evicted ROS name and consume whole cores.
+pkill -f '[g]pu_dwa_follower.py' 2>/dev/null || true
 pkill -f '[h]ybrid_geometric_objects.py' 2>/dev/null || true
 pkill -f '[h]ybrid_object_fusion.py' 2>/dev/null || true
 pkill -f '[v]ision_detection_bridge.py' 2>/dev/null || true
@@ -91,7 +123,8 @@ for node in /waypoint_follower /obstacle_clusters /tip_guard \
             /semantic_safety_supervisor /terrain_guard; do
   rosnode kill "$node" >/dev/null 2>&1 || true
 done
-for pattern in '[d]wa_follower.py' '[o]bstacle_clusters.py' \
+for pattern in '[g]pu_dwa_follower.py' '[d]wa_follower.py' \
+               '[o]bstacle_clusters.py' \
                '[h]ybrid_geometric_objects.py' '[h]ybrid_object_fusion.py' \
                '[v]ision_detection_bridge.py' \
                '[l]ocalization_exclusion_boxes.py' \
@@ -100,12 +133,12 @@ for pattern in '[d]wa_follower.py' '[o]bstacle_clusters.py' \
   pkill -f "$pattern" 2>/dev/null || true
 done
 for _ in $(seq 1 20); do
-  if ! pgrep -f '[d]wa_follower.py|[o]bstacle_clusters.py|[h]ybrid_geometric_objects.py|[h]ybrid_object_fusion.py|[v]ision_detection_bridge.py|[l]ocalization_exclusion_boxes.py|[s]emantic_safety_supervisor.py|[t]errain_guard.py|[t]ip_guard.py' >/dev/null 2>&1; then
+  if ! pgrep -f '[g]pu_dwa_follower.py|[d]wa_follower.py|[o]bstacle_clusters.py|[h]ybrid_geometric_objects.py|[h]ybrid_object_fusion.py|[v]ision_detection_bridge.py|[l]ocalization_exclusion_boxes.py|[s]emantic_safety_supervisor.py|[t]errain_guard.py|[t]ip_guard.py' >/dev/null 2>&1; then
     break
   fi
   sleep 0.25
 done
-if pgrep -f '[d]wa_follower.py|[o]bstacle_clusters.py|[h]ybrid_geometric_objects.py|[h]ybrid_object_fusion.py|[v]ision_detection_bridge.py|[l]ocalization_exclusion_boxes.py|[s]emantic_safety_supervisor.py|[t]errain_guard.py|[t]ip_guard.py' >/dev/null 2>&1; then
+if pgrep -f '[g]pu_dwa_follower.py|[d]wa_follower.py|[o]bstacle_clusters.py|[h]ybrid_geometric_objects.py|[h]ybrid_object_fusion.py|[v]ision_detection_bridge.py|[l]ocalization_exclusion_boxes.py|[s]emantic_safety_supervisor.py|[t]errain_guard.py|[t]ip_guard.py' >/dev/null 2>&1; then
   fail "a replaced hybrid motion/perception node survived shutdown"
 fi
 # safety_gate remains alive and fails closed while /cmd_vel_raw is absent.
@@ -160,15 +193,18 @@ setsid nohup env $SINGLE_THREAD_ENV \
   rosrun static_livox_localization localization_exclusion_boxes.py \
   > "$LOG/live_localization_exclusions.log" 2>&1 < /dev/null &
 
-say "DWA produces a proposal, not a motor-authoritative command"
+say "RTX-accelerated DWA produces a proposal, not a motor-authoritative command"
 setsid nohup env $SINGLE_THREAD_ENV \
-  rosrun static_livox_localization dwa_follower.py \
+  WHEELCHAIR_DWA_GPU=1 WHEELCHAIR_REQUIRE_GPU="$REQUIRE_GPU" \
+  rosrun static_livox_localization gpu_dwa_follower.py \
   _route:="$ROUTE" \
   _safety_band:="$BAND" \
   _drivable_mask:="$DRIVABLE_MASK" \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
   _latency_s:="$LATENCY_S" \
+  _prefer_gpu:=true \
+  _require_gpu:="$REQUIRE_GPU" \
   _cmd_topic:=/cmd_vel_planned \
   > "$LOG/live_hybrid_dwa.log" 2>&1 < /dev/null &
 
@@ -207,6 +243,7 @@ say "checking the complete chain while it is still paused"
 READY=0
 for _ in $(seq 1 30); do
   if rosrun static_livox_localization hybrid_preflight.py \
+      _require_gpu:="$REQUIRE_GPU" \
       _require_learned:="$REQUIRE_LEARNED" _timeout_s:=3.0; then
     READY=1
     break
@@ -235,10 +272,10 @@ echo " HYBRID AVOIDANCE READY - PAUSED"
 echo ""
 echo "  geometry : all non-ground MID-360 clusters; map subtraction disabled"
 echo "  semantics: ${LEARNED_VISION_TOPIC:-geometric-only}"
-echo "  planner  : DWA -> /cmd_vel_planned"
+echo "  planner  : RTX/CuPy DWA -> /cmd_vel_planned (required=$REQUIRE_GPU)"
 echo "  guards   : semantic -> raw gate -> terrain -> tip_guard"
 echo "  cliff    : required=$CLIFF_REQUIRED"
 echo ""
-echo "  start:  bash $REPO_ROOT/tools/hybrid.sh go"
+echo "  start:  REQUIRE_GPU=$REQUIRE_GPU bash $REPO_ROOT/tools/hybrid.sh go"
 echo "  stop :  bash $REPO_ROOT/tools/hybrid.sh stop"
 echo "=============================================================="
