@@ -52,12 +52,21 @@ def route_contract():
 def main():
     rospy.init_node("hybrid_preflight", anonymous=True, disable_signals=True)
     timeout_s = float(rospy.get_param("~timeout_s", 5.0))
+    require_gpu = bool(rospy.get_param("~require_gpu", True))
     require_learned = bool(rospy.get_param("~require_learned", False))
 
     law = str(rospy.get_param("/waypoint_follower/control_law", ""))
     if law != "dwa":
         raise PreflightFailure(
             "running control law is %r, expected 'dwa'" % law)
+    distance_backend = str(rospy.get_param(
+        "/waypoint_follower/distance_backend", ""))
+    gpu_active = bool(rospy.get_param(
+        "/waypoint_follower/gpu_active", False))
+    if require_gpu and (distance_backend != "cupy" or not gpu_active):
+        raise PreflightFailure(
+            "RTX DWA backend was required but reports backend=%r active=%r"
+            % (distance_backend, gpu_active))
     route_path, expected_profile, expected_centre = route_contract()
 
     summary = payload(wait(
@@ -132,6 +141,8 @@ def main():
 
     print("HYBRID_PREFLIGHT_OK")
     print("  control law : dwa")
+    print("  DWA backend : %s (GPU active=%s, required=%s)" % (
+        distance_backend or "unknown", gpu_active, require_gpu))
     print("  route       : %s" % route_path)
     print("  object frame: chair_centre/%s" % expected_profile)
     print("  perception  : %s (%d objects)" % (
