@@ -58,20 +58,27 @@ def replace_manifest_hash(text: str, path_name: str, new_hash: str) -> str:
     raise RuntimeError("manifest entry not found: %s" % path_name)
 
 
+def write_utf8(path: Path, text: str) -> None:
+    # Path.write_text gained a newline argument only after Noetic's Python
+    # 3.8. The files are LF-normalized in git, so a normal text write is exact.
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        stream.write(text)
+
+
 def main() -> None:
     readme_hash = digest(README)
     original_a15 = A15.read_text(encoding="utf-8")
     updated_a15 = replace_indented_hash(
         original_a15, "  repository_readme", readme_hash)
     if updated_a15 != original_a15:
-        A15.write_text(updated_a15, encoding="utf-8", newline="")
+        write_utf8(A15, updated_a15)
 
     a15_hash = digest(A15)
     original_manifest = MANIFEST.read_text(encoding="utf-8")
     updated_manifest = replace_manifest_hash(
         original_manifest, A15.name, a15_hash)
     if updated_manifest != original_manifest:
-        MANIFEST.write_text(updated_manifest, encoding="utf-8", newline="")
+        write_utf8(MANIFEST, updated_manifest)
 
     print("README.md", readme_hash)
     print(str(A15.relative_to(ROOT)), a15_hash)
