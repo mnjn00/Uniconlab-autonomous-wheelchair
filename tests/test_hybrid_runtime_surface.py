@@ -20,9 +20,24 @@ def test_geometric_summary_is_unfiltered_and_remapped_before_fusion():
     assert 'localization_exclusion_boxes.py' in text
 
 
+def test_rtx_dwa_is_the_hybrid_planner_and_is_fail_closed_by_default():
+    start = (ROOT / 'tools/start_hybrid_avoidance.sh').read_text()
+    go = (ROOT / 'tools/go_hybrid.sh').read_text()
+    preflight = (ROOT / 'src/static_livox_localization/scripts/'
+                 'hybrid_preflight.py').read_text()
+    assert 'REQUIRE_GPU="${REQUIRE_GPU:-true}"' in start
+    assert 'gpu_dwa_follower.py' in start
+    assert 'WHEELCHAIR_DWA_GPU=1' in start
+    assert '_require_gpu:="$REQUIRE_GPU"' in start
+    assert 'REQUIRE_GPU="${REQUIRE_GPU:-true}"' in go
+    assert '/waypoint_follower/distance_backend' in preflight
+    assert '/waypoint_follower/gpu_active' in preflight
+
+
 def test_new_nodes_are_installed_by_catkin():
     cmake = (ROOT / 'src/static_livox_localization/CMakeLists.txt').read_text()
     for name in (
+        'gpu_dwa_follower.py', 'gpu_dwa_backend.py',
         'hybrid_geometric_objects.py', 'hybrid_object_fusion.py',
         'vision_detection_bridge.py', 'localization_exclusion_boxes.py',
         'semantic_safety_supervisor.py', 'terrain_guard.py',
