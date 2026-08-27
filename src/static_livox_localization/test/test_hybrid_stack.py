@@ -13,6 +13,7 @@ SCRIPTS = PACKAGE / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from hybrid_perception import fuse_summaries  # noqa: E402
+from localization_exclusion_policy import should_exclude  # noqa: E402
 from route_mask import RouteMask  # noqa: E402
 from semantic_safety_policy import (PersonStopLatch, ThreatView,
                                     decide_semantic_stop, stopping_distance)  # noqa: E402
@@ -125,6 +126,17 @@ def test_stopping_distance_grows_and_nonfinite_fails_closed():
     assert math.isinf(stopping_distance(math.nan, 0.2, 0.1))
 
 
+def test_localization_exclusions_do_not_remove_static_mapped_walls():
+    assert not should_exclude({
+        "class": "vehicle", "motion": "static", "source": "geometric"})
+    assert should_exclude({
+        "class": "obstacle", "motion": "moving", "source": "geometric"})
+    assert should_exclude({
+        "class": "person", "motion": "unknown", "source": "geometric"})
+    assert not should_exclude({
+        "class": "vehicle", "motion": "unknown", "source": "learned_only"})
+
+
 class Mask:
     def __init__(self, x_limit=10.0, clearance=1.0):
         self.x_limit, self.clearance = x_limit, clearance
@@ -170,13 +182,16 @@ def test_route_mask_clearance_api(tmp_path):
 def test_accumulator_uses_numpy_decoder():
     text = (SCRIPTS / "scan_accumulator.py").read_text(encoding="utf-8")
     assert "from cloud_points import points_xyz" in text
-    assert "points = points_xyz(message, read_points)" in text
+    assert "pts = points_xyz(message, read_points)" in text
     assert "np.array(list(read_points" not in text
 
 
 def test_runtime_wiring_keeps_old_stack_as_rollback_and_checks_before_go():
     start = (ROOT / "tools" / "start_hybrid_avoidance.sh").read_text(encoding="utf-8")
     assert "PROFILE=dwa" in start and "start_wheelchair_localization.sh" in start
+    assert "hybrid_geometric_objects.py" in start
+    assert "geometric_exclusion_candidates" in start
+    assert "localization_exclusion_boxes.py" in start
     assert "_cmd_topic:=/cmd_vel_planned" in start
     assert "/cmd_vel_gated:=/cmd_vel_terrain_safe" in start
     assert "/perception/objects_summary:=/perception/geometric_objects_summary" in start
@@ -186,8 +201,10 @@ def test_runtime_wiring_keeps_old_stack_as_rollback_and_checks_before_go():
 
 def test_catkin_installs_hybrid_nodes_and_policies():
     cmake = (PACKAGE / "CMakeLists.txt").read_text(encoding="utf-8")
-    for name in ("hybrid_object_fusion.py", "vision_detection_bridge.py",
+    for name in ("hybrid_geometric_objects.py", "hybrid_object_fusion.py",
+                 "vision_detection_bridge.py", "localization_exclusion_boxes.py",
                  "semantic_safety_supervisor.py", "terrain_guard.py",
                  "hybrid_preflight.py", "hybrid_perception.py",
+                 "localization_exclusion_policy.py",
                  "semantic_safety_policy.py", "terrain_guard_policy.py"):
         assert name in cmake

@@ -22,7 +22,10 @@ permissions:
 
 jobs:
   software-rc:
-    runs-on: ubuntu-20.04
+    # Noetic itself stays pinned inside tools/noetic/Dockerfile. The host only
+    # needs a maintained GitHub runner with Docker; using the retired Focal
+    # host label left every PR queued before a single repository test ran.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4

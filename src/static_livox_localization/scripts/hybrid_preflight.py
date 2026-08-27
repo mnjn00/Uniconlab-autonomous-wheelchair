@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed readiness check for the RTX hybrid perception profile."""
+"""Fail-closed readiness check for the hybrid perception/avoidance profile."""
 
 import json
 import math
@@ -8,10 +8,6 @@ import sys
 import rospy
 from diagnostic_msgs.msg import DiagnosticArray
 from std_msgs.msg import String
-
-
-PINNED_POINTPILLARS_COMMIT = \
-    "ce7e2bd694c90207435c8751d61cdb38d48a9f4c"
 
 
 class PreflightFailure(RuntimeError):
@@ -35,37 +31,34 @@ def wait(topic, message_type, timeout_s):
         raise PreflightFailure("%s is silent" % topic)
 
 
-def finite(value, name):
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or \
-            not math.isfinite(float(value)):
-        raise PreflightFailure("%s is not finite" % name)
-    return float(value)
-
-
-def fresh_stamp(data, name, maximum_age_s):
-    stamp = finite(data.get("stamp"), "%s stamp" % name)
-    age = rospy.Time.now().to_sec() - stamp
-    if age < -0.05 or age > maximum_age_s:
-        raise PreflightFailure("%s age is %.2f s" % (name, age))
-    return age
+def route_contract():
+    route_path = str(rospy.get_param("/waypoint_follower/route", ""))
+    if not route_path:
+        raise PreflightFailure("running follower publishes no route path")
+    try:
+        with open(route_path, encoding="utf-8") as stream:
+            route = json.load(stream)
+        profile = str(route["body_frame_profile"])
+        centre = route["chair_centre_in_body_xyz"]
+        centre = [float(value) for value in centre]
+    except (IOError, OSError, KeyError, TypeError, ValueError) as error:
+        raise PreflightFailure(
+            "cannot read running route frame contract: %s" % error)
+    if len(centre) != 3 or not all(math.isfinite(value) for value in centre):
+        raise PreflightFailure("running route chair centre is invalid")
+    return route_path, profile, centre
 
 
 def main():
     rospy.init_node("hybrid_preflight", anonymous=True, disable_signals=True)
     timeout_s = float(rospy.get_param("~timeout_s", 5.0))
     require_learned = bool(rospy.get_param("~require_learned", False))
-    require_gpu_detector = bool(rospy.get_param(
-        "~require_gpu_detector", require_learned))
-    require_rtx2060 = bool(rospy.get_param("~require_rtx2060", True))
-    maximum_gpu_age_s = float(rospy.get_param(
-        "~maximum_gpu_status_age_s", 1.5))
-    maximum_inference_ms = float(rospy.get_param(
-        "~maximum_gpu_inference_ms", 90.0))
 
     law = str(rospy.get_param("/waypoint_follower/control_law", ""))
     if law != "dwa":
         raise PreflightFailure(
             "running control law is %r, expected 'dwa'" % law)
+    route_path, expected_profile, expected_centre = route_contract()
 
     summary = payload(wait(
         "/perception/objects_summary", String, timeout_s),
@@ -76,7 +69,28 @@ def main():
     if summary.get("frame") != "chair_centre":
         raise PreflightFailure(
             "fused perception frame is %r" % summary.get("frame"))
-    fresh_stamp(summary, "fused perception", 1.5)
+    if summary.get("body_frame_profile") != expected_profile:
+        raise PreflightFailure(
+            "fused object profile %r does not match route profile %r"
+            % (summary.get("body_frame_profile"), expected_profile))
+    observed_centre = summary.get("chair_centre_in_body_xyz")
+    try:
+        observed_centre = [float(value) for value in observed_centre]
+    except (TypeError, ValueError):
+        raise PreflightFailure("fused summary has no chair-centre contract")
+    if len(observed_centre) != 3 or any(
+            abs(observed - expected) > 1e-6
+            for observed, expected in zip(observed_centre, expected_centre)):
+        raise PreflightFailure(
+            "fused chair centre %r does not match route %r"
+            % (observed_centre, expected_centre))
+
+    stamp = summary.get("stamp")
+    if not isinstance(stamp, (int, float)) or not math.isfinite(stamp):
+        raise PreflightFailure("fused perception has no finite stamp")
+    age = rospy.Time.now().to_sec() - float(stamp)
+    if age < -0.05 or age > 1.5:
+        raise PreflightFailure("fused perception age is %.2f s" % age)
     if require_learned and summary.get("mode") != "hybrid":
         raise PreflightFailure(
             "learned perception was required but fusion mode is %r"
@@ -88,34 +102,9 @@ def main():
     if hybrid.get("status") != "OK":
         raise PreflightFailure(
             "hybrid fusion is not ready: %r" % hybrid.get("status"))
-
-    gpu = None
-    if require_gpu_detector:
-        gpu = payload(wait(
-            "/pointpillars/status", String, timeout_s),
-            "pointpillars_status")
-        if gpu.get("status") != "OK":
-            raise PreflightFailure(
-                "PointPillars status is %r: %s" %
-                (gpu.get("status"), gpu.get("detail", "")))
-        if gpu.get("gpu_active") is not True:
-            raise PreflightFailure("PointPillars did not report GPU execution")
-        device_name = str(gpu.get("device_name", ""))
-        if require_rtx2060 and "RTX 2060" not in device_name:
-            raise PreflightFailure(
-                "PointPillars is running on %r, not RTX 2060" % device_name)
-        if gpu.get("upstream_commit") != PINNED_POINTPILLARS_COMMIT:
-            raise PreflightFailure(
-                "PointPillars upstream commit is not the reviewed pin")
-        fresh_stamp(gpu, "PointPillars", maximum_gpu_age_s)
-        inference_ms = finite(
-            gpu.get("inference_ms"), "PointPillars inference_ms")
-        if inference_ms > maximum_inference_ms:
-            raise PreflightFailure(
-                "PointPillars inference %.1f ms exceeds %.1f ms" %
-                (inference_ms, maximum_inference_ms))
-        if int(gpu.get("used_points", 0)) <= 0:
-            raise PreflightFailure("PointPillars processed no LiDAR points")
+    if hybrid.get("output_body_frame_profile") != expected_profile:
+        raise PreflightFailure(
+            "hybrid health profile does not match the route")
 
     semantic = payload(wait(
         "/semantic_safety/status", String, timeout_s),
@@ -143,14 +132,10 @@ def main():
 
     print("HYBRID_PREFLIGHT_OK")
     print("  control law : dwa")
+    print("  route       : %s" % route_path)
+    print("  object frame: chair_centre/%s" % expected_profile)
     print("  perception  : %s (%d objects)" % (
         summary.get("mode"), len(summary.get("objects", []))))
-    if gpu is not None:
-        print("  gpu          : %s" % gpu.get("device_name"))
-        print("  inference    : %.2f ms" % float(gpu["inference_ms"]))
-        print("  gpu points   : %s" % gpu.get("used_points"))
-    else:
-        print("  gpu          : not required")
     print("  semantic    : ready")
     print("  terrain     : ready")
     print("  localization: TRACKING")
