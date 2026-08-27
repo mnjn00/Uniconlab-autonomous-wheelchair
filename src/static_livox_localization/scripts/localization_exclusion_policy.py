@@ -2,12 +2,13 @@
 
 The hybrid collision source keeps mapped walls and fixtures, so its complete
 box stream must never be sent to the localizer. Registration exclusions are
-limited to directly person-like or measured-moving evidence, plus learned
-person/vehicle/two-wheeler boxes. Uncertain geometric-only walls are retained
-for localization until motion evidence says otherwise.
-"""
+limited to directly person-like geometry and measured moving evidence.
 
-DYNAMIC_CLASSES = frozenset(("person", "vehicle", "two_wheeler"))
+An unknown-motion learned ``vehicle`` is not enough. A false vehicle label on
+a mapped wall would remove the strongest registration structure exactly when
+the pose needs it. Vehicle/two-wheeler boxes become exclusions only after the
+geometric tracker measures them moving.
+"""
 
 
 def normalize(value):
@@ -19,22 +20,13 @@ def should_exclude(item):
         return False
     label = normalize(item.get("class"))
     motion = normalize(item.get("motion"))
-    source = normalize(item.get("source", "geometric"))
-    learned_label = normalize(item.get("learned_class"))
 
     # A measured moving object is absent from the immutable map whatever its
     # classifier called it.
     if motion == "moving":
         return True
     # Person geometry is deliberately conservative even before the tracker
-    # has enough history to decide motion.
-    if label == "person":
-        return True
-    # Learned dynamic-class geometry may be excluded while its motion is
-    # unknown. This does not apply to geometric-only vehicle heuristics: a
-    # long mapped wall can look vehicle-sized and must remain registration
-    # evidence.
-    if source in ("learned_only", "geometric+learned"):
-        if label in DYNAMIC_CLASSES or learned_label in DYNAMIC_CLASSES:
-            return True
-    return False
+    # has enough history to decide motion. Learning may promote a geometric
+    # box to person, but cannot make a non-person static wall disappear merely
+    # by calling it a vehicle.
+    return label == "person"
