@@ -175,9 +175,9 @@ class VisionDetectionBridge:
             if label is None or score < self.minimum_score:
                 continue
             size = detection.bbox.size
-            dimensions = (float(size.x), float(size.y), float(size.z))
-            if not all(math.isfinite(value) and value > 0.0
-                       for value in dimensions):
+            dimensions = np.asarray(
+                (float(size.x), float(size.y), float(size.z)), dtype=float)
+            if not np.isfinite(dimensions).all() or (dimensions <= 0.0).any():
                 continue
             try:
                 centre = self._pose_in_output(
@@ -195,6 +195,12 @@ class VisionDetectionBridge:
             values = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)
             if not all(math.isfinite(float(value)) for value in values):
                 continue
+            output_R_object = tft.quaternion_matrix(
+                [q.x, q.y, q.z, q.w])[:3, :3]
+            # The downstream JSON contract carries axis-aligned boxes. Convert
+            # the detector's oriented dimensions conservatively instead of
+            # silently treating object-axis lengths as frame-axis lengths.
+            axis_aligned = np.abs(output_R_object) @ dimensions
             yaw = tft.euler_from_quaternion([q.x, q.y, q.z, q.w])[2]
             objects.append({
                 "id": int(index),
@@ -204,7 +210,7 @@ class VisionDetectionBridge:
                 "y": round(float(p.y), 4),
                 "z": round(float(p.z), 4),
                 "yaw": round(float(yaw), 5),
-                "size": [round(value, 4) for value in dimensions],
+                "size": [round(float(value), 4) for value in axis_aligned],
                 "motion": "unknown",
             })
         self.publish_status(
