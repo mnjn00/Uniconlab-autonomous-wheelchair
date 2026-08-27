@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Fuse geometric cluster boxes with optional learned 3D detections.
 
-The geometric topic is mandatory and is never weakened by learning.  Learned
-boxes improve semantics and may add high-confidence geometry.  Output remains
+The geometric topic is mandatory and is never weakened by learning. Learned
+boxes improve semantics and may add high-confidence geometry. Output remains
 the existing ``/perception/objects_summary`` JSON contract so the pursuit,
 MPC, DWA, black box, and Bluetooth UI do not need a new message package.
+
+The output axes and origin are read from the route. This matters whenever the
+running IMU profile differs from the one that recorded the route: the follower
+corrects its pose into the route body frame, so relative obstacle geometry must
+be expressed in that same frame before it is rotated into the map.
 """
 
 import json
@@ -19,7 +24,8 @@ from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from body_frame import CHAIR_CENTRE_IN_BODY_XYZ, lidar_extrinsics
+from body_frame import (CHAIR_CENTRE_IN_BODY_XYZ, lidar_extrinsics,
+                        route_chair_centre)
 from hybrid_perception import fuse_summaries
 
 
@@ -35,13 +41,35 @@ class HybridObjectFusion:
         self.geometric_receipt_s = 0.0
         self.learned_receipt_s = 0.0
 
-        profile = str(rospy.get_param("~body_frame_profile", "builtin"))
-        lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
-        self.rotation = np.asarray(lidar_to_body_rotation, dtype=float)
-        # chair_T_lidar: p_chair = body_R_lidar p_lidar
-        #                            + body_p_lidar - body_p_chair
-        self.translation = np.asarray(lidar_in_body, dtype=float) - \
-            np.asarray(CHAIR_CENTRE_IN_BODY_XYZ, dtype=float)
+        running_profile = str(rospy.get_param(
+            "~body_frame_profile", "builtin"))
+        route_path = str(rospy.get_param("~route", ""))
+        route_profile = str(rospy.get_param(
+            "~output_body_frame_profile", running_profile))
+        chair_centre = tuple(CHAIR_CENTRE_IN_BODY_XYZ)
+        if route_path:
+            try:
+                with open(route_path, encoding="utf-8") as stream:
+                    route = json.load(stream)
+                route_profile = str(route["body_frame_profile"])
+                chair_centre = route_chair_centre(route)
+            except (IOError, OSError, KeyError, TypeError, ValueError) as error:
+                raise rospy.ROSInitException(
+                    "cannot derive hybrid output frame from route %s: %s"
+                    % (route_path, error))
+
+        lidar_in_route_body, lidar_to_route_body_rotation = \
+            lidar_extrinsics(route_profile)
+        self.rotation = np.asarray(
+            lidar_to_route_body_rotation, dtype=float)
+        # route_chair_T_lidar: p_route_chair = route_body_R_lidar p_lidar
+        #                                 + route_body_p_lidar
+        #                                 - route_body_p_chair
+        self.translation = np.asarray(lidar_in_route_body, dtype=float) - \
+            np.asarray(chair_centre, dtype=float)
+        self.running_profile = running_profile
+        self.output_profile = route_profile
+        self.output_chair_centre = tuple(float(value) for value in chair_centre)
 
         self.require_learned = bool(rospy.get_param("~require_learned", False))
         self.geometric_max_age_s = float(rospy.get_param(
@@ -92,9 +120,9 @@ class HybridObjectFusion:
 
         rospy.loginfo(
             "hybrid fusion: geometric=%s learned=%s required=%s output=%s "
-            "frame=chair_centre profile=%s",
+            "frame=chair_centre running_profile=%s route_profile=%s",
             geometric_topic, learned_topic, self.require_learned,
-            output_topic, profile)
+            output_topic, running_profile, route_profile)
 
     @staticmethod
     def _parse(message):
@@ -143,6 +171,8 @@ class HybridObjectFusion:
             person_min_extent_m=self.person_min_extent_m,
             require_learned=self.require_learned,
         )
+        result["body_frame_profile"] = self.output_profile
+        result["chair_centre_in_body_xyz"] = list(self.output_chair_centre)
         self.output_pub.publish(String(data=json.dumps(
             result, separators=(",", ":"), sort_keys=True)))
 
@@ -153,6 +183,8 @@ class HybridObjectFusion:
             "frame": result.get("frame", ""),
             "object_count": len(result.get("objects", [])),
             "sources": result.get("sources", {}),
+            "running_body_frame_profile": self.running_profile,
+            "output_body_frame_profile": self.output_profile,
             "geometric_receipt_age_s": None if geometric_receipt <= 0.0 else
                 round(max(0.0, now_s - geometric_receipt), 3),
             "learned_receipt_age_s": None if learned_receipt <= 0.0 else
