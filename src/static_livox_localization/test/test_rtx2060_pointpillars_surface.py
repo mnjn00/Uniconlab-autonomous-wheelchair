@@ -68,17 +68,17 @@ def test_default_start_launches_both_rtx_paths_and_waits_for_them():
     start = text(ROOT / "tools" / "start_hybrid_avoidance.sh")
 
     assert 'START_POINTPILLARS="${START_POINTPILLARS:-true}"' in start
-    assert 'REQUIRE_DWA_GPU="${REQUIRE_DWA_GPU:-true}"' in start
+    assert 'REQUIRE_GPU="${REQUIRE_GPU:-true}"' in start
     assert "rtx_pointpillars_node" in start
     assert "gpu_dwa_follower.py" in start
-    assert "WHEELCHAIR_DWA_GPU" in start
+    assert "WHEELCHAIR_DWA_GPU=1" in start
     assert "WHEELCHAIR_REQUIRE_GPU" in start
     assert "check_rtx2060_pointpillars.sh\" 30" in start
     assert "check_nuc_gpu_dwa.sh\" 20" in start
     assert "POINTPILLARS_DETECTIONS_TOPIC" in start
     assert "LEARNED_VISION_TOPIC=\"$POINTPILLARS_DETECTIONS_TOPIC\"" in start
     assert "_require_gpu_detector:=\"$START_POINTPILLARS\"" in start
-    assert "_require_gpu_dwa:=\"$REQUIRE_DWA_GPU\"" in start
+    assert "_require_gpu_dwa:=\"$REQUIRE_GPU\"" in start
     assert "/pointpillars/detections" in start
     assert "/pointpillars/status" in start
 
@@ -112,11 +112,12 @@ def test_preflight_and_go_refuse_fake_stale_or_cpu_gpu_claims():
         '"/waypoint_follower/distance_backend"',
     ):
         assert required in preflight
+    assert 'REQUIRE_GPU="${REQUIRE_GPU:-true}"' in go
     assert "rosnode ping -c1 /rtx_pointpillars" in go
     assert "check_rtx2060_pointpillars.sh\" 5" in go
     assert "check_nuc_gpu_dwa.sh\" 5" in go
     assert "_require_gpu_detector:=\"$START_POINTPILLARS\"" in go
-    assert "_require_gpu_dwa:=\"$REQUIRE_DWA_GPU\"" in go
+    assert "_require_gpu_dwa:=\"$REQUIRE_GPU\"" in go
     assert "nvidia-smi" in pointpillars_check
     assert 'status != "OK"' in pointpillars_check
     assert 'data.get("gpu_active") is not True' in pointpillars_check
