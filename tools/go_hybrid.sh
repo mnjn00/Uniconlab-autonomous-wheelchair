@@ -13,7 +13,7 @@ source "$LOCALIZATION_WS/devel/setup.bash"
 fail() { echo "REFUSING TO START: $*" >&2; exit 1; }
 
 START_POINTPILLARS="${START_POINTPILLARS:-true}"
-REQUIRE_DWA_GPU="${REQUIRE_DWA_GPU:-true}"
+REQUIRE_GPU="${REQUIRE_GPU:-true}"
 POINTPILLARS_REQUIRE_RTX2060="${POINTPILLARS_REQUIRE_RTX2060:-true}"
 if [ "${REQUIRE_LEARNED+x}" = x ]; then
   REQUIRE_LEARNED="$REQUIRE_LEARNED"
@@ -22,7 +22,7 @@ else
 fi
 for pair in "START_POINTPILLARS:$START_POINTPILLARS" \
             "REQUIRE_LEARNED:$REQUIRE_LEARNED" \
-            "REQUIRE_DWA_GPU:$REQUIRE_DWA_GPU" \
+            "REQUIRE_GPU:$REQUIRE_GPU" \
             "POINTPILLARS_REQUIRE_RTX2060:$POINTPILLARS_REQUIRE_RTX2060"; do
   name="${pair%%:*}"; value="${pair#*:}"
   case "$value" in true|false) ;; *) fail "$name must be true or false" ;; esac
@@ -34,7 +34,7 @@ for node in /waypoint_follower /hybrid_geometric_objects \
   rosnode ping -c1 "$node" >/dev/null 2>&1 || fail "$node is not running"
 done
 
-if [ "$REQUIRE_DWA_GPU" = "true" ]; then
+if [ "$REQUIRE_GPU" = "true" ]; then
   REQUIRE_RTX2060="$POINTPILLARS_REQUIRE_RTX2060" \
     "$SCRIPT_DIR/check_nuc_gpu_dwa.sh" 5 || \
     fail "RTX/CuPy DWA health check failed"
@@ -54,7 +54,7 @@ rosrun static_livox_localization hybrid_preflight.py \
   _require_learned:="$REQUIRE_LEARNED" \
   _require_gpu_detector:="$START_POINTPILLARS" \
   _require_rtx2060:="$POINTPILLARS_REQUIRE_RTX2060" \
-  _require_gpu_dwa:="$REQUIRE_DWA_GPU" \
+  _require_gpu_dwa:="$REQUIRE_GPU" \
   _timeout_s:=5.0 || fail "hybrid preflight did not pass"
 
 # Reuse the original command ordering: every check above occurs before either
