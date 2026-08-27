@@ -1,0 +1,39 @@
+<launch>
+  <!-- Bench/replay MPPI profile. Existing DWA remains the field default. -->
+  <arg name="route" />
+  <arg name="safety_band" />
+  <arg name="drivable_mask" />
+  <arg name="body_frame_profile" default="builtin" />
+  <arg name="cmd_topic" default="/cmd_vel_planned" />
+  <arg name="safety_policies" default="true" />
+  <arg name="latency_s" default="0.55" />
+  <arg name="prefer_gpu" default="true" />
+  <arg name="require_gpu" default="false" />
+  <arg name="batch_size" default="384" />
+  <arg name="horizon_steps" default="30" />
+  <arg name="model_dt" default="0.10" />
+  <arg name="temperature" default="0.70" />
+  <arg name="noise_v" default="0.18" />
+  <arg name="noise_w" default="0.22" />
+
+  <node pkg="static_livox_localization"
+        type="mppi_follower.py"
+        name="waypoint_follower"
+        output="screen">
+    <param name="route" value="$(arg route)" />
+    <param name="safety_band" value="$(arg safety_band)" />
+    <param name="drivable_mask" value="$(arg drivable_mask)" />
+    <param name="body_frame_profile" value="$(arg body_frame_profile)" />
+    <param name="cmd_topic" value="$(arg cmd_topic)" />
+    <param name="safety_policies" value="$(arg safety_policies)" />
+    <param name="latency_s" value="$(arg latency_s)" />
+    <param name="prefer_gpu" value="$(arg prefer_gpu)" />
+    <param name="require_gpu" value="$(arg require_gpu)" />
+    <param name="batch_size" value="$(arg batch_size)" />
+    <param name="horizon_steps" value="$(arg horizon_steps)" />
+    <param name="model_dt" value="$(arg model_dt)" />
+    <param name="temperature" value="$(arg temperature)" />
+    <param name="noise_v" value="$(arg noise_v)" />
+    <param name="noise_w" value="$(arg noise_w)" />
+  </node>
+</launch>
