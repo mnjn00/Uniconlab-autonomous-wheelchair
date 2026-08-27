@@ -18,10 +18,16 @@ for node in /waypoint_follower /hybrid_geometric_objects \
   rosnode ping -c1 "$node" >/dev/null 2>&1 || fail "$node is not running"
 done
 
+REQUIRE_GPU="${REQUIRE_GPU:-true}"
 REQUIRE_LEARNED="${REQUIRE_LEARNED:-false}"
-case "$REQUIRE_LEARNED" in true|false) ;; *) fail "REQUIRE_LEARNED must be true or false" ;; esac
+for pair in "REQUIRE_GPU:$REQUIRE_GPU" \
+            "REQUIRE_LEARNED:$REQUIRE_LEARNED"; do
+  name="${pair%%:*}"; value="${pair#*:}"
+  case "$value" in true|false) ;; *) fail "$name must be true or false" ;; esac
+done
 
 rosrun static_livox_localization hybrid_preflight.py \
+  _require_gpu:="$REQUIRE_GPU" \
   _require_learned:="$REQUIRE_LEARNED" _timeout_s:=5.0 || \
   fail "hybrid preflight did not pass"
 
