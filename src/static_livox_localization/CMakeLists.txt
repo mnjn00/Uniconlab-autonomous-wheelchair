@@ -66,8 +66,10 @@ catkin_install_python(
     scripts/dwa_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
+    scripts/hybrid_geometric_objects.py
     scripts/hybrid_object_fusion.py
     scripts/vision_detection_bridge.py
+    scripts/localization_exclusion_boxes.py
     scripts/semantic_safety_supervisor.py
     scripts/terrain_guard.py
     scripts/hybrid_preflight.py
@@ -81,6 +83,7 @@ install(
     scripts/body_frame.py
     scripts/dwa_core.py
     scripts/hybrid_perception.py
+    scripts/localization_exclusion_policy.py
     scripts/semantic_safety_policy.py
     scripts/terrain_guard_policy.py
     scripts/initial_pose_candidates.py
