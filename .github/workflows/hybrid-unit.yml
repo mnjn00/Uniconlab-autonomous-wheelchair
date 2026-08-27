@@ -15,6 +15,7 @@ on:
       - 'tests/test_hybrid_runtime_surface.py'
   push:
     branches:
+      - main
       - fix/hybrid-perception-avoidance
       - feat/rtx2060-pointpillars
 
@@ -63,6 +64,7 @@ jobs:
       - name: Hybrid policy and wiring tests
         run: |
           python -m pytest -q \
+            src/static_livox_localization/test/test_gpu_dwa_backend.py \
             src/static_livox_localization/test/test_hybrid_perception.py \
             src/static_livox_localization/test/test_hybrid_stack.py \
             src/static_livox_localization/test/test_route_mask_clearance.py \
