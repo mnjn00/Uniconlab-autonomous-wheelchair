@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# Canonical field entry point for the hybrid profile.
-#
-# ROS Noetic setup scripts read variables before defining them and can abort
-# under `set -u`. The underlying reviewed scripts intentionally remain
-# ordinary bash files; this launcher executes a temporary same-directory copy
-# with nounset relaxed, preserving their SCRIPT_DIR/repository resolution.
+# Canonical field entry point for the RTX-accelerated ROS1 hybrid profile.
 set -eo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -20,11 +15,16 @@ Usage:
   bash tools/hybrid.sh stop
   bash tools/hybrid.sh gpu-status
 
-Environment is passed through unchanged. Important variables:
-  REQUIRE_LEARNED=false|true
+`setup-gpu` installs/verifies both RTX paths:
+  1. CuPy nearest-neighbour acceleration for DWA
+  2. NVIDIA CUDA-PointPillars + FP16 TensorRT object detection
+
+Important environment variables:
   START_POINTPILLARS=true|false
+  REQUIRE_LEARNED=true|false
+  REQUIRE_DWA_GPU=true|false
   POINTPILLARS_MODEL=/path/to/pointpillar.plan
-  LEARNED_VISION_TOPIC=/pointpillars/detections
+  POINTPILLARS_REQUIRE_RTX2060=true|false
   CLIFF_REQUIRED=false|true
 EOF
 }
@@ -34,18 +34,24 @@ run_without_nounset() {
   shift
   [ -f "$source" ] || {
     echo "ERROR: missing hybrid script: $source" >&2
-    exit 66
+    return 66
   }
-  local temporary
+  local temporary status
   temporary="$(mktemp "$SCRIPT_DIR/.hybrid-runtime.XXXXXX.sh")"
-  trap 'rm -f "$temporary"' EXIT HUP INT TERM
   sed 's/^set -euo pipefail$/set -eo pipefail/' "$source" > "$temporary"
-  bash "$temporary" "$@"
+  if bash "$temporary" "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  rm -f "$temporary"
+  return "$status"
 }
 
 case "$COMMAND" in
   setup-gpu)
-    run_without_nounset "$SCRIPT_DIR/setup_rtx2060_pointpillars.sh" "$@"
+    run_without_nounset "$SCRIPT_DIR/install_nuc_gpu_runtime.sh" "$@" &&
+      run_without_nounset "$SCRIPT_DIR/setup_rtx2060_pointpillars.sh" "$@"
     ;;
   start)
     run_without_nounset "$SCRIPT_DIR/start_hybrid_avoidance.sh" "$@"
@@ -54,7 +60,8 @@ case "$COMMAND" in
     run_without_nounset "$SCRIPT_DIR/go_hybrid.sh" "$@"
     ;;
   gpu-status)
-    run_without_nounset "$SCRIPT_DIR/check_rtx2060_pointpillars.sh" "$@"
+    run_without_nounset "$SCRIPT_DIR/check_nuc_gpu_dwa.sh" "${1:-0}" &&
+      run_without_nounset "$SCRIPT_DIR/check_rtx2060_pointpillars.sh" "${1:-0}"
     ;;
   stop)
     STOP="${BASE_STOP:-$HOME/stop.sh}"
