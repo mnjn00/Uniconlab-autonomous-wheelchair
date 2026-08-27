@@ -6,6 +6,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Stock ROS Noetic SciPy predates the ``workers`` cKDTree keyword used by the
+# planner. Install the compatibility constructor before either dwa_core or the
+# GPU backend imports cKDTree.
+from scipy_ckdtree_compat import install as install_ckdtree_compat
+install_ckdtree_compat()
+
 import rospy
 
 import dwa_core
