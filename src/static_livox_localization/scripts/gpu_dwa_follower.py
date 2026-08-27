@@ -26,7 +26,7 @@ from dwa_follower import DwaFollower  # noqa: E402
 
 if __name__ == "__main__":
     try:
-        DwaFollower().spin()
+        DwaFollower().run()
     except GpuRequiredError as error:
         rospy.logfatal("required RTX DWA backend failed: %s", error)
         raise SystemExit(2)

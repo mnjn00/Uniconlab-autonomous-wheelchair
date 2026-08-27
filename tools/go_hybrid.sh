@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start motion only after the running hybrid graph proves it is ready.
+# Start motion only after both RTX paths and every fail-closed guard prove ready.
 set -eo pipefail
 
 source /opt/ros/noetic/setup.bash >/dev/null 2>&1
@@ -12,24 +12,50 @@ source "$LOCALIZATION_WS/devel/setup.bash"
 
 fail() { echo "REFUSING TO START: $*" >&2; exit 1; }
 
+START_POINTPILLARS="${START_POINTPILLARS:-true}"
+REQUIRE_GPU="${REQUIRE_GPU:-true}"
+POINTPILLARS_REQUIRE_RTX2060="${POINTPILLARS_REQUIRE_RTX2060:-true}"
+if [ "${REQUIRE_LEARNED+x}" = x ]; then
+  REQUIRE_LEARNED="$REQUIRE_LEARNED"
+else
+  REQUIRE_LEARNED="$START_POINTPILLARS"
+fi
+for pair in "START_POINTPILLARS:$START_POINTPILLARS" \
+            "REQUIRE_LEARNED:$REQUIRE_LEARNED" \
+            "REQUIRE_GPU:$REQUIRE_GPU" \
+            "POINTPILLARS_REQUIRE_RTX2060:$POINTPILLARS_REQUIRE_RTX2060"; do
+  name="${pair%%:*}"; value="${pair#*:}"
+  case "$value" in true|false) ;; *) fail "$name must be true or false" ;; esac
+done
+
 for node in /waypoint_follower /hybrid_geometric_objects \
             /hybrid_object_fusion /localization_exclusion_boxes \
             /semantic_safety_supervisor /terrain_guard /tip_guard; do
   rosnode ping -c1 "$node" >/dev/null 2>&1 || fail "$node is not running"
 done
 
-REQUIRE_GPU="${REQUIRE_GPU:-true}"
-REQUIRE_LEARNED="${REQUIRE_LEARNED:-false}"
-for pair in "REQUIRE_GPU:$REQUIRE_GPU" \
-            "REQUIRE_LEARNED:$REQUIRE_LEARNED"; do
-  name="${pair%%:*}"; value="${pair#*:}"
-  case "$value" in true|false) ;; *) fail "$name must be true or false" ;; esac
-done
+if [ "$REQUIRE_GPU" = "true" ]; then
+  REQUIRE_RTX2060="$POINTPILLARS_REQUIRE_RTX2060" \
+    "$SCRIPT_DIR/check_nuc_gpu_dwa.sh" 5 || \
+    fail "RTX/CuPy DWA health check failed"
+fi
+
+if [ "$START_POINTPILLARS" = "true" ]; then
+  rosnode ping -c1 /rtx_pointpillars >/dev/null 2>&1 || \
+    fail "/rtx_pointpillars is not running"
+  POINTPILLARS_ENV="${POINTPILLARS_ENV:-$HOME/.config/unicon/pointpillars.env}"
+  POINTPILLARS_ENV="$POINTPILLARS_ENV" \
+  REQUIRE_RTX2060="$POINTPILLARS_REQUIRE_RTX2060" \
+    "$SCRIPT_DIR/check_rtx2060_pointpillars.sh" 5 || \
+    fail "RTX 2060 PointPillars health check failed"
+fi
 
 rosrun static_livox_localization hybrid_preflight.py \
-  _require_gpu:="$REQUIRE_GPU" \
-  _require_learned:="$REQUIRE_LEARNED" _timeout_s:=5.0 || \
-  fail "hybrid preflight did not pass"
+  _require_learned:="$REQUIRE_LEARNED" \
+  _require_gpu_detector:="$START_POINTPILLARS" \
+  _require_rtx2060:="$POINTPILLARS_REQUIRE_RTX2060" \
+  _require_gpu_dwa:="$REQUIRE_GPU" \
+  _timeout_s:=5.0 || fail "hybrid preflight did not pass"
 
 # Reuse the original command ordering: every check above occurs before either
 # the auto-mode command or the follower start service.
