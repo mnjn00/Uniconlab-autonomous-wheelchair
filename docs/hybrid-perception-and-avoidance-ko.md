@@ -1,150 +1,174 @@
 # 하이브리드 객체 감지·분류·회피 프로파일
 
-이 프로파일은 ROS1 Noetic, FAST-LIO/GICP 측위, 기존 경로·안전 밴드,
-`wheel_cmd_tmp.py`/UART를 바꾸지 않는다. 기존 기동은 긴급 롤백으로 그대로
-남기고, `start_hybrid_avoidance.sh`가 기동 후 교체 가능한 노드만 안전하게
-다시 올린다.
+이 문서는 `tools/hybrid.sh`가 실행하는 **실제 ROS1 그래프**를 설명한다.
+스크립트 하나가 객체 감지나 회피 알고리즘을 대신하는 것이 아니다. 스크립트는
+아래 노드들을 한 명령 체인으로 연결하는 진입점일 뿐이다.
 
-## 해결하는 문제
+기존 FAST-LIO/GICP 측위, 경로·safety band·drivable mask, 휠 베이스,
+`safety_gate.py`, `tip_guard.py`, UART watchdog은 유지한다. 기존
+`start_wheelchair_localization.sh`와 `go.sh`도 긴급 롤백 경로로 남는다.
 
-1. **학습 검출기가 놓친 장애물이 사라지는 문제**
-   - 기존 기하학 클러스터가 항상 남는다.
-   - 학습 결과는 클래스 보강과 고신뢰 box 추가만 할 수 있다.
-   - 학습 결과가 기하학 객체를 삭제하거나 도로를 clear로 만들 수 없다.
+## 실제 구현 범위
 
-2. **LiDAR 원점과 의자 중심 원점 혼용**
-   - 기존 `/perception/geometric_objects_summary`는 `lidar` 기준이다.
-   - fusion 출력은 실제 회전 중심인 `chair_centre` 기준으로 변환된다.
-   - DWA가 의자 중심 pose에 상대 객체 좌표를 더할 때 약 0.5 m의 전후 오차가
-     생기지 않는다.
+### 저장소 안에 구현됨
 
-3. **사람 앞에서 STOP/GO가 반복되는 문제**
-   - DWA 명령은 바로 안전 게이트로 가지 않고 semantic supervisor를 지난다.
-   - 사람 정지는 동적 정지거리가 줄어도 0.30 m release margin까지 유지된다.
-  -  원직이거나 아직 정지 여부를 알 수 없는 객체는 가까우면 정지한다.
-   - 확인된 정적 비사람 객체만 DWA에 우회를 맡긴다.
+- 지도 차감 없이 height-filtered MID-360 기하학 클러스터 생성
+- 기하학 객체와 선택적 학습 3D detection의 fail-closed 융합
+- 모든 제어용 객체 좌표를 `chair_centre` 기준으로 통일
+- 사람과 moving/unknown 객체를 DWA보다 뒤, raw safety gate보다 앞에서 정지
+- 정지 사람 앞 STOP/GO 반복을 막는 release hysteresis
+- DWA 제안 명령을 semantic supervisor가 승인한 뒤에만 `/cmd_vel_raw`로 전달
+- route mask와 safety band를 다시 검사하는 terrain guard
+- 학습 detector 및 하향 cliff detector의 stale/malformed fail-closed 계약
+- PointCloud2 NumPy fast decoder 사용
+- 출발 전 전체 그래프와 localization 상태 검사
 
-4. **인도 경계 밖으로 회피할 가능성**
-   - `terrain_guard.py`가 현재 명령을 정지 horizon까지 rollout한다.
-   - route mask와 safety band의 모든 점·선분을 통과해야 한다.
-   - 경계 0.35 m 이내에서는 0.35 m/s로 제한하고, 0.12 m 미만 또는 경계
-     횡단이면 즉시 정지한다.
-  -  하향 cliff 센서가 추가되면 `CLIFF_REQUIRED=true`로 센서 침묵까지 정지
-     조건으로 만들 수 있다.
+### 저장소 밖에서 준비해야 함
 
-5. **PointCloud2 Python 변환 CPU 폭주**
-   - follower와 safety gate가 공유하는 `scan_accumulator.py`를
-     `cloud_points.points_xyz()`의 NumPy decoder로 교체했다.
+- PointPillars/CenterPoint 학습 가중치와 TensorRT engine
+- 해당 engine을 실행하여 `vision_msgs/Detection3DArray`를 발행하는 ROS1 node
+- 실제 하향 2D LiDAR 또는 depth cliff detector
+- NUC 배포 후 catkin build, bag replay, 무인 저속 실차 검증
 
-## 새 명령 체인
+따라서 이 PR은 **학습 모델을 훈련했다고 주장하지 않는다.** 모델이 없으면
+geometry-only로 동작하고, `REQUIRE_LEARNED=true`일 때는 학습 detector가 정상이라는
+증거가 없으면 출발을 거부한다.
+
+## 실제 명령 체인
 
 ```text
-obstacle_clusters.py
-  /perception/geometric_objects_summary   lidar frame
+/cloud_registered_body + /Odometry + /fast_lio_icp/pose
                   │
-learned Detection3DArray (optional)
-  vision_detection_bridge.py
-  /perception/learned_objects_summary     lidar frame
+                  ▼
+hybrid_geometric_objects.py
+  - 기존 누적/자체제거/height filter/클러스터/profile/tracker 재사용
+  - fixed-map subtraction은 사용하지 않음
+  - mapped wall·bench도 회피 geometry에 남김
+  /perception/geometric_objects_summary       lidar frame
+  /perception/geometric_exclusion_candidates  body frame
+                  │
+       optional Detection3DArray
+                  │
+                  ▼
+vision_detection_bridge.py
+  - source frame → body TF → 측정된 body_T_lidar
+  - oriented box를 보수적인 axis-aligned box로 변환
+  /perception/learned_objects_summary          lidar frame
                   │
                   ▼
 hybrid_object_fusion.py
-  /perception/objects_summary             chair_centre frame
+  - learning은 geometry를 삭제할 수 없음
+  - person label 승격 또는 고신뢰 learned-only box 추가
+  /perception/objects_summary                  chair_centre frame
                   │
-                  ▼
-dwa_follower.py
-  /cmd_vel_planned
-                  │
-                  ▼
-semantic_safety_supervisor.py
-  /cmd_vel_raw
-                  │
-                  ▼
-기존 safety_gate.py
-  /cmd_vel_gated
-                  │
-                  ▼
-terrain_guard.py
-  /cmd_vel_terrain_safe
-                  │
-                  ▼
-기존 tip_guard.py
-  /cmd_vel → wheel_cmd → UART
+       ┌──────────┴──────────┐
+       ▼                     ▼
+localization_exclusion_   dwa_follower.py
+boxes.py                  /cmd_vel_planned
+  - person                 │
+  - measured moving        ▼
+  - learned dynamic      semantic_safety_supervisor.py
+    class만 제외          - person 정지
+  /perception/            - moving/unknown 정지
+  dynamic_boxes           - stale/malformed 정지
+                          /cmd_vel_raw
+                              │
+                              ▼
+                        기존 safety_gate.py
+                          /cmd_vel_gated
+                              │
+                              ▼
+                        terrain_guard.py
+                          /cmd_vel_terrain_safe
+                              │
+                              ▼
+                        기존 tip_guard.py
+                          /cmd_vel → wheel_cmd → UART
 ```
 
-각 단계가 죽으면 다음 단계의 stale watchdog이 0 명령을 낸다. 기존 joystick
-manual override와 `stop.sh`도 그대로 유지된다.
+## 왜 지도 차감을 회피 geometry에서 제거했는가
 
-## 배포
+기존 `obstacle_clusters.py`는 immutable map과 가까운 live return을 제거한 뒤
+클러스터링했다. 그 방식은 localization용 novelty 판단에는 유용하지만 다음 교착을
+만들 수 있다.
 
-저장소를 NUC에 배포하고 `static_livox_localization` 패키지를 다시 빌드한다.
-기존 `push_to_nuc.sh`가 저장소 패키지를 실제 workspace로 rsync하고 catkin build를
-수행한다.
+```text
+raw safety gate: 벽 또는 장애물이 보이므로 정지
+cluster planner : 지도와 겹쳤으므로 객체가 없음
+DWA             : 계속 전진 명령
+결과            : gate가 계속 0으로 만들어 영구 정지
+```
+
+하이브리드 프로파일은 map subtraction을 collision/avoidance geometry에서 끈다.
+대신 모든 박스를 localizer에서 제외하지 않도록 별도 노드가 person과 실제 moving
+증거만 `/perception/dynamic_boxes`로 보낸다. 정적인 mapped wall을 localization에서
+지워 측위를 약화시키지 않는다.
+
+## 좌표계
+
+- 기존 기하학 summary: `lidar`
+- 학습 bridge 출력: `lidar`
+- fused control summary: `chair_centre`
+- marker/localizer exclusion: `body`
+- route, band, terrain guard: `map`
+
+fusion 변환은 `body_frame.py`의 실측 extrinsic과
+`CHAIR_CENTRE_IN_BODY_XYZ`를 사용한다. LiDAR 상대좌표를 의자 중심 pose에 그대로
+더하던 약 0.5 m 전후 오차를 허용하지 않는다.
+
+## 사람과 이동 객체 정책
+
+- 사람: 정지하고 기다림
+- `motion == moving`: 정지하고 기다림
+- `motion == unknown`: 정지거리 안에서는 정지
+- 확인된 static 비사람 객체: DWA가 우회 궤적을 찾음
+- perception/command stale 또는 malformed: 정지
+
+사람 때문에 한 번 정지하면 정지 후 작아진 braking envelope만으로 즉시 재출발하지
+않는다. 가장 큰 stop radius에 0.30 m release margin을 더한 위치를 벗어날 때까지
+정지 상태를 유지한다. perception이 한 프레임 끊겨도 이 latch를 초기화하지 않는다.
+
+## 인도 경계와 낙하 방지
+
+`terrain_guard.py`는 현재 명령을 unicycle model로 정지 horizon까지 rollout하고 다음을
+검사한다.
+
+- route mask의 모든 점과 선분이 contained인가
+- safety band의 모든 점과 chord가 contained인가
+- mask boundary clearance가 hard/slow threshold를 만족하는가
+- pose와 입력 명령이 최신인가
+- 선택적으로 `/terrain/cliff_status`가 최신이며 safe인가
+
+안전한 인도 내부 우회가 없으면 차도나 mask 밖으로 내려가지 않고 정지한다.
+
+MID-360만으로는 가까운 바닥이나 지도 생성 후 생긴 구멍을 확인할 수 없다.
+`CLIFF_REQUIRED=false`에서는 지도·band 기반 방어만 제공한다. 하향 센서를 검증한 후
+아래처럼 승격한다.
 
 ```bash
-cd ~/wheelchair_localization_src
-git fetch --all --prune
-git checkout main
-git reset --hard github/main
-
-# 기존 지도 볼륨을 사용하는 표준 배포
-./tools/push_to_nuc.sh /path/to/merged_0707_0725_v1
+CLIFF_REQUIRED=true \
+CLIFF_TOPIC=/terrain/cliff_status \
+  bash ~/wheelchair_localization_src/tools/hybrid.sh start
 ```
 
-wrapper는 `$HOME` 복사본이 없어도 저장소에서 직접 실행할 수 있다.
+cliff topic은 `std_msgs/String` JSON이다.
 
-```bash
-~/wheelchair_localization_src/tools/start_hybrid_avoidance.sh
-~/wheelchair_localization_src/tools/go_hybrid.sh
-~/stop.sh
+```json
+{"stamp": 123.4, "status": "OK", "safe": true}
 ```
 
-기존 검증 프로파일로 복귀할 때는 기존 스크립트를 사용한다.
+stale, malformed, `safe=false`이면 terrain guard가 0을 출력한다.
 
-```bash
-~/start_wheelchair_localization.sh
-~/go.sh
+## 학습 detector 연결
+
+외부 detector의 출력 계약:
+
+```text
+Topic: LEARNED_VISION_TOPIC
+Type : vision_msgs/Detection3DArray
 ```
 
-## 학습 detector 없이 시작
-
-기본은 geometry-only다. 장애물 회피와 사람 heuristic은 기존 detector를 사용하고,
-새 좌표계·semantic stop·terrain guard·fast cloud decoder는 모두 활성화된다.
-
-```bash
-REQUIRE_LEARNED=false \
-  ~/wheelchair_localization_src/tools/start_hybrid_avoidance.sh
-```
-
-fusion status는 `mode: geometric_only`이고, 이것은 정상 상태다. geometric source가
-`NO_CLOUD`, `NO_MAP_POSE`, stale이면 output `status`가 `OK`가 아니므로 모든
-consumer가 fail closed한다.
-
-## PointPillars 또는 CenterPoint 연결
-
-모델·TensorRT engine은 저장소에 넣지 않는다. 엔진은 GPU compute capability,
-TensorRT/CUDA 버전, 학습 클래스에 종속되기 때문이다. 외부 detector는 표준
-`vision_msgs/Detection3DArray`를 발행하면 된다.
-
-권장 구현 기반:
-
-- NVIDIA-AI-IOT/CUDA-PointPillars
-- NVIDIA-AI-IOT/Lidar_AI_Solution
-- OpenMMLab MMDetection3D에서 학습 후 TensorRT export
-
-예시:
-
-```bash
-# 외부 PointPillars node가 이 topic을 발행 중이어야 한다.
-rostopic type /pointpillars/detections
-# vision_msgs/Detection3DArray
-
-REQUIRE_LEARNED=true \
-LEARNED_VISION_TOPIC=/pointpillars/detections \
-LEARNED_MODEL_ID=pointpillars-mid360-v1 \
-  ~/wheelchair_localization_src/tools/start_hybrid_avoidance.sh
-```
-
-`vision_detection_bridge.py` 기본 class map:
+기본 class map:
 
 | ID | class |
 |---:|---|
@@ -153,97 +177,92 @@ LEARNED_MODEL_ID=pointpillars-mid360-v1 \
 | 2 | two_wheeler |
 | 3 | obstacle |
 
-detector frame은 TF로 `lidar`에 변환된다. TF가 없으면 bridge가
-`TF_UNAVAILABLE`을 내며, `REQUIRE_LEARNED=true`에서는 출발이 거부된다.
-
-## 학습 데이터 정책
-
-처음 클래스는 네 개면 충분하다.
-
-```text
-person
-vehicle
-two_wheeler
-obstacle
-```
-
-세션 또는 rosbag 단위로 train/validation/test를 나눈다. 인접 프레임을 무작위로
-나누면 같은 장면이 양쪽에 들어가 성능이 부풀려진다. 반드시 포함할 hard negative:
-
-- 탑승자 다리·발·발판·팔걸이
-- 경사 정상부의 도로
-- 대각선 벽, 수풀, 나뭇가지
-- 반사 표지판, 거울·유리
-- 벽 가까이 선 사람
-- 가려진 오토바이, 낮은 박스, 얇은 기둥
-
-학습 detector는 semantic 보조다. 충돌 recall은 geometric source와 raw safety gate가
-계속 담답한다.
-
-## 인도와 cliff 센서
-
-현재 지도 기반 방어는 즉시 사용할 수 있다.
+권장 기반은 NVIDIA CUDA-PointPillars, NVIDIA Lidar AI Solution 또는
+MMDetection3D에서 학습한 PointPillars/CenterPoint다. 모델과 engine은 NUC CUDA,
+TensorRT, GPU compute capability 및 자체 MID-360 데이터에 종속되므로 저장소에
+가짜 범용 engine을 포함하지 않는다.
 
 ```bash
-CLIFF_REQUIRED=false \
-  ~/wheelchair_localization_src/tools/start_hybrid_avoidance.sh
+REQUIRE_LEARNED=true \
+LEARNED_VISION_TOPIC=/pointpillars/detections \
+LEARNED_MODEL_ID=pointpillars-mid360-v1 \
+  bash ~/wheelchair_localization_src/tools/hybrid.sh start
 ```
 
-하향 2D LiDAR 또는 depth cliff node가 다음 JSON String을 발행하도록 연결한다.
-
-```json
-{"stamp": 123.4, "status": "CLEAR", "safe": true}
-```
-
-그다음:
+모델이 준비되지 않은 첫 검증:
 
 ```bash
-CLIFF_REQUIRED=true \
-CLIFF_TOPIC=/terrain/cliff_status \
-  ~/wheelchair_localization_src/tools/start_hybrid_avoidance.sh
+REQUIRE_LEARNED=false \
+  bash ~/wheelchair_localization_src/tools/hybrid.sh start
 ```
 
-센서가 stale, malformed, unsafe이면 `terrain_guard`가 0을 출력한다. 센서가
-차도 쪽 지면을 발견해도 route mask 밖을 허가하지 않는다.
+이때 heuristic class와 tracked motion을 사용하지만 학습 기반 분류라고 부르지 않는다.
 
-## 출발 전 확인
+## 기동
 
-`go_hybrid.sh`는 아래를 모두 명령 전에 확인한다.
+전체 그래프를 올리되 PAUSED 상태로 유지:
 
-- `/waypoint_follower/control_law == dwa`
-- fused summary `status == OK`
-- fused frame `chair_centre`
-- learning required 시 `mode == hybrid`
-- semantic supervisor가 hold 중이 아님
-- terrain guard가 hold 중이 아님
-- localization이 `TRACKING`
-
-하나라도 실패하면 auto mode와 start service를 호출하지 않는다.
-
-## 기록되는 추가 토픽
-
-기존 black box 외에 `hybrid_*.bag`이 다음만 별도로 기록한다.
-
-```text
-/perception/geometric_objects_summary
-/perception/learned_objects_summary
-/perception/hybrid_status
-/cmd_vel_planned
-/semantic_safety/status
-/cmd_vel_terrain_safe
-/terrain_guard/status
+```bash
+bash ~/wheelchair_localization_src/tools/hybrid.sh start
 ```
 
-## 실차 승격 순서
+출발 전 preflight 후 기존 `go.sh`에 위임:
 
-1. 바퀴를 띄우거나 모터 전원을 분리한 상태에서 topic chain 확인
-2. geometry-only, `CLIFF_REQUIRED=false`, 0.35 m/s 이하 저속 시험
-3. 박스·콘·벽·오토바이 정적 우회
-4. 사람이 경로에 들어올 때 정지와 release 확인
-5. 인도 경계에서 `MASK_CLEARANCE`와 `MASK_BOUNDARY` 확인
-6. 학습 detector shadow 기록과 오검출 분석
-7. `REQUIRE_LEARNED=true` 승격
-8. 하향 센서 검증 후 `CLIFF_REQUIRED=true` 승격
+```bash
+bash ~/wheelchair_localization_src/tools/hybrid.sh go
+```
 
-이 프로파일은 main에 포함되어도 기존 startup의 실차 검증 상태를 덮어쓰지 않는다.
-새 profile은 별도로 검증하고, 문제가 있으면 기존 startup으로 즉시 되돌린다.
+정지:
+
+```bash
+bash ~/wheelchair_localization_src/tools/hybrid.sh stop
+```
+
+`go`는 최소한 다음 노드와 상태를 확인한다.
+
+- `/waypoint_follower`가 실제 DWA control law인지
+- `/hybrid_geometric_objects`
+- `/hybrid_object_fusion`
+- `/localization_exclusion_boxes`
+- `/semantic_safety_supervisor`
+- `/terrain_guard`
+- `/tip_guard`
+- fused summary `status == OK`, `frame == chair_centre`
+- learning required 시 fusion mode가 hybrid인지
+- semantic/terrain guard가 blocked가 아닌지
+- localization이 `TRACKING`인지
+
+하나라도 실패하면 auto mode와 follower start service를 호출하지 않는다.
+
+## 배포와 검증 순서
+
+```bash
+cd ~/wheelchair_localization_src
+git fetch --all --prune
+git checkout main
+git reset --hard github/main
+```
+
+그다음 기존 `push_to_nuc.sh`로 실제 localization workspace에 rsync하고 catkin build한다.
+GitHub main만 바뀌어도 NUC 실행 파일은 자동으로 바뀌지 않는다.
+
+승격 순서:
+
+1. Docker/Noetic catkin build 및 unit/regression test
+2. NUC build와 모든 토픽 주기 측정
+3. 모터 전원을 분리하거나 바퀴를 띄운 command-chain 시험
+4. geometry-only, 빈 휠체어, 0.35 m/s 제한 저속 시험
+5. 박스·기둥·벽·오토바이 정적 우회
+6. 사람 진입 시 정지와 release hysteresis
+7. 인도 경계에서 terrain guard 차단
+8. 학습 detector shadow bag 수집·평가
+9. `REQUIRE_LEARNED=true`
+10. 하향 센서 검증 후 `CLIFF_REQUIRED=true`
+
+## 현재 한계
+
+- 기본 global startup은 바뀌지 않았고 hybrid는 명시적으로 실행해야 한다.
+- 실제 회피 planner는 TEB가 아니라 기존 DWA다.
+- geometry-only mode의 class는 학습 기반이 아니라 기존 heuristic이다.
+- 학습 engine과 하향 센서가 없으면 각각 learned semantics와 live cliff 검출은 없다.
+- 소프트웨어 CI 통과는 NUC 성능, 실차 주행, 승객 안전 승인을 뜻하지 않는다.
