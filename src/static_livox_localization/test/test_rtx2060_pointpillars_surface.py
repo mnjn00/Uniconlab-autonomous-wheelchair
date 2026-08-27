@@ -6,6 +6,7 @@ without building, running, measuring, and gating on actual GPU inference.
 """
 
 from pathlib import Path
+import subprocess
 
 
 PACKAGE = Path(__file__).parents[1]
@@ -104,3 +105,19 @@ def test_hybrid_entry_point_exposes_gpu_setup_and_observability():
     assert "require_rtx2060: true" in config
     assert "max_inference_ms: 90.0" in config
     assert "person_score_threshold: 0.30" in config
+
+
+def test_all_rtx_shell_entry_points_parse_in_bash():
+    scripts = [
+        ROOT / "tools" / "hybrid.sh",
+        ROOT / "tools" / "setup_rtx2060_pointpillars.sh",
+        ROOT / "tools" / "check_rtx2060_pointpillars.sh",
+        ROOT / "tools" / "start_hybrid_avoidance.sh",
+        ROOT / "tools" / "go_hybrid.sh",
+    ]
+    result = subprocess.run(
+        ["bash", "-n", *[str(path) for path in scripts]],
+        check=False, text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT)
+
+    assert result.returncode == 0, result.stdout
