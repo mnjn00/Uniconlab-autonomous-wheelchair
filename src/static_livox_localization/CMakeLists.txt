@@ -64,6 +64,7 @@ catkin_install_python(
     scripts/waypoint_follower.py
     scripts/mpc_follower.py
     scripts/dwa_follower.py
+    scripts/gpu_dwa_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
     scripts/hybrid_geometric_objects.py
@@ -80,6 +81,7 @@ install(
   FILES
     scripts/array_backend.py
     scripts/gpu_voxel_scorer.py
+    scripts/gpu_dwa_backend.py
     scripts/body_frame.py
     scripts/dwa_core.py
     scripts/hybrid_perception.py
