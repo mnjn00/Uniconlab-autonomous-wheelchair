@@ -58,8 +58,12 @@ def bypass_swept_footprint_collision(
         obstacles, linear_speed_mps, angular_speed_rps, horizon_s):
     longitudinal_padding = (
         base_gate.SWEEP_MARGIN_M - BYPASS_SIDE_MARGIN_M)
-    return base_gate.swept_footprint_collision(
-        obstacles,
+    rear = obstacles[
+        obstacles[:, 0] < -base_gate.FOOTPRINT_REAR_M]
+    forward = obstacles[
+        obstacles[:, 0] >= -base_gate.FOOTPRINT_REAR_M]
+    forward_collision = base_gate.swept_footprint_collision(
+        forward,
         linear_speed_mps=linear_speed_mps,
         angular_speed_rps=angular_speed_rps,
         horizon_s=horizon_s,
@@ -67,6 +71,17 @@ def bypass_swept_footprint_collision(
         rear_m=base_gate.FOOTPRINT_REAR_M + longitudinal_padding,
         half_width_m=base_gate.FOOTPRINT_HALF_WIDTH_M,
         margin_m=BYPASS_SIDE_MARGIN_M)
+    if forward_collision:
+        return True
+    return base_gate.swept_footprint_collision(
+        rear,
+        linear_speed_mps=linear_speed_mps,
+        angular_speed_rps=angular_speed_rps,
+        horizon_s=horizon_s,
+        front_m=base_gate.FOOTPRINT_FRONT_M,
+        rear_m=base_gate.FOOTPRINT_REAR_M,
+        half_width_m=base_gate.FOOTPRINT_HALF_WIDTH_M,
+        margin_m=0.0)
 
 
 class TrajectorySafetyGate(base_gate.SafetyGate):
@@ -137,24 +152,20 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             return reason, cap
 
         # The ordinary sweep includes its rear safety margin at t=0. During
-        # forward, nearly straight motion that margin can only move away from
-        # a return already behind the physical rear plane. Do not let a passed
-        # person or the chair's rear-edge returns restart the stop-go cycle.
-        # Meaningful turns retain every rear point because the tail can swing.
+        # forward motion, passed returns use the physical tail sweep instead:
+        # clear points no longer restart stop-go, while a real tail swing is
+        # still rejected by bypass_swept_footprint_collision.
         if reason == "OBSTACLE_SWEEP" and \
-                float(self.raw.linear.x) > base_gate.MOTION_EPSILON and \
-                abs(float(self.raw.angular.z)) < self.minimum_bypass_turn_rps:
+                float(self.raw.linear.x) > base_gate.MOTION_EPSILON:
             obstacles = self.collision_points()
-            forward_obstacles = obstacles[
-                obstacles[:, 0] >= -base_gate.FOOTPRINT_REAR_M]
             horizon_s = self.evidence.get("horizon_s")
             if horizon_s is not None and not bypass_swept_footprint_collision(
-                    forward_obstacles,
+                    obstacles,
                     linear_speed_mps=float(self.raw.linear.x),
                     angular_speed_rps=float(self.raw.angular.z),
                     horizon_s=float(horizon_s)):
                 self.evidence["trajectory_override_reason"] = \
-                    "FULLY_BEHIND_CLEAR"
+                    "REAR_MARGIN_CLEAR"
                 return "", cap
 
         now_s = now.to_sec()
