@@ -28,6 +28,7 @@ from gpu_dwa_backend import GpuRequiredError, install_gpu_planner
 # ROS params still choose CuPy or the diagnostic CPU path.
 install_gpu_planner(dwa_core)
 from cluster_guard import GO_ROUND  # noqa: E402
+from trajectory_safety_gate import make_raw_gate_candidate_veto  # noqa: E402
 from dwa_follower import DwaFollower  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
     StaticPersonQualifier,
@@ -42,6 +43,7 @@ class PersonBypassDwaFollower(DwaFollower):
     def __init__(self):
         self._gate_rejected_yaw_rates = set()
         self._gate_rejected_track_id = None
+        self.active_trajectory_permit = None
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
             "~person_bypass_confirmation_s", 3.0))
@@ -63,6 +65,8 @@ class PersonBypassDwaFollower(DwaFollower):
             "~person_bypass_speed_mps", 0.35))
         self.person_bypass_clearance_m = float(rospy.get_param(
             "~person_bypass_clearance_m", 0.50))
+        self.minimum_person_bypass_turn_rps = float(rospy.get_param(
+            "/safety_gate/minimum_person_bypass_turn_rps", 0.08))
         self.qualifier = StaticPersonQualifier(
             confirmation_s=self.person_bypass_confirmation_s,
             maximum_gap_s=self.person_bypass_maximum_gap_s,
@@ -79,6 +83,7 @@ class PersonBypassDwaFollower(DwaFollower):
             "/person_bypass/permit", String, queue_size=1, latch=False)
         self._permit_published_this_cycle = False
         rospy.set_param("~person_bypass_capable", True)
+        rospy.set_param("~raw_gate_candidate_precheck", True)
         rospy.loginfo(
             "stationary-person bypass: %.1f s same-track STATIC, "
             "v<=%.2f m/s, clearance>=%.2f m",
@@ -107,6 +112,7 @@ class PersonBypassDwaFollower(DwaFollower):
         self._gate_rejected_track_id = None
 
     def activate_trajectory_bypass(self, permit, detail):
+        self.active_trajectory_permit = permit
         if self._gate_rejected_track_id != permit.track_id:
             self._gate_rejected_yaw_rates.clear()
             self._gate_rejected_track_id = permit.track_id
@@ -198,7 +204,17 @@ class PersonBypassDwaFollower(DwaFollower):
             permit, "static-person trajectory permit")
         return GO_ROUND
 
+    def planner_candidate_veto(self, now, _decision, command_for_target):
+        if self.active_trajectory_permit is None:
+            return None
+        return make_raw_gate_candidate_veto(
+            self.cloud, self.motion,
+            (now - self.cloud_stamp).to_sec(), command_for_target,
+            minimum_turn_rps=self.minimum_person_bypass_turn_rps,
+            now_s=now.to_sec())
+
     def step(self):
+        self.active_trajectory_permit = None
         self._permit_published_this_cycle = False
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
