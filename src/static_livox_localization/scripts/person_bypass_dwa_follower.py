@@ -8,6 +8,8 @@ unknown, learned-only, too-close, multiple, stale, or geometrically invalid
 people remain stop-only.
 """
 
+import json
+import math
 import os
 import sys
 
@@ -30,6 +32,7 @@ from dwa_follower import DwaFollower  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
     StaticPersonQualifier,
     person_observations,
+    static_obstacle_permit,
 )
 
 
@@ -37,11 +40,13 @@ class PersonBypassDwaFollower(DwaFollower):
     CONTROL_LAW = "dwa"
 
     def __init__(self):
+        self._gate_rejected_yaw_rates = set()
+        self._gate_rejected_track_id = None
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
             "~person_bypass_confirmation_s", 3.0))
         self.person_bypass_maximum_gap_s = float(rospy.get_param(
-            "~person_bypass_maximum_gap_s", 0.35))
+            "~person_bypass_maximum_gap_s", 0.45))
         self.person_bypass_position_jump_m = float(rospy.get_param(
             "~person_bypass_position_jump_m", 0.35))
         self.person_bypass_permit_lifetime_s = float(rospy.get_param(
@@ -50,6 +55,8 @@ class PersonBypassDwaFollower(DwaFollower):
             "~person_bypass_maximum_forward_m", 8.0))
         self.person_bypass_maximum_lateral_m = float(rospy.get_param(
             "~person_bypass_maximum_lateral_m", 1.0))
+        self.person_bypass_lateral_hysteresis_m = float(rospy.get_param(
+            "~person_bypass_lateral_hysteresis_m", 0.25))
         self.person_bypass_minimum_near_m = float(rospy.get_param(
             "~person_bypass_minimum_near_m", 0.60))
         self.person_bypass_speed_mps = float(rospy.get_param(
@@ -63,6 +70,7 @@ class PersonBypassDwaFollower(DwaFollower):
             permit_lifetime_s=self.person_bypass_permit_lifetime_s,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
             maximum_lateral_m=self.person_bypass_maximum_lateral_m,
+            lateral_hysteresis_m=self.person_bypass_lateral_hysteresis_m,
             minimum_near_distance_m=self.person_bypass_minimum_near_m,
             max_speed_mps=self.person_bypass_speed_mps,
             min_clearance_m=self.person_bypass_clearance_m,
@@ -82,6 +90,37 @@ class PersonBypassDwaFollower(DwaFollower):
         self.permit_pub.publish(String(data=permit.to_json()))
         self._permit_published_this_cycle = True
 
+    def on_gate_status(self, message):
+        super(PersonBypassDwaFollower, self).on_gate_status(message)
+        try:
+            report = json.loads(message.data)
+            reason = str(report.get("trajectory_override_reason") or "")
+            requested_yaw = float(report.get("trajectory_requested_w"))
+        except (TypeError, ValueError):
+            return
+        if reason in ("REQUESTED_PATH_COLLISION", "TURN_TOO_SMALL") and \
+                math.isfinite(requested_yaw):
+            self._gate_rejected_yaw_rates.add(requested_yaw)
+
+    def reset_gate_rejections(self):
+        self._gate_rejected_yaw_rates.clear()
+        self._gate_rejected_track_id = None
+
+    def activate_trajectory_bypass(self, permit, detail):
+        if self._gate_rejected_track_id != permit.track_id:
+            self._gate_rejected_yaw_rates.clear()
+            self._gate_rejected_track_id = permit.track_id
+        self.planner.max_speed = min(
+            float(self.planner.max_speed), float(permit.max_speed_mps))
+        dwa_core.OBSTACLE_FLOOR_M = max(
+            float(dwa_core.OBSTACLE_FLOOR_M),
+            float(permit.min_clearance_m))
+        self.planner.rejected_yaw_rates = tuple(
+            sorted(self._gate_rejected_yaw_rates))
+        self.gate_reason = ""
+        self.gate_blocked_since = None
+        self.gate_detail = detail
+
     def inactive_permit(self, now, reason):
         return self.qualifier.inactive(now.to_sec(), reason)
 
@@ -98,11 +137,15 @@ class PersonBypassDwaFollower(DwaFollower):
         threat = self.corridor_threat(0.0)
         if threat is None or not threat.is_person:
             self.qualifier.reset()
+            if threat is None:
+                self.reset_gate_rejections()
             return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
         observations = person_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
-            maximum_lateral_m=self.person_bypass_maximum_lateral_m,
+            maximum_lateral_m=(
+                self.person_bypass_maximum_lateral_m
+                + self.person_bypass_lateral_hysteresis_m),
         )
         return self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING")
@@ -112,8 +155,31 @@ class PersonBypassDwaFollower(DwaFollower):
             now, threat, blocking)
         if threat is None or not threat.is_person:
             self.qualifier.reset()
-            self.publish_permit(self.inactive_permit(
-                now, "NEAREST_THREAT_NOT_PERSON"))
+            if threat is None or ordinary != GO_ROUND:
+                self.reset_gate_rejections()
+                self.publish_permit(self.inactive_permit(
+                    now, "NEAREST_THREAT_NOT_PERSON"))
+                return ordinary
+            permit = static_obstacle_permit(
+                now_s=now.to_sec(),
+                observed_stamp_s=threat.observed_stamp_s,
+                track_id=threat.track_id,
+                target_x_m=threat.distance_m,
+                target_y_m=threat.lateral_m,
+                motion=threat.motion,
+                directly_observed=threat.directly_observed,
+                geometry_valid=threat.geometry_valid,
+                maximum_observation_age_s=self.person_bypass_maximum_gap_s,
+                permit_lifetime_s=self.person_bypass_permit_lifetime_s,
+                max_speed_mps=self.person_bypass_speed_mps,
+                min_clearance_m=self.person_bypass_clearance_m,
+            )
+            self.publish_permit(permit)
+            if permit.active:
+                self.activate_trajectory_bypass(
+                    permit, "static-object trajectory permit")
+            else:
+                self.reset_gate_rejections()
             return ordinary
 
         permit = self.observed_person_permit(now)
@@ -124,25 +190,20 @@ class PersonBypassDwaFollower(DwaFollower):
         # DWA-only authorization. The semantic and raw trajectory gates both
         # consume the same short-lived permit; neither can infer authorization
         # from a class label or from this return value alone.
-        self.planner.max_speed = min(
-            float(self.planner.max_speed), float(permit.max_speed_mps))
-        dwa_core.OBSTACLE_FLOOR_M = max(
-            float(dwa_core.OBSTACLE_FLOOR_M),
-            float(permit.min_clearance_m))
-
         # The base GATE_STALL diagnostic is for an obstacle absent from planner
         # geometry. This person is present in geometry and the trajectory
         # gate is now the authority, so the old fixed-corridor reason must not
         # pre-empt the DWA cycle before a curved proposal exists.
-        self.gate_reason = ""
-        self.gate_blocked_since = None
-        self.gate_detail = "static-person trajectory permit"
+        self.activate_trajectory_bypass(
+            permit, "static-person trajectory permit")
         return GO_ROUND
 
     def step(self):
         self._permit_published_this_cycle = False
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
+        saved_rejected_yaws = getattr(
+            self.planner, "rejected_yaw_rates", ())
         now = rospy.Time.now()
         # Publish a continuously refreshed qualification heartbeat before the
         # base hold ladder can return for PAUSED/MANUAL/STARTUP. This does not
@@ -154,6 +215,7 @@ class PersonBypassDwaFollower(DwaFollower):
         finally:
             self.planner.max_speed = saved_max_speed
             dwa_core.OBSTACLE_FLOOR_M = saved_clearance
+            self.planner.rejected_yaw_rates = saved_rejected_yaws
             if not self._permit_published_this_cycle:
                 if self.tracking_state != "TRACKING":
                     self.qualifier.reset()

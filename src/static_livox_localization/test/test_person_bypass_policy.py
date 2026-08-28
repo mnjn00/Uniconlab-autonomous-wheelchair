@@ -11,6 +11,7 @@ from person_bypass_policy import (  # noqa: E402
     permit_is_fresh,
     permit_matches_observation,
     person_observations,
+    static_obstacle_permit,
 )
 
 
@@ -78,6 +79,58 @@ def test_dropout_identity_change_jump_and_tracking_loss_reset_the_timer():
         person_observations(summary(4.0, [person()])), 4.0, False).active
 
 
+def test_fusion_cadence_jitter_does_not_reset_a_static_person():
+    qualifier = StaticPersonQualifier(confirmation_s=1.0)
+
+    permit = None
+    for index in range(7):
+        stamp = 1.0 + 0.2 * index
+        observations = person_observations(summary(stamp, [person()]))
+        permit = qualifier.update(observations, stamp + 0.36, True)
+
+    assert permit is not None and permit.active
+
+
+def test_observation_beyond_the_jitter_budget_resets_authorization():
+    qualifier = StaticPersonQualifier(confirmation_s=0.2)
+    qualifier.update(
+        person_observations(summary(1.0, [person()])), 1.0, True)
+    permit = qualifier.update(
+        person_observations(summary(1.2, [person()])), 1.66, True)
+
+    assert not permit.active
+    assert permit.reason == "PERSON_OBSERVATION_STALE"
+
+
+def test_same_track_remains_authorized_across_the_lateral_boundary():
+    qualifier = StaticPersonQualifier(confirmation_s=0.4)
+    for stamp in (1.0, 1.2, 1.4):
+        observations = person_observations(
+            summary(stamp, [person(y=-0.8)]), maximum_lateral_m=1.25)
+        permit = qualifier.update(observations, stamp, True)
+    assert permit.active
+
+    for stamp, lateral in ((1.6, -1.0), (1.8, -1.2), (2.0, -1.413)):
+        observations = person_observations(
+            summary(stamp, [person(y=lateral)]), maximum_lateral_m=1.25)
+        permit = qualifier.update(observations, stamp, True)
+
+    assert permit.active
+
+
+def test_new_track_cannot_acquire_inside_only_the_lateral_hysteresis():
+    qualifier = StaticPersonQualifier(confirmation_s=0.4)
+
+    permit = None
+    for stamp in (1.0, 1.2, 1.4, 1.6):
+        observations = person_observations(
+            summary(stamp, [person(y=-1.413)]), maximum_lateral_m=1.25)
+        permit = qualifier.update(observations, stamp, True)
+
+    assert permit is not None and not permit.active
+    assert permit.reason == "PERSON_OUTSIDE_MANEUVER_REGION"
+
+
 def test_too_close_person_is_stop_only():
     qualifier = StaticPersonQualifier(
         confirmation_s=0.1, minimum_near_distance_m=.60)
@@ -97,6 +150,47 @@ def test_permit_round_trip_freshness_and_target_match():
     observation = person_observations(summary(1.2, [person()]))[0]
     assert permit_matches_observation(parsed, observation)
     assert not permit_is_fresh(parsed, 2.0)
+
+
+def test_direct_static_object_gets_a_short_trajectory_permit():
+    permit = static_obstacle_permit(
+        now_s=10.0, observed_stamp_s=9.8, track_id=42,
+        target_x_m=2.0, target_y_m=0.3, motion="static",
+        directly_observed=True, geometry_valid=True)
+
+    assert permit.active
+    assert permit.track_id == 42
+    assert permit.reason == "STATIC_OBJECT_BYPASS"
+    assert permit.expires_s == 10.45
+
+
+def test_untrusted_or_non_static_object_cannot_authorize_motion():
+    common = dict(
+        now_s=10.0, observed_stamp_s=9.8, track_id=42,
+        target_x_m=2.0, target_y_m=0.3, motion="static",
+        directly_observed=True, geometry_valid=True)
+    variants = (
+        dict(motion="moving"),
+        dict(motion="unknown"),
+        dict(track_id=None),
+        dict(directly_observed=False),
+        dict(geometry_valid=False),
+        dict(observed_stamp_s=9.4),
+    )
+
+    for variant in variants:
+        assert not static_obstacle_permit(
+            **dict(common, **variant)).active
+
+
+def test_object_permit_cannot_suppress_the_person_semantic_stop():
+    permit = static_obstacle_permit(
+        now_s=10.0, observed_stamp_s=9.8, track_id=7,
+        target_x_m=3.0, target_y_m=0.0, motion="static",
+        directly_observed=True, geometry_valid=True)
+    observation = person_observations(summary(9.8, [person()]))[0]
+
+    assert not permit_matches_observation(permit, observation)
 
 
 def test_raw_gate_override_requires_curved_clear_path_and_stopped_carried_path():

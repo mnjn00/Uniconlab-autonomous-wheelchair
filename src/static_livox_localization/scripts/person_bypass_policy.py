@@ -179,18 +179,20 @@ class StaticPersonQualifier:
     """Continuous same-track evidence before a DWA person pass is allowed."""
 
     def __init__(self, confirmation_s: float = 3.0,
-                 maximum_gap_s: float = 0.35,
+                 maximum_gap_s: float = 0.45,
                  maximum_position_jump_m: float = 0.35,
                  permit_lifetime_s: float = 0.45,
                  maximum_forward_m: float = 8.0,
                  maximum_lateral_m: float = 1.0,
+                 lateral_hysteresis_m: float = 0.25,
                  minimum_near_distance_m: float = 0.60,
                  max_speed_mps: float = 0.35,
                  min_clearance_m: float = 0.80):
         values = (
             confirmation_s, maximum_gap_s, maximum_position_jump_m,
             permit_lifetime_s, maximum_forward_m, maximum_lateral_m,
-            minimum_near_distance_m, max_speed_mps, min_clearance_m,
+            lateral_hysteresis_m, minimum_near_distance_m, max_speed_mps,
+            min_clearance_m,
         )
         if not all(math.isfinite(float(value)) and float(value) > 0.0
                    for value in values):
@@ -201,6 +203,7 @@ class StaticPersonQualifier:
         self.permit_lifetime_s = float(permit_lifetime_s)
         self.maximum_forward_m = float(maximum_forward_m)
         self.maximum_lateral_m = float(maximum_lateral_m)
+        self.lateral_hysteresis_m = float(lateral_hysteresis_m)
         self.minimum_near_distance_m = float(minimum_near_distance_m)
         self.max_speed_mps = float(max_speed_mps)
         self.min_clearance_m = float(min_clearance_m)
@@ -236,14 +239,17 @@ class StaticPersonQualifier:
             return self.inactive(
                 now_s, "NO_PERSON" if not observations else "MULTIPLE_PEOPLE")
         person = observations[0]
+        same_track = self.track_id == person.track_id
         if not person.eligible_static:
             self.reset()
             return self.inactive(now_s, "PERSON_NOT_CONFIRMED_STATIC")
         if person.near_distance_m < self.minimum_near_distance_m:
             self.reset()
             return self.inactive(now_s, "PERSON_TOO_CLOSE")
+        lateral_limit_m = self.maximum_lateral_m + (
+            self.lateral_hysteresis_m if same_track else 0.0)
         if person.near_distance_m > self.maximum_forward_m or \
-                abs(person.y_m) - 0.5 * person.size_y_m > self.maximum_lateral_m:
+                abs(person.y_m) - 0.5 * person.size_y_m > lateral_limit_m:
             self.reset()
             return self.inactive(now_s, "PERSON_OUTSIDE_MANEUVER_REGION")
 
@@ -252,7 +258,6 @@ class StaticPersonQualifier:
             self.reset()
             return self.inactive(now_s, "PERSON_OBSERVATION_STALE")
 
-        same_track = self.track_id == person.track_id
         if not same_track or self.last_stamp_s is None:
             self.track_id = person.track_id
             self.first_stamp_s = stamp_s
@@ -296,6 +301,62 @@ class StaticPersonQualifier:
             min_clearance_m=self.min_clearance_m,
             reason="STATIC_PERSON_BYPASS",
         )
+
+
+def static_obstacle_permit(*, now_s: float, observed_stamp_s: float,
+                           track_id: int, target_x_m: float,
+                           target_y_m: float, motion: str,
+                           directly_observed: bool, geometry_valid: bool,
+                           maximum_observation_age_s: float = 0.45,
+                           permit_lifetime_s: float = 0.45,
+                           max_speed_mps: float = 0.35,
+                           min_clearance_m: float = 0.80) -> BypassPermit:
+    now_s = float(now_s)
+
+    def inactive(reason: str) -> BypassPermit:
+        return BypassPermit(
+            capable=True, active=False, stamp_s=now_s,
+            expires_s=now_s + float(permit_lifetime_s),
+            track_id=None, target_x_m=None, target_y_m=None,
+            static_for_s=0.0, max_speed_mps=float(max_speed_mps),
+            min_clearance_m=float(min_clearance_m), reason=reason,
+        )
+
+    values = (
+        now_s, observed_stamp_s, target_x_m, target_y_m,
+        maximum_observation_age_s, permit_lifetime_s,
+        max_speed_mps, min_clearance_m,
+    )
+    try:
+        finite = all(math.isfinite(float(value)) for value in values)
+    except (TypeError, ValueError):
+        finite = False
+    if not finite or not math.isfinite(now_s):
+        return inactive("OBJECT_OBSERVATION_INVALID")
+    if float(maximum_observation_age_s) <= 0.0 or \
+            float(permit_lifetime_s) <= 0.0 or \
+            float(max_speed_mps) <= 0.0 or float(min_clearance_m) <= 0.0:
+        return inactive("OBJECT_POLICY_INVALID")
+    if isinstance(track_id, bool) or not isinstance(track_id, int) or track_id < 0:
+        return inactive("OBJECT_TRACK_INVALID")
+    if not directly_observed:
+        return inactive("OBJECT_NOT_DIRECTLY_OBSERVED")
+    if not geometry_valid:
+        return inactive("OBJECT_GEOMETRY_INVALID")
+    if _normal_label(motion) != STATIC:
+        return inactive("OBJECT_NOT_CONFIRMED_STATIC")
+    age_s = now_s - float(observed_stamp_s)
+    if age_s < -0.05 or age_s > float(maximum_observation_age_s):
+        return inactive("OBJECT_OBSERVATION_STALE")
+    return BypassPermit(
+        capable=True, active=True, stamp_s=now_s,
+        expires_s=now_s + float(permit_lifetime_s),
+        track_id=track_id, target_x_m=float(target_x_m),
+        target_y_m=float(target_y_m), static_for_s=0.0,
+        max_speed_mps=float(max_speed_mps),
+        min_clearance_m=float(min_clearance_m),
+        reason="STATIC_OBJECT_BYPASS",
+    )
 
 
 def permit_from_payload(value) -> Optional[BypassPermit]:
@@ -358,7 +419,9 @@ def permit_is_fresh(permit: Optional[BypassPermit], now_s: float,
 def permit_matches_observation(permit: Optional[BypassPermit],
                                observation: PersonObservation,
                                maximum_position_error_m: float = 0.45) -> bool:
-    if permit is None or not permit.active or not observation.eligible_static:
+    if permit is None or not permit.active or \
+            permit.reason != "STATIC_PERSON_BYPASS" or \
+            not observation.eligible_static:
         return False
     if permit.track_id != observation.track_id or \
             permit.target_x_m is None or permit.target_y_m is None:

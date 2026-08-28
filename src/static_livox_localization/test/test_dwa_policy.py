@@ -779,6 +779,63 @@ def blocking_gate(follower, reason="OBSTACLE", held_s=2.0,
     follower.gate_blocked_for = lambda now: held_s
 
 
+def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
+    module, _Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.gate_reason = ""
+    follower.gate_blocked_since = None
+    follower.gate_detail = ""
+    follower._gate_rejected_yaw_rates = set()
+    message = types.SimpleNamespace(data=json.dumps({
+        "reason": "OBSTACLE",
+        "trajectory_override_reason": "REQUESTED_PATH_COLLISION",
+        "trajectory_requested_w": 0.5,
+    }))
+
+    follower.on_gate_status(message)
+
+    assert follower._gate_rejected_yaw_rates == {0.5}
+
+
+def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
+    module, Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    published = []
+    follower.qualifier = types.SimpleNamespace(
+        reset=lambda: None,
+        inactive=lambda now_s, reason: types.SimpleNamespace(
+            active=False, reason=reason))
+    follower.publish_permit = lambda permit: published.append(permit)
+    follower.person_bypass_permit_lifetime_s = 0.45
+    follower.person_bypass_maximum_gap_s = 0.45
+    follower.person_bypass_speed_mps = 0.35
+    follower.person_bypass_clearance_m = 0.80
+    follower._gate_rejected_yaw_rates = set()
+    follower._gate_rejected_track_id = None
+    follower.planner = types.SimpleNamespace(max_speed=0.8)
+    threat = types.SimpleNamespace(
+        is_person=False,
+        parked=True,
+        track_id=44,
+        observed_stamp_s=99.8,
+        distance_m=2.0,
+        lateral_m=0.3,
+        directly_observed=True,
+        geometry_valid=True,
+        motion="static")
+    monkeypatch.setattr(
+        module.DwaFollower, "avoidance_for",
+        lambda self, now, observed, blocking: module.GO_ROUND)
+
+    decision = follower.avoidance_for(Stamp(100.0), threat, True)
+
+    assert decision == module.GO_ROUND
+    assert published[-1].active
+    assert published[-1].reason == "STATIC_OBJECT_BYPASS"
+
+
 def test_a_gate_stall_is_named_rather_than_left_running(monkeypatch):
     """Two obstacle sources, one world each.
 

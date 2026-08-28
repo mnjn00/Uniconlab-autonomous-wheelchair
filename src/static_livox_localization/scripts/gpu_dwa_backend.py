@@ -14,6 +14,7 @@ hold instead of silently returning to the high-load CPU obstacle query.
 
 from __future__ import annotations
 
+import math
 import os
 
 import numpy as np
@@ -207,17 +208,26 @@ def make_gpu_planner(base_class, core_module):
                 pass
 
         def plan(self, state, obstacles=(), speed_cap=None,
-                 last_yaw_rate=0.0, last_speed=None):
+                 last_yaw_rate=0.0, last_speed=None,
+                 obstacle_floor_m=core_module.OBSTACLE_FLOOR_M,
+                 rejected_yaw_rates=None):
             cap = self.max_speed if speed_cap is None else min(
                 self.max_speed, float(speed_cap))
+            rejected = tuple(
+                float(value) for value in (
+                    getattr(self, "rejected_yaw_rates", ())
+                    if rejected_yaw_rates is None else rejected_yaw_rates)
+                if math.isfinite(float(value)))
             pairs = [
                 (v, w)
                 for v in core_module.speed_samples(cap, current=last_speed)
                 if v > 0.0
                 for w in core_module.yaw_samples()
+                if not any(abs(w - value) < 1e-6 for value in rejected)
             ]
             if not pairs:
-                return 0.0, 0.0, "SPEED_BELOW_FLOOR"
+                return 0.0, 0.0, (
+                    "GATE_REJECTED" if rejected else "SPEED_BELOW_FLOOR")
 
             span = self.preview_distance(last_speed)
             paths = self._rollouts(np.asarray(state, dtype=float), pairs, span)
@@ -244,7 +254,7 @@ def make_gpu_planner(base_class, core_module):
                     clear = distance.reshape(len(pairs), -1).min(axis=1)
                 else:
                     clear = np.full(len(pairs), np.inf)
-                ok &= clear >= core_module.OBSTACLE_FLOOR_M
+                ok &= clear >= float(obstacle_floor_m)
                 if not ok.any():
                     return 0.0, 0.0, "OBSTACLE"
                 # Route lookup stays on the exact reference cKDTree contract.
