@@ -73,9 +73,12 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
             "~person_bypass_maximum_forward_m", 8.0))
         self.bypass_maximum_lateral_m = float(rospy.get_param(
             "~person_bypass_maximum_lateral_m", 1.0))
+        self.bypass_lateral_hysteresis_m = float(rospy.get_param(
+            "~person_bypass_lateral_hysteresis_m", 0.25))
         for name in (
                 "maximum_permit_age_s", "maximum_target_error_m",
-                "bypass_maximum_forward_m", "bypass_maximum_lateral_m"):
+                "bypass_maximum_forward_m", "bypass_maximum_lateral_m",
+                "bypass_lateral_hysteresis_m"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0.0:
                 raise rospy.ROSInitException(
@@ -100,7 +103,11 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
         observations = person_observations(
             self.summary,
             maximum_forward_m=self.bypass_maximum_forward_m,
-            maximum_lateral_m=self.bypass_maximum_lateral_m,
+            # Validate in the same observation region as the qualifier.
+            # Only the qualifier may acquire a new target; the extended
+            # region retains an already qualified track through a turn.
+            maximum_lateral_m=(self.bypass_maximum_lateral_m
+                               + self.bypass_lateral_hysteresis_m),
         )
         if len(observations) != 1:
             return None, None
@@ -214,6 +221,8 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
             "out_v": round(float(out.linear.x), 3),
             "person_bypass_capable": True,
             "person_bypass_active": bypass_active,
+            "person_bypass_permit_reason": None if self.bypass_permit is None
+                                           else self.bypass_permit.reason,
             "person_bypass_track_id": None if permit is None
                                       else permit.track_id,
             "person_bypass_static_for_s": None if permit is None

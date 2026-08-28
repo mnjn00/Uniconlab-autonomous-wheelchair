@@ -96,6 +96,8 @@ def test_activation_passes_the_reliability_tunables_to_the_follower():
         in activate
     assert "PERSON_BYPASS_LATERAL_HYSTERESIS_M" in activate
     assert "_person_bypass_lateral_hysteresis_m:" in activate
+    supervisor_command = activate.split('__name:=semantic_safety_supervisor')[1]
+    assert '_person_bypass_lateral_hysteresis_m:="$PERSON_BYPASS_LATERAL_HYSTERESIS_M"' in supervisor_command
     assert 'PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.50}"' \
         in activate
     follower = text(SCRIPTS / "person_bypass_dwa_follower.py")
