@@ -574,38 +574,23 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
                        bypass_after_s, person_bypass_ready=False):
     """What to do about the nearest thing in the corridor.
 
-    GO_ROUND for something the tracker has watched stand still, and taken
-    while it is still plan_ahead_m away so the chair drifts past rather than
-    driving up to it and stopping first.
-
-    WAIT for anything moving, or not yet watched long enough to say.
-    Stepping around a person is a manoeuvre into where they are about to be.
-    Nothing here resumes the chair explicitly: once they leave the corridor
-    the threat is gone, the answer becomes CLEAR, and it drives on.
-
-    A person is waited out by default. The caller may supply a separate
-    person_bypass_ready authorization only after longer, direct same-track
-    STATIC evidence; that produces a distinct result so only a controller
-    with current geometry and hard-mask rollout checks can execute it.
-    Standing still for the tracker's CONFIRM_S alone is never enough.
-
-    blocked_for_s is the fallback for sources that carry no identity. A
-    raw-scan return is UNKNOWN forever, so standing in the way is the only
-    evidence of parkedness it can ever offer - but it never overrules a
-    tracker that says the thing is moving.
+    People and objects inside plan_ahead_m are gone around. WAIT is only
+    for unusable geometry: a sidestep with no shape is a guess into the
+    obstacle. person_bypass_ready and blocked_for_s are kept for callers
+    and no longer withhold a bypass.
     """
     if threat is None:
         return CLEAR
-    if threat.is_person:
-        if threat.parked and threat.distance_m < plan_ahead_m:
-            return PERSON_BYPASS if person_bypass_ready else WAIT
+    if str(threat.label).strip().lower() in ("no summary", "no_cloud"):
+        return WAIT
+    in_range = blocking or threat.distance_m < plan_ahead_m
+    if not in_range:
+        return CLEAR
+    if not threat.geometry_valid:
         return WAIT if blocking else CLEAR
-    if threat.parked and threat.distance_m < plan_ahead_m:
-        return GO_ROUND
-    if blocking and blocked_for_s is not None and \
-            blocked_for_s > bypass_after_s and threat.motion != MOVING:
-        return GO_ROUND
-    return WAIT if blocking else CLEAR
+    if threat.is_person:
+        return PERSON_BYPASS
+    return GO_ROUND
 
 
 def is_stale(summary_stamp_s, now_s, stale_s=STALE_S):

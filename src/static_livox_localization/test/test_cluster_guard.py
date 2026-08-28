@@ -214,67 +214,46 @@ def test_a_parked_thing_still_far_off_is_left_alone():
     assert decide(threat(9.0, ct.STATIC), blocking=False) == cg.CLEAR
 
 
-@pytest.mark.parametrize("motion", [ct.MOVING, ct.UNKNOWN])
-def test_anything_moving_or_unjudged_is_waited_out_not_driven_around(motion):
-    assert decide(threat(2.0, motion)) == cg.WAIT
+@pytest.mark.parametrize("motion", [ct.MOVING, ct.UNKNOWN, ct.STATIC])
+def test_objects_in_the_planning_distance_are_gone_around(motion):
+    assert decide(threat(2.0, motion)) == cg.GO_ROUND
 
 
-def test_a_moving_thing_is_never_gone_around_however_long_it_blocks():
-    """The 3 s rule is evidence of parkedness for sources that cannot track.
-    It must not overrule one that can: someone pacing in the corridor has
-    blocked it for 3 s and is still going to step somewhere."""
-    assert decide(threat(1.0, ct.MOVING), blocked_for_s=30.0) == cg.WAIT
+def test_a_moving_object_is_still_gone_around():
+    assert decide(threat(1.0, ct.MOVING), blocked_for_s=0.0) == cg.GO_ROUND
 
 
-def test_an_untrackable_return_that_has_not_moved_for_3s_is_gone_around():
-    """The raw scan has no identity, so standing there is all the evidence
-    it can offer, and this is the pre-existing behaviour it keeps."""
-    assert decide(threat(1.0, ct.UNKNOWN), blocked_for_s=4.0) == cg.GO_ROUND
+def test_an_untrackable_return_is_gone_around_without_waiting_three_seconds():
+    assert decide(threat(1.0, ct.UNKNOWN), blocked_for_s=0.0) == cg.GO_ROUND
 
 
 def person(distance, motion):
     return cg.Threat(distance, motion, cg.PERSON_LABEL)
 
 
-def test_a_person_standing_still_is_waited_for_not_driven_around():
-    """The rule the docstring always claimed and the code only half kept.
-
-    CONFIRM_S is 1.5 s, so someone who stops to check a phone is STATIC,
-    and STATIC is parked - which sent the chair around a stationary
-    pedestrian from 8 m out without the blocked clock ever starting.
-    """
-    assert decide(person(4.0, ct.STATIC), blocking=False) == cg.WAIT
-    assert decide(person(4.0, ct.STATIC)) == cg.WAIT
+def test_a_person_in_the_planning_distance_is_gone_around():
+    assert decide(person(4.0, ct.STATIC), blocking=False) == cg.PERSON_BYPASS
+    assert decide(person(4.0, ct.STATIC)) == cg.PERSON_BYPASS
+    assert decide(person(1.0, ct.MOVING)) == cg.PERSON_BYPASS
+    assert decide(person(1.0, ct.UNKNOWN)) == cg.PERSON_BYPASS
 
 
-def test_a_person_is_not_gone_around_by_the_time_rule_either():
-    """The slower road to the same place. Standing in the way for three
-    seconds is evidence of parkedness for a thing; for a person it is
-    evidence of nothing but that they are standing there."""
-    assert decide(person(1.0, ct.STATIC), blocked_for_s=30.0) == cg.WAIT
-    assert decide(person(1.0, ct.UNKNOWN), blocked_for_s=30.0) == cg.WAIT
-
-
-def test_a_person_needs_explicit_static_bypass_authorization():
+def test_person_bypass_ready_is_not_required_to_go_around_a_person():
     assert decide(
         person(1.0, ct.STATIC),
-        blocked_for_s=30.0,
-        person_bypass_ready=True) == cg.PERSON_BYPASS
+        blocked_for_s=0.0,
+        person_bypass_ready=False) == cg.PERSON_BYPASS
     assert decide(
         person(1.0, ct.MOVING),
-        blocked_for_s=30.0,
-        person_bypass_ready=True) == cg.WAIT
+        blocked_for_s=0.0,
+        person_bypass_ready=False) == cg.PERSON_BYPASS
 
 
-def test_a_static_person_is_stopped_and_watched_before_blocking():
+def test_a_static_person_ahead_is_gone_around_before_blocking():
     assert decide(
         person(4.0, ct.STATIC),
         blocking=False,
-        person_bypass_ready=False) == cg.WAIT
-    assert decide(
-        person(4.0, ct.STATIC),
-        blocking=False,
-        person_bypass_ready=True) == cg.PERSON_BYPASS
+        person_bypass_ready=False) == cg.PERSON_BYPASS
 
 
 def test_a_person_who_leaves_the_corridor_clears_it():
@@ -305,10 +284,15 @@ def test_a_clear_corridor_is_clear():
 
 
 def test_the_chair_resumes_by_the_threat_going_away_not_by_a_timer():
-    """A pedestrian crossing: blocked while they are in the corridor, clear
-    the moment they are not. Nothing has to remember they were there."""
-    assert decide(threat(1.5, ct.MOVING)) == cg.WAIT
+    """A pedestrian crossing: gone around while they are in the corridor,
+    clear the moment they are not."""
+    assert decide(threat(1.5, ct.MOVING)) == cg.GO_ROUND
     assert decide(None, blocking=False) == cg.CLEAR
+
+
+def test_unusable_geometry_is_waited_out_not_guessed_around():
+    broken = cg.Threat(1.0, ct.STATIC, cg.PERSON_LABEL, geometry_valid=False)
+    assert decide(broken) == cg.WAIT
 
 
 def watched(stamp, motion=None, track_id=17, distance=1.6):

@@ -73,7 +73,8 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
                            BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
                            PERSON_BYPASS, PERSON_BYPASS_CONFIRM_S,
-                           PERSON_BYPASS_MAX_GAP_S, PERSON_LABEL,
+                           PERSON_BYPASS_MAX_GAP_S, PERSON_BYPASS_SPEED_MPS,
+                           PERSON_LABEL,
                            advance_person_bypass_clock, avoidance_decision,
                            bypass_offsets_for_room, is_stale,
                            matching_threats, nearest_threat, parse_summary)
@@ -1182,10 +1183,9 @@ class WaypointFollower:
         decision = self.avoidance_for(
             now, threat, self.threat_blocks(threat, guard_stop))
         if decision == PERSON_BYPASS:
-            self.status_pub.publish(String(data="HOLD:PERSON_BYPASS_DWA_ONLY"))
-            self.send_stop()
-            return
-        if decision == GO_ROUND and abs(self.lateral_offset) < 0.01:
+            allowed = min(allowed, PERSON_BYPASS_SPEED_MPS)
+        if decision in (GO_ROUND, PERSON_BYPASS) and \
+                abs(self.lateral_offset) < 0.01:
             self.take_a_way_round(max(guard_slow, PLAN_AHEAD_M))
         if blocking is None:
             if abs(self.lateral_offset) > 0.01:

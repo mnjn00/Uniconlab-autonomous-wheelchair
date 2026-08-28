@@ -172,11 +172,11 @@ def test_the_lane_check_reaches_the_planning_distance_not_the_brake():
     assert module.PLAN_AHEAD_M > module.GUARD_STOP_MIN_M
 
 
-def test_a_walking_person_is_waited_for_rather_than_driven_around():
+def test_a_walking_person_is_gone_around():
     _module, follower = follower_with([walking(3.0, 0.0)])
     threat = follower.corridor_threat()
     assert not threat.parked
-    assert cg.avoidance_decision(threat, True, 30.0, 5.0, 3.0) == cg.WAIT
+    assert cg.avoidance_decision(threat, True, 30.0, 5.0, 3.0) == cg.PERSON_BYPASS
 
 
 def test_the_chair_moves_again_once_they_are_out_of_the_corridor():
