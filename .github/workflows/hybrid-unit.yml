@@ -11,14 +11,17 @@ on:
       - 'tools/check_nuc_gpu_dwa.sh'
       - 'tools/check_rtx2060_pointpillars.sh'
       - 'tools/start_hybrid_avoidance.sh'
+      - 'tools/activate_person_bypass.sh'
       - 'tools/go_hybrid.sh'
       - 'tests/test_hybrid_runtime_surface.py'
+      - 'tests/test_person_bypass_runtime_surface.py'
       - 'conftest.py'
   push:
     branches:
       - main
       - fix/hybrid-perception-avoidance
       - feat/rtx2060-pointpillars
+      - fix/static-person-trajectory-bypass
 
 permissions:
   contents: read
@@ -40,14 +43,20 @@ jobs:
             src/static_livox_localization/scripts/scipy_ckdtree_compat.py \
             src/static_livox_localization/scripts/gpu_dwa_backend.py \
             src/static_livox_localization/scripts/gpu_dwa_follower.py \
+            src/static_livox_localization/scripts/person_bypass_dwa_follower.py \
             src/static_livox_localization/scripts/hybrid_geometric_objects.py \
             src/static_livox_localization/scripts/hybrid_object_fusion.py \
             src/static_livox_localization/scripts/hybrid_perception.py \
             src/static_livox_localization/scripts/hybrid_preflight.py \
+            src/static_livox_localization/scripts/person_bypass_preflight.py \
             src/static_livox_localization/scripts/localization_exclusion_boxes.py \
             src/static_livox_localization/scripts/localization_exclusion_policy.py \
             src/static_livox_localization/scripts/semantic_safety_policy.py \
             src/static_livox_localization/scripts/semantic_safety_supervisor.py \
+            src/static_livox_localization/scripts/person_bypass_semantic_supervisor.py \
+            src/static_livox_localization/scripts/person_bypass_policy.py \
+            src/static_livox_localization/scripts/safety_gate.py \
+            src/static_livox_localization/scripts/trajectory_safety_gate.py \
             src/static_livox_localization/scripts/terrain_guard.py \
             src/static_livox_localization/scripts/terrain_guard_policy.py \
             src/static_livox_localization/scripts/vision_detection_bridge.py \
@@ -63,6 +72,7 @@ jobs:
             tools/check_nuc_gpu_dwa.sh \
             tools/check_rtx2060_pointpillars.sh \
             tools/start_hybrid_avoidance.sh \
+            tools/activate_person_bypass.sh \
             tools/go_hybrid.sh
       - name: Hybrid policy and wiring tests
         run: |
@@ -70,9 +80,11 @@ jobs:
             src/static_livox_localization/test/test_gpu_dwa_backend.py \
             src/static_livox_localization/test/test_hybrid_perception.py \
             src/static_livox_localization/test/test_hybrid_stack.py \
+            src/static_livox_localization/test/test_person_bypass_policy.py \
             src/static_livox_localization/test/test_route_mask_clearance.py \
             src/static_livox_localization/test/test_rtx2060_pointpillars_surface.py \
             src/static_livox_localization/test/test_scan_accumulator_fast_path.py \
             src/static_livox_localization/test/test_semantic_safety_policy.py \
             src/static_livox_localization/test/test_terrain_guard_policy.py \
-            tests/test_hybrid_runtime_surface.py
+            tests/test_hybrid_runtime_surface.py \
+            tests/test_person_bypass_runtime_surface.py

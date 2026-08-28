@@ -1,0 +1,49 @@
+name: Static-person bypass Noetic build
+
+on:
+  push:
+    branches:
+      - fix/static-person-trajectory-bypass
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  noetic-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned ROS Noetic image
+        run: |
+          docker build --pull=false \
+            --tag wheelchair-person-bypass:${GITHUB_SHA} \
+            --file tools/noetic/Dockerfile .
+      - name: Resolve dependencies and build the field package
+        run: |
+          docker run --rm wheelchair-person-bypass:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
+            source /opt/ros/noetic/setup.bash
+            rosdep check --from-paths /ws/src --ignore-src --rosdistro=noetic
+            rm -rf /tmp/person_bypass_ws
+            mkdir -p /tmp/person_bypass_ws
+            cd /tmp/person_bypass_ws
+            catkin_make --source /ws/src \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCATKIN_WHITELIST_PACKAGES=static_livox_localization
+            source devel/setup.bash
+            rospack find static_livox_localization
+            test -x devel/lib/static_livox_localization/person_bypass_dwa_follower.py
+            test -x devel/lib/static_livox_localization/person_bypass_semantic_supervisor.py
+            test -x devel/lib/static_livox_localization/trajectory_safety_gate.py
+            test -x devel/lib/static_livox_localization/person_bypass_preflight.py'
+      - name: Run branch-specific ROS-free tests under Noetic Python
+        run: |
+          docker run --rm wheelchair-person-bypass:${GITHUB_SHA} bash -lc '
+            set -eo pipefail
+            source /opt/ros/noetic/setup.bash
+            cd /ws
+            python3 -m pytest -q \
+              src/static_livox_localization/test/test_person_bypass_policy.py \
+              tests/test_person_bypass_runtime_surface.py'
