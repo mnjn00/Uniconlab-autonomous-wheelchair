@@ -1,0 +1,78 @@
+name: Hybrid perception unit checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/hybrid-unit.yml'
+      - 'src/static_livox_localization/**'
+      - 'tools/hybrid.sh'
+      - 'tools/install_nuc_gpu_runtime.sh'
+      - 'tools/setup_rtx2060_pointpillars.sh'
+      - 'tools/check_nuc_gpu_dwa.sh'
+      - 'tools/check_rtx2060_pointpillars.sh'
+      - 'tools/start_hybrid_avoidance.sh'
+      - 'tools/go_hybrid.sh'
+      - 'tests/test_hybrid_runtime_surface.py'
+      - 'conftest.py'
+  push:
+    branches:
+      - main
+      - fix/hybrid-perception-avoidance
+      - feat/rtx2060-pointpillars
+
+permissions:
+  contents: read
+
+jobs:
+  hybrid-unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install ROS-free test dependencies
+        run: python -m pip install --disable-pip-version-check numpy scipy pillow pyyaml pytest
+      - name: Python syntax
+        run: |
+          python -m py_compile \
+            src/static_livox_localization/scripts/scipy_ckdtree_compat.py \
+            src/static_livox_localization/scripts/gpu_dwa_backend.py \
+            src/static_livox_localization/scripts/gpu_dwa_follower.py \
+            src/static_livox_localization/scripts/hybrid_geometric_objects.py \
+            src/static_livox_localization/scripts/hybrid_object_fusion.py \
+            src/static_livox_localization/scripts/hybrid_perception.py \
+            src/static_livox_localization/scripts/hybrid_preflight.py \
+            src/static_livox_localization/scripts/localization_exclusion_boxes.py \
+            src/static_livox_localization/scripts/localization_exclusion_policy.py \
+            src/static_livox_localization/scripts/semantic_safety_policy.py \
+            src/static_livox_localization/scripts/semantic_safety_supervisor.py \
+            src/static_livox_localization/scripts/terrain_guard.py \
+            src/static_livox_localization/scripts/terrain_guard_policy.py \
+            src/static_livox_localization/scripts/vision_detection_bridge.py \
+            src/static_livox_localization/scripts/scan_accumulator.py \
+            src/static_livox_localization/scripts/route_mask.py \
+            conftest.py
+      - name: Shell syntax
+        run: |
+          bash -n \
+            tools/hybrid.sh \
+            tools/install_nuc_gpu_runtime.sh \
+            tools/setup_rtx2060_pointpillars.sh \
+            tools/check_nuc_gpu_dwa.sh \
+            tools/check_rtx2060_pointpillars.sh \
+            tools/start_hybrid_avoidance.sh \
+            tools/go_hybrid.sh
+      - name: Hybrid policy and wiring tests
+        run: |
+          python -m pytest -q \
+            src/static_livox_localization/test/test_gpu_dwa_backend.py \
+            src/static_livox_localization/test/test_hybrid_perception.py \
+            src/static_livox_localization/test/test_hybrid_stack.py \
+            src/static_livox_localization/test/test_route_mask_clearance.py \
+            src/static_livox_localization/test/test_rtx2060_pointpillars_surface.py \
+            src/static_livox_localization/test/test_scan_accumulator_fast_path.py \
+            src/static_livox_localization/test/test_semantic_safety_policy.py \
+            src/static_livox_localization/test/test_terrain_guard_policy.py \
+            tests/test_hybrid_runtime_surface.py

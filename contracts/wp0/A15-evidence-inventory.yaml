@@ -12,7 +12,7 @@ provenance:
     intent_reconciliation_sha256: a31092d64375ae1958fa77ea8adb682ffd1232d11f01865109fcb0112fb3607f
   repository_readme:
     path: README.md
-    sha256: 157440edb752f4515aec67132042d6f84b862145e3d254cd68c9aa6af38cfcf7
+    sha256: bf9f29f3bc7040d0f4e092189089d22a3d46e11dcbe46f59b5602edb93db8256
     claim_scope: public project overview, the deployed-vs-designed stack split, measured field localization results and their recordings, vehicle mount geometry, deployment and field-run procedure, and the explicit safety/authority boundary
   local_manual:
     reported_path: /home/mnjn/다운로드/20230725_wheel_manual (2).pdf

@@ -113,6 +113,7 @@ TURN_FLOOR_SPEED = 0.35
 WHEEL_SEPARATION_M = 0.54
 MAX_ACCEL = 0.18
 MAX_DECEL = 0.6
+MAX_JERK = 0.36
 CONTROL_HZ = 10.0
 
 CORRIDOR_HALF_WIDTH = 0.45
@@ -190,6 +191,48 @@ PROGRESS_WINDOW_M = 20.0
 ROUTE_STEP_M = 0.2
 MIN_LOOKAHEAD_M = 0.9
 LOOKAHEAD_BACKOFF_M = 0.4
+
+
+def advance_speed(speed, accel, target, dt, brake_hard=False):
+    """Advance a bounded, jerk-limited speed command by one control tick."""
+    speed = max(0.0, min(MAX_SPEED, float(speed)))
+    target = max(0.0, min(MAX_SPEED, float(target)))
+    dt = max(0.0, float(dt))
+    if dt == 0.0:
+        return speed, accel
+    if brake_hard:
+        return max(target, speed - MAX_DECEL * dt), 0.0
+
+    error = target - speed
+    jerk_step = MAX_JERK * dt
+    if abs(error) <= 1e-12:
+        next_accel = accel + max(
+            -jerk_step, min(jerk_step, -accel)
+        )
+        return target, next_accel
+
+    direction = 1.0 if error > 0.0 else -1.0
+    directional_accel = max(0.0, direction * accel)
+    speed_needed_to_release_accel = (
+        directional_accel * directional_accel / (2.0 * MAX_JERK)
+    )
+    if abs(error) <= speed_needed_to_release_accel:
+        desired_accel = 0.0
+    else:
+        desired_accel = MAX_ACCEL if direction > 0.0 else -MAX_DECEL
+
+    accel_delta = max(
+        -jerk_step, min(jerk_step, desired_accel - accel)
+    )
+    next_accel = accel + accel_delta
+    next_speed = speed + next_accel * dt
+    crossed_target = (
+        (direction > 0.0 and next_speed >= target)
+        or (direction < 0.0 and next_speed <= target)
+    )
+    if crossed_target:
+        next_speed = target
+    return max(0.0, min(MAX_SPEED, next_speed)), next_accel
 
 
 class WaypointFollower:
@@ -317,6 +360,7 @@ class WaypointFollower:
         self.cloud_stamp = rospy.Time(0)
         self.nearest_index = 0
         self.current_speed = 0.0
+        self.current_accel = 0.0
         self.blocked_since = None
         self.lateral_offset = 0.0
         self.chord_speed_cap = MAX_SPEED
@@ -866,6 +910,7 @@ class WaypointFollower:
 
     def send_stop(self):
         self.current_speed = 0.0
+        self.current_accel = 0.0
         self.cmd_pub.publish(Twist())
 
     # ------------------------------------------------------------ control
@@ -1188,12 +1233,13 @@ class WaypointFollower:
             allowed = 0.0
 
         dt = 1.0 / CONTROL_HZ
-        if allowed >= self.current_speed:
-            self.current_speed = min(allowed,
-                                     self.current_speed + MAX_ACCEL * dt)
-        else:
-            self.current_speed = max(allowed,
-                                     self.current_speed - MAX_DECEL * dt)
+        self.current_speed, self.current_accel = advance_speed(
+            self.current_speed,
+            self.current_accel,
+            allowed,
+            dt,
+            brake_hard=blocking,
+        )
 
         command = Twist()
         command.linear.x = self.current_speed

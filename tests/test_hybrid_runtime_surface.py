@@ -1,0 +1,78 @@
+from pathlib import Path
+
+ROOT = Path(__file__).parents[1]
+
+
+def test_start_wrapper_keeps_original_stack_as_rollback():
+    text = (ROOT / 'tools/start_hybrid_avoidance.sh').read_text()
+    assert 'PROFILE=dwa' in text
+    assert 'start_wheelchair_localization.sh' in text
+    assert '_cmd_topic:=/cmd_vel_planned' in text
+    assert '/cmd_vel_gated:=/cmd_vel_terrain_safe' in text
+
+
+def test_geometric_summary_is_unfiltered_and_remapped_before_fusion():
+    text = (ROOT / 'tools/start_hybrid_avoidance.sh').read_text()
+    assert 'hybrid_geometric_objects.py' in text
+    assert '/perception/objects_summary:=/perception/geometric_objects_summary' in text
+    assert '/perception/dynamic_boxes:=/perception/geometric_exclusion_candidates' in text
+    assert 'hybrid_object_fusion.py' in text
+    assert 'localization_exclusion_boxes.py' in text
+
+
+def test_rtx_dwa_is_the_hybrid_planner_and_is_fail_closed_by_default():
+    start = (ROOT / 'tools/start_hybrid_avoidance.sh').read_text()
+    go = (ROOT / 'tools/go_hybrid.sh').read_text()
+    preflight = (ROOT / 'src/static_livox_localization/scripts/'
+                 'hybrid_preflight.py').read_text()
+    assert 'REQUIRE_GPU="${REQUIRE_GPU:-true}"' in start
+    assert 'gpu_dwa_follower.py' in start
+    assert 'WHEELCHAIR_DWA_GPU=1' in start
+    assert '_require_gpu:="$REQUIRE_GPU"' in start
+    assert 'REQUIRE_GPU="${REQUIRE_GPU:-true}"' in go
+    assert '/waypoint_follower/distance_backend' in preflight
+    assert '/waypoint_follower/gpu_active' in preflight
+
+
+def test_new_nodes_are_installed_by_catkin():
+    cmake = (ROOT / 'src/static_livox_localization/CMakeLists.txt').read_text()
+    for name in (
+        'gpu_dwa_follower.py', 'gpu_dwa_backend.py',
+        'hybrid_geometric_objects.py', 'hybrid_object_fusion.py',
+        'vision_detection_bridge.py', 'localization_exclusion_boxes.py',
+        'semantic_safety_supervisor.py', 'terrain_guard.py',
+        'hybrid_preflight.py', 'hybrid_perception.py',
+        'localization_exclusion_policy.py',
+        'semantic_safety_policy.py', 'terrain_guard_policy.py',
+    ):
+        assert name in cmake
+
+
+def test_go_checks_everything_before_delegating_to_go():
+    text = (ROOT / 'tools/go_hybrid.sh').read_text()
+    for node in ('hybrid_geometric_objects', 'localization_exclusion_boxes',
+                 'semantic_safety_supervisor', 'terrain_guard'):
+        assert node in text
+    check = text.index('hybrid_preflight.py')
+    delegate = text.index('exec "$GO"')
+    assert check < delegate
+
+
+def test_fusion_and_preflight_are_bound_to_the_route_frame_contract():
+    fusion = (ROOT / 'src/static_livox_localization/scripts/'
+              'hybrid_object_fusion.py').read_text()
+    preflight = (ROOT / 'src/static_livox_localization/scripts/'
+                 'hybrid_preflight.py').read_text()
+    assert '/waypoint_follower/route' in fusion
+    assert 'route_chair_centre' in fusion
+    assert 'body_frame_profile' in preflight
+    assert 'chair_centre_in_body_xyz' in preflight
+
+
+def test_terrain_guard_checks_carried_wheel_motion_not_only_the_command():
+    text = (ROOT / 'src/static_livox_localization/scripts/'
+            'terrain_guard.py').read_text()
+    assert 'Int16MultiArray' in text
+    assert 'self.measured_speed' in text
+    assert 'self.measured_yaw_rate' in text
+    assert 'CARRIED_' in text

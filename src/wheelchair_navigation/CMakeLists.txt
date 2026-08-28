@@ -29,6 +29,7 @@ catkin_install_python(PROGRAMS
   scripts/localization_adapter.py
   scripts/route_manager.py
   scripts/control_monitor.py
+  scripts/make_plan_client.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

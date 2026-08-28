@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.0.2)
 project(static_livox_localization)
 
 option(ENABLE_FAST_GICP_CUDA "Enable the fail-closed fast_vgicp CUDA registration backend" OFF)
+option(ENABLE_RTX_POINTPILLARS "Build the NVIDIA CUDA-PointPillars ROS1 inference node" OFF)
 
 set(STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS)
 if(ENABLE_FAST_GICP_CUDA)
@@ -9,14 +10,14 @@ if(ENABLE_FAST_GICP_CUDA)
 endif()
 
 add_compile_options(-std=c++14 -Wall -Wextra)
-find_package(catkin REQUIRED COMPONENTS roscpp sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions ${STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS})
+find_package(catkin REQUIRED COMPONENTS roscpp rospy std_msgs sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs tf2_msgs visualization_msgs vision_msgs message_filters pcl_ros pcl_conversions ${STATIC_LIVOX_OPTIONAL_CATKIN_COMPONENTS})
 find_package(PCL REQUIRED COMPONENTS common io filters registration kdtree)
 find_package(OpenSSL REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES static_registration moving_tracker rolling_submap assisted_alignment bounded_cloud_preview
-  CATKIN_DEPENDS roscpp sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_msgs visualization_msgs message_filters pcl_ros pcl_conversions
+  CATKIN_DEPENDS roscpp rospy std_msgs sensor_msgs geometry_msgs diagnostic_msgs nav_msgs std_srvs tf2 tf2_ros tf2_geometry_msgs tf2_msgs visualization_msgs vision_msgs message_filters pcl_ros pcl_conversions
 )
 include_directories(include ${catkin_INCLUDE_DIRS} ${PCL_INCLUDE_DIRS} ${OPENSSL_INCLUDE_DIR})
 add_definitions(${PCL_DEFINITIONS})
@@ -46,6 +47,56 @@ target_link_libraries(map_preview_publisher ${catkin_LIBRARIES} ${PCL_LIBRARIES}
 add_executable(bounded_cloud_preview_node src/bounded_cloud_preview_node.cpp)
 target_link_libraries(bounded_cloud_preview_node bounded_cloud_preview ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
+if(ENABLE_RTX_POINTPILLARS)
+  find_package(CUDA REQUIRED)
+  set(CUDA_POINTPILLARS_ROOT "$ENV{CUDA_POINTPILLARS_ROOT}" CACHE PATH
+      "Pinned NVIDIA-AI-IOT/CUDA-PointPillars checkout")
+  if(NOT CUDA_POINTPILLARS_ROOT)
+    message(FATAL_ERROR
+      "ENABLE_RTX_POINTPILLARS=ON requires CUDA_POINTPILLARS_ROOT or the "
+      "CUDA_POINTPILLARS_ROOT environment variable")
+  endif()
+  find_path(CUDA_POINTPILLARS_INCLUDE_DIR
+    NAMES pointpillar/pointpillar.hpp
+    PATHS "${CUDA_POINTPILLARS_ROOT}/src"
+    NO_DEFAULT_PATH)
+  find_library(CUDA_POINTPILLARS_CORE_LIBRARY
+    NAMES pointpillar_core
+    PATHS "${CUDA_POINTPILLARS_ROOT}/build"
+    NO_DEFAULT_PATH)
+  find_path(TENSORRT_INCLUDE_DIR
+    NAMES NvInfer.h
+    HINTS "$ENV{TensorRT_Inc}"
+    PATHS /usr/include/x86_64-linux-gnu /usr/include)
+  find_library(TENSORRT_NVINFER_LIBRARY
+    NAMES nvinfer
+    HINTS "$ENV{TensorRT_Lib}"
+    PATHS /usr/lib/x86_64-linux-gnu /usr/lib)
+  if(NOT CUDA_POINTPILLARS_INCLUDE_DIR OR
+     NOT CUDA_POINTPILLARS_CORE_LIBRARY OR
+     NOT TENSORRT_INCLUDE_DIR OR
+     NOT TENSORRT_NVINFER_LIBRARY)
+    message(FATAL_ERROR
+      "RTX PointPillars dependencies are incomplete. Run "
+      "tools/setup_rtx2060_pointpillars.sh on the NUC first.")
+  endif()
+
+  add_executable(rtx_pointpillars_node src/rtx_pointpillars_node.cpp)
+  target_include_directories(rtx_pointpillars_node PRIVATE
+    "${CUDA_POINTPILLARS_INCLUDE_DIR}"
+    "${TENSORRT_INCLUDE_DIR}"
+    "${CUDA_INCLUDE_DIRS}")
+  target_link_libraries(rtx_pointpillars_node
+    "${CUDA_POINTPILLARS_CORE_LIBRARY}"
+    "${CUDA_CUDART_LIBRARY}"
+    "${TENSORRT_NVINFER_LIBRARY}"
+    ${catkin_LIBRARIES}
+    dl)
+  set_target_properties(rtx_pointpillars_node PROPERTIES
+    BUILD_RPATH "${CUDA_POINTPILLARS_ROOT}/build"
+    INSTALL_RPATH "${CUDA_POINTPILLARS_ROOT}/build")
+endif()
+
 catkin_install_python(
   PROGRAMS
     scripts/preflight.py
@@ -64,9 +115,17 @@ catkin_install_python(
     scripts/waypoint_follower.py
     scripts/mpc_follower.py
     scripts/dwa_follower.py
+    scripts/gpu_dwa_follower.py
     scripts/safety_gate.py
     scripts/obstacle_clusters.py
     scripts/human_aware_shadow_node.py
+    scripts/hybrid_geometric_objects.py
+    scripts/hybrid_object_fusion.py
+    scripts/vision_detection_bridge.py
+    scripts/localization_exclusion_boxes.py
+    scripts/semantic_safety_supervisor.py
+    scripts/terrain_guard.py
+    scripts/hybrid_preflight.py
     scripts/dwa_run_report.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
@@ -74,15 +133,21 @@ install(
   FILES
     scripts/array_backend.py
     scripts/gpu_voxel_scorer.py
+    scripts/gpu_dwa_backend.py
+    scripts/scipy_ckdtree_compat.py
     scripts/body_frame.py
     scripts/human_aware_shadow.py
     scripts/dwa_core.py
+    scripts/hybrid_perception.py
+    scripts/localization_exclusion_policy.py
+    scripts/semantic_safety_policy.py
+    scripts/terrain_guard_policy.py
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py
     scripts/cluster_guard.py
     scripts/cluster_tracking.py
     scripts/cloud_points.py
-  scripts/fixed_map_filter.py
+    scripts/fixed_map_filter.py
     scripts/drive_policy.py
     scripts/localization_policy.py
     scripts/motion_safety.py
@@ -111,6 +176,10 @@ install(
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
   LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
 )
+if(ENABLE_RTX_POINTPILLARS)
+  install(TARGETS rtx_pointpillars_node
+    RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+endif()
 install(DIRECTORY launch config DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 
 if(CATKIN_ENABLE_TESTING)

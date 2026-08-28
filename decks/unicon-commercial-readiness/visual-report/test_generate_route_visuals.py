@@ -10,9 +10,22 @@
 # ///
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+# This report generator is an explicitly isolated uv/Python-3.11 tool. ROS
+# Noetic on Ubuntu 20.04 is Python 3.8, where dataclass(slots=True) and
+# hashlib.file_digest are unavailable. The Noetic repository suite must not
+# fail while merely collecting a tool whose own metadata excludes that
+# interpreter; its dedicated uv invocation remains authoritative.
+if sys.version_info < (3, 11):
+    pytest.skip(
+        "route visual report requires Python >=3.11 as declared by the script",
+        allow_module_level=True,
+    )
+
 from generate_route_visuals import digest_file
 from route_audit import audit_route_bundle
 

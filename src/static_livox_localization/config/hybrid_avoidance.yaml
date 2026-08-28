@@ -1,0 +1,49 @@
+# Hybrid ROS1 field profile. The launch wrapper passes route/map identities;
+# these are only policy thresholds and may be replay-tuned without changing
+# which assets the vehicle is allowed to use.
+hybrid_object_fusion:
+  require_learned: false
+  geometric_max_age_s: 1.5
+  learned_max_age_s: 1.0
+  maximum_skew_s: 0.40
+  association_gate_m: 0.85
+  person_score_threshold: 0.35
+  class_score_threshold: 0.50
+  learned_only_score_threshold: 0.65
+  person_min_extent_m: 0.70
+
+semantic_safety_supervisor:
+  maximum_summary_age_s: 1.5
+  maximum_command_age_s: 0.6
+  corridor_half_width_m: 0.50
+  person_half_width_m: 0.65
+  person_memory_s: 1.0
+  person_release_margin_m: 0.30
+  accumulation_s: 0.6
+  pipeline_s: 0.2
+  minimum_deceleration_mps2: 0.5
+  geometry_margin_m: 0.9
+
+terrain_guard:
+  input_stale_s: 0.6
+  pose_stale_s: 1.0
+  hard_clearance_m: 0.12
+  slow_clearance_m: 0.35
+  edge_speed_mps: 0.35
+  minimum_deceleration_mps2: 0.5
+  reaction_s: 0.25
+  reserve_s: 0.5
+  minimum_horizon_s: 1.0
+  maximum_horizon_s: 3.0
+  rollout_step_s: 0.05
+  cliff_required: false
+  cliff_stale_s: 0.5
+
+vision_detection_bridge:
+  output_frame: lidar
+  minimum_score: 0.05
+  class_map:
+    "0": vehicle
+    "1": person
+    "2": two_wheeler
+    "3": obstacle
