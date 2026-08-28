@@ -133,6 +133,11 @@ def test_shadow_launch_sinks_every_hateb_velocity_command():
     )
     for namespace in ("global_costmap", "local_costmap"):
         assert any(
+            param.get("name") == f"{namespace}/robot_base_frame"
+            and param.get("value") == "$(arg base_frame)"
+            for param in params
+        )
+        assert any(
             param.get("name") == f"{namespace}/obstacle_layer/enabled"
             and param.get("value") == "false"
             for param in params

@@ -1,0 +1,21 @@
+{
+ "status": "APPROVED",
+ "stations": 1892,
+ "samples_0p1m": 4731,
+ "bilateral_station_violations": 0,
+ "continuous_chord_violations": 0,
+ "minimum_raw_left_m": 0.458625,
+ "minimum_raw_right_m": 0.453253,
+ "minimum_wheel_left_margin_m": 0.108625,
+ "minimum_wheel_right_margin_m": 0.103253,
+ "minimum_total_measured_width_m": 1.2,
+ "unscanned_boundary_stations": 71,
+ "unscanned_boundary_minimum_wheel_margin_m": 1.15,
+ "hard_drop_hits": 0,
+ "geometry_source": "/Volumes/\ubb34\uc81c/merged_0707_0725_v1/mergedmap.ply",
+ "route_source_bags": [
+  "/Users/minjun/unicon-wheelchair/blackbox/blackbox_20260802_213633.bag",
+  "/Users/minjun/unicon-wheelchair/blackbox/blackbox_20260731_212959.bag"
+ ],
+ "hard_drop_minimum_wheel_margin_m": 0.115
+}

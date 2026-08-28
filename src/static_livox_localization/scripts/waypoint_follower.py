@@ -199,6 +199,7 @@ class WaypointFollower:
     person_static_track_id = None
     person_static_since_s = None
     person_static_last_stamp_s = None
+    person_bypass_committed_track_id = None
 
     # Which control law this class turns a pose into a Twist with. Both
     # profiles run as the same node under the same name, so the node alone
@@ -329,6 +330,7 @@ class WaypointFollower:
         self.person_static_track_id = None
         self.person_static_since_s = None
         self.person_static_last_stamp_s = None
+        self.person_bypass_committed_track_id = None
         # Deliberately NOT behind ~safety_policies. The raw corridor check is
         # switched off with the rest of the judgements because it stops on
         # five returns and is the loudest false-positive source in the chain;
@@ -658,6 +660,12 @@ class WaypointFollower:
             labels=(PERSON_LABEL,))
         self.direct_person_threats = tuple(
             bypass_people if self.cluster_summary.usable else ())
+        committed_person = next((
+            candidate for candidate in bypass_people
+            if candidate.track_id == self.person_bypass_committed_track_id
+        ), None)
+        if person is None and len(bypass_people) == 1:
+            person = committed_person
         if self.cluster_summary.usable:
             if person is not None:
                 self.person_memory = (self.cluster_summary.stamp_s, person)
@@ -740,6 +748,7 @@ class WaypointFollower:
         self.person_static_track_id = None
         self.person_static_since_s = None
         self.person_static_last_stamp_s = None
+        self.person_bypass_committed_track_id = None
 
     def person_bypass_ready(self, threat, _blocking):
         """Direct same-track STATIC evidence required before a person arc."""
@@ -763,6 +772,8 @@ class WaypointFollower:
         if not eligible:
             self.reset_person_bypass_evidence()
             return False
+        if self.person_bypass_committed_track_id == threat.track_id:
+            return True
         stamp_s = threat.observed_stamp_s
         if self.person_static_track_id != threat.track_id or \
                 self.person_static_last_stamp_s is None:
@@ -777,8 +788,11 @@ class WaypointFollower:
             return False
         if gap_s > 0.0:
             self.person_static_last_stamp_s = stamp_s
-        return stamp_s - self.person_static_since_s >= \
+        ready = stamp_s - self.person_static_since_s >= \
             PERSON_BYPASS_CONFIRM_S
+        if ready:
+            self.person_bypass_committed_track_id = threat.track_id
+        return ready
 
     def take_a_way_round(self, clear_for_m):
         """Offset far enough to clear the corridor without leaving the band.

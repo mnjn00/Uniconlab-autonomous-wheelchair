@@ -1,0 +1,518 @@
+{"kind":"deck","id":"pr/lkityq","name":"Deck"}
+{"kind":"layout","layoutId":"f5439bb5-b5cd-4396-9beb-ad828b7f11e9","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"b52d29ef-a4a4-4c13-ae82-afc230aac4e4","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/ff0t9i","slide":1,"title":"자율주행 전동휠체어 · 중간점검 보고","textShapes":8}
+{"kind":"shape","id":"sh/4jip0z6t","slide":1,"bbox":[0,0,18,720]}
+{"kind":"textbox","id":"sh/3i98rup8","slide":1,"text":"자율주행 전동휠체어 · 중간점검 보고","textPreview":"자율주행 전동휠체어 · 중간점검 보고","textChars":20,"textLines":1,"bbox":[70,62,460,28]}
+{"kind":"textbox","id":"sh/ih07ypo3","slide":1,"text":"Livox 단일 구성 복귀 이후\n위치추정·경로주행 검증","textPreview":"Livox 단일 구성 복귀 이후 | 위치추정·경로주행 검증","textChars":30,"textLines":2,"bbox":[70,128,650,190]}
+{"kind":"textbox","id":"sh/dobqx4nq","slide":1,"text":"센서 변수 고정에서 ROSBAG 원본 경로 재현,\n안전 게이트 단계 검증까지","textPreview":"센서 변수 고정에서 ROSBAG 원본 경로 재현, | 안전 게이트 단계 검증까지","textChars":42,"textLines":2,"bbox":[72,346,620,64]}
+{"kind":"shape","id":"sh/sn2p4z65","slide":1,"bbox":[72,444,250,4]}
+{"kind":"textbox","id":"sh/rmt8vupk","slide":1,"text":"발표자  ____________________\n지도교수  ____________________","textPreview":"발표자  ____________________ | 지도교수  ____________________","textChars":52,"textLines":2,"bbox":[72,472,520,70]}
+{"kind":"textbox","id":"sh/ql072poz","slide":1,"text":"분석 범위  2026.07.27 — 2026.08.03","textPreview":"분석 범위  2026.07.27 — 2026.08.03","textChars":30,"textLines":1,"bbox":[72,620,500,30]}
+{"kind":"shape","id":"sh/1cbq14nm","slide":1,"name":"photo-실차 전경 또는 Livox 장착부","bbox":[790,92,410,520]}
+{"kind":"shape","id":"sh/0r298j61","slide":1,"bbox":[808,110,82,28]}
+{"kind":"textbox","id":"sh/6lkvidkz","slide":1,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[808,113,82,22]}
+{"kind":"textbox","id":"sh/7mtwri1k","slide":1,"text":"실차 전경 또는 Livox 장착부","textPreview":"실차 전경 또는 Livox 장착부","textChars":18,"textLines":1,"bbox":[818,320,354,72]}
+{"kind":"textbox","id":"sh/sn2dk32p","slide":1,"text":"세로 사진 권장 · 휠체어와 센서가 함께 보이게","textPreview":"세로 사진 권장 · 휠체어와 센서가 함께 보이게","textChars":26,"textLines":1,"bbox":[818,560,354,30]}
+{"kind":"notes","id":"nt/ff0t9i","slide":1,"text":"[Sources]\n- Local repository history and field evidence in /Users/minjun/unicon-wheelchair.\n- No external image is embedded; the visible rectangle is a user-requested photo placeholder."}
+{"kind":"slide","id":"sl/mwbw2x","slide":2,"title":"OVERVIEW","textShapes":19}
+{"kind":"textbox","id":"sh/pcnat4bu","slide":2,"text":"OVERVIEW","textPreview":"OVERVIEW","textChars":8,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/2pwbips3","slide":2,"text":"발표 구성","textPreview":"발표 구성","textChars":5,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/3q5sruto","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/gnetgfax","slide":2,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/1onapkbi","slide":2,"bbox":[64,150,1152,61]}
+{"kind":"textbox","id":"sh/ulcbepsr","slide":2,"text":"개요","textPreview":"개요","textChars":2,"textLines":1,"bbox":[82,160,90,40]}
+{"kind":"shape","id":"sh/fm5snutc","slide":2,"bbox":[182,157,10,47]}
+{"kind":"textbox","id":"sh/sju9cfa1","slide":2,"text":"프로젝트 개요와 이번 중간점검 질문","textPreview":"프로젝트 개요와 이번 중간점검 질문","textChars":19,"textLines":1,"bbox":[230,161,930,38]}
+{"kind":"shape","id":"sh/tk3alkbm","slide":2,"bbox":[64,220,1152,61]}
+{"kind":"textbox","id":"sh/dcbut4zq","slide":2,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[82,230,90,40]}
+{"kind":"shape","id":"sh/cb2t0zi5","slide":2,"bbox":[182,227,10,47]}
+{"kind":"textbox","id":"sh/ratsruhk","slide":2,"text":"Livox Mid-360 + VN-100 센서 융합 시도","textPreview":"Livox Mid-360 + VN-100 센서 융합 시도","textChars":31,"textLines":1,"bbox":[230,231,930,38]}
+{"kind":"shape","id":"sh/q9kby90f","slide":2,"bbox":[64,290,1152,61]}
+{"kind":"textbox","id":"sh/p8bap4zu","slide":2,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[82,300,90,40]}
+{"kind":"shape","id":"sh/47itwzi9","slide":2,"bbox":[182,297,10,47]}
+{"kind":"textbox","id":"sh/369snuho","slide":2,"text":"Livox Mid-360 단일 사용으로 회귀","textPreview":"Livox Mid-360 단일 사용으로 회귀","textChars":24,"textLines":1,"bbox":[230,301,930,38]}
+{"kind":"shape","id":"sh/2l0bup03","slide":2,"bbox":[64,360,1152,61]}
+{"kind":"textbox","id":"sh/hkralkzi","slide":2,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[82,370,90,40]}
+{"kind":"shape","id":"sh/gjitsfix","slide":2,"bbox":[182,367,10,47]}
+{"kind":"textbox","id":"sh/8nmt8fqt","slide":2,"text":"로컬라이제이션 원인 파악과 수동 주행","textPreview":"로컬라이제이션 원인 파악과 수동 주행","textChars":20,"textLines":1,"bbox":[230,371,930,38]}
+{"kind":"shape","id":"sh/tovu1k7e","slide":2,"bbox":[64,430,1152,61]}
+{"kind":"textbox","id":"sh/6lkb6p83","slide":2,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[82,440,90,40]}
+{"kind":"shape","id":"sh/7mdczup8","slide":2,"bbox":[182,437,10,47]}
+{"kind":"textbox","id":"sh/kz2t4fqx","slide":2,"text":"ROSBAG 원본 경로 재현 주행","textPreview":"ROSBAG 원본 경로 재현 주행","textChars":18,"textLines":1,"bbox":[230,441,930,38]}
+{"kind":"shape","id":"sh/l0baxk7i","slide":2,"bbox":[64,500,1152,61]}
+{"kind":"textbox","id":"sh/yxkb258r","slide":2,"text":"5","textPreview":"5","textChars":1,"textLines":1,"bbox":[82,510,90,40]}
+{"kind":"shape","id":"sh/zytsvapc","slide":2,"bbox":[182,507,10,47]}
+{"kind":"textbox","id":"sh/4v6tgzq1","slide":2,"text":"안전 게이트 적용 및 기록 검증","textPreview":"안전 게이트 적용 및 기록 검증","textChars":17,"textLines":1,"bbox":[230,511,930,38]}
+{"kind":"shape","id":"sh/5wfu947m","slide":2,"bbox":[64,570,1152,61]}
+{"kind":"textbox","id":"sh/fqhwzy9o","slide":2,"text":"결과","textPreview":"결과","textChars":2,"textLines":1,"bbox":[82,580,90,40]}
+{"kind":"shape","id":"sh/ep8f6ds3","slide":2,"bbox":[182,577,10,47]}
+{"kind":"textbox","id":"sh/1cje18ru","slide":2,"text":"수행 결과, 남은 위험과 다음 실험","textPreview":"수행 결과, 남은 위험과 다음 실험","textChars":19,"textLines":1,"bbox":[230,581,930,38]}
+{"kind":"shape","id":"sh/0bqx83a9","slide":2,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/ne1w3i90","slide":2,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/2dsfadsf","slide":2,"text":"2026.08.03  ·  02","textPreview":"2026.08.03  ·  02","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/mwbw2x","slide":2,"text":"[Sources]\n- User-supplied agenda screenshot used as the structural visual reference for this agenda slide."}
+{"kind":"slide","id":"sl/h5f50p","slide":3,"title":"SUMMARY","textShapes":16}
+{"kind":"textbox","id":"sh/4bu1cful","slide":3,"text":"SUMMARY","textPreview":"SUMMARY","textChars":7,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/3alkjat0","slide":3,"text":"중간점검의 결론은 세 가지입니다","textPreview":"중간점검의 결론은 세 가지입니다","textChars":17,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/29cja5cf","slide":3,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/h832h0bu","slide":3,"bbox":[64,126,1152,2]}
+{"kind":"textbox","id":"sh/g7u18vup","slide":3,"text":"01","textPreview":"01","textChars":2,"textLines":1,"bbox":[64,158,200,72]}
+{"kind":"textbox","id":"sh/f6lkfqt4","slide":3,"text":"Livox 내장 IMU를 현장 기본값으로 유지","textPreview":"Livox 내장 IMU를 현장 기본값으로 유지","textChars":25,"textLines":1,"bbox":[174,158,970,42]}
+{"kind":"textbox","id":"sh/u5cj6lcj","slide":3,"text":"동일 주행 비교에서 VN-100의 이동 중 자이로 우위가 확인되지 않았고, 가속도 스케일은 추가 검증이 필요했습니다.","textPreview":"동일 주행 비교에서 VN-100의 이동 중 자이로 우위가 확인되지 않았고, 가속도 스케일은 추가 검증이 필요했습니다.","textChars":65,"textLines":1,"bbox":[174,204,970,52]}
+{"kind":"shape","id":"sh/1472t4be","slide":3,"bbox":[64,274,1152,1]}
+{"kind":"textbox","id":"sh/03ylkzat","slide":3,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[64,303,200,72]}
+{"kind":"textbox","id":"sh/ad4nqxkb","slide":3,"text":"문제 원인은 센서 하나가 아니라 지도·프레임·점수·구동계의 결합","textPreview":"문제 원인은 센서 하나가 아니라 지도·프레임·점수·구동계의 결합","textChars":35,"textLines":1,"bbox":[174,303,970,42]}
+{"kind":"textbox","id":"sh/bedoj21g","slide":3,"text":"수동 주행과 bag 분석으로 초기 방향 반전, 지도 식별자 불일치, ROI 밖 점수 오염, 저속 선회 미동작을 분리했습니다.","textPreview":"수동 주행과 bag 분석으로 초기 방향 반전, 지도 식별자 불일치, ROI 밖 점수 오염, 저속 선회 미동작을 분리했습니다.","textChars":69,"textLines":1,"bbox":[174,349,970,52]}
+{"kind":"shape","id":"sh/cfm5s721","slide":3,"bbox":[64,419,1152,1]}
+{"kind":"textbox","id":"sh/xgv6lsjm","slide":3,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[64,448,200,72]}
+{"kind":"textbox","id":"sh/29knmdkz","slide":3,"text":"0727 경로의 위치추정은 닫혔고, v4 안전 근거는 아직 열려 있음","textPreview":"0727 경로의 위치추정은 닫혔고, v4 안전 근거는 아직 열려 있음","textChars":38,"textLines":1,"bbox":[174,448,970,42]}
+{"kind":"textbox","id":"sh/natofi1k","slide":3,"text":"두 번의 완주에서 주행 샘플 전부 TRACKING이었지만, 현재 배포 경로 v4의 위치추정 envelope와 물리적 경계 측정은 미완료입니다.","textPreview":"두 번의 완주에서 주행 샘플 전부 TRACKING이었지만, 현재 배포 경로 v4의 위치추정 envelope와 물리적 경계 측정은 미완료입니다.","textChars":79,"textLines":1,"bbox":[174,494,970,60]}
+{"kind":"shape","id":"sh/ob25on25","slide":3,"bbox":[64,594,1152,46]}
+{"kind":"textbox","id":"sh/pcb6hsjq","slide":3,"text":"999028a","textPreview":"999028a","textChars":7,"textLines":1,"bbox":[78,605,108,24]}
+{"kind":"textbox","id":"sh/m5onyhk3","slide":3,"text":"기준선 회귀 이후의 커밋·bag·필드 보고서를 연결해 결론을 도출","textPreview":"기준선 회귀 이후의 커밋·bag·필드 보고서를 연결해 결론을 도출","textChars":36,"textLines":1,"bbox":[190,604,1012,26]}
+{"kind":"shape","id":"sh/76xorm1o","slide":3,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/jqpkjehg","slide":3,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/ipg3q90v","slide":3,"text":"2026.08.03  ·  03","textPreview":"2026.08.03  ·  03","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/h5f50p","slide":3,"text":"[Sources]\n- git show 999028a, 3a64b80, bb14666, d52ce66, f59e30f.\n- /Users/minjun/unicon-wheelchair/docs/debug_bags.md lines 110-173.\n- /Users/minjun/unicon-wheelchair/README.md lines 56-79 and 302-306."}
+{"kind":"slide","id":"sl/eln4q1","slide":4,"title":"BASELINE","textShapes":24}
+{"kind":"textbox","id":"sh/xkzatori","slide":4,"text":"BASELINE","textPreview":"BASELINE","textChars":8,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/ax8ryts7","slide":4,"text":"999028a 이후 68개 커밋을 추적했습니다","textPreview":"999028a 이후 68개 커밋을 추적했습니다","textChars":25,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/byhsry9s","slide":4,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/kna943a9","slide":4,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/lojax8ru","slide":4,"name":"photo-Git log 또는 commit diff 캡처","bbox":[824,156,392,220]}
+{"kind":"shape","id":"sh/yl8r2ts3","slide":4,"bbox":[842,174,82,28]}
+{"kind":"textbox","id":"sh/zmhsvy9o","slide":4,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[842,177,82,22]}
+{"kind":"textbox","id":"sh/8rat8na5","slide":4,"text":"Git log 또는 commit diff 캡처","textPreview":"Git log 또는 commit diff 캡처","textChars":25,"textLines":1,"bbox":[852,234,336,72]}
+{"kind":"textbox","id":"sh/tsja18rq","slide":4,"text":"999028a와 3a64b80이 함께 보이게","textPreview":"999028a와 3a64b80이 함께 보이게","textChars":24,"textLines":1,"bbox":[852,324,336,30]}
+{"kind":"textbox","id":"sh/psjyd0b2","slide":4,"text":"분석 기준점","textPreview":"분석 기준점","textChars":6,"textLines":1,"bbox":[64,156,690,36]}
+{"kind":"textbox","id":"sh/4rahkvah","slide":4,"text":"2026.07.27 · 999028a","textPreview":"2026.07.27 · 999028a","textChars":20,"textLines":1,"bbox":[64,198,690,72]}
+{"kind":"textbox","id":"sh/3qhgbqtw","slide":4,"text":"VN-100 융합을 제거하고 Livox 내장 IMU로 복귀했습니다.\n동시에 33개 커밋·46개 파일의 다른 수정도 되돌아갔습니다.","textPreview":"VN-100 융합을 제거하고 Livox 내장 IMU로 복귀했습니다. | 동시에 33개 커밋·46개 파일의 다른 수정도 되돌아갔습니다.","textChars":72,"textLines":2,"bbox":[64,276,690,90]}
+{"kind":"shape","id":"sh/258zilsb","slide":4,"bbox":[92,458,1070,4]}
+{"kind":"shape","id":"sh/dwjyh0by","slide":4,"bbox":[120,448,20,20]}
+{"kind":"textbox","id":"sh/cvahofat","slide":4,"text":"07/25","textPreview":"07/25","textChars":5,"textLines":1,"bbox":[68,485,124,24]}
+{"kind":"textbox","id":"sh/ru1gfat8","slide":4,"text":"3a64b80","textPreview":"3a64b80","textChars":7,"textLines":1,"bbox":[55,514,150,24]}
+{"kind":"textbox","id":"sh/qtszm5sn","slide":4,"text":"VN-100 융합","textPreview":"VN-100 융합","textChars":9,"textLines":1,"bbox":[20,544,220,54]}
+{"kind":"shape","id":"sh/t0zy5gbu","slide":4,"bbox":[420,448,20,20]}
+{"kind":"textbox","id":"sh/sz6xcba9","slide":4,"text":"07/27","textPreview":"07/27","textChars":5,"textLines":1,"bbox":[368,485,124,24]}
+{"kind":"textbox","id":"sh/kjahsbi5","slide":4,"text":"999028a","textPreview":"999028a","textChars":7,"textLines":1,"bbox":[355,514,150,24]}
+{"kind":"textbox","id":"sh/lkjylgjq","slide":4,"text":"Livox 기준선 회귀","textPreview":"Livox 기준선 회귀","textChars":12,"textLines":1,"bbox":[320,544,220,54]}
+{"kind":"shape","id":"sh/yhszq10z","slide":4,"bbox":[740,448,20,20]}
+{"kind":"textbox","id":"sh/ji1gj61k","slide":4,"text":"07/29","textPreview":"07/29","textChars":5,"textLines":1,"bbox":[688,485,124,24]}
+{"kind":"textbox","id":"sh/87uhwvih","slide":4,"text":"bb14666","textPreview":"bb14666","textChars":7,"textLines":1,"bbox":[675,514,150,24]}
+{"kind":"textbox","id":"sh/t83yp0jm","slide":4,"text":"Livox 기본값 확정","textPreview":"Livox 기본값 확정","textChars":12,"textLines":1,"bbox":[640,544,220,54]}
+{"kind":"shape","id":"sh/6lczul0b","slide":4,"bbox":[1070,448,20,20]}
+{"kind":"textbox","id":"sh/76lgnq1w","slide":4,"text":"08/03","textPreview":"08/03","textChars":5,"textLines":1,"bbox":[1018,485,124,24]}
+{"kind":"textbox","id":"sh/gbuh0vid","slide":4,"text":"a3f0e85","textPreview":"a3f0e85","textChars":7,"textLines":1,"bbox":[1005,514,150,24]}
+{"kind":"textbox","id":"sh/hcnyt0jy","slide":4,"text":"분석 종점","textPreview":"분석 종점","textChars":5,"textLines":1,"bbox":[970,544,220,54]}
+{"kind":"textbox","id":"sh/r6pkjul0","slide":4,"text":"해석 원칙  ·  회귀는 ‘센서 선택’과 ‘되돌아온 결함’을 분리해 다시 검증하는 출발점","textPreview":"해석 원칙  ·  회귀는 ‘센서 선택’과 ‘되돌아온 결함’을 분리해 다시 검증하는 출발점","textChars":49,"textLines":1,"bbox":[64,620,1152,32]}
+{"kind":"shape","id":"sh/q5gjqpkf","slide":4,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/d872l436","slide":4,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/s7y1sz2l","slide":4,"text":"2026.08.03  ·  04","textPreview":"2026.08.03  ·  04","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/eln4q1","slide":4,"text":"[Sources]\n- git show --format=fuller --stat --summary 999028a.\n- git rev-list --count 999028a..a3f0e85 => 68.\n- git show 3a64b80 and git show bb14666."}
+{"kind":"slide","id":"sl/m1bief","slide":5,"title":"01 · SENSOR FUSION","textShapes":18}
+{"kind":"textbox","id":"sh/mt8nex0r","slide":5,"text":"01 · SENSOR FUSION","textPreview":"01 · SENSOR FUSION","textChars":18,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/9wz69cz2","slide":5,"text":"VN-100 융합은 이동 검증 전에 되돌렸습니다","textPreview":"VN-100 융합은 이동 검증 전에 되돌렸습니다","textChars":26,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/ovq5g7ih","slide":5,"text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/zqxo3ih0","slide":5,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/eponad0f","slide":5,"name":"photo-두 IMU 장착 위치와 축 방향","bbox":[760,158,456,350]}
+{"kind":"shape","id":"sh/1sf65sz6","slide":5,"bbox":[778,176,82,28]}
+{"kind":"textbox","id":"sh/0r65cnil","slide":5,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[778,179,82,22]}
+{"kind":"textbox","id":"sh/r2x4zih4","slide":5,"text":"두 IMU 장착 위치와 축 방향","textPreview":"두 IMU 장착 위치와 축 방향","textChars":17,"textLines":1,"bbox":[788,301,400,72]}
+{"kind":"textbox","id":"sh/q14n6d0j","slide":5,"text":"Livox MID-360 / VN-100 라벨 표시","textPreview":"Livox MID-360 / VN-100 라벨 표시","textChars":28,"textLines":1,"bbox":[788,456,400,30]}
+{"kind":"shape","id":"sh/sfe9wr6h","slide":5,"bbox":[64,171,9,9]}
+{"kind":"textbox","id":"sh/tgna5wn2","slide":5,"text":"시도 이유","textPreview":"시도 이유","textChars":5,"textLines":1,"bbox":[88,164,616,28]}
+{"kind":"textbox","id":"sh/6dwruhob","slide":5,"text":"MID-360 내장 MEMS보다 VN-100의 관성 성능이 좋을 가능성을 FAST-LIO와 tip guard에 활용하려 했습니다.","textPreview":"MID-360 내장 MEMS보다 VN-100의 관성 성능이 좋을 가능성을 FAST-LIO와 tip guard에 활용하려 했습니다.","textChars":72,"textLines":1,"bbox":[88,196,616,60]}
+{"kind":"shape","id":"sh/7e5s3m5w","slide":5,"bbox":[64,275,9,9]}
+{"kind":"textbox","id":"sh/kbu9s765","slide":5,"text":"측정한 외부 파라미터","textPreview":"측정한 외부 파라미터","textChars":11,"textLines":1,"bbox":[88,268,616,28]}
+{"kind":"textbox","id":"sh/5c3a1cnq","slide":5,"text":"150초 동시 회전 데이터로 yaw -2.80°, 위치 14.4 cm 뒤·2.2 cm 측면·6.7 cm 아래를 추정했습니다.","textPreview":"150초 동시 회전 데이터로 yaw -2.80°, 위치 14.4 cm 뒤·2.2 cm 측면·6.7 cm 아래를 추정했습니다.","textChars":69,"textLines":1,"bbox":[88,300,616,60]}
+{"kind":"shape","id":"sh/ipcrqhof","slide":5,"bbox":[64,379,9,9]}
+{"kind":"textbox","id":"sh/jql8z25k","slide":5,"text":"당시 확인 범위","textPreview":"당시 확인 범위","textChars":8,"textLines":1,"bbox":[88,372,616,28]}
+{"kind":"textbox","id":"sh/47y94b6p","slide":5,"text":"정지 30초 drift 9.9 mm, pitch 0.19°까지 확인했지만 이동 중 검증과 tip guard 상관 검증은 남아 있었습니다.","textPreview":"정지 30초 drift 9.9 mm, pitch 0.19°까지 확인했지만 이동 중 검증과 tip guard 상관 검증은 남아 있었습니다.","textChars":76,"textLines":1,"bbox":[88,404,616,72]}
+{"kind":"shape","id":"sh/p87adgna","slide":5,"bbox":[64,516,1152,112]}
+{"kind":"textbox","id":"sh/d43ahwfe","slide":5,"text":"회귀 판단","textPreview":"회귀 판단","textChars":5,"textLines":1,"bbox":[84,534,220,30]}
+{"kind":"textbox","id":"sh/c3u9obyt","slide":5,"text":"검증되지 않은 센서를 운영 경로의 기본값으로 두지 않고, Livox를 기준선으로 고정한 뒤 동일 주행에서 두 센서를 병렬 비교하기로 했습니다.","textPreview":"검증되지 않은 센서를 운영 경로의 기본값으로 두지 않고, Livox를 기준선으로 고정한 뒤 동일 주행에서 두 센서를 병렬 비교하기로 했습니다.","textChars":79,"textLines":1,"bbox":[304,531,888,76]}
+{"kind":"shape","id":"sh/b2lsf6x8","slide":5,"bbox":[64,636,1152,46]}
+{"kind":"textbox","id":"sh/q1crm1gn","slide":5,"text":"3a64b80","textPreview":"3a64b80","textChars":7,"textLines":1,"bbox":[78,647,108,24]}
+{"kind":"textbox","id":"sh/p03qdwf2","slide":5,"text":"융합 시도  →  999028a에서 제거  →  이후 VN_IMU=1 진단 옵션으로만 유지","textPreview":"융합 시도  →  999028a에서 제거  →  이후 VN_IMU=1 진단 옵션으로만 유지","textChars":50,"textLines":1,"bbox":[190,646,1012,26]}
+{"kind":"shape","id":"sh/oza9kryh","slide":5,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/3y18bmxw","slide":5,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/2xsrihgr","slide":5,"text":"2026.08.03  ·  05","textPreview":"2026.08.03  ·  05","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/m1bief","slide":5,"text":"[Sources]\n- git show 3a64b80: measured extrinsics, stationary result, and moving validation still pending.\n- git show 999028a: VN-100 fusion removed and Livox built-in IMU restored.\n- git show bb14666 and tools/start_wheelchair_localization.sh lines 108-153: Livox remains the field default; VN_IMU=1 is an explicit override."}
+{"kind":"slide","id":"sl/ah984p","slide":6,"title":"02 · SINGLE LIVOX","textShapes":25}
+{"kind":"textbox","id":"sh/qhofu5wv","slide":6,"text":"02 · SINGLE LIVOX","textPreview":"02 · SINGLE LIVOX","textChars":17,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/d4zy50f6","slide":6,"text":"같은 주행에서 비교하자 VN-100의 우위가 보이지 않았습니다","textPreview":"같은 주행에서 비교하자 VN-100의 우위가 보이지 않았습니다","textChars":34,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/cj6hwvel","slide":6,"text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/3exgzqx4","slide":6,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/2dofqlwj","slide":6,"bbox":[64,164,205,4]}
+{"kind":"textbox","id":"sh/pgfy10fa","slide":6,"text":"357 s","textPreview":"357 s","textChars":5,"textLines":1,"bbox":[64,180,205,64]}
+{"kind":"textbox","id":"sh/of6xsvep","slide":6,"text":"동시 기록","textPreview":"동시 기록","textChars":5,"textLines":1,"bbox":[64,246,205,30]}
+{"kind":"textbox","id":"sh/fadgvqx8","slide":6,"text":"466,616 messages · drop 0","textPreview":"466,616 messages · drop 0","textChars":25,"textLines":1,"bbox":[64,278,205,46]}
+{"kind":"shape","id":"sh/u94fmlwn","slide":6,"bbox":[294,164,205,4]}
+{"kind":"textbox","id":"sh/cb2lofud","slide":6,"text":"165.8 m","textPreview":"165.8 m","textChars":7,"textLines":1,"bbox":[294,180,205,64]}
+{"kind":"textbox","id":"sh/dcb2h0vy","slide":6,"text":"조이스틱 주행","textPreview":"조이스틱 주행","textChars":7,"textLines":1,"bbox":[294,246,205,30]}
+{"kind":"textbox","id":"sh/q9k3m5cn","slide":6,"text":"두 센서가 동일한 움직임을 관측","textPreview":"두 센서가 동일한 움직임을 관측","textChars":17,"textLines":1,"bbox":[294,278,205,46]}
+{"kind":"shape","id":"sh/ratkfads","slide":6,"bbox":[524,164,205,4]}
+{"kind":"textbox","id":"sh/4nilkvuh","slide":6,"text":"200 Hz","textPreview":"200 Hz","textChars":6,"textLines":1,"bbox":[524,180,205,64]}
+{"kind":"textbox","id":"sh/p8b2d0v2","slide":6,"text":"두 IMU 주기","textPreview":"두 IMU 주기","textChars":8,"textLines":1,"bbox":[524,246,205,30]}
+{"kind":"textbox","id":"sh/2l0jilcb","slide":6,"text":"median stamp offset 약 4.2 ms","textPreview":"median stamp offset 약 4.2 ms","textChars":28,"textLines":1,"bbox":[524,278,205,46]}
+{"kind":"shape","id":"sh/3m9kbqdw","slide":6,"name":"photo-수동 주행 또는 bag 분석 화면","bbox":[786,158,430,250]}
+{"kind":"shape","id":"sh/ojmlwzul","slide":6,"bbox":[804,176,82,28]}
+{"kind":"textbox","id":"sh/94vmpkb6","slide":6,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[804,179,82,22]}
+{"kind":"textbox","id":"sh/x0r29k3a","slide":6,"text":"수동 주행 또는 bag 분석 화면","textPreview":"수동 주행 또는 bag 분석 화면","textChars":18,"textLines":1,"bbox":[814,251,374,72]}
+{"kind":"textbox","id":"sh/wzil0fmp","slide":6,"text":"그래프·터미널·RViz 중 하나","textPreview":"그래프·터미널·RViz 중 하나","textChars":17,"textLines":1,"bbox":[814,356,374,30]}
+{"kind":"shape","id":"sh/vy9k7ul4","slide":6,"bbox":[64,363,9,9]}
+{"kind":"textbox","id":"sh/ax03yp4z","slide":6,"text":"이동 중 자이로 차이","textPreview":"이동 중 자이로 차이","textChars":11,"textLines":1,"bbox":[88,356,676,28]}
+{"kind":"textbox","id":"sh/9wr25k3e","slide":6,"text":"축별 RMS 0.69 / 0.92 / 0.67°/s. 휠 odometry와의 오차도 두 센서가 동일해 잔차는 휠 미끄럼으로 해석했습니다.","textPreview":"축별 RMS 0.69 / 0.92 / 0.67°/s. 휠 odometry와의 오차도 두 센서가 동일해 잔차는 휠 미끄럼으로 해석했습니다.","textChars":76,"textLines":1,"bbox":[88,388,676,56]}
+{"kind":"shape","id":"sh/8vilwfmt","slide":6,"bbox":[64,461,9,9]}
+{"kind":"textbox","id":"sh/nu9k3a58","slide":6,"text":"가속도 단위와 스케일","textPreview":"가속도 단위와 스케일","textChars":11,"textLines":1,"bbox":[88,454,676,28]}
+{"kind":"textbox","id":"sh/mtgju54n","slide":6,"text":"Livox는 0.9994 g, VN-100은 9.5435 m/s²로 측정되어 VN-100 가속도 스케일은 tilt magnitude 용도로 미검증 상태입니다.","textPreview":"Livox는 0.9994 g, VN-100은 9.5435 m/s²로 측정되어 VN-100 가속도 스케일은 tilt magnitude 용도로 미검증 상태입니다.","textChars":88,"textLines":1,"bbox":[88,486,676,56]}
+{"kind":"shape","id":"sh/ls7210n2","slide":6,"bbox":[786,430,430,170]}
+{"kind":"textbox","id":"sh/07y1svmh","slide":6,"text":"결론","textPreview":"결론","textChars":2,"textLines":1,"bbox":[812,450,378,32]}
+{"kind":"textbox","id":"sh/qdwz21kf","slide":6,"text":"이번 휠체어 동역학과 장착 환경에서는 VN-100 교체의 실익이 입증되지 않았습니다.\n→ Livox 단일 기준선 유지","textPreview":"이번 휠체어 동역학과 장착 환경에서는 VN-100 교체의 실익이 입증되지 않았습니다. | → Livox 단일 기준선 유지","textChars":65,"textLines":2,"bbox":[812,490,378,88]}
+{"kind":"shape","id":"sh/by50b610","slide":6,"bbox":[64,620,1152,46]}
+{"kind":"textbox","id":"sh/czeh4b2l","slide":6,"text":"d52ce66","textPreview":"d52ce66","textChars":7,"textLines":1,"bbox":[78,631,108,24]}
+{"kind":"textbox","id":"sh/d0nidgj6","slide":6,"text":"비교 도구  ·  35122b8에 주행 결과와 다음 검증 프로토콜 기록","textPreview":"비교 도구  ·  35122b8에 주행 결과와 다음 검증 프로토콜 기록","textChars":39,"textLines":1,"bbox":[190,630,1012,26]}
+{"kind":"shape","id":"sh/29czy1kj","slide":6,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/3al076l4","slide":6,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/obeh0r29","slide":6,"text":"2026.08.03  ·  06","textPreview":"2026.08.03  ·  06","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/ah984p","slide":6,"text":"[Sources]\n- git show 4ca3350, d52ce66, and 35122b8.\n- /Users/minjun/unicon-wheelchair/docs/debug_bags.md lines 110-139."}
+{"kind":"slide","id":"sl/cj2ki6","slide":7,"title":"03 · DIAGNOSIS","textShapes":21}
+{"kind":"textbox","id":"sh/x0ja9wza","slide":7,"text":"03 · DIAGNOSIS","textPreview":"03 · DIAGNOSIS","textChars":14,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/axsryh0z","slide":7,"text":"위치추정 실패는 센서보다 데이터 계약 문제였습니다","textPreview":"위치추정 실패는 센서보다 데이터 계약 문제였습니다","textChars":27,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/by1s7mhk","slide":7,"text":"07","textPreview":"07","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/ova9w7it","slide":7,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/pwja5cze","slide":7,"name":"photo-RViz 정합 실패·초기 자세 비교","bbox":[820,158,396,330]}
+{"kind":"shape","id":"sh/29sruh0n","slide":7,"bbox":[838,176,82,28]}
+{"kind":"textbox","id":"sh/nu1s3mh8","slide":7,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[838,179,82,22]}
+{"kind":"textbox","id":"sh/8ru98byx","slide":7,"text":"RViz 정합 실패·초기 자세 비교","textPreview":"RViz 정합 실패·초기 자세 비교","textChars":19,"textLines":1,"bbox":[848,291,340,72]}
+{"kind":"textbox","id":"sh/tsnahgzi","slide":7,"text":"잘못된 seed와 정상 정합 화면을 나란히","textPreview":"잘못된 seed와 정상 정합 화면을 나란히","textChars":23,"textLines":1,"bbox":[848,436,340,30]}
+{"kind":"textbox","id":"sh/h8va58f2","slide":7,"text":"지도","textPreview":"지도","textChars":2,"textLines":1,"bbox":[64,160,106,30]}
+{"kind":"textbox","id":"sh/g7m9w3yh","slide":7,"text":"ed2b272 · bb14666","textPreview":"ed2b272 · bb14666","textChars":17,"textLines":1,"bbox":[172,160,220,26]}
+{"kind":"textbox","id":"sh/v6ds3yxw","slide":7,"text":"0727 경로를 덮지 않는 0707 지도, auto-init/ICP의 서로 다른 map 파일을 하나의 hash-pinned runtime map으로 통일","textPreview":"0727 경로를 덮지 않는 0707 지도, auto-init/ICP의 서로 다른 map 파일을 하나의 hash-pinned runtime map으로 통일","textChars":85,"textLines":1,"bbox":[64,194,700,61]}
+{"kind":"shape","id":"sh/u54ratgr","slide":7,"bbox":[64,262,700,1]}
+{"kind":"textbox","id":"sh/t4va1of6","slide":7,"text":"초기 방향","textPreview":"초기 방향","textChars":5,"textLines":1,"bbox":[64,272,106,30]}
+{"kind":"textbox","id":"sh/83m98jyl","slide":7,"text":"0eb8c62","textPreview":"0eb8c62","textChars":7,"textLines":1,"bbox":[172,272,220,26]}
+{"kind":"textbox","id":"sh/72d8zex0","slide":7,"text":"시작 yaw가 실제 +3.7° 대신 -175.4°로 저장되어 ICP가 반대 방향에서 시작한 문제 수정","textPreview":"시작 yaw가 실제 +3.7° 대신 -175.4°로 저장되어 ICP가 반대 방향에서 시작한 문제 수정","textChars":56,"textLines":1,"bbox":[64,306,700,61]}
+{"kind":"shape","id":"sh/614r6tgf","slide":7,"bbox":[64,374,700,1]}
+{"kind":"textbox","id":"sh/d0zadsfa","slide":7,"text":"점수 정의","textPreview":"점수 정의","textChars":5,"textLines":1,"bbox":[64,384,106,30]}
+{"kind":"textbox","id":"sh/cz694nyp","slide":7,"text":"defd0d2","textPreview":"defd0d2","textChars":7,"textLines":1,"bbox":[172,384,220,26]}
+{"kind":"textbox","id":"sh/wfylwvad","slide":7,"text":"ROI 밖 scan을 outlier로 세던 inlier ratio를 ‘지도가 설명할 수 있는 범위’로 제한","textPreview":"ROI 밖 scan을 outlier로 세던 inlier ratio를 ‘지도가 설명할 수 있는 범위’로 제한","textChars":59,"textLines":1,"bbox":[64,418,700,61]}
+{"kind":"shape","id":"sh/xg72p0ri","slide":7,"bbox":[64,486,700,1]}
+{"kind":"textbox","id":"sh/adg3uls7","slide":7,"text":"시간·신선도","textPreview":"시간·신선도","textChars":6,"textLines":1,"bbox":[64,496,106,30]}
+{"kind":"textbox","id":"sh/bepknq9s","slide":7,"text":"91e8d04 · 11b346e","textPreview":"91e8d04 · 11b346e","textChars":17,"textLines":1,"bbox":[172,496,220,26]}
+{"kind":"textbox","id":"sh/orylsba1","slide":7,"text":"pose timestamp 단조성 보장, stale localization과 invalid route는 fail-closed 처리","textPreview":"pose timestamp 단조성 보장, stale localization과 invalid route는 fail-closed 처리","textChars":72,"textLines":1,"bbox":[64,530,700,61]}
+{"kind":"shape","id":"sh/9s72lgrm","slide":7,"bbox":[64,598,700,1]}
+{"kind":"shape","id":"sh/mpw3q1sv","slide":7,"bbox":[820,510,396,112]}
+{"kind":"textbox","id":"sh/nqpkj69g","slide":7,"text":"핵심 해석\n‘센서가 흔들린다’가 아니라 입력의 지도·자세·시간 의미가 서로 달랐습니다.","textPreview":"핵심 해석 | ‘센서가 흔들린다’가 아니라 입력의 지도·자세·시간 의미가 서로 달랐습니다.","textChars":48,"textLines":2,"bbox":[842,530,352,72]}
+{"kind":"shape","id":"sh/0neloba5","slide":7,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/1on2hgrq","slide":7,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/3il476tc","slide":7,"text":"2026.08.03  ·  07","textPreview":"2026.08.03  ·  07","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/cj2ki6","slide":7,"text":"[Sources]\n- git show ed2b272 and bb14666: map coverage and one pinned map identity.\n- git show 0eb8c62: reversed start heading and replayed inlier score.\n- git show defd0d2: ROI-based score and recorded-line steering.\n- git show 91e8d04 and 11b346e: timestamp monotonicity and fail-closed route/localization handling."}
+{"kind":"slide","id":"sl/gdeazb","slide":8,"title":"03 · DIAGNOSIS","textShapes":15}
+{"kind":"textbox","id":"sh/xsf6pk7a","slide":8,"text":"03 · DIAGNOSIS","textPreview":"03 · DIAGNOSIS","textChars":14,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/aponu5oj","slide":8,"text":"수동 주행은 제어·기하 오차를 추가로 드러냈습니다","textPreview":"수동 주행은 제어·기하 오차를 추가로 드러냈습니다","textChars":27,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/vqxonap4","slide":8,"text":"08","textPreview":"08","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/8nm5sv6d","slide":8,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/9ofml07y","slide":8,"name":"photo-휠체어 센서 위치·차체 중심 측정","bbox":[760,160,456,410]}
+{"kind":"shape","id":"sh/m14nq5o7","slide":8,"bbox":[778,178,82,28]}
+{"kind":"textbox","id":"sh/n2d4jqps","slide":8,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[778,181,82,22]}
+{"kind":"textbox","id":"sh/0zm5ovqh","slide":8,"text":"휠체어 센서 위치·차체 중심 측정","textPreview":"휠체어 센서 위치·차체 중심 측정","textChars":18,"textLines":1,"bbox":[788,333,400,72]}
+{"kind":"textbox","id":"sh/l0vmh072","slide":8,"text":"줄자 측정 또는 연석 근접 주행 사진","textPreview":"줄자 측정 또는 연석 근접 주행 사진","textChars":20,"textLines":1,"bbox":[788,518,400,30]}
+{"kind":"shape","id":"sh/psf6d8n6","slide":8,"bbox":[64,173,9,9]}
+{"kind":"textbox","id":"sh/orm5kn6l","slide":8,"text":"저속 선회가 바퀴에 도달하지 않음","textPreview":"저속 선회가 바퀴에 도달하지 않음","textChars":18,"textLines":1,"bbox":[88,166,616,28]}
+{"kind":"textbox","id":"sh/3qdobi50","slide":8,"text":"0.5 rad/s를 4초 명령해도 실제는 0.03–0.05 rad/s에 머물다가 한 번에 0.57 rad/s로 회전했습니다. 최소 휠 속도와 반올림을 수정했습니다.","textPreview":"0.5 rad/s를 4초 명령해도 실제는 0.03–0.05 rad/s에 머물다가 한 번에 0.57 rad/s로 회전했습니다. 최소 휠 속도와 반올림을 수정했습니다.","textChars":91,"textLines":1,"bbox":[88,198,616,86]}
+{"kind":"shape","id":"sh/2p4nidof","slide":8,"bbox":[64,311,9,9]}
+{"kind":"textbox","id":"sh/1ovm98na","slide":8,"text":"경로 기준점이 센서와 차체 중심 사이에서 섞임","textPreview":"경로 기준점이 센서와 차체 중심 사이에서 섞임","textChars":25,"textLines":1,"bbox":[88,304,616,28]}
+{"kind":"textbox","id":"sh/g3m5g36p","slide":8,"text":"Livox는 차축 중심에서 앞 0.500 m, 왼쪽 0.200 m. 경로와 clearance를 같은 기준점으로 맞췄습니다.","textPreview":"Livox는 차축 중심에서 앞 0.500 m, 왼쪽 0.200 m. 경로와 clearance를 같은 기준점으로 맞췄습니다.","textChars":68,"textLines":1,"bbox":[88,336,616,68]}
+{"kind":"shape","id":"sh/f2d47y54","slide":8,"bbox":[64,431,9,9]}
+{"kind":"textbox","id":"sh/e14netoj","slide":8,"text":"센서 높이 placeholder가 장애물을 가림","textPreview":"센서 높이 placeholder가 장애물을 가림","textChars":26,"textLines":1,"bbox":[88,424,616,28]}
+{"kind":"textbox","id":"sh/t0bm5ony","slide":8,"text":"0.30 m로 남아 있던 높이를 실측 0.725 m로 수정해 57 cm 이하 물체가 검출 밴드 밖으로 빠지는 문제를 제거했습니다.","textPreview":"0.30 m로 남아 있던 높이를 실측 0.725 m로 수정해 57 cm 이하 물체가 검출 밴드 밖으로 빠지는 문제를 제거했습니다.","textChars":72,"textLines":1,"bbox":[88,456,616,78]}
+{"kind":"shape","id":"sh/sz25cj6d","slide":8,"bbox":[64,566,1152,74]}
+{"kind":"textbox","id":"sh/kj65s3e9","slide":8,"text":"결론  ·  로컬라이제이션 성능만 높여도, 구동과 기준 좌표가 틀리면 기록 경로를 안전하게 재현할 수 없습니다.","textPreview":"결론  ·  로컬라이제이션 성능만 높여도, 구동과 기준 좌표가 틀리면 기록 경로를 안전하게 재현할 수 없습니다.","textChars":62,"textLines":1,"bbox":[82,581,1118,44]}
+{"kind":"shape","id":"sh/54f618vu","slide":8,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/ihonqtw3","slide":8,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/jixozydo","slide":8,"text":"2026.08.03  ·  08","textPreview":"2026.08.03  ·  08","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/gdeazb","slide":8,"text":"[Sources]\n- git show e12f9b8: commanded turn did not reach the wheels and kerb excursion analysis.\n- git show bd37dbb and a8bb453: chair-centre/reference-point handling.\n- git show ffc001b: measured sensor height 0.725 m and obstacle-band impact."}
+{"kind":"slide","id":"sl/h10x85","slide":9,"title":"04 · ROSBAG ROUTE","textShapes":26}
+{"kind":"textbox","id":"sh/qx8zmhcr","slide":9,"text":"04 · ROSBAG ROUTE","textPreview":"04 · ROSBAG ROUTE","textChars":17,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/dkzihwbi","slide":9,"text":"ROSBAG 원본 궤적을 ‘재현 가능한 경로’로 바꿨습니다","textPreview":"ROSBAG 원본 궤적을 ‘재현 가능한 경로’로 바꿨습니다","textChars":32,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/sjqhorux","slide":9,"text":"09","textPreview":"09","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/3ux0bmtg","slide":9,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/itozihcv","slide":9,"bbox":[306,273,72,36]}
+{"kind":"shape","id":"sh/5wfidcb6","slide":9,"bbox":[590,273,72,36]}
+{"kind":"shape","id":"sh/4v6hkrul","slide":9,"bbox":[874,273,72,36]}
+{"kind":"shape","id":"sh/vqxg72t4","slide":9,"bbox":[64,206,236,168]}
+{"kind":"textbox","id":"sh/upozexcj","slide":9,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[82,222,44,42]}
+{"kind":"textbox","id":"sh/kzups729","slide":9,"text":"원본 bag","textPreview":"원본 bag","textChars":6,"textLines":1,"bbox":[130,228,150,32]}
+{"kind":"shape","id":"sh/50nq1cju","slide":9,"bbox":[82,274,200,1]}
+{"kind":"textbox","id":"sh/ixc7qhk3","slide":9,"text":"full_debug_20260727_\n214306.bag\npose·yaw·정지 구간 확인","textPreview":"full_debug_20260727_ | 214306.bag | pose·yaw·정지 구간 확인","textChars":49,"textLines":3,"bbox":[82,292,200,62]}
+{"kind":"shape","id":"sh/jyl8zm1o","slide":9,"bbox":[348,206,236,168]}
+{"kind":"textbox","id":"sh/wvupo72x","slide":9,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[366,222,44,42]}
+{"kind":"textbox","id":"sh/xw3qxcji","slide":9,"text":"궤적 정제","textPreview":"궤적 정제","textChars":5,"textLines":1,"bbox":[414,228,150,32]}
+{"kind":"shape","id":"sh/a9c7mxkr","slide":9,"bbox":[366,274,200,1]}
+{"kind":"textbox","id":"sh/val8v21c","slide":9,"text":"끝 회전 구간 제거\n시작점·heading 복구","textPreview":"끝 회전 구간 제거 | 시작점·heading 복구","textChars":25,"textLines":2,"bbox":[366,292,200,62]}
+{"kind":"shape","id":"sh/gry90b2h","slide":9,"bbox":[632,206,236,168]}
+{"kind":"textbox","id":"sh/hs7q9wjm","slide":9,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[650,222,44,42]}
+{"kind":"textbox","id":"sh/pcjyxc7u","slide":9,"text":"차체 기준 경로","textPreview":"차체 기준 경로","textChars":8,"textLines":1,"bbox":[698,228,150,32]}
+{"kind":"shape","id":"sh/4bah4769","slide":9,"bbox":[650,274,200,1]}
+{"kind":"textbox","id":"sh/3a1gv2po","slide":9,"text":"0.2 m 재표본화\n1,446 points · 383.4 m","textPreview":"0.2 m 재표본화 | 1,446 points · 383.4 m","textChars":33,"textLines":2,"bbox":[650,292,200,62]}
+{"kind":"shape","id":"sh/29sz2x83","slide":9,"bbox":[916,206,236,168]}
+{"kind":"textbox","id":"sh/h8zyts7i","slide":9,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[934,222,44,42]}
+{"kind":"textbox","id":"sh/g7qh0nqx","slide":9,"text":"band와 배포","textPreview":"band와 배포","textChars":8,"textLines":1,"bbox":[982,228,150,32]}
+{"kind":"shape","id":"sh/f6hgrips","slide":9,"bbox":[934,274,200,1]}
+{"kind":"textbox","id":"sh/u58zyx87","slide":9,"text":"경계·clearance 결합\nroute/hash 일치 검증","textPreview":"경계·clearance 결합 | route/hash 일치 검증","textChars":32,"textLines":2,"bbox":[934,292,200,62]}
+{"kind":"shape","id":"sh/t4zyps7m","slide":9,"name":"photo-원본 궤적과 재표본화 경로 오버레이","bbox":[64,418,560,196]}
+{"kind":"shape","id":"sh/sjqhwnq1","slide":9,"bbox":[82,436,82,28]}
+{"kind":"textbox","id":"sh/ip4vqtoz","slide":9,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[82,439,82,22]}
+{"kind":"textbox","id":"sh/jaxwze5k","slide":9,"text":"원본 궤적과 재표본화 경로 오버레이","textPreview":"원본 궤적과 재표본화 경로 오버레이","textChars":19,"textLines":1,"bbox":[92,484,504,72]}
+{"kind":"textbox","id":"sh/kb6xsjmp","slide":9,"text":"map 위에 bag trace와 route를 다른 색으로","textPreview":"map 위에 bag trace와 route를 다른 색으로","textChars":31,"textLines":1,"bbox":[92,562,504,30]}
+{"kind":"shape","id":"sh/5cfe1ona","slide":9,"bbox":[662,418,554,196]}
+{"kind":"textbox","id":"sh/al4vm9on","slide":9,"text":"경로 충실도 개선","textPreview":"경로 충실도 개선","textChars":9,"textLines":1,"bbox":[688,438,500,30]}
+{"kind":"textbox","id":"sh/vmdwve58","slide":9,"text":"5 m 근사","textPreview":"5 m 근사","textChars":6,"textLines":1,"bbox":[688,482,130,28]}
+{"kind":"textbox","id":"sh/wnmdoj6t","slide":9,"text":"median 0.222 m  ·  p99 1.078 m","textPreview":"median 0.222 m  ·  p99 1.078 m","textChars":30,"textLines":1,"bbox":[820,482,368,28]}
+{"kind":"textbox","id":"sh/xovexone","slide":9,"text":"기록 궤적","textPreview":"기록 궤적","textChars":5,"textLines":1,"bbox":[688,526,130,28]}
+{"kind":"textbox","id":"sh/mhkvi9or","slide":9,"text":"median 0.005 m  ·  p99 0.095 m","textPreview":"median 0.005 m  ·  p99 0.095 m","textChars":30,"textLines":1,"bbox":[820,526,368,28]}
+{"kind":"textbox","id":"sh/nidwru5c","slide":9,"text":"‘예쁜 경로’보다 실제로 달린 선을 보존","textPreview":"‘예쁜 경로’보다 실제로 달린 선을 보존","textChars":22,"textLines":1,"bbox":[688,576,500,24]}
+{"kind":"shape","id":"sh/fads3a9s","slide":9,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/e94bu587","slide":9,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/1cfa5kry","slide":9,"text":"2026.08.03  ·  09","textPreview":"2026.08.03  ·  09","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/h10x85","slide":9,"text":"[Sources]\n- git show d5939fb, cc0f54d, 07beb42, bd37dbb, and a847579.\n- README.md lines 114-121 for route point count and length."}
+{"kind":"slide","id":"sl/wdotkr","slide":10,"title":"04 · TEST DESIGN","textShapes":13}
+{"kind":"textbox","id":"sh/lgv2p0fy","slide":10,"text":"04 · TEST DESIGN","textPreview":"04 · TEST DESIGN","textChars":16,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/yd43u5g7","slide":10,"text":"한 번의 주행에는 한 가지 질문만 남겼습니다","textPreview":"한 번의 주행에는 한 가지 질문만 남겼습니다","textChars":24,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/jedknqxs","slide":10,"text":"10","textPreview":"10","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/wb2lsvy1","slide":10,"bbox":[64,126,1152,2]}
+{"kind":"textbox","id":"sh/xcb2l0fm","slide":10,"text":"질문: 383 m 동안 위치추정이 경로에 계속 붙어 있는가?","textPreview":"질문: 383 m 동안 위치추정이 경로에 계속 붙어 있는가?","textChars":33,"textLines":1,"bbox":[64,158,1152,52]}
+{"kind":"shape","id":"sh/apk3qlgb","slide":10,"bbox":[64,244,540,260]}
+{"kind":"textbox","id":"sh/batkjqxg","slide":10,"text":"이 실험에서 끈 판단","textPreview":"이 실험에서 끈 판단","textChars":11,"textLines":1,"bbox":[88,266,492,32]}
+{"kind":"textbox","id":"sh/on2loby5","slide":10,"text":"• band containment\n• geofence·slope·localization hold\n• stopping envelope·scan-staleness 판단\n• 장애물 우회 등 재량 정책","textPreview":"• band containment | • geofence·slope·localization hold | • stopping envelope·scan-staleness 판단 | • 장애물 우회 등 재량 정책","textChars":108,"textLines":4,"bbox":[92,316,488,156]}
+{"kind":"shape","id":"sh/9ob2hgfq","slide":10,"bbox":[676,244,540,260]}
+{"kind":"textbox","id":"sh/pgvulsnu","slide":10,"text":"항상 유지한 fail-safe","textPreview":"항상 유지한 fail-safe","textChars":16,"textLines":1,"bbox":[700,266,492,32]}
+{"kind":"textbox","id":"sh/ofmdcn69","slide":10,"text":"• joystick 즉시 override\n• wheel status freshness\n• input stale / invalid / reverse 차단\n• speed ceiling·PAUSED·DONE","textPreview":"• joystick 즉시 override | • wheel status freshness | • input stale / invalid / reverse 차단 | • speed ceiling·PAUSED·DONE","textChars":112,"textLines":4,"bbox":[704,316,488,156]}
+{"kind":"textbox","id":"sh/nedcji5o","slide":10,"text":"꺼진 정책도 WOULD_HOLD로 기록했습니다.\n따라서 ‘멈추지 않고 측정’하면서도 실제 정책이 어디서 개입했을지는 bag으로 재구성할 수 있습니다.","textPreview":"꺼진 정책도 WOULD_HOLD로 기록했습니다. | 따라서 ‘멈추지 않고 측정’하면서도 실제 정책이 어디서 개입했을지는 bag으로 재구성할 수 있습니다.","textChars":83,"textLines":2,"bbox":[64,532,1152,70]}
+{"kind":"shape","id":"sh/2d4vado3","slide":10,"bbox":[64,616,1152,46]}
+{"kind":"textbox","id":"sh/1cvuh8ni","slide":10,"text":"52a47a6","textPreview":"52a47a6","textChars":7,"textLines":1,"bbox":[78,627,108,24]}
+{"kind":"textbox","id":"sh/0bmt8n6x","slide":10,"text":"SAFETY_POLICIES=false 진단 모드 · 판단과 fail-safe를 분리","textPreview":"SAFETY_POLICIES=false 진단 모드 · 판단과 fail-safe를 분리","textChars":47,"textLines":1,"bbox":[190,626,1012,26]}
+{"kind":"shape","id":"sh/fadcfi5c","slide":10,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/e9kb6do7","slide":10,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/dobud87m","slide":10,"text":"2026.08.03  ·  10","textPreview":"2026.08.03  ·  10","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/wdotkr","slide":10,"text":"[Sources]\n- git show 52a47a6: diagnostic mode separates discretionary policies and preserves fail-safes.\n- /Users/minjun/unicon-wheelchair/README.md lines 177-187.\n- git show a8bb453: 0727 localization-only trial scripts and pre-drive checks."}
+{"kind":"slide","id":"sl/da5dg2","slide":11,"title":"RESULT · LOCALIZATION","textShapes":23}
+{"kind":"textbox","id":"sh/fml47ixk","slide":11,"text":"RESULT · LOCALIZATION","textPreview":"RESULT · LOCALIZATION","textChars":21,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/0nulgny5","slide":11,"text":"0727 원본 경로에서 위치추정은 두 번 모두 닫혔습니다","textPreview":"0727 원본 경로에서 위치추정은 두 번 모두 닫혔습니다","textChars":31,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/1o3m9sfq","slide":11,"text":"11","textPreview":"11","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/qhs3adg3","slide":11,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/ri1k3yxo","slide":11,"bbox":[64,158,228,4]}
+{"kind":"textbox","id":"sh/sjalc3y9","slide":11,"text":"2회","textPreview":"2회","textChars":2,"textLines":1,"bbox":[64,174,228,64]}
+{"kind":"textbox","id":"sh/dkjm58fu","slide":11,"text":"완전 자율주행","textPreview":"완전 자율주행","textChars":7,"textLines":1,"bbox":[64,240,228,30]}
+{"kind":"textbox","id":"sh/it836tg7","slide":11,"text":"1,446 points end-to-end","textPreview":"1,446 points end-to-end","textChars":23,"textLines":1,"bbox":[64,272,228,46]}
+{"kind":"shape","id":"sh/3uhkzyxc","slide":11,"bbox":[318,158,228,4]}
+{"kind":"textbox","id":"sh/zy54f2t8","slide":11,"text":"154","textPreview":"154","textChars":3,"textLines":1,"bbox":[318,174,228,64]}
+{"kind":"textbox","id":"sh/exw3mxcn","slide":11,"text":"주행 중 샘플","textPreview":"주행 중 샘플","textChars":7,"textLines":1,"bbox":[318,240,228,30]}
+{"kind":"textbox","id":"sh/10nmhcbe","slide":11,"text":"모든 샘플 TRACKING","textPreview":"모든 샘플 TRACKING","textChars":14,"textLines":1,"bbox":[318,272,228,46]}
+{"kind":"shape","id":"sh/0zelo7ut","slide":11,"bbox":[572,158,228,4]}
+{"kind":"textbox","id":"sh/n2p4jmt4","slide":11,"text":"0회","textPreview":"0회","textChars":2,"textLines":1,"bbox":[572,174,228,64]}
+{"kind":"textbox","id":"sh/m1g3qhcj","slide":11,"text":"LOCALIZATION hold","textPreview":"LOCALIZATION hold","textChars":17,"textLines":1,"bbox":[572,240,228,30]}
+{"kind":"textbox","id":"sh/947mlwba","slide":11,"text":"published + suppressed 모두 0","textPreview":"published + suppressed 모두 0","textChars":27,"textLines":1,"bbox":[572,272,228,46]}
+{"kind":"shape","id":"sh/o3ylsrup","slide":11,"name":"photo-두 번의 완주 증거","bbox":[846,154,370,220]}
+{"kind":"shape","id":"sh/36lk7it0","slide":11,"bbox":[864,172,82,28]}
+{"kind":"textbox","id":"sh/i5c3edcf","slide":11,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[864,175,82,22]}
+{"kind":"textbox","id":"sh/6d4f2p0f","slide":11,"text":"두 번의 완주 증거","textPreview":"두 번의 완주 증거","textChars":10,"textLines":1,"bbox":[874,232,314,72]}
+{"kind":"textbox","id":"sh/7ydgbuh0","slide":11,"text":"RViz 경로 또는 blackbox 분석 캡처","textPreview":"RViz 경로 또는 blackbox 분석 캡처","textChars":25,"textLines":1,"bbox":[874,322,314,30]}
+{"kind":"textbox","id":"sh/szmx4zi5","slide":11,"text":"측정 envelope","textPreview":"측정 envelope","textChars":11,"textLines":1,"bbox":[64,346,736,30]}
+{"kind":"shape","id":"sh/t0vyd4zq","slide":11,"bbox":[64,402,710,12]}
+{"kind":"shape","id":"sh/i9kfy503","slide":11,"bbox":[64,402,688,12]}
+{"kind":"textbox","id":"sh/jatg7aho","slide":11,"text":"inlier_ratio  0.9666 – 1.0000  (mean 0.9949)     gate > 0.20","textPreview":"inlier_ratio  0.9666 – 1.0000  (mean 0.9949)     gate > 0.20","textChars":60,"textLines":1,"bbox":[64,426,710,28]}
+{"kind":"shape","id":"sh/kb2x0fi9","slide":11,"bbox":[64,484,710,12]}
+{"kind":"shape","id":"sh/5cby9kzu","slide":11,"bbox":[64,484,84,12]}
+{"kind":"textbox","id":"sh/a50fu507","slide":11,"text":"fitness  0.0137 – 0.0329  (mean 0.0219)     gate < 0.28","textPreview":"fitness  0.0137 – 0.0329  (mean 0.0219)     gate < 0.28","textChars":55,"textLines":1,"bbox":[64,508,710,28]}
+{"kind":"shape","id":"sh/v6tw3ahs","slide":11,"bbox":[846,404,370,146]}
+{"kind":"textbox","id":"sh/d0zi98ja","slide":11,"text":"초기화도 수동 seed 없이 통과","textPreview":"초기화도 수동 seed 없이 통과","textChars":18,"textLines":1,"bbox":[868,422,326,28]}
+{"kind":"textbox","id":"sh/czq1032p","slide":11,"text":"WAITING_INITIALIZATION → VERIFYING → TRACKING\n정지 drift 0.016 m / 0.014 m","textPreview":"WAITING_INITIALIZATION → VERIFYING → TRACKING | 정지 drift 0.016 m / 0.014 m","textChars":72,"textLines":2,"bbox":[868,464,326,60]}
+{"kind":"shape","id":"sh/ryh07y14","slide":11,"bbox":[64,572,1152,66]}
+{"kind":"textbox","id":"sh/qx8jytkj","slide":11,"text":"단, 목표점에서 20분 정지 후 inlier 0.124–0.262로 4회 gate를 교차했습니다. 주행 중이 아닌 ‘목표 지점의 약한 geometry’로 기록했습니다.","textPreview":"단, 목표점에서 20분 정지 후 inlier 0.124–0.262로 4회 gate를 교차했습니다. 주행 중이 아닌 ‘목표 지점의 약한 geometry’로 기록했습니다.","textChars":93,"textLines":1,"bbox":[84,585,1112,40]}
+{"kind":"shape","id":"sh/pwfi5ojy","slide":11,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/4v61w32d","slide":11,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/3ux03y18","slide":11,"text":"2026.08.03  ·  11","textPreview":"2026.08.03  ·  11","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/da5dg2","slide":11,"text":"[Sources]\n- git show f59e30f: two complete runs and all reported metrics.\n- /Users/minjun/unicon-wheelchair/README.md lines 56-79."}
+{"kind":"slide","id":"sl/38cd6e","slide":12,"title":"05 · SAFETY GATE","textShapes":19}
+{"kind":"textbox","id":"sh/18vitofu","slide":12,"text":"05 · SAFETY GATE","textPreview":"05 · SAFETY GATE","textChars":16,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/e54zy9w3","slide":12,"text":"안전 체인은 상위 노드가 실패해도 정지하도록 구성했습니다","textPreview":"안전 체인은 상위 노드가 실패해도 정지하도록 구성했습니다","textChars":31,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/f6d0rexo","slide":12,"text":"12","textPreview":"12","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/s3mhwzex","slide":12,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/d4vyp4fi","slide":12,"bbox":[308,276,58,32]}
+{"kind":"shape","id":"sh/qhkzu9w7","slide":12,"bbox":[596,276,58,32]}
+{"kind":"shape","id":"sh/r2tgnexc","slide":12,"bbox":[884,276,58,32]}
+{"kind":"shape","id":"sh/4f2hsze1","slide":12,"bbox":[64,206,232,180]}
+{"kind":"shape","id":"sh/5gbyl4fm","slide":12,"bbox":[64,206,232,12]}
+{"kind":"textbox","id":"sh/hsf6h4bi","slide":12,"text":"waypoint follower","textPreview":"waypoint follower","textChars":17,"textLines":1,"bbox":[80,234,200,32]}
+{"kind":"textbox","id":"sh/gr6p8zax","slide":12,"text":"/cmd_vel_raw","textPreview":"/cmd_vel_raw","textChars":12,"textLines":1,"bbox":[80,276,200,26]}
+{"kind":"textbox","id":"sh/fqxofutc","slide":12,"text":"경로 추종\nband·장애물 정책","textPreview":"경로 추종 | band·장애물 정책","textChars":17,"textLines":2,"bbox":[80,320,200,50]}
+{"kind":"shape","id":"sh/up476psr","slide":12,"bbox":[352,206,232,180]}
+{"kind":"shape","id":"sh/tov6dkb6","slide":12,"bbox":[352,206,232,12]}
+{"kind":"textbox","id":"sh/snmp4fal","slide":12,"text":"safety gate","textPreview":"safety gate","textChars":11,"textLines":1,"bbox":[368,234,200,32]}
+{"kind":"textbox","id":"sh/72dobat0","slide":12,"text":"/cmd_vel_gated","textPreview":"/cmd_vel_gated","textChars":14,"textLines":1,"bbox":[368,276,200,26]}
+{"kind":"textbox","id":"sh/61472psv","slide":12,"text":"정지 envelope\nswept footprint","textPreview":"정지 envelope | swept footprint","textChars":27,"textLines":2,"bbox":[368,320,200,50]}
+{"kind":"shape","id":"sh/50v69kba","slide":12,"bbox":[640,206,232,180]}
+{"kind":"shape","id":"sh/kzmp0fap","slide":12,"bbox":[640,206,232,12]}
+{"kind":"textbox","id":"sh/w36pgfil","slide":12,"text":"tip guard","textPreview":"tip guard","textChars":9,"textLines":1,"bbox":[656,234,200,32]}
+{"kind":"textbox","id":"sh/x4zqpkj6","slide":12,"text":"/cmd_vel","textPreview":"/cmd_vel","textChars":8,"textLines":1,"bbox":[656,276,200,26]}
+{"kind":"textbox","id":"sh/aho7e50f","slide":12,"text":"rate limit\nstaleness fail-safe","textPreview":"rate limit | staleness fail-safe","textChars":30,"textLines":2,"bbox":[656,320,200,50]}
+{"kind":"shape","id":"sh/b2xona10","slide":12,"bbox":[928,206,232,180]}
+{"kind":"shape","id":"sh/of6pcvi9","slide":12,"bbox":[928,206,232,12]}
+{"kind":"textbox","id":"sh/9gf6l0ju","slide":12,"text":"wheel / UART","textPreview":"wheel / UART","textChars":12,"textLines":1,"bbox":[944,234,200,32]}
+{"kind":"textbox","id":"sh/mdo7a50j","slide":12,"text":"motor command","textPreview":"motor command","textChars":13,"textLines":1,"bbox":[944,276,200,26]}
+{"kind":"textbox","id":"sh/nexoja1o","slide":12,"text":"checksum·watchdog\n최종 구동","textPreview":"checksum·watchdog | 최종 구동","textChars":23,"textLines":2,"bbox":[944,320,200,50]}
+{"kind":"shape","id":"sh/8bapozit","slide":12,"bbox":[64,430,1152,110]}
+{"kind":"textbox","id":"sh/tcjqx4je","slide":12,"text":"follower가 죽으면 gate가 정지하고, gate가 죽으면 tip guard의 stale 검사가 정지시키며, 마지막에는 UART watchdog이 command starvation을 차단합니다.","textPreview":"follower가 죽으면 gate가 정지하고, gate가 죽으면 tip guard의 stale 검사가 정지시키며, 마지막에는 UART watchdog이 command starvation을 차단합니다.","textChars":111,"textLines":1,"bbox":[88,452,1104,66]}
+{"kind":"shape","id":"sh/36lsnylg","slide":12,"bbox":[64,562,1152,70]}
+{"kind":"textbox","id":"sh/25crutkv","slide":12,"text":"운영자 joystick override는 어떤 진단 모드에서도 해제되지 않습니다.","textPreview":"운영자 joystick override는 어떤 진단 모드에서도 해제되지 않습니다.","textChars":45,"textLines":1,"bbox":[84,579,1112,38]}
+{"kind":"shape","id":"sh/ps3ap83m","slide":12,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/47utw321","slide":12,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/ru5srilc","slide":12,"text":"2026.08.03  ·  12","textPreview":"2026.08.03  ·  12","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/38cd6e","slide":12,"text":"[Sources]\n- /Users/minjun/unicon-wheelchair/README.md lines 140-155 for the deployed command path and failover behavior.\n- git show 814a17d, 4b4fb2c, and 52a47a6 for stop propagation, wheel status validation, and diagnostic-mode invariants."}
+{"kind":"slide","id":"sl/v5b0ra","slide":13,"title":"05 · FIELD TEST","textShapes":25}
+{"kind":"textbox","id":"sh/03y1sfy9","slide":13,"text":"05 · FIELD TEST","textPreview":"05 · FIELD TEST","textChars":15,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/z2pkzax4","slide":13,"text":"08/02 기록은 동작과 검증 한계를 함께 보여줍니다","textPreview":"08/02 기록은 동작과 검증 한계를 함께 보여줍니다","textChars":29,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/y1gjq5gj","slide":13,"text":"13","textPreview":"13","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/d0n2xkfy","slide":13,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/cze1ofyd","slide":13,"bbox":[64,158,205,4]}
+{"kind":"textbox","id":"sh/by5kvaxs","slide":13,"text":"3개","textPreview":"3개","textChars":2,"textLines":1,"bbox":[64,174,205,64]}
+{"kind":"textbox","id":"sh/qdwjm5g7","slide":13,"text":"완료된 blackbox","textPreview":"완료된 blackbox","textChars":12,"textLines":1,"bbox":[64,240,205,30]}
+{"kind":"textbox","id":"sh/pcn2t0fm","slide":13,"text":"모두 indexed · LZ4","textPreview":"모두 indexed · LZ4","textChars":16,"textLines":1,"bbox":[64,272,205,46]}
+{"kind":"shape","id":"sh/obe1kvyh","slide":13,"bbox":[294,158,205,4]}
+{"kind":"textbox","id":"sh/uhcbudsf","slide":13,"text":"36:45","textPreview":"36:45","textChars":5,"textLines":1,"bbox":[294,174,205,64]}
+{"kind":"textbox","id":"sh/vilcnit0","slide":13,"text":"총 기록 시간","textPreview":"총 기록 시간","textChars":7,"textLines":1,"bbox":[294,240,205,30]}
+{"kind":"textbox","id":"sh/gjutwnal","slide":13,"text":"1,126,515 messages","textPreview":"1,126,515 messages","textChars":18,"textLines":1,"bbox":[294,272,205,46]}
+{"kind":"shape","id":"sh/hk3upsb6","slide":13,"bbox":[524,158,205,4]}
+{"kind":"textbox","id":"sh/6dcbqdsj","slide":13,"text":"0→1126","textPreview":"0→1126","textChars":6,"textLines":1,"bbox":[524,174,205,64]}
+{"kind":"textbox","id":"sh/7elcjyto","slide":13,"text":"세 번째 주행 진행","textPreview":"세 번째 주행 진행","textChars":10,"textLines":1,"bbox":[524,240,205,30]}
+{"kind":"textbox","id":"sh/8futs3a9","slide":13,"text":"waypoint 기준","textPreview":"waypoint 기준","textChars":11,"textLines":1,"bbox":[524,272,205,46]}
+{"kind":"shape","id":"sh/tg3ul8bu","slide":13,"name":"photo-08/02 route v4 현장 주행","bbox":[786,154,430,230]}
+{"kind":"shape","id":"sh/ypsbmts7","slide":13,"bbox":[804,172,82,28]}
+{"kind":"textbox","id":"sh/ja1cfyts","slide":13,"text":"사진 삽입","textPreview":"사진 삽입","textChars":5,"textLines":1,"bbox":[804,175,82,22]}
+{"kind":"textbox","id":"sh/nuh8nu9k","slide":13,"text":"08/02 route v4 현장 주행","textPreview":"08/02 route v4 현장 주행","textChars":20,"textLines":1,"bbox":[814,237,374,72]}
+{"kind":"textbox","id":"sh/mtorep8z","slide":13,"text":"실차·RViz·blackbox 상태 화면","textPreview":"실차·RViz·blackbox 상태 화면","textChars":22,"textLines":1,"bbox":[814,332,374,30]}
+{"kind":"shape","id":"sh/9gzqp4rq","slide":13,"bbox":[64,359,9,9]}
+{"kind":"textbox","id":"sh/ovq9gzq5","slide":13,"text":"관측된 정상 동작","textPreview":"관측된 정상 동작","textChars":9,"textLines":1,"bbox":[88,352,676,28]}
+{"kind":"textbox","id":"sh/bih8re9g","slide":13,"text":"세 기록 모두 localization은 TRACKING 유지. 세 번째 기록의 time mismatch 7회는 level 0 단발성이며 LOST/DEGRADED 전환이 없었습니다.","textPreview":"세 기록 모두 localization은 TRACKING 유지. 세 번째 기록의 time mismatch 7회는 level 0 단발성이며 LOST/DEGRADED 전환이 없었습니다.","textChars":100,"textLines":1,"bbox":[88,384,676,62]}
+{"kind":"shape","id":"sh/ah8ri98b","slide":13,"bbox":[64,465,9,9]}
+{"kind":"textbox","id":"sh/xkzat4rm","slide":13,"text":"안전 관련 기록","textPreview":"안전 관련 기록","textChars":8,"textLines":1,"bbox":[88,458,676,28]}
+{"kind":"textbox","id":"sh/wjq9kzq1","slide":13,"text":"실제 정지 18개 구간, tip_guard 비정상 상태 0, object summary 6,442개 전부 OK. 긴 정지는 주로 MANUAL_MODE와 PAUSED였습니다.","textPreview":"실제 정지 18개 구간, tip_guard 비정상 상태 0, object summary 6,442개 전부 OK. 긴 정지는 주로 MANUAL_MODE와 PAUSED였습니다.","textChars":96,"textLines":1,"bbox":[88,490,676,62]}
+{"kind":"shape","id":"sh/rmx8fa9c","slide":13,"bbox":[786,410,430,174]}
+{"kind":"textbox","id":"sh/ql4rm58r","slide":13,"text":"검증 한계","textPreview":"검증 한계","textChars":5,"textLines":1,"bbox":[810,430,382,28]}
+{"kind":"textbox","id":"sh/gr25gb6p","slide":13,"text":"bag에 route ID/hash와 safety mode가 없어 ‘어떤 정책 조합으로 달렸는지’를 bag만으로 증명할 수 없습니다.\nshadow-safety 프로토타입도 당시 미완료였습니다.","textPreview":"bag에 route ID/hash와 safety mode가 없어 ‘어떤 정책 조합으로 달렸는지’를 bag만으로 증명할 수 없습니다. | shadow-safety 프로토타입도 당시 미완료였습니다.","textChars":106,"textLines":2,"bbox":[810,470,382,94]}
+{"kind":"shape","id":"sh/hsb6pg7a","slide":13,"bbox":[64,612,1152,46]}
+{"kind":"textbox","id":"sh/u5kne1oj","slide":13,"text":"f69351f","textPreview":"f69351f","textChars":7,"textLines":1,"bbox":[78,623,108,24]}
+{"kind":"textbox","id":"sh/vqton6p4","slide":13,"text":"08/02 field report  ·  기록 보존과 한계를 함께 문서화","textPreview":"08/02 field report  ·  기록 보존과 한계를 함께 문서화","textChars":40,"textLines":1,"bbox":[190,622,1012,26]}
+{"kind":"shape","id":"sh/8325cr6d","slide":13,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/t4b6lw7y","slide":13,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/610na1on","slide":13,"text":"2026.08.03  ·  13","textPreview":"2026.08.03  ·  13","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/v5b0ra","slide":13,"text":"[Sources]\n- git show f69351f and /Users/minjun/unicon-wheelchair/docs/2026-08-02-field-report.md lines 3-75.\n- git show 5599d30 for the return-based obstacle distance correction applied before the later field session."}
+{"kind":"slide","id":"sl/hbsr8k","slide":14,"title":"CURRENT STATE","textShapes":21}
+{"kind":"textbox","id":"sh/cny94zyx","slide":14,"text":"CURRENT STATE","textPreview":"CURRENT STATE","textChars":13,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/bmpsvuxc","slide":14,"text":"현재는 0727 검증 완료, v4 안전 검증은 진행 중입니다","textPreview":"현재는 0727 검증 완료, v4 안전 검증은 진행 중입니다","textChars":33,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/qlgr2pgr","slide":14,"text":"14","textPreview":"14","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/pk7atkf6","slide":14,"bbox":[64,126,1152,2]}
+{"kind":"shape","id":"sh/4jy90fyl","slide":14,"bbox":[64,160,550,400]}
+{"kind":"textbox","id":"sh/3i5srax0","slide":14,"text":"완료된 근거","textPreview":"완료된 근거","textChars":6,"textLines":1,"bbox":[88,184,502,34]}
+{"kind":"shape","id":"sh/2hwrypgv","slide":14,"bbox":[90,247,9,9]}
+{"kind":"textbox","id":"sh/9gra5ofa","slide":14,"text":"센서 기준선","textPreview":"센서 기준선","textChars":6,"textLines":1,"bbox":[114,240,464,28]}
+{"kind":"textbox","id":"sh/8fitcjy5","slide":14,"text":"Livox 내장 IMU가 현장 기본값. VN-100은 diagnostic override.","textPreview":"Livox 내장 IMU가 현장 기본값. VN-100은 diagnostic override.","textChars":50,"textLines":1,"bbox":[114,272,464,46]}
+{"kind":"shape","id":"sh/yx4ri18b","slide":14,"bbox":[90,333,9,9]}
+{"kind":"textbox","id":"sh/zyd8b69w","slide":14,"text":"0727 위치추정","textPreview":"0727 위치추정","textChars":9,"textLines":1,"bbox":[114,326,464,28]}
+{"kind":"textbox","id":"sh/0zm9kbqh","slide":14,"text":"두 번 완주, 주행 샘플 전부 TRACKING, localization hold 0.","textPreview":"두 번 완주, 주행 샘플 전부 TRACKING, localization hold 0.","textChars":47,"textLines":1,"bbox":[114,358,464,46]}
+{"kind":"shape","id":"sh/l0vqdg72","slide":14,"bbox":[90,419,9,9]}
+{"kind":"textbox","id":"sh/qtk7eh8f","slide":14,"text":"기록 가능성","textPreview":"기록 가능성","textChars":6,"textLines":1,"bbox":[114,412,464,28]}
+{"kind":"textbox","id":"sh/rut87m90","slide":14,"text":"blackbox와 분석 도구로 센서·상태·정지 이벤트 재구성 가능.","textPreview":"blackbox와 분석 도구로 센서·상태·정지 이벤트 재구성 가능.","textChars":37,"textLines":1,"bbox":[114,444,464,46]}
+{"kind":"shape","id":"sh/cvmpgrql","slide":14,"bbox":[666,160,550,400]}
+{"kind":"textbox","id":"sh/dwvq9wrq","slide":14,"text":"아직 열린 위험","textPreview":"아직 열린 위험","textChars":8,"textLines":1,"bbox":[690,184,502,34]}
+{"kind":"shape","id":"sh/aporql8j","slide":14,"bbox":[692,247,9,9]}
+{"kind":"textbox","id":"sh/vqx8jqp4","slide":14,"text":"v4 localization envelope","textPreview":"v4 localization envelope","textChars":24,"textLines":1,"bbox":[716,240,464,28]}
+{"kind":"textbox","id":"sh/7y5wvel4","slide":14,"text":"현재 배포 경로 v4에서는 0727 수준의 두-run envelope를 재측정하지 않았습니다.","textPreview":"현재 배포 경로 v4에서는 0727 수준의 두-run envelope를 재측정하지 않았습니다.","textChars":52,"textLines":1,"bbox":[716,272,464,50]}
+{"kind":"shape","id":"sh/6xwfm9kz","slide":14,"bbox":[692,337,9,9]}
+{"kind":"textbox","id":"sh/tk7exo3a","slide":14,"text":"물리 경계 의미","textPreview":"물리 경계 의미","textChars":8,"textLines":1,"bbox":[716,330,464,28]}
+{"kind":"textbox","id":"sh/8zyxoj2p","slide":14,"text":"v4 band 1,516개 edge가 모두 open으로 기록되어, kerb/drop 근거가 측정값이 아닌 drawing입니다.","textPreview":"v4 band 1,516개 edge가 모두 open으로 기록되어, kerb/drop 근거가 측정값이 아닌 drawing입니다.","textChars":70,"textLines":1,"bbox":[716,362,464,60]}
+{"kind":"shape","id":"sh/vmpwzylg","slide":14,"bbox":[692,437,9,9]}
+{"kind":"textbox","id":"sh/ulgfqtkv","slide":14,"text":"evidence identity","textPreview":"evidence identity","textChars":17,"textLines":1,"bbox":[716,430,464,28]}
+{"kind":"textbox","id":"sh/ho7e18jm","slide":14,"text":"bag만으로 route hash·safety mode를 확인할 수 없어 재현성에 빈틈이 있습니다.","textPreview":"bag만으로 route hash·safety mode를 확인할 수 없어 재현성에 빈틈이 있습니다.","textChars":54,"textLines":1,"bbox":[716,462,464,50]}
+{"kind":"shape","id":"sh/gnyxs321","slide":14,"bbox":[64,584,360,70]}
+{"kind":"textbox","id":"sh/3q9w3y1c","slide":14,"text":"사진 삽입  ·  v4 corridor preview","textPreview":"사진 삽입  ·  v4 corridor preview","textChars":29,"textLines":1,"bbox":[82,600,324,38]}
+{"kind":"textbox","id":"sh/ipgfudkr","slide":14,"text":"중간점검 판단  ·  ‘자율주행 가능’이 아니라, 0727 기준선 검증을 기반으로 v4의 안전 근거를 채우는 단계","textPreview":"중간점검 판단  ·  ‘자율주행 가능’이 아니라, 0727 기준선 검증을 기반으로 v4의 안전 근거를 채우는 단계","textChars":63,"textLines":1,"bbox":[456,584,760,70]}
+{"kind":"shape","id":"sh/0vidk3i5","slide":14,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/1wret8zq","slide":14,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/et0vid0z","slide":14,"text":"2026.08.03  ·  14","textPreview":"2026.08.03  ·  14","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/hbsr8k","slide":14,"text":"[Sources]\n- /Users/minjun/unicon-wheelchair/README.md lines 114-130 and 302-306.\n- /Users/minjun/unicon-wheelchair/README.md lines 279-300: formal release and physical authority remain unapproved.\n- /Users/minjun/unicon-wheelchair/tools/start_wheelchair_localization.sh lines 108-153."}
+{"kind":"slide","id":"sl/coab9z","slide":15,"title":"NEXT STEP","textShapes":23}
+{"kind":"textbox","id":"sh/8rat8n2l","slide":15,"text":"NEXT STEP","textPreview":"NEXT STEP","textChars":9,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/7q1cfil0","slide":15,"text":"다음 주행은 v4의 안전 근거를 채우는 실험입니다","textPreview":"다음 주행은 v4의 안전 근거를 채우는 실험입니다","textChars":27,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/6psb6dkf","slide":15,"text":"15","textPreview":"15","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/hg3uls32","slide":15,"bbox":[64,126,1152,2]}
+{"kind":"textbox","id":"sh/gfutcn2h","slide":15,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[64,160,54,54]}
+{"kind":"textbox","id":"sh/ve1cjilw","slide":15,"text":"기준선 고정","textPreview":"기준선 고정","textChars":6,"textLines":1,"bbox":[138,158,260,32]}
+{"kind":"textbox","id":"sh/utsbadkr","slide":15,"text":"VN_IMU=0, route/hash/safety mode를 bag에 기록하고 실험 중 변경 금지","textPreview":"VN_IMU=0, route/hash/safety mode를 bag에 기록하고 실험 중 변경 금지","textChars":54,"textLines":1,"bbox":[138,196,660,50]}
+{"kind":"shape","id":"sh/5k3upc3e","slide":15,"bbox":[138,254,660,1]}
+{"kind":"textbox","id":"sh/4jutg72t","slide":15,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[64,272,54,54]}
+{"kind":"textbox","id":"sh/qtw721kb","slide":15,"text":"v4 위치추정 2회 반복","textPreview":"v4 위치추정 2회 반복","textChars":13,"textLines":1,"bbox":[138,270,260,32]}
+{"kind":"textbox","id":"sh/be5obm1g","slide":15,"text":"동일 조건 두 번 완주 후 inlier·fitness·TRACKING·drift envelope 확정","textPreview":"동일 조건 두 번 완주 후 inlier·fitness·TRACKING·drift envelope 확정","textChars":56,"textLines":1,"bbox":[138,308,660,50]}
+{"kind":"shape","id":"sh/cfep4ri1","slide":15,"bbox":[138,366,660,1]}
+{"kind":"textbox","id":"sh/dgn6dwjm","slide":15,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[64,384,54,54]}
+{"kind":"textbox","id":"sh/yhg76107","slide":15,"text":"안전 정책 shadow → active","textPreview":"안전 정책 shadow → active","textChars":21,"textLines":1,"bbox":[138,382,260,32]}
+{"kind":"textbox","id":"sh/zipof61s","slide":15,"text":"처음에는 WOULD_HOLD와 실제 정지를 비교하고, raised-wheel 검증 후 full gate 주행","textPreview":"처음에는 WOULD_HOLD와 실제 정지를 비교하고, raised-wheel 검증 후 full gate 주행","textChars":60,"textLines":1,"bbox":[138,420,660,50]}
+{"kind":"shape","id":"sh/0jyp8bid","slide":15,"bbox":[138,478,660,1]}
+{"kind":"textbox","id":"sh/lk7qhgjy","slide":15,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[64,496,54,54]}
+{"kind":"textbox","id":"sh/elcnuhk3","slide":15,"text":"물리 경계 재측정","textPreview":"물리 경계 재측정","textChars":9,"textLines":1,"bbox":[138,494,260,32]}
+{"kind":"textbox","id":"sh/fmlo321o","slide":15,"text":"v4 corridor의 kerb/drop semantics를 map·현장 측정으로 채워 drawing 의존 축소","textPreview":"v4 corridor의 kerb/drop semantics를 map·현장 측정으로 채워 drawing 의존 축소","textChars":62,"textLines":1,"bbox":[138,532,660,50]}
+{"kind":"shape","id":"sh/jq14vyhg","slide":15,"bbox":[138,590,660,1]}
+{"kind":"shape","id":"sh/ip832d0v","slide":15,"bbox":[842,160,374,448]}
+{"kind":"textbox","id":"sh/5sjmx8z6","slide":15,"text":"교수님께 확인받을 사항","textPreview":"교수님께 확인받을 사항","textChars":12,"textLines":1,"bbox":[868,186,322,34]}
+{"kind":"shape","id":"sh/4ral43il","slide":15,"bbox":[870,252,18,18]}
+{"kind":"textbox","id":"sh/v2h4ryh4","slide":15,"text":"① VN-100 재융합은 v4 안전 검증 이후 별도 실험으로 분리할지","textPreview":"① VN-100 재융합은 v4 안전 검증 이후 별도 실험으로 분리할지","textChars":38,"textLines":1,"bbox":[902,246,286,66]}
+{"kind":"shape","id":"sh/a183yt0j","slide":15,"bbox":[870,334,18,18]}
+{"kind":"textbox","id":"sh/hozmt8za","slide":15,"text":"② 다음 중간 목표를 ‘v4 두 번 완주 + full safety trace’로 잡을지","textPreview":"② 다음 중간 목표를 ‘v4 두 번 완주 + full safety trace’로 잡을지","textChars":48,"textLines":1,"bbox":[902,328,286,66]}
+{"kind":"shape","id":"sh/w3ql03ip","slide":15,"bbox":[870,416,18,18]}
+{"kind":"textbox","id":"sh/fyl432h8","slide":15,"text":"③ 물리 경계 측정의 허용 오차와 현장 측정 방법","textPreview":"③ 물리 경계 측정의 허용 오차와 현장 측정 방법","textChars":27,"textLines":1,"bbox":[902,410,286,66]}
+{"kind":"shape","id":"sh/exsnaxg3","slide":15,"bbox":[870,498,18,18]}
+{"kind":"textbox","id":"sh/cr298vu9","slide":15,"text":"④ passenger/campus 실험 전 요구할 추가 안전 증거","textPreview":"④ passenger/campus 실험 전 요구할 추가 안전 증거","textChars":36,"textLines":1,"bbox":[902,492,286,66]}
+{"kind":"shape","id":"sh/dsbah0bu","slide":15,"bbox":[64,625,1152,34]}
+{"kind":"textbox","id":"sh/qpkr6lc3","slide":15,"text":"제안: 센서 재융합보다 먼저, 현재 배포 경로의 위치추정·안전 근거를 동일 bag에서 재현 가능하게 닫겠습니다.","textPreview":"제안: 센서 재융합보다 먼저, 현재 배포 경로의 위치추정·안전 근거를 동일 bag에서 재현 가능하게 닫겠습니다.","textChars":62,"textLines":1,"bbox":[80,630,1120,24]}
+{"kind":"shape","id":"sh/rqtsfqto","slide":15,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/0vm9cvu5","slide":15,"text":"Livox 단일 구성 회귀 이후 중간점검","textPreview":"Livox 단일 구성 회귀 이후 중간점검","textChars":22,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/1wval0bq","slide":15,"text":"2026.08.03  ·  15","textPreview":"2026.08.03  ·  15","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/coab9z","slide":15,"text":"[Sources]\n- /Users/minjun/unicon-wheelchair/README.md lines 302-306 for current open items.\n- /Users/minjun/unicon-wheelchair/docs/2026-08-02-field-report.md lines 70-75 for evidence identity and shadow-safety follow-up.\n- /Users/minjun/unicon-wheelchair/docs/debug_bags.md lines 161-173 for the prescribed Livox-baseline and separate VN-100 experiment."}
+{"kind":"slide","id":"sl/ezl2l0","slide":16,"title":"APPENDIX","textShapes":24}
+{"kind":"textbox","id":"sh/xw3a5s7i","slide":16,"text":"APPENDIX","textPreview":"APPENDIX","textChars":8,"textLines":1,"bbox":[64,28,500,24]}
+{"kind":"textbox","id":"sh/atcrad8r","slide":16,"text":"핵심 커밋 맵","textPreview":"핵심 커밋 맵","textChars":7,"textLines":1,"bbox":[64,58,1110,64]}
+{"kind":"textbox","id":"sh/buls3ipc","slide":16,"text":"16","textPreview":"16","textChars":2,"textLines":1,"bbox":[1184,34,44,22]}
+{"kind":"shape","id":"sh/kzetg7q9","slide":16,"bbox":[64,126,1152,2]}
+{"kind":"textbox","id":"sh/lkna9s7e","slide":16,"text":"분석 범위  999028a (2026-07-27)  →  a3f0e85 (2026-08-03)  ·  총 68 commits","textPreview":"분석 범위  999028a (2026-07-27)  →  a3f0e85 (2026-08-03)  ·  총 68 commits","textChars":69,"textLines":1,"bbox":[64,150,1152,28]}
+{"kind":"shape","id":"sh/yxcbex83","slide":16,"bbox":[64,196,1152,66]}
+{"kind":"textbox","id":"sh/zy5s72po","slide":16,"text":"센서","textPreview":"센서","textChars":2,"textLines":1,"bbox":[82,213,122,30]}
+{"kind":"textbox","id":"sh/03a943qp","slide":16,"text":"3a64b80 → 999028a → bb14666","textPreview":"3a64b80 → 999028a → bb14666","textChars":27,"textLines":1,"bbox":[220,214,392,28]}
+{"kind":"textbox","id":"sh/1ojad8ra","slide":16,"text":"VN-100 융합 → 전체 회귀 → Livox 기본값·VN diagnostic override","textPreview":"VN-100 융합 → 전체 회귀 → Livox 기본값·VN diagnostic override","textChars":52,"textLines":1,"bbox":[632,208,560,42]}
+{"kind":"shape","id":"sh/dwful07a","slide":16,"bbox":[64,270,1152,66]}
+{"kind":"textbox","id":"sh/sv6tcv6p","slide":16,"text":"측정","textPreview":"측정","textChars":2,"textLines":1,"bbox":[82,287,122,30]}
+{"kind":"textbox","id":"sh/raxcjqp4","slide":16,"text":"4ca3350 · d52ce66 · 35122b8","textPreview":"4ca3350 · d52ce66 · 35122b8","textChars":27,"textLines":1,"bbox":[220,288,392,28]}
+{"kind":"textbox","id":"sh/q9obaloj","slide":16,"text":"one-shot bag → 두 IMU 비교 → 07/27 결과 문서화","textPreview":"one-shot bag → 두 IMU 비교 → 07/27 결과 문서화","textChars":38,"textLines":1,"bbox":[632,282,560,42]}
+{"kind":"shape","id":"sh/10zup0n6","slide":16,"bbox":[64,344,1152,66]}
+{"kind":"textbox","id":"sh/0zqtgf61","slide":16,"text":"위치추정","textPreview":"위치추정","textChars":4,"textLines":1,"bbox":[82,361,122,30]}
+{"kind":"textbox","id":"sh/fyxcnapg","slide":16,"text":"91e8d04 · 11b346e · 0eb8c62 · defd0d2","textPreview":"91e8d04 · 11b346e · 0eb8c62 · defd0d2","textChars":37,"textLines":1,"bbox":[220,362,392,28]}
+{"kind":"textbox","id":"sh/exobe5ov","slide":16,"text":"timestamp·fail-closed·초기 yaw·inlier score/steering 수정","textPreview":"timestamp·fail-closed·초기 yaw·inlier score/steering 수정","textChars":53,"textLines":1,"bbox":[632,356,560,42]}
+{"kind":"shape","id":"sh/p4zutkni","slide":16,"bbox":[64,418,1152,66]}
+{"kind":"textbox","id":"sh/o3qtkf6x","slide":16,"text":"지도/경로","textPreview":"지도/경로","textChars":5,"textLines":1,"bbox":[82,435,122,30]}
+{"kind":"textbox","id":"sh/87ydwje9","slide":16,"text":"ed2b272 · bb14666 · bd37dbb · a847579","textPreview":"ed2b272 · bb14666 · bd37dbb · a847579","textChars":37,"textLines":1,"bbox":[220,436,392,28]}
+{"kind":"textbox","id":"sh/987epovu","slide":16,"text":"merged map·single identity·chair centre·recorded trace 보존","textPreview":"merged map·single identity·chair centre·recorded trace 보존","textChars":57,"textLines":1,"bbox":[632,430,560,42]}
+{"kind":"shape","id":"sh/m5gvutw3","slide":16,"bbox":[64,492,1152,66]}
+{"kind":"textbox","id":"sh/n6pwnydo","slide":16,"text":"구동/기하","textPreview":"구동/기하","textChars":5,"textLines":1,"bbox":[82,509,122,30]}
+{"kind":"textbox","id":"sh/wbid03e5","slide":16,"text":"e12f9b8 · ffc001b · a8bb453","textPreview":"e12f9b8 · ffc001b · a8bb453","textChars":27,"textLines":1,"bbox":[220,510,392,28]}
+{"kind":"textbox","id":"sh/xcret8vq","slide":16,"text":"저속 선회·센서 높이·route reference 재현","textPreview":"저속 선회·센서 높이·route reference 재현","textChars":30,"textLines":1,"bbox":[632,504,560,42]}
+{"kind":"shape","id":"sh/a9gvytwz","slide":16,"bbox":[64,566,1152,66]}
+{"kind":"textbox","id":"sh/vapwrydk","slide":16,"text":"검증","textPreview":"검증","textChars":2,"textLines":1,"bbox":[82,583,122,30]}
+{"kind":"textbox","id":"sh/cfedoze1","slide":16,"text":"f59e30f · 52a47a6 · f69351f","textPreview":"f59e30f · 52a47a6 · f69351f","textChars":27,"textLines":1,"bbox":[220,584,392,28]}
+{"kind":"textbox","id":"sh/dgneh4vm","slide":16,"text":"두 번 완주·진단 모드·08/02 field report","textPreview":"두 번 완주·진단 모드·08/02 field report","textChars":31,"textLines":1,"bbox":[632,578,560,42]}
+{"kind":"shape","id":"sh/f6d8j61g","slide":16,"bbox":[64,656,1152,1]}
+{"kind":"shape","id":"sh/e547a1kv","slide":16,"bbox":[64,675,1152,1]}
+{"kind":"textbox","id":"sh/18fqlgj6","slide":16,"text":"부록 · Git evidence map","textPreview":"부록 · Git evidence map","textChars":21,"textLines":1,"bbox":[64,686,760,18]}
+{"kind":"textbox","id":"sh/076pcb2l","slide":16,"text":"2026.08.03  ·  16","textPreview":"2026.08.03  ·  16","textChars":17,"textLines":1,"bbox":[1080,686,136,18]}
+{"kind":"notes","id":"nt/ezl2l0","slide":16,"text":"[Sources]\n- All commit subjects and bodies were inspected with git show in /Users/minjun/unicon-wheelchair.\n- git log 999028a..a3f0e85 --oneline and git rev-list --count 999028a..a3f0e85."}

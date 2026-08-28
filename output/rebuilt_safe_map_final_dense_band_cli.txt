@@ -1,0 +1,7 @@
+stations: 1892
+band width: min 1.2 m, median 6.6 m
+stations narrower than 0.9 m: none
+edge kind: drop=622, lip=61, open=1565, step_up=1465, unscanned=71
+measured step RISE: median 0.50 m, p90 0.79 m, max 1.02 m
+measured step depth: median 0.22 m, p90 0.27 m, max 0.94 m
+saved output/rebuilt_safe_map_final_dense.json / output/rebuilt_safe_map_final_dense_preview.png

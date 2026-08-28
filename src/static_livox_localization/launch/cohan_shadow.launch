@@ -48,6 +48,10 @@
                 file="$(find wheelchair_navigation)/config/local_costmap.yaml"/>
       <param name="local_costmap/global_frame"
              value="$(arg global_frame)"/>
+      <param name="global_costmap/robot_base_frame"
+             value="$(arg base_frame)"/>
+      <param name="local_costmap/robot_base_frame"
+             value="$(arg base_frame)"/>
       <param name="global_costmap/obstacle_layer/enabled"
              value="false"/>
       <param name="local_costmap/obstacle_layer/enabled"

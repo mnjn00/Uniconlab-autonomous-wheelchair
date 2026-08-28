@@ -1,0 +1,7 @@
+image: dropsafe.pgm
+mode: trinary
+resolution: 0.1500
+origin: [-33.2491, -26.8518, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25

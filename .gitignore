@@ -39,3 +39,4 @@ artifacts/
 .omc/
 .omo/
 .claude/
+.codex_tmp/

@@ -1,0 +1,32 @@
+<!-- Drop-safe global route planning with navfn.
+
+     Serves the drop-safe occupancy grid (baked by bake_dropsafe_costmap.py from
+     the 3D map) and runs move_base/navfn over it. Call /move_base/make_plan
+     with start+goal (make_plan_client.py) to get a nav_msgs/Path that cannot
+     cross a kerb, grade or unmapped cell the 3D terrain analysis refused.
+
+     This launch is for PLANNING ONLY. It does not drive the chair. The
+     follower still runs separately (trial_0727.sh / start_wheelchair_localization.sh)
+     and loads the route + band that path_to_route_assets.py wrote from this
+     plan. Motion authority is unchanged.
+-->
+<launch>
+  <arg name="dropsafe_map" default="$(find wheelchair_navigation)/../../data/dropsafe/dropsafe.yaml"/>
+  <arg name="map_frame" default="map"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+
+  <node pkg="map_server" type="map_server" name="map_server"
+        args="$(arg dropsafe_map)" output="screen" required="true"/>
+
+  <rosparam command="load" file="$(find wheelchair_navigation)/config/move_base.yaml" ns="move_base"/>
+  <rosparam command="load" file="$(find wheelchair_navigation)/config/dropsafe_global_costmap.yaml" ns="move_base"/>
+  <rosparam command="load" file="$(find wheelchair_navigation)/config/local_costmap.yaml" ns="move_base"/>
+  <rosparam command="load" file="$(find wheelchair_navigation)/config/dwa_local_planner.yaml" ns="move_base"/>
+
+  <node pkg="move_base" type="move_base" name="move_base" output="screen">
+    <remap from="cmd_vel" to="/cmd_vel_nav_unused"/>
+    <remap from="odom" to="/odom"/>
+  </node>
+</launch>

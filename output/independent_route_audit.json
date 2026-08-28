@@ -1,0 +1,20 @@
+{
+ "recorded_route_used": false,
+ "waypoints": 1837,
+ "hard_hazard_hits": 0,
+ "obstacle_hits": 0,
+ "step_hits": 0,
+ "steep_hits": 0,
+ "unknown_hits": 0,
+ "min_clearance_m": 0.4,
+ "p05_clearance_m": 0.566,
+ "route_length_m": 365.877,
+ "start": [
+  -7.9,
+  -2.9
+ ],
+ "goal": [
+  226.652,
+  24.252
+ ]
+}

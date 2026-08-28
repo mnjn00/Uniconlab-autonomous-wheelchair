@@ -1,0 +1,19 @@
+{
+ "recorded_route_used": false,
+ "path_length_m": 147.724,
+ "waypoints": 742,
+ "min_clearance_m": 0.4,
+ "config": {
+  "cell_m": 0.2,
+  "known_gap_m": 0.3,
+  "ground_opening_m": 0.6,
+  "body_low_m": 0.12,
+  "body_high_m": 1.8,
+  "body_min_returns": 48,
+  "step_limit_m": 0.1,
+  "slope_limit_deg": 14.0,
+  "clearance_m": 0.4,
+  "start_artifact_radius_m": 0.85,
+  "output_step_m": 0.2
+ }
+}

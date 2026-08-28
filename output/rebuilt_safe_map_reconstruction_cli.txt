@@ -1,0 +1,20 @@
+{
+ "status": "RECONSTRUCTED",
+ "frame": "map",
+ "route": "output/rebuilt_safe_map_driven_route.json",
+ "start_index": 797,
+ "goal_index": 16611,
+ "first_stitch_index": 10690,
+ "second_stitch_index": 13173,
+ "start_residual_m": 0.3229548626027938,
+ "goal_residual_m": 0.3619121344059005,
+ "stitch_position_gap_m": 0.15440961843023376,
+ "stitch_heading_gap_deg": 3.176603996975,
+ "maximum_source_step_m": 0.208003444274252,
+ "path_length_m": 378.2870996667556,
+ "source_pose_count": 1904,
+ "route_point_count": 1904,
+ "loop_pose_count_removed": 5722,
+ "maximum_smoothing_shift_m": 0.16213743919240334,
+ "p95_smoothing_shift_m": 0.03720275923374443
+}

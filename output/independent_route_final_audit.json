@@ -1,0 +1,22 @@
+{
+ "recorded_route_used": false,
+ "waypoints": 1837,
+ "path_length_m": 365.801,
+ "hard_hazard_hits": 0,
+ "obstacle_hits": 0,
+ "step_hits": 0,
+ "steep_hits": 0,
+ "unknown_hits": 0,
+ "min_clearance_m": 0.4,
+ "p05_clearance_m": 0.566,
+ "band_stations": 362,
+ "min_band_width_m": 1.0,
+ "band_below_0_9m": 0,
+ "excluded_measured_bottleneck": [
+  [
+   144.7,
+   -82.7,
+   2.5
+  ]
+ ]
+}

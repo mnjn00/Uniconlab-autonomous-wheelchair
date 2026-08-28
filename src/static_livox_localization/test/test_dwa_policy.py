@@ -173,6 +173,7 @@ def dwa_with(objects, monkeypatch, threat_distance_stop_radius=1.5):
     follower.person_static_track_id = None
     follower.person_static_since_s = None
     follower.person_static_last_stamp_s = None
+    follower.person_bypass_committed_track_id = None
     follower.lateral_offset = 0.0
     follower.pose_xy = np.array([10.0, 0.0])
     follower.pose_yaw = 0.0
@@ -283,6 +284,47 @@ def test_recorded_stationary_person_eventually_allows_safe_bypass(monkeypatch):
         "the recorded stationary person never reached DWA geometry planning"
     assert follower.planner.calls[0]["obstacle_floor_m"] == 0.80
     assert follower.planner.calls[0]["speed_cap"] <= 0.35
+
+
+def test_committed_person_bypass_survives_lateral_arc(monkeypatch):
+    # Given: the latest field-bag sequence: one directly observed static
+    # person commits, then appears laterally outside the narrow stop corridor
+    # while remaining inside the planner's wider maneuver corridor.
+    person = walking(1.6)
+    person.update({"id": 16, "motion": ct.STATIC})
+    _module, follower, _published, _commanded = dwa_with(
+        [person], monkeypatch)
+    for index in range(51):
+        follower.cluster_summary = summary_at(
+            100.0 + index * 0.2, [person])
+        follower.step()
+    committed_calls = len(follower.planner.calls)
+    person.update({
+        "x": 1.12,
+        "y": -0.75,
+        "size": [0.28, 0.28, 0.86],
+        "profile": {
+            "bin_m": 0.2,
+            "y0": -1.0,
+            "min_x": [1.08, 0.98],
+        },
+    })
+
+    # When: the same static track remains directly observed through the arc.
+    for index in range(6):
+        follower.cluster_summary = summary_at(
+            110.2 + index * 0.2, [person])
+        follower.step()
+
+    # Then: every cycle remains a person-bypass plan instead of forgetting
+    # the commitment and steering back toward the person.
+    lateral_calls = follower.planner.calls[committed_calls:]
+    assert len(lateral_calls) == 6
+    assert all(call["obstacles"] for call in lateral_calls)
+    assert all(
+        call["obstacle_floor_m"] == 0.80
+        for call in lateral_calls
+    )
 
 
 def test_stationary_person_is_watched_from_plan_ahead_before_bypass(

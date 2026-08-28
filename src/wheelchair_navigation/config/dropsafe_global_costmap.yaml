@@ -1,0 +1,37 @@
+# Global costmap for drop-safe route planning.
+#
+# The static layer is the drop-safe occupancy grid baked by
+# bake_dropsafe_costmap.py: every cell a chair centre may not occupy - kerb,
+# grade, obstruction, unmapped, or outside the analysed corridor - is lethal,
+# and the free cells are the eroded configuration space. navfn with
+# allow_unknown: false (move_base.yaml) therefore cannot plan through a drop.
+#
+# No obstacle layer: live obstacles are the local planner's responsibility, not
+# the global plan's. Adding one here would let a transient return re-open a
+# kerb cell that the 3D analysis refused, which is exactly the failure the
+# costmap exists to prevent. The static drop-safe map is the whole input.
+global_costmap:
+  global_frame: map
+  robot_base_frame: base_footprint
+  update_frequency: 0.5
+  publish_frequency: 0.5
+  rolling_window: false
+  resolution: 0.15
+  track_unknown_space: true
+  plugins:
+    - {name: static_layer, type: "costmap_2d::StaticLayer"}
+    - {name: inflation_layer, type: "costmap_2d::InflationLayer"}
+
+static_layer:
+  enabled: true
+  map_topic: /map
+  subscribe_to_updates: false
+
+# A soft gradient away from lethal edges so navfn prefers the centre of the
+# drop-safe ribbon rather than its edge. The configuration space is already
+# eroded by chair half width + margin, so this only adds a preference, never
+# legality.
+inflation_layer:
+  enabled: true
+  inflation_radius: 0.45
+  cost_scaling_factor: 3.0

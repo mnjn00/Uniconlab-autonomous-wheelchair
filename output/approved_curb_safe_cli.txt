@@ -1,0 +1,6 @@
+{
+ "status": "BLOCKED",
+ "reason": "goal is outside the start-connected safe component",
+ "required_clearance_m": 0.45,
+ "maximum_connected_clearance_m": 0.282843
+}
