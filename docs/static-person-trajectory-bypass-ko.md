@@ -1,6 +1,6 @@
 # 정지 사람 궤적 우회 브랜치
 
-브랜치: `fix/static-person-trajectory-bypass`
+브랜치: `fix/dwa-gate-footprint-alignment`
 
 이 브랜치는 기존 하이브리드 스택의 두 교착을 함께 고친다.
 
@@ -17,7 +17,7 @@
 | motion이 unknown인 사람 | 정지 |
 | learned-only 사람 | 정지 |
 | 두 명 이상이 우회 영역에 있음 | 정지 |
-| 사람 트랙 ID 변경·포즈 점프·프레임 누락 | 우회 허가 즉시 폐기 |
+| 사람 트랙 ID 변경·포즈 점프·1초 초과 프레임 누락 | 우회 허가 즉시 폐기 |
 | 사람이 너무 가까움 | 정지 |
 | DWA 곡선 swept footprint가 raw point와 충돌 | 정지 |
 | 현재 관성 궤적이 충돌 | 완전히 멈출 때까지 정지 |
@@ -27,7 +27,7 @@
 
 ```text
 정지 사람 추가 확인:       3.0 s
-허용 관측 간격:            0.35 s
+허용 관측 간격:            1.00 s
 같은 트랙 위치 점프:       0.35 m 이하
 permit 수명:               0.45 s
 최대 우회 속도:            0.35 m/s
@@ -63,6 +63,13 @@ fresh static-person permit
 
 즉 raw LiDAR를 끄거나 사람 점을 지우는 방식이 아니다. 고정 직선 박스 대신 현재 DWA가 요청한 곡선 자체를 검사한다.
 
+또한 gate에서 거부된 뒤 다음 주기에 같은 호를 다시 내는 교착을 막기
+위해 DWA 후보 선택 단계에서도 동일한 raw point, 동적 horizon, 차체
+footprint와 margin으로 먼저 검사한다. 비용이 가장 낮은 후보가 막히면
+다음 후보를 검사하고, 통과 후보가 하나도 없으면
+`HOLD:DWA_GATE_TRAJECTORY`로 정지한다. CPU와 RTX/CuPy DWA가 동일한
+`0.80 m` 우회 clearance와 후보 veto 계약을 사용한다.
+
 ## NUC에 브랜치 배포
 
 휠체어를 수동 모드로 정지한 상태에서:
@@ -71,8 +78,8 @@ fresh static-person permit
 cd ~/wheelchair_localization_src
 
 git fetch --all --prune
-git switch fix/static-person-trajectory-bypass
-git pull --ff-only origin fix/static-person-trajectory-bypass
+git switch fix/dwa-gate-footprint-alignment
+git pull --ff-only origin fix/dwa-gate-footprint-alignment
 ```
 
 기존 NUC remote 이름이 `github`이면 `origin` 대신 `github`를 사용한다.

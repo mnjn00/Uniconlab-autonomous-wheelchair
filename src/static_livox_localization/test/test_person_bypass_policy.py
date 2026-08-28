@@ -120,3 +120,48 @@ def test_raw_gate_override_requires_curved_clear_path_and_stopped_carried_path()
         **dict(common, carried_path_collision=True)).allowed
     assert not evaluate_gate_override(
         **dict(common, now_s=permit.expires_s + .01)).allowed
+
+
+def test_one_missed_frame_does_not_reset_static_qualification():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=3.0, maximum_gap_s=1.0)
+    permit = None
+    for stamp in (1.0, 1.2, 1.4, 2.0, 2.2, 2.4, 3.0, 3.2, 3.4, 4.0):
+        permit = qualifier.update(
+            person_observations(summary(stamp, [person()])), stamp, True)
+    assert permit.active
+
+
+def test_brief_motion_flicker_freezes_but_does_not_count_as_static():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=1.0, maximum_gap_s=1.0, flicker_s=1.0)
+    for stamp in (1.0, 1.2, 1.4, 1.6):
+        permit = qualifier.update(
+            person_observations(summary(stamp, [person()])), stamp, True)
+    assert not permit.active
+    permit = qualifier.update(
+        person_observations(summary(1.8, [person(motion="unknown")])),
+        1.8, True)
+    assert not permit.active
+    permit = qualifier.update(
+        person_observations(summary(2.0, [person()])), 2.0, True)
+    assert not permit.active
+    permit = qualifier.update(
+        person_observations(summary(2.2, [person()])), 2.2, True)
+    assert not permit.active
+    permit = qualifier.update(
+        person_observations(summary(2.4, [person()])), 2.4, True)
+    assert permit.active
+
+
+def test_motion_immediately_revokes_a_committed_permit():
+    qualifier = StaticPersonQualifier(confirmation_s=0.4)
+    permit = None
+    for stamp in (1.0, 1.2, 1.4):
+        permit = qualifier.update(
+            person_observations(summary(stamp, [person()])), stamp, True)
+    assert permit.active
+    permit = qualifier.update(
+        person_observations(summary(1.6, [person(motion="moving")])),
+        1.6, True)
+    assert not permit.active

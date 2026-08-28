@@ -45,6 +45,8 @@ def test_dwa_keeps_rtx_qualifies_while_paused_and_publishes_short_permit():
     assert "self.planner.max_speed" in follower
     assert "dwa_core.OBSTACLE_FLOOR_M" in follower
     assert "return GO_ROUND" in follower
+    assert "CURRENT_THREAT_NOT_PERSON" in follower
+    assert "person_observations(" in follower
     # Permit qualification happens before the inherited hold ladder can
     # return for PAUSED, otherwise a person already in front makes `go`
     # impossible forever.
@@ -79,6 +81,25 @@ def test_raw_gate_replaces_only_fixed_corridor_obstacle_with_clear_curve():
     assert '"~person_bypass_immediate_front_margin_m", 0.0' in gate
     assert '"~person_bypass_immediate_side_margin_m", 0.0' in gate
     assert '"~person_bypass_immediate_point_count", 5' in gate
+
+
+def test_dwa_filters_candidates_with_the_same_raw_gate_contract_first():
+    follower = text(SCRIPTS / "person_bypass_dwa_follower.py")
+    gate = text(SCRIPTS / "trajectory_safety_gate.py")
+    core = text(SCRIPTS / "dwa_core.py")
+    gpu = text(SCRIPTS / "gpu_dwa_backend.py")
+    assert "make_raw_gate_candidate_veto" in follower
+    assert "planner_candidate_veto" in follower
+    assert "collision_points_from_cloud" in gate
+    assert "base_gate.stopping_envelope(" in gate
+    assert "base_gate.swept_footprint_collision(" in gate
+    assert "candidate_veto(v, w)" in core
+    assert '"GATE_TRAJECTORY"' in core
+    # The deployed RTX planner must accept the same dynamic clearance and
+    # callback as the CPU reference instead of silently reverting to 0.50 m.
+    assert "obstacle_floor_m=core_module.OBSTACLE_FLOOR_M" in gpu
+    assert "clear >= float(obstacle_floor_m)" in gpu
+    assert "candidate_veto(v, w)" in gpu
 
 
 def test_branch_preflight_proves_new_implementations_not_only_node_names():

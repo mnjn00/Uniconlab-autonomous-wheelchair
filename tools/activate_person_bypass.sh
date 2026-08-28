@@ -64,7 +64,7 @@ for pair in "SAFETY_POLICIES:$SAFETY_POLICIES" \
 done
 
 PERSON_BYPASS_CONFIRM_S="${PERSON_BYPASS_CONFIRM_S:-3.0}"
-PERSON_BYPASS_MAX_GAP_S="${PERSON_BYPASS_MAX_GAP_S:-0.35}"
+PERSON_BYPASS_MAX_GAP_S="${PERSON_BYPASS_MAX_GAP_S:-1.0}"
 PERSON_BYPASS_MAX_JUMP_M="${PERSON_BYPASS_MAX_JUMP_M:-0.35}"
 PERSON_BYPASS_PERMIT_LIFETIME_S="${PERSON_BYPASS_PERMIT_LIFETIME_S:-0.45}"
 PERSON_BYPASS_MAX_FORWARD_M="${PERSON_BYPASS_MAX_FORWARD_M:-8.0}"
@@ -132,6 +132,7 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _person_bypass_minimum_near_m:="$PERSON_BYPASS_MIN_NEAR_M" \
   _person_bypass_speed_mps:="$PERSON_BYPASS_SPEED_MPS" \
   _person_bypass_clearance_m:="$PERSON_BYPASS_CLEARANCE_M" \
+  _minimum_person_bypass_turn_rps:="$PERSON_BYPASS_MIN_TURN_RPS" \
   > "$LOG/live_person_bypass_dwa.log" 2>&1 < /dev/null &
 
 say "semantic supervisor with target-only static-person exception"

@@ -259,6 +259,34 @@ class DwaFollower(WaypointFollower):
             return None
         return (now - self.gate_blocked_since).to_sec()
 
+    def command_for_target(self, target_v, target_w, elapsed):
+        """The raw command the ramp will publish for one planner target.
+
+        Candidate safety has to judge this command rather than the solver's
+        target.  On the first cycle of a turn the yaw slew limiter can make
+        those two very different; validating the target and publishing the
+        ramped command would recreate the planner/gate disagreement one step
+        later.
+        """
+        step = max(float(elapsed), 1e-3)
+        wanted_accel = np.clip(
+            (float(target_v) - self.current_speed) / step,
+            -MAX_DECEL, MAX_ACCEL)
+        command_accel = jerk_limited(
+            wanted_accel, self.command_accel, step)
+        accel = np.array([
+            command_accel,
+            np.clip((float(target_w) - self.last_yaw_rate) / step,
+                    -YAW_SLEW_RPS2, YAW_SLEW_RPS2)])
+        speed, yaw_rate = advance_command(
+            self.current_speed, self.last_yaw_rate, accel, elapsed,
+            dwa_core.MAX_SPEED, MAX_YAW_RATE)
+        return float(speed), float(yaw_rate), float(command_accel)
+
+    def planner_candidate_veto(self, _now, _decision, _command_for_target):
+        """Optional downstream-geometry veto, supplied by guarded profiles."""
+        return None
+
     def send_stop(self):
         # The jerk limit shapes driving, never braking. Dropping the carried
         # acceleration here is what keeps a stop as abrupt as it was before.
@@ -411,6 +439,19 @@ class DwaFollower(WaypointFollower):
         # travel at 0.6 m/s and 0.55 m at 1.0 - the planner correcting for
         # where the chair no longer is, which is what lateral hunting is.
         state = self.led_state(state)
+        elapsed = 1.0 / CONTROL_HZ
+        if self.last_command_stamp is not None:
+            elapsed = (now - self.last_command_stamp).to_sec()
+        if elapsed > MAX_COMMAND_GAP_S:
+            rospy.logwarn_throttle(
+                5.0, "control loop gap %.2f s - resyncing command to measured",
+                elapsed)
+            self.current_speed = float(state[3])
+            self.last_yaw_rate = float(state[4])
+        command_for_target = lambda v, w: self.command_for_target(
+            v, w, elapsed)
+        candidate_veto = self.planner_candidate_veto(
+            now, decision, command_for_target)
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate,
@@ -418,7 +459,8 @@ class DwaFollower(WaypointFollower):
             obstacle_floor_m=(
                 PERSON_BYPASS_CLEARANCE_M
                 if decision == PERSON_BYPASS
-                else dwa_core.OBSTACLE_FLOOR_M))
+                else dwa_core.OBSTACLE_FLOOR_M),
+            candidate_veto=candidate_veto)
         if status != "OK":
             if status != self.dwa_status:
                 if status == "SPEED_BELOW_FLOOR":
@@ -438,28 +480,9 @@ class DwaFollower(WaypointFollower):
             return
         self.dwa_status = status
 
-        elapsed = 1.0 / CONTROL_HZ
-        if self.last_command_stamp is not None:
-            elapsed = (now - self.last_command_stamp).to_sec()
-        if elapsed > MAX_COMMAND_GAP_S:
-            rospy.logwarn_throttle(
-                5.0, "control loop gap %.2f s - resyncing command to measured",
-                elapsed)
-            self.current_speed = float(state[3])
-            self.last_yaw_rate = float(state[4])
         self.last_command_stamp = now
-        step = max(elapsed, 1e-3)
-        wanted_accel = np.clip((target_v - self.current_speed) / step,
-                               -MAX_DECEL, MAX_ACCEL)
-        self.command_accel = jerk_limited(
-            wanted_accel, self.command_accel, step)
-        accel = np.array([
-            self.command_accel,
-            np.clip((target_w - self.last_yaw_rate) / step,
-                    -YAW_SLEW_RPS2, YAW_SLEW_RPS2)])
-        speed, yaw_rate = advance_command(
-            self.current_speed, self.last_yaw_rate, accel, elapsed,
-            dwa_core.MAX_SPEED, MAX_YAW_RATE)
+        speed, yaw_rate, self.command_accel = command_for_target(
+            target_v, target_w)
 
         command = Twist()
         command.linear.x = speed

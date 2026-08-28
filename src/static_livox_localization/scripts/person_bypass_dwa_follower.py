@@ -25,12 +25,13 @@ from gpu_dwa_backend import GpuRequiredError, install_gpu_planner
 # Install before DwaFollower constructs dwa_core.DwaPlanner. Environment and
 # ROS params still choose CuPy or the diagnostic CPU path.
 install_gpu_planner(dwa_core)
-from cluster_guard import GO_ROUND  # noqa: E402
+from cluster_guard import GO_ROUND, PERSON_BYPASS, WAIT  # noqa: E402
 from dwa_follower import DwaFollower  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
     StaticPersonQualifier,
     person_observations,
 )
+from trajectory_safety_gate import make_raw_gate_candidate_veto  # noqa: E402
 
 
 class PersonBypassDwaFollower(DwaFollower):
@@ -41,7 +42,7 @@ class PersonBypassDwaFollower(DwaFollower):
         self.person_bypass_confirmation_s = float(rospy.get_param(
             "~person_bypass_confirmation_s", 3.0))
         self.person_bypass_maximum_gap_s = float(rospy.get_param(
-            "~person_bypass_maximum_gap_s", 0.35))
+            "~person_bypass_maximum_gap_s", 1.0))
         self.person_bypass_position_jump_m = float(rospy.get_param(
             "~person_bypass_position_jump_m", 0.35))
         self.person_bypass_permit_lifetime_s = float(rospy.get_param(
@@ -56,6 +57,8 @@ class PersonBypassDwaFollower(DwaFollower):
             "~person_bypass_speed_mps", 0.35))
         self.person_bypass_clearance_m = float(rospy.get_param(
             "~person_bypass_clearance_m", 0.80))
+        self.minimum_person_bypass_turn_rps = float(rospy.get_param(
+            "~minimum_person_bypass_turn_rps", 0.08))
         self.qualifier = StaticPersonQualifier(
             confirmation_s=self.person_bypass_confirmation_s,
             maximum_gap_s=self.person_bypass_maximum_gap_s,
@@ -70,6 +73,7 @@ class PersonBypassDwaFollower(DwaFollower):
         self.permit_pub = rospy.Publisher(
             "/person_bypass/permit", String, queue_size=1, latch=False)
         self._permit_published_this_cycle = False
+        self.active_person_bypass_permit = None
         rospy.set_param("~person_bypass_capable", True)
         rospy.loginfo(
             "stationary-person bypass: %.1f s same-track STATIC, "
@@ -95,10 +99,11 @@ class PersonBypassDwaFollower(DwaFollower):
         semantic preflight needs the permit before motion may start. Reading
         perception here breaks that cycle without sending any command.
         """
-        threat = self.corridor_threat(0.0)
-        if threat is None or not threat.is_person:
-            self.qualifier.reset()
-            return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
+        # Watch the person independently of the nearest ordinary threat.  In
+        # the 2026-08-27 bag a kerb or wall was nearer in 87 % of permit
+        # samples and repeatedly erased otherwise valid same-track STATIC
+        # evidence.  Those objects remain in DWA and raw-gate geometry; they
+        # must constrain the arc, not erase the identity clock.
         observations = person_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
@@ -110,16 +115,24 @@ class PersonBypassDwaFollower(DwaFollower):
     def avoidance_for(self, now, threat, blocking):
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
             now, threat, blocking)
+        self.active_person_bypass_permit = None
         if threat is None or not threat.is_person:
-            self.qualifier.reset()
+            # Do not reset the separately watched person's clock merely
+            # because a kerb/wall is a few centimetres nearer this cycle.
+            # The permit is inactive until the person is the threat actually
+            # being bypassed, while accumulated same-track evidence survives.
             self.publish_permit(self.inactive_permit(
-                now, "NEAREST_THREAT_NOT_PERSON"))
+                now, "CURRENT_THREAT_NOT_PERSON"))
             return ordinary
 
         permit = self.observed_person_permit(now)
         self.publish_permit(permit)
         if not permit.active:
-            return ordinary
+            # The base follower has its own direct person clock.  Motion in
+            # this guarded profile additionally requires the short-lived
+            # permit consumed by semantic and raw gates; never let the base
+            # clock outrun those two independent authorities.
+            return WAIT if ordinary == PERSON_BYPASS else ordinary
 
         # DWA-only authorization. The semantic and raw trajectory gates both
         # consume the same short-lived permit; neither can infer authorization
@@ -137,10 +150,21 @@ class PersonBypassDwaFollower(DwaFollower):
         self.gate_reason = ""
         self.gate_blocked_since = None
         self.gate_detail = "static-person trajectory permit"
+        self.active_person_bypass_permit = permit
         return GO_ROUND
+
+    def planner_candidate_veto(self, now, _decision, command_for_target):
+        """Reject DWA arcs that the raw trajectory gate would reject later."""
+        if self.active_person_bypass_permit is None:
+            return None
+        cloud_age_s = max(0.0, now.to_sec() - self.cloud_stamp.to_sec())
+        return make_raw_gate_candidate_veto(
+            self.cloud, self.motion, cloud_age_s, command_for_target,
+            minimum_turn_rps=self.minimum_person_bypass_turn_rps)
 
     def step(self):
         self._permit_published_this_cycle = False
+        self.active_person_bypass_permit = None
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
         now = rospy.Time.now()

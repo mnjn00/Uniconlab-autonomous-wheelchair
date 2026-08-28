@@ -142,10 +142,11 @@ class RecordingPlanner(object):
 
     def plan(self, state, obstacles=(), speed_cap=None,
              last_yaw_rate=0.0, last_speed=None,
-             obstacle_floor_m=None):
+             obstacle_floor_m=None, candidate_veto=None):
         self.calls.append({"obstacles": list(obstacles),
                            "speed_cap": speed_cap,
-                           "obstacle_floor_m": obstacle_floor_m})
+                           "obstacle_floor_m": obstacle_floor_m,
+                           "candidate_veto": candidate_veto})
         return 0.3, 0.0, "OK"
 
 

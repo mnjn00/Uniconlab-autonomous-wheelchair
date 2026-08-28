@@ -410,7 +410,8 @@ class DwaPlanner:
         return np.concatenate([paths, grown], axis=1)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
-             last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M):
+             last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M,
+             candidate_veto=None):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -531,5 +532,18 @@ class DwaPlanner:
                 + W_OBSTACLE * penalty + W_STEER * steer + W_CENTRE * centre
                 + band_escape + W_MASK_BOUNDARY * mask_boundary)
         cost = np.where(ok, cost, np.inf)
-        best = int(np.argmin(cost))
-        return float(pairs[best][0]), float(pairs[best][1]), "OK"
+        # A downstream safety gate may know geometry that the clustered
+        # obstacle critic cannot: notably the raw LiDAR swept footprint.
+        # Ask it in score order rather than accepting the cheapest candidate
+        # and discovering one node later that the command can never pass.
+        # The callback returns True to reject a candidate.  It is deliberately
+        # optional so ordinary route following retains the vectorized hot
+        # path; stationary-person bypass is the only current caller.
+        for best in np.argsort(cost):
+            if not np.isfinite(cost[best]):
+                break
+            v, w = pairs[int(best)]
+            if candidate_veto is not None and candidate_veto(v, w):
+                continue
+            return float(v), float(w), "OK"
+        return 0.0, 0.0, "GATE_TRAJECTORY"

@@ -36,6 +36,98 @@ from person_bypass_policy import (  # noqa: E402
 )
 
 
+def collision_points_from_cloud(cloud):
+    """The exact raw-point population used by the independent gate."""
+    if cloud is None:
+        return np.empty((0, 2), dtype=float)
+    return base_gate.filter_obstacle_points(
+        cloud,
+        sensor_height_m=base_gate.SENSOR_HEIGHT_M,
+        min_height_m=base_gate.COLLISION_MIN_HEIGHT_M,
+        max_height_m=base_gate.COLLISION_MAX_HEIGHT_M,
+        self_x_min_m=base_gate.RIDER_EXCLUDE_X_MIN_M,
+        self_x_max_m=base_gate.RIDER_EXCLUDE_X_MAX_M,
+        self_half_width_m=base_gate.RIDER_EXCLUDE_HALF_WIDTH_M,
+        self_y_centre_m=base_gate.CHAIR_CENTRE_IN_BODY_XYZ[1])
+
+
+def make_raw_gate_candidate_veto(
+        cloud, motion, cloud_age_s, command_for_target,
+        minimum_turn_rps=0.08):
+    """Return a DWA veto using the raw gate's own swept-footprint contract.
+
+    The callback is evaluated in DWA cost order.  It predicts the *ramped*
+    command that will actually be published, builds the same dynamic horizon
+    as :class:`safety_gate.SafetyGate`, and rejects any command the
+    trajectory-aware gate would later reject.  Missing cloud/motion is
+    fail-closed; the ordinary hold ladder should catch it first, but a stale
+    callback must never turn that race into motion.
+    """
+    obstacles = collision_points_from_cloud(cloud)
+    if motion is None or not motion.valid or len(obstacles) < 5:
+        return lambda _v, _w: True
+    cloud_age_s = max(0.0, float(cloud_age_s))
+    minimum_turn_rps = abs(float(minimum_turn_rps))
+    cache = {}
+
+    def veto(target_v, target_w):
+        requested_v, requested_w, _accel = command_for_target(
+            target_v, target_w)
+        # The command ramp collapses many solver targets to the same next
+        # command.  Exact raw-cloud sweeps are intentionally conservative
+        # but not cheap; evaluate each command once per control cycle.
+        key = (round(requested_v, 6), round(requested_w, 6))
+        if key in cache:
+            return cache[key]
+        # SafetyGate does not run world geometry below its motion epsilon;
+        # DwaFollower also publishes zero yaw in this range.
+        if requested_v <= base_gate.MOTION_EPSILON:
+            cache[key] = False
+            return False
+        if abs(requested_w) < minimum_turn_rps:
+            cache[key] = True
+            return True
+        envelope = base_gate.stopping_envelope(
+            measured_speed_mps=motion.linear_speed_mps,
+            requested_speed_mps=requested_v,
+            measured_yaw_rate_rps=motion.angular_speed_rps,
+            requested_yaw_rate_rps=requested_w,
+            cloud_age_s=cloud_age_s,
+            accumulation_s=base_gate.ACCUMULATION_WINDOW_S,
+            pipeline_s=base_gate.PIPELINE_BUDGET_S,
+            min_linear_decel_mps2=base_gate.MIN_BRAKE_DECEL_MPS2,
+            min_angular_decel_rps2=base_gate.MIN_YAW_DECEL_RPS2,
+            geometry_margin_m=base_gate.GEOMETRY_MARGIN_M)
+        requested_collision = base_gate.swept_footprint_collision(
+            obstacles,
+            linear_speed_mps=requested_v,
+            angular_speed_rps=requested_w,
+            horizon_s=envelope.horizon_s,
+            front_m=base_gate.FOOTPRINT_FRONT_M,
+            rear_m=base_gate.FOOTPRINT_REAR_M,
+            half_width_m=base_gate.FOOTPRINT_HALF_WIDTH_M,
+            margin_m=base_gate.SWEEP_MARGIN_M)
+        if requested_collision:
+            cache[key] = True
+            return True
+        carried_v = max(0.0, float(motion.linear_speed_mps))
+        if carried_v <= base_gate.MOTION_EPSILON:
+            cache[key] = False
+            return False
+        cache[key] = base_gate.swept_footprint_collision(
+            obstacles,
+            linear_speed_mps=carried_v,
+            angular_speed_rps=float(motion.angular_speed_rps),
+            horizon_s=envelope.horizon_s,
+            front_m=base_gate.FOOTPRINT_FRONT_M,
+            rear_m=base_gate.FOOTPRINT_REAR_M,
+            half_width_m=base_gate.FOOTPRINT_HALF_WIDTH_M,
+            margin_m=base_gate.SWEEP_MARGIN_M)
+        return cache[key]
+
+    return veto
+
+
 class TrajectorySafetyGate(base_gate.SafetyGate):
     def __init__(self):
         super(TrajectorySafetyGate, self).__init__()
@@ -87,15 +179,7 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             permit, now_s, self.maximum_permit_age_s) else None
 
     def collision_points(self):
-        return base_gate.filter_obstacle_points(
-            self.cloud,
-            sensor_height_m=base_gate.SENSOR_HEIGHT_M,
-            min_height_m=base_gate.COLLISION_MIN_HEIGHT_M,
-            max_height_m=base_gate.COLLISION_MAX_HEIGHT_M,
-            self_x_min_m=base_gate.RIDER_EXCLUDE_X_MIN_M,
-            self_x_max_m=base_gate.RIDER_EXCLUDE_X_MAX_M,
-            self_half_width_m=base_gate.RIDER_EXCLUDE_HALF_WIDTH_M,
-            self_y_centre_m=base_gate.CHAIR_CENTRE_IN_BODY_XYZ[1])
+        return collision_points_from_cloud(self.cloud)
 
     def motion_blocked(self, now):
         reason, cap = super(TrajectorySafetyGate, self).motion_blocked(now)

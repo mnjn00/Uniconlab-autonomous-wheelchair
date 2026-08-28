@@ -179,8 +179,9 @@ class StaticPersonQualifier:
     """Continuous same-track evidence before a DWA person pass is allowed."""
 
     def __init__(self, confirmation_s: float = 3.0,
-                 maximum_gap_s: float = 0.35,
+                 maximum_gap_s: float = 1.0,
                  maximum_position_jump_m: float = 0.35,
+                 flicker_s: float = 1.0,
                  permit_lifetime_s: float = 0.45,
                  maximum_forward_m: float = 8.0,
                  maximum_lateral_m: float = 1.0,
@@ -188,7 +189,7 @@ class StaticPersonQualifier:
                  max_speed_mps: float = 0.35,
                  min_clearance_m: float = 0.80):
         values = (
-            confirmation_s, maximum_gap_s, maximum_position_jump_m,
+            confirmation_s, maximum_gap_s, maximum_position_jump_m, flicker_s,
             permit_lifetime_s, maximum_forward_m, maximum_lateral_m,
             minimum_near_distance_m, max_speed_mps, min_clearance_m,
         )
@@ -198,6 +199,7 @@ class StaticPersonQualifier:
         self.confirmation_s = float(confirmation_s)
         self.maximum_gap_s = float(maximum_gap_s)
         self.maximum_position_jump_m = float(maximum_position_jump_m)
+        self.flicker_s = float(flicker_s)
         self.permit_lifetime_s = float(permit_lifetime_s)
         self.maximum_forward_m = float(maximum_forward_m)
         self.maximum_lateral_m = float(maximum_lateral_m)
@@ -210,7 +212,11 @@ class StaticPersonQualifier:
         self.track_id = None
         self.first_stamp_s = None
         self.last_stamp_s = None
+        self.last_static_stamp_s = None
         self.last_xy = None
+        self.last_motion = None
+        self.static_elapsed_s = 0.0
+        self.committed = False
 
     def inactive(self, now_s: float, reason: str) -> BypassPermit:
         now_s = float(now_s)
@@ -236,9 +242,9 @@ class StaticPersonQualifier:
             return self.inactive(
                 now_s, "NO_PERSON" if not observations else "MULTIPLE_PEOPLE")
         person = observations[0]
-        if not person.eligible_static:
+        if person.track_id < 0 or not person.geometrically_backed:
             self.reset()
-            return self.inactive(now_s, "PERSON_NOT_CONFIRMED_STATIC")
+            return self.inactive(now_s, "PERSON_NOT_GEOMETRIC")
         if person.near_distance_m < self.minimum_near_distance_m:
             self.reset()
             return self.inactive(now_s, "PERSON_TOO_CLOSE")
@@ -254,10 +260,17 @@ class StaticPersonQualifier:
 
         same_track = self.track_id == person.track_id
         if not same_track or self.last_stamp_s is None:
+            if not person.eligible_static:
+                self.reset()
+                return self.inactive(now_s, "PERSON_NOT_CONFIRMED_STATIC")
             self.track_id = person.track_id
             self.first_stamp_s = stamp_s
             self.last_stamp_s = stamp_s
+            self.last_static_stamp_s = stamp_s
             self.last_xy = (person.x_m, person.y_m)
+            self.last_motion = STATIC
+            self.static_elapsed_s = 0.0
+            self.committed = False
             return self.inactive(now_s, "QUALIFYING_STATIC_PERSON")
 
         gap_s = stamp_s - float(self.last_stamp_s)
@@ -270,11 +283,41 @@ class StaticPersonQualifier:
             if jump > self.maximum_position_jump_m:
                 self.reset()
                 return self.update((person,), now_s, localization_tracking)
-        if gap_s > 1e-6:
+
+        motion = person.motion.strip().lower()
+        if motion != STATIC:
+            # Once motion has been authorized, any moving/unknown report
+            # revokes it immediately.  Before commitment a bounded one-frame
+            # classifier flicker freezes accumulated STATIC evidence instead
+            # of erasing it; the flicker interval itself is not counted.
+            recent_static = self.last_static_stamp_s is not None and \
+                0.0 <= stamp_s - self.last_static_stamp_s <= self.flicker_s
+            if self.committed or not recent_static or \
+                    motion not in ("moving", "unknown"):
+                self.reset()
+                return self.inactive(now_s, "PERSON_NOT_CONFIRMED_STATIC")
             self.last_stamp_s = stamp_s
             self.last_xy = (person.x_m, person.y_m)
+            self.last_motion = motion
+            return BypassPermit(
+                capable=True, active=False, stamp_s=now_s,
+                expires_s=now_s + self.permit_lifetime_s,
+                track_id=person.track_id,
+                target_x_m=person.x_m, target_y_m=person.y_m,
+                static_for_s=self.static_elapsed_s,
+                max_speed_mps=self.max_speed_mps,
+                min_clearance_m=self.min_clearance_m,
+                reason="QUALIFYING_STATIC_PERSON",
+            )
+        if gap_s > 1e-6:
+            if self.last_motion == STATIC:
+                self.static_elapsed_s += gap_s
+            self.last_stamp_s = stamp_s
+            self.last_static_stamp_s = stamp_s
+            self.last_xy = (person.x_m, person.y_m)
+            self.last_motion = STATIC
 
-        static_for_s = max(0.0, stamp_s - float(self.first_stamp_s))
+        static_for_s = max(0.0, self.static_elapsed_s)
         if static_for_s + 1e-6 < self.confirmation_s:
             return BypassPermit(
                 capable=True, active=False, stamp_s=now_s,
@@ -286,6 +329,7 @@ class StaticPersonQualifier:
                 min_clearance_m=self.min_clearance_m,
                 reason="QUALIFYING_STATIC_PERSON",
             )
+        self.committed = True
         return BypassPermit(
             capable=True, active=True, stamp_s=now_s,
             expires_s=now_s + self.permit_lifetime_s,

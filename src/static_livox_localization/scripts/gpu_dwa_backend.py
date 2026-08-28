@@ -207,7 +207,9 @@ def make_gpu_planner(base_class, core_module):
                 pass
 
         def plan(self, state, obstacles=(), speed_cap=None,
-                 last_yaw_rate=0.0, last_speed=None):
+                 last_yaw_rate=0.0, last_speed=None,
+                 obstacle_floor_m=core_module.OBSTACLE_FLOOR_M,
+                 candidate_veto=None):
             cap = self.max_speed if speed_cap is None else min(
                 self.max_speed, float(speed_cap))
             pairs = [
@@ -244,7 +246,12 @@ def make_gpu_planner(base_class, core_module):
                     clear = distance.reshape(len(pairs), -1).min(axis=1)
                 else:
                     clear = np.full(len(pairs), np.inf)
-                ok &= clear >= core_module.OBSTACLE_FLOOR_M
+                # Keep the accelerated planner on the same per-manoeuvre
+                # clearance contract as the reference planner.  The old GPU
+                # wrapper ignored DwaFollower's 0.80 m person-bypass floor
+                # (and rejected the keyword entirely), so the NUC could make
+                # a different, tighter decision than the CPU tests covered.
+                ok &= clear >= float(obstacle_floor_m)
                 if not ok.any():
                     return 0.0, 0.0, "OBSTACLE"
                 # Route lookup stays on the exact reference cKDTree contract.
@@ -303,8 +310,14 @@ def make_gpu_planner(base_class, core_module):
                 core_module.W_CENTRE * centre + band_escape +
                 core_module.W_MASK_BOUNDARY * mask_boundary)
             cost = np.where(ok, cost, np.inf)
-            best = int(np.argmin(cost))
-            return float(pairs[best][0]), float(pairs[best][1]), "OK"
+            for best in np.argsort(cost):
+                if not np.isfinite(cost[best]):
+                    break
+                v, w = pairs[int(best)]
+                if candidate_veto is not None and candidate_veto(v, w):
+                    continue
+                return float(v), float(w), "OK"
+            return 0.0, 0.0, "GATE_TRAJECTORY"
 
     GpuDwaPlanner.__name__ = "GpuDwaPlanner"
     return GpuDwaPlanner
