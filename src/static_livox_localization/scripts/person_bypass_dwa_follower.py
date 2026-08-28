@@ -27,7 +27,7 @@ from gpu_dwa_backend import GpuRequiredError, install_gpu_planner
 # Install before DwaFollower constructs dwa_core.DwaPlanner. Environment and
 # ROS params still choose CuPy or the diagnostic CPU path.
 install_gpu_planner(dwa_core)
-from cluster_guard import GO_ROUND  # noqa: E402
+from cluster_guard import GO_ROUND, WAIT  # noqa: E402
 from trajectory_safety_gate import make_raw_gate_candidate_veto  # noqa: E402
 from dwa_follower import DwaFollower  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
@@ -140,12 +140,13 @@ class PersonBypassDwaFollower(DwaFollower):
         semantic preflight needs the permit before motion may start. Reading
         perception here breaks that cycle without sending any command.
         """
-        threat = self.corridor_threat(0.0)
-        if threat is None or not threat.is_person:
-            self.qualifier.reset()
-            if threat is None:
-                self.reset_gate_rejections()
-            return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
+        # Qualification is about the observed PERSON, not whichever object
+        # wins the narrow forward-corridor query this cycle. On 2026-08-28
+        # the 0.55 m follower query missed a static person seen by the 0.65 m
+        # semantic stop query for ~21 s. It also reset a qualified person
+        # when an unrelated, nearer object appeared. Use the full maneuver
+        # region here; the qualifier still rejects moving/unknown, missing,
+        # multiple, stale, changed-ID and too-close observations.
         observations = person_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
@@ -153,56 +154,62 @@ class PersonBypassDwaFollower(DwaFollower):
                 self.person_bypass_maximum_lateral_m
                 + self.person_bypass_lateral_hysteresis_m),
         )
-        return self.qualifier.update(
+        permit = self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING")
+        if not permit.active:
+            self.reset_gate_rejections()
+        return permit
 
     def avoidance_for(self, now, threat, blocking):
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
             now, threat, blocking)
-        if threat is None or not threat.is_person:
-            self.qualifier.reset()
-            if threat is None or ordinary != GO_ROUND:
-                self.reset_gate_rejections()
-                self.publish_permit(self.inactive_permit(
-                    now, "NEAREST_THREAT_NOT_PERSON"))
-                return ordinary
-            permit = static_obstacle_permit(
-                now_s=now.to_sec(),
-                observed_stamp_s=threat.observed_stamp_s,
-                track_id=threat.track_id,
-                target_x_m=threat.distance_m,
-                target_y_m=threat.lateral_m,
-                motion=threat.motion,
-                directly_observed=threat.directly_observed,
-                geometry_valid=threat.geometry_valid,
-                maximum_observation_age_s=self.person_bypass_maximum_gap_s,
-                permit_lifetime_s=self.person_bypass_permit_lifetime_s,
-                max_speed_mps=self.person_bypass_speed_mps,
-                min_clearance_m=self.person_bypass_clearance_m,
-            )
-            self.publish_permit(permit)
-            if permit.active:
-                self.activate_trajectory_bypass(
-                    permit, "static-object trajectory permit")
-            else:
-                self.reset_gate_rejections()
-            return ordinary
-
         permit = self.observed_person_permit(now)
-        self.publish_permit(permit)
-        if not permit.active:
-            return ordinary
+        if permit.reason != "NO_PERSON":
+            # Never replace a person's qualification with a generic object
+            # permit. A closer object may require WAIT, but is not evidence
+            # that this directly observed person moved or disappeared.
+            self.publish_permit(permit)
+            if not permit.active:
+                self.reset_gate_rejections()
+                return WAIT
+            if threat is not None and not threat.is_person and (
+                    ordinary == WAIT or not threat.parked):
+                return WAIT
+            self.activate_trajectory_bypass(
+                permit, "static-person trajectory permit")
+            return GO_ROUND
 
-        # DWA-only authorization. The semantic and raw trajectory gates both
-        # consume the same short-lived permit; neither can infer authorization
-        # from a class label or from this return value alone.
-        # The base GATE_STALL diagnostic is for an obstacle absent from planner
-        # geometry. This person is present in geometry and the trajectory
-        # gate is now the authority, so the old fixed-corridor reason must not
-        # pre-empt the DWA cycle before a curved proposal exists.
-        self.activate_trajectory_bypass(
-            permit, "static-person trajectory permit")
-        return GO_ROUND
+        # A remembered person is sufficient to stop, never to authorize an
+        # arc. NO_PERSON has already reset the qualifier above.
+        if threat is not None and threat.is_person:
+            self.publish_permit(permit)
+            self.reset_gate_rejections()
+            return WAIT
+        if threat is None or ordinary != GO_ROUND:
+            self.reset_gate_rejections()
+            self.publish_permit(permit)
+            return ordinary
+        permit = static_obstacle_permit(
+            now_s=now.to_sec(),
+            observed_stamp_s=threat.observed_stamp_s,
+            track_id=threat.track_id,
+            target_x_m=threat.distance_m,
+            target_y_m=threat.lateral_m,
+            motion=threat.motion,
+            directly_observed=threat.directly_observed,
+            geometry_valid=threat.geometry_valid,
+            maximum_observation_age_s=self.person_bypass_maximum_gap_s,
+            permit_lifetime_s=self.person_bypass_permit_lifetime_s,
+            max_speed_mps=self.person_bypass_speed_mps,
+            min_clearance_m=self.person_bypass_clearance_m,
+        )
+        self.publish_permit(permit)
+        if permit.active:
+            self.activate_trajectory_bypass(
+                permit, "static-object trajectory permit")
+        else:
+            self.reset_gate_rejections()
+        return ordinary
 
     def planner_candidate_veto(self, now, _decision, command_for_target):
         if self.active_trajectory_permit is None:

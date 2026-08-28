@@ -145,7 +145,8 @@ class RecordingPlanner(object):
              obstacle_floor_m=None, candidate_veto=None):
         self.calls.append({"obstacles": list(obstacles),
                            "speed_cap": speed_cap,
-                           "obstacle_floor_m": obstacle_floor_m})
+                           "obstacle_floor_m": obstacle_floor_m,
+                           "candidate_veto": candidate_veto})
         return 0.3, 0.0, "OK"
 
 
@@ -807,6 +808,8 @@ def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
         reset=lambda: None,
         inactive=lambda now_s, reason: types.SimpleNamespace(
             active=False, reason=reason))
+    follower.observed_person_permit = lambda now: types.SimpleNamespace(
+        active=False, reason="NO_PERSON")
     follower.publish_permit = lambda permit: published.append(permit)
     follower.person_bypass_permit_lifetime_s = 0.45
     follower.person_bypass_maximum_gap_s = 0.45
@@ -834,6 +837,194 @@ def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
     assert decision == module.GO_ROUND
     assert published[-1].active
     assert published[-1].reason == "STATIC_OBJECT_BYPASS"
+
+
+def bypass_fixture(monkeypatch):
+    module, Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(module.PersonBypassDwaFollower)
+    follower.qualifier = module.StaticPersonQualifier()
+    follower.person_bypass_maximum_forward_m = 8.0
+    follower.person_bypass_maximum_lateral_m = 1.0
+    follower.person_bypass_lateral_hysteresis_m = 0.25
+    follower.tracking_state = "TRACKING"
+    follower._gate_rejected_yaw_rates = set()
+    follower._gate_rejected_track_id = None
+    follower.active_trajectory_permit = None
+    follower.planner = types.SimpleNamespace(max_speed=0.8)
+    permits = []
+    def publish(permit):
+        permits.append(permit)
+        follower._permit_published_this_cycle = True
+    follower.publish_permit = publish
+    # Keep the real base decision in other tests. Here the ordinary query
+    # result is varied explicitly to verify it cannot reset person evidence.
+    monkeypatch.setattr(module.DwaFollower, "avoidance_for",
+                        lambda *a: cg.CLEAR)
+    monkeypatch.setattr(module.dwa_core, "OBSTACLE_FLOOR_M", .5)
+    return module, Stamp, follower, permits
+
+
+def recorded_side_person():
+    # 13:35:50, track 5584, summary recorded during the ~21 s PERSON hold.
+    return dict(id=5584, **{"class": "person"}, motion="static",
+                source="geometric", x=1.339, y=.817, size=[.52, .43, .88],
+                points=1761, profile=dict(bin_m=.2, min_x=[1.13,1.08,1.17], y0=.6))
+
+
+def qualify_bypass_fixture(follower, Stamp, people=None, start=10.0):
+    people = people if people is not None else [recorded_side_person()]
+    for i in range(17):
+        now = start + .2*i
+        follower.cluster_summary = summary_at(now, people)
+        permit = follower.observed_person_permit(Stamp(now))
+    return permit
+
+
+def test_recorded_semantic_only_side_person_qualifies_without_nearest_query(monkeypatch):
+    module, Stamp, follower, permits = bypass_fixture(monkeypatch)
+    item = recorded_side_person()
+    summary = summary_at(10., [item])
+    assert cg.nearest_threat(summary, .55, labels=("person",)) is None
+    assert cg.nearest_threat(summary, .65, labels=("person",)).track_id == 5584
+    follower.corridor_threat = lambda *a: pytest.fail("narrow query must not gate qualification")
+    permit = qualify_bypass_fixture(follower, Stamp)
+    assert permit.active and permit.static_for_s >= 3.
+    assert follower.avoidance_for(Stamp(13.2), None, False) == module.GO_ROUND
+    assert permits[-1].track_id == 5584
+    assert follower.active_trajectory_permit is not None
+    assert follower.planner.max_speed == .35
+
+
+@pytest.mark.parametrize('ordinary', [cg.CLEAR, cg.GO_ROUND, cg.WAIT])
+def test_nearer_static_object_does_not_erase_person_timer(monkeypatch, ordinary):
+    module, Stamp, follower, permits = bypass_fixture(monkeypatch)
+    monkeypatch.setattr(module.DwaFollower, "avoidance_for", lambda *a: ordinary)
+    nearer = dict(id=5748, **{"class": "obstacle"}, motion="static",
+                  x=1.0, y=0., size=[.1,.1,.2], points=25)
+    threat = types.SimpleNamespace(is_person=False, parked=True)
+    for i in range(18):
+        now = 10.0 + .2*i
+        follower.cluster_summary = summary_at(now, [nearer, recorded_side_person()])
+        result = follower.avoidance_for(Stamp(now), threat, True)
+        if i < 15:
+            assert result == module.WAIT
+            assert not permits[-1].active
+    assert permits[-1].active and permits[-1].track_id == 5584
+    assert permits[-1].static_for_s >= 3.
+    assert permits[-1].reason == "STATIC_PERSON_BYPASS"
+    assert result == (module.WAIT if ordinary == cg.WAIT else module.GO_ROUND)
+
+
+@pytest.mark.parametrize('motion', ['moving', 'unknown'])
+@pytest.mark.parametrize('ordinary', [cg.CLEAR, cg.WAIT, cg.GO_ROUND])
+def test_person_permit_never_overrides_another_nonstatic_obstacle(monkeypatch, motion, ordinary):
+    module, Stamp, follower, permits = bypass_fixture(monkeypatch)
+    qualify_bypass_fixture(follower, Stamp)
+    monkeypatch.setattr(module.DwaFollower, "avoidance_for", lambda *a: ordinary)
+    threat = types.SimpleNamespace(is_person=False, parked=False, motion=motion)
+    assert follower.avoidance_for(Stamp(13.2), threat, True) == module.WAIT
+    assert permits[-1].active  # evidence retained, motion still withheld
+    assert follower.active_trajectory_permit is None
+
+
+@pytest.mark.parametrize('change,reason', [
+    ('moving', 'PERSON_NOT_CONFIRMED_STATIC'),
+    ('unknown', 'PERSON_NOT_CONFIRMED_STATIC'),
+    ('missing', 'NO_PERSON'), ('multiple', 'MULTIPLE_PEOPLE'),
+    ('id', 'QUALIFYING_STATIC_PERSON'), ('jump', 'QUALIFYING_STATIC_PERSON'),
+    ('stale', 'PERSON_OBSERVATION_STALE'),
+    ('localization', 'LOCALIZATION_NOT_TRACKING'),
+    ('close', 'PERSON_TOO_CLOSE'), ('learned', 'PERSON_NOT_CONFIRMED_STATIC')])
+def test_person_evidence_changes_still_revoke_permission(monkeypatch, change, reason):
+    module, Stamp, follower, permits = bypass_fixture(monkeypatch)
+    assert qualify_bypass_fixture(follower, Stamp).active
+    item = recorded_side_person()
+    people = [item]
+    stamp, now = 13.4, 13.4
+    if change in ('moving','unknown'): item['motion'] = change
+    elif change == 'missing': people = []
+    elif change == 'multiple': people.append(dict(item, id=5752))
+    elif change == 'id': item['id'] = 5757
+    elif change == 'jump': item['x'] += .5
+    elif change == 'stale': stamp = 12.0
+    elif change == 'localization': follower.tracking_state = 'LOST'
+    elif change == 'close': item['x'] = .7
+    elif change == 'learned': item['source'] = 'learned_only'
+    follower.cluster_summary = summary_at(stamp, people)
+    permit = follower.observed_person_permit(Stamp(now))
+    assert not permit.active and permit.reason == reason
+    # Even the base's separate remembered-person readiness cannot release.
+    monkeypatch.setattr(module.DwaFollower, 'avoidance_for', lambda *a: cg.PERSON_BYPASS)
+    assert follower.avoidance_for(Stamp(now), types.SimpleNamespace(is_person=True), True) == module.WAIT
+
+
+def test_semantic_validation_retains_same_track_in_qualifier_hysteresis(monkeypatch):
+    module, Stamp, follower, _permits = bypass_fixture(monkeypatch)
+    person = dict(recorded_side_person(), x=3., y=1., size=[.7,.7,1.7])
+    assert qualify_bypass_fixture(follower, Stamp, [person]).active
+    follower.cluster_summary = summary_at(13.3, [dict(person, y=1.2)])
+    assert follower.observed_person_permit(Stamp(13.3)).active
+    person = dict(person, y=1.413)  # box edge 1.063: inside retention, not acquisition
+    follower.cluster_summary = summary_at(13.4, [person])
+    permit = follower.observed_person_permit(Stamp(13.4))
+    assert permit.active
+    semantic, _ = load_follower('person_bypass_semantic_supervisor')
+    supervisor = semantic.PersonBypassSemanticSupervisor.__new__(semantic.PersonBypassSemanticSupervisor)
+    supervisor.bypass_permit = permit
+    supervisor.summary = follower.cluster_summary
+    supervisor.maximum_permit_age_s = .45
+    supervisor.maximum_target_error_m = .45
+    supervisor.bypass_maximum_forward_m = 8.
+    supervisor.bypass_maximum_lateral_m = 1.
+    supervisor.bypass_lateral_hysteresis_m = .25
+    assert supervisor.validated_bypass(13.4)[0] is not None
+    supervisor.summary = summary_at(13.4, [person, dict(person,id=999)])
+    assert supervisor.validated_bypass(13.4) == (None,None)
+    supervisor.summary = summary_at(13.4, [dict(person,motion='moving')])
+    assert supervisor.validated_bypass(13.4) == (None,None)
+
+
+def test_person_qualification_while_paused_does_not_send_motion(monkeypatch):
+    module, Stamp, follower, permits = bypass_fixture(monkeypatch)
+    # The real wrapper step must publish qualification even when the base
+    # hold ladder returns immediately, but must not activate a trajectory.
+    monkeypatch.setattr(module.DwaFollower, 'step', lambda self: None)
+    for i in range(18):
+        now = 10. + .2*i
+        monkeypatch.setattr(module.rospy.Time, 'now', lambda: Stamp(now))
+        follower.cluster_summary = summary_at(now, [recorded_side_person()])
+        follower.step()
+    assert any(p.active and p.track_id == 5584 for p in permits)
+    assert len(permits) == 18 and permits[-1].active
+    assert follower.active_trajectory_permit is None
+    assert follower.planner.max_speed == .8
+
+
+def test_semantic_only_person_reaches_dwa_with_geometry_and_precheck(monkeypatch):
+    _base_module, template, published, commanded = dwa_with([], monkeypatch)
+    module, Stamp, follower, _permits = bypass_fixture(monkeypatch)
+    follower.__dict__.update(template.__dict__)
+    follower.planner.max_speed = .8
+    reference_module = module.DwaFollower.step.__globals__['mpc_speed']
+    monkeypatch.setattr(reference_module, 'shaped_reference',
+                        lambda *a, **k: (np.array([.6,.6]), None))
+    assert qualify_bypass_fixture(follower, Stamp, start=96.8).active
+    monkeypatch.setattr(module.rospy.Time, 'now', lambda: Stamp(100.))
+    veto_calls = []
+    def candidate_veto(now, decision, command):
+        assert decision == module.GO_ROUND
+        assert follower.active_trajectory_permit.track_id == 5584
+        assert follower.planner.max_speed == .35
+        veto_calls.append(True)
+        return lambda v,w: False
+    follower.planner_candidate_veto = candidate_veto
+    follower.step()
+    assert veto_calls and len(follower.planner.calls) == 1
+    plan = follower.planner.calls[0]
+    assert plan['obstacles'] and callable(plan['candidate_veto'])
+    assert plan['speed_cap'] <= .6  # actual solver also enforces planner.max_speed
+    assert commanded and commanded[0] != 'STOP'
+    assert follower.planner.max_speed == .8  # temporary cap restored
 
 
 def test_a_gate_stall_is_named_rather_than_left_running(monkeypatch):

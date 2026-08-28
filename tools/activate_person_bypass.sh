@@ -143,6 +143,7 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _maximum_person_bypass_permit_age_s:="$PERSON_BYPASS_PERMIT_LIFETIME_S" \
   _person_bypass_maximum_forward_m:="$PERSON_BYPASS_MAX_FORWARD_M" \
   _person_bypass_maximum_lateral_m:="$PERSON_BYPASS_MAX_LATERAL_M" \
+  _person_bypass_lateral_hysteresis_m:="$PERSON_BYPASS_LATERAL_HYSTERESIS_M" \
   > "$LOG/live_person_bypass_semantic.log" 2>&1 < /dev/null &
 
 for node in /safety_gate /waypoint_follower /semantic_safety_supervisor; do
