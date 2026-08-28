@@ -815,6 +815,24 @@ def test_final_stop_resynchronizes_the_dwa_command_ramp():
     assert follower.command_accel == 0.0
 
 
+def test_small_final_command_lag_preserves_the_dwa_acceleration_ramp():
+    module, _Stamp = load_follower("dwa_follower")
+    follower = module.DwaFollower.__new__(module.DwaFollower)
+    follower.current_speed = 0.10
+    follower.last_yaw_rate = 0.2
+    follower.command_accel = 0.08
+    accepted = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.09),
+        angular=types.SimpleNamespace(z=0.18),
+    )
+
+    follower.on_accepted_command(accepted)
+
+    assert follower.current_speed == 0.09
+    assert follower.last_yaw_rate == 0.18
+    assert follower.command_accel == 0.08
+
+
 def test_floor_speed_collision_skips_useless_bisection(monkeypatch):
     module, Stamp = load_follower("safety_gate")
     gate = module.SafetyGate.__new__(module.SafetyGate)

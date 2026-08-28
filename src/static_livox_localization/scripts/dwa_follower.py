@@ -267,10 +267,9 @@ class DwaFollower(WaypointFollower):
     def on_accepted_command(self, message):
         accepted_speed = float(message.linear.x)
         accepted_yaw_rate = float(message.angular.z)
-        was_faster = accepted_speed + 1e-6 < self.current_speed
         self.current_speed = accepted_speed
         self.last_yaw_rate = accepted_yaw_rate
-        if was_faster or accepted_speed <= 0.02:
+        if accepted_speed <= 0.02:
             self.command_accel = 0.0
 
     def send_stop(self):
