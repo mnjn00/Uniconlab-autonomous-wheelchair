@@ -64,11 +64,12 @@ for pair in "SAFETY_POLICIES:$SAFETY_POLICIES" \
 done
 
 PERSON_BYPASS_CONFIRM_S="${PERSON_BYPASS_CONFIRM_S:-3.0}"
-PERSON_BYPASS_MAX_GAP_S="${PERSON_BYPASS_MAX_GAP_S:-0.35}"
+PERSON_BYPASS_MAX_GAP_S="${PERSON_BYPASS_MAX_GAP_S:-0.45}"
 PERSON_BYPASS_MAX_JUMP_M="${PERSON_BYPASS_MAX_JUMP_M:-0.35}"
 PERSON_BYPASS_PERMIT_LIFETIME_S="${PERSON_BYPASS_PERMIT_LIFETIME_S:-0.45}"
 PERSON_BYPASS_MAX_FORWARD_M="${PERSON_BYPASS_MAX_FORWARD_M:-8.0}"
 PERSON_BYPASS_MAX_LATERAL_M="${PERSON_BYPASS_MAX_LATERAL_M:-1.0}"
+PERSON_BYPASS_LATERAL_HYSTERESIS_M="${PERSON_BYPASS_LATERAL_HYSTERESIS_M:-0.25}"
 PERSON_BYPASS_MIN_NEAR_M="${PERSON_BYPASS_MIN_NEAR_M:-0.60}"
 PERSON_BYPASS_SPEED_MPS="${PERSON_BYPASS_SPEED_MPS:-0.35}"
 PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.80}"
@@ -129,6 +130,7 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _person_bypass_permit_lifetime_s:="$PERSON_BYPASS_PERMIT_LIFETIME_S" \
   _person_bypass_maximum_forward_m:="$PERSON_BYPASS_MAX_FORWARD_M" \
   _person_bypass_maximum_lateral_m:="$PERSON_BYPASS_MAX_LATERAL_M" \
+  _person_bypass_lateral_hysteresis_m:="$PERSON_BYPASS_LATERAL_HYSTERESIS_M" \
   _person_bypass_minimum_near_m:="$PERSON_BYPASS_MIN_NEAR_M" \
   _person_bypass_speed_mps:="$PERSON_BYPASS_SPEED_MPS" \
   _person_bypass_clearance_m:="$PERSON_BYPASS_CLEARANCE_M" \
@@ -173,10 +175,12 @@ setsid nohup rosbag record --lz4 \
 cat <<EOF
 
 ==============================================================
- STATIC-PERSON TRAJECTORY BYPASS READY - PAUSED
+ STATIC-THREAT TRAJECTORY BYPASS READY - PAUSED
 
   moving/unknown person : WAIT
   one static person     : qualify ${PERSON_BYPASS_CONFIRM_S}s, then RTX DWA
+  tracked static object : RTX DWA with raw-trajectory permit
+  moving/unknown object : WAIT
   bypass speed          : <= ${PERSON_BYPASS_SPEED_MPS} m/s
   person clearance      : >= ${PERSON_BYPASS_CLEARANCE_M} m
   raw gate              : fixed corridor replaced only by clear curved sweep

@@ -86,3 +86,25 @@ def test_branch_preflight_proves_new_implementations_not_only_node_names():
     assert "person_bypass_capable" in preflight
     assert "trajectory_person_bypass_capable" in preflight
     assert "permit_is_fresh" in preflight
+
+
+def test_activation_passes_the_reliability_tunables_to_the_follower():
+    activate = text(ROOT / "tools" / "activate_person_bypass.sh")
+
+    assert 'PERSON_BYPASS_MAX_GAP_S="${PERSON_BYPASS_MAX_GAP_S:-0.45}"' \
+        in activate
+    assert "PERSON_BYPASS_LATERAL_HYSTERESIS_M" in activate
+    assert "_person_bypass_lateral_hysteresis_m:" in activate
+
+
+def test_static_threat_test_entrypoint_is_non_driving_by_default():
+    runner = text(ROOT / "tools" / "test_static_threat_bypass.sh")
+
+    assert 'MODE="${1:-host}"' in runner
+    assert "test_person_bypass_policy.py" in runner
+    assert "test_dwa_policy.py" in runner
+    assert "test_gpu_dwa_backend.py" in runner
+    assert "test_python_node_packaging.py" in runner
+    assert "person-bypass-status" in runner
+    assert "hybrid.sh start" not in runner
+    assert "hybrid.sh go" not in runner

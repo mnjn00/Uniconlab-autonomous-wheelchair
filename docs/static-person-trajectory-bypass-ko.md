@@ -1,6 +1,6 @@
-# 정지 사람 궤적 우회 브랜치
+# 정지 사람·오브젝트 궤적 우회 브랜치
 
-브랜치: `fix/static-person-trajectory-bypass`
+브랜치: `codex/person-bypass-reliability`
 
 이 브랜치는 기존 하이브리드 스택의 두 교착을 함께 고친다.
 
@@ -12,6 +12,8 @@
 | 상황 | 동작 |
 |---|---|
 | 일반 정지 장애물 | 기존 RTX/CuPy DWA로 우회 |
+| 직접 관측된 유효 트랙의 정지 오브젝트 | 짧은 trajectory permit 아래 RTX/CuPy DWA로 우회 |
+| 움직이거나 motion이 unknown인 오브젝트 | 정지하고 재관측 |
 | 동일 트랙의 정지 사람 1명 | 3초 연속 직접 관측 후 DWA 우회 |
 | 움직이는 사람 | 정지하고 재관측 |
 | motion이 unknown인 사람 | 정지 |
@@ -27,8 +29,9 @@
 
 ```text
 정지 사람 추가 확인:       3.0 s
-허용 관측 간격:            0.35 s
+허용 관측 간격:            0.45 s
 같은 트랙 위치 점프:       0.35 m 이하
+같은 트랙 측면 해제 여유:   0.25 m
 permit 수명:               0.45 s
 최대 우회 속도:            0.35 m/s
 사람 최소 중심선 clearance: 0.80 m
@@ -63,7 +66,37 @@ fresh static-person permit
 
 즉 raw LiDAR를 끄거나 사람 점을 지우는 방식이 아니다. 고정 직선 박스 대신 현재 DWA가 요청한 곡선 자체를 검사한다.
 
-## NUC에 브랜치 배포
+## 로컬 무구동 검증
+
+다른 작업자의 checkout이나 ROS 그래프를 건드리지 않는 기본 시험은 전용
+worktree에서 실행한다.
+
+```bash
+cd /Users/minjun/.codex/worktrees/unicon-wheelchair-person-bypass-reliability
+bash tools/test_static_threat_bypass.sh host
+```
+
+성공하면 마지막 줄에 다음이 출력된다.
+
+```text
+STATIC_THREAT_HOST_TEST_PASS
+```
+
+이미 NUC에서 스택을 올린 뒤 노드를 교체하거나 명령을 발행하지 않고 현재
+그래프의 capability와 permit heartbeat만 확인하려면 다음을 실행한다.
+
+```bash
+bash tools/test_static_threat_bypass.sh live-check
+```
+
+`host`와 `live-check` 어느 쪽도 `hybrid.sh start` 또는 `hybrid.sh go`를
+호출하지 않는다.
+
+## 원격 브랜치가 준비된 뒤 NUC에 배포
+
+현재 로컬 전용 브랜치를 임의로 원격에 올리거나 NUC checkout을 바꾸지 않는다.
+팀 작업과 분리된 `codex/person-bypass-reliability` 원격 브랜치가 명시적으로
+준비된 뒤에만 아래 배포 절차를 사용한다.
 
 휠체어를 수동 모드로 정지한 상태에서:
 
@@ -71,8 +104,8 @@ fresh static-person permit
 cd ~/wheelchair_localization_src
 
 git fetch --all --prune
-git switch fix/static-person-trajectory-bypass
-git pull --ff-only origin fix/static-person-trajectory-bypass
+git switch codex/person-bypass-reliability
+git pull --ff-only origin codex/person-bypass-reliability
 ```
 
 기존 NUC remote 이름이 `github`이면 `origin` 대신 `github`를 사용한다.
@@ -133,6 +166,10 @@ PERSON_NOT_CONFIRMED_STATIC
 QUALIFYING_STATIC_PERSON
 STATIC_PERSON_BYPASS (active=true)
 ```
+
+정적 오브젝트를 둔 시험에서는 `STATIC_OBJECT_BYPASS (active=true)`를
+확인한다. 같은 오브젝트가 `moving` 또는 `unknown`으로 바뀌면 permit은 즉시
+비활성화되어야 한다.
 
 ## 시험 순서
 

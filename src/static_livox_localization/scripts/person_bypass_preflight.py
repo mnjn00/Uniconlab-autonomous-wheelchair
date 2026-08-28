@@ -2,10 +2,13 @@
 """Fail-closed readiness check for the stationary-person bypass branch."""
 
 import json
+import os
 import sys
 
 import rospy
 from std_msgs.msg import String
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from person_bypass_policy import permit_from_payload, permit_is_fresh
 

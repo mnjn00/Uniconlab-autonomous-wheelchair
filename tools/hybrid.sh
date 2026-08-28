@@ -22,7 +22,7 @@ Usage:
 
 `start` first brings up the ordinary paused hybrid graph, then replaces the
 stop-only person policy and fixed-corridor raw gate with the reviewed
-stationary-person trajectory-bypass nodes. Moving/unknown people still stop.
+stationary-threat trajectory-bypass nodes. Moving/unknown threats still stop.
 
 Important environment variables:
   START_POINTPILLARS=true|false
@@ -32,6 +32,8 @@ Important environment variables:
   POINTPILLARS_REQUIRE_RTX2060=true|false
   CLIFF_REQUIRED=false|true
   PERSON_BYPASS_CONFIRM_S=3.0
+  PERSON_BYPASS_MAX_GAP_S=0.45
+  PERSON_BYPASS_LATERAL_HYSTERESIS_M=0.25
   PERSON_BYPASS_SPEED_MPS=0.35
   PERSON_BYPASS_CLEARANCE_M=0.80
 EOF
