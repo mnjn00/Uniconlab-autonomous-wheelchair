@@ -72,6 +72,7 @@ import json
 import math
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -232,6 +233,10 @@ class DwaFollower(WaypointFollower):
         self.gate_detail = ""
         rospy.Subscriber("/safety_gate/status", String,
                          self.on_gate_status, queue_size=1)
+        accepted_cmd_topic = str(rospy.get_param(
+            "~accepted_cmd_topic", "/cmd_vel"))
+        rospy.Subscriber(accepted_cmd_topic, Twist,
+                         self.on_accepted_command, queue_size=1)
         rospy.loginfo(
             "DWA profile: sim %.2f m, %d speeds x %d yaw rates, band and "
             "drivable mask as hard rejects", self.planner.distance_m,
@@ -258,6 +263,15 @@ class DwaFollower(WaypointFollower):
         if self.gate_blocked_since is None:
             return None
         return (now - self.gate_blocked_since).to_sec()
+
+    def on_accepted_command(self, message):
+        accepted_speed = float(message.linear.x)
+        accepted_yaw_rate = float(message.angular.z)
+        was_faster = accepted_speed + 1e-6 < self.current_speed
+        self.current_speed = accepted_speed
+        self.last_yaw_rate = accepted_yaw_rate
+        if was_faster or accepted_speed <= 0.02:
+            self.command_accel = 0.0
 
     def send_stop(self):
         # The jerk limit shapes driving, never braking. Dropping the carried
@@ -411,6 +425,7 @@ class DwaFollower(WaypointFollower):
         # travel at 0.6 m/s and 0.55 m at 1.0 - the planner correcting for
         # where the chair no longer is, which is what lateral hunting is.
         state = self.led_state(state)
+        planner_started = time.perf_counter()
         target_v, target_w, status = self.planner.plan(
             state, obstacles, speed_cap=cap,
             last_yaw_rate=self.last_yaw_rate,
@@ -419,6 +434,7 @@ class DwaFollower(WaypointFollower):
                 PERSON_BYPASS_CLEARANCE_M
                 if decision == PERSON_BYPASS
                 else dwa_core.OBSTACLE_FLOOR_M))
+        planner_ms = (time.perf_counter() - planner_started) * 1000.0
         if status != "OK":
             if status != self.dwa_status:
                 if status == "SPEED_BELOW_FLOOR":
@@ -468,9 +484,11 @@ class DwaFollower(WaypointFollower):
         self.current_speed = speed
         self.last_yaw_rate = yaw_rate
         self.publish_state(
-            "DWA wp=%d/%d v=%.2f w=%+.2f target %.2f/%+.2f%s" % (
+            "DWA wp=%d/%d v=%.2f w=%+.2f target %.2f/%+.2f "
+            "plan=%.1fms n=%d%s" % (
                 self.nearest_index, len(self.waypoints), speed, yaw_rate,
-                target_v, target_w,
+                target_v, target_w, planner_ms,
+                int(getattr(self.planner, "last_candidate_count", 0)),
                 "" if self.policies else " POLICIES_OFF"), "DWA:OK")
 
     def publish_state(self, text, state=None):

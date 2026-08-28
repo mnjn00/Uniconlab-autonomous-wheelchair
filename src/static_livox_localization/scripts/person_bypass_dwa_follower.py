@@ -8,8 +8,6 @@ unknown, learned-only, too-close, multiple, stale, or geometrically invalid
 people remain stop-only.
 """
 
-import json
-import math
 import os
 import sys
 
@@ -40,8 +38,6 @@ class PersonBypassDwaFollower(DwaFollower):
     CONTROL_LAW = "dwa"
 
     def __init__(self):
-        self._gate_rejected_yaw_rates = set()
-        self._gate_rejected_track_id = None
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
             "~person_bypass_confirmation_s", 3.0))
@@ -90,33 +86,12 @@ class PersonBypassDwaFollower(DwaFollower):
         self.permit_pub.publish(String(data=permit.to_json()))
         self._permit_published_this_cycle = True
 
-    def on_gate_status(self, message):
-        super(PersonBypassDwaFollower, self).on_gate_status(message)
-        try:
-            report = json.loads(message.data)
-            reason = str(report.get("trajectory_override_reason") or "")
-            requested_yaw = float(report.get("trajectory_requested_w"))
-        except (TypeError, ValueError):
-            return
-        if reason in ("REQUESTED_PATH_COLLISION", "TURN_TOO_SMALL") and \
-                math.isfinite(requested_yaw):
-            self._gate_rejected_yaw_rates.add(requested_yaw)
-
-    def reset_gate_rejections(self):
-        self._gate_rejected_yaw_rates.clear()
-        self._gate_rejected_track_id = None
-
     def activate_trajectory_bypass(self, permit, detail):
-        if self._gate_rejected_track_id != permit.track_id:
-            self._gate_rejected_yaw_rates.clear()
-            self._gate_rejected_track_id = permit.track_id
         self.planner.max_speed = min(
             float(self.planner.max_speed), float(permit.max_speed_mps))
         dwa_core.OBSTACLE_FLOOR_M = max(
             float(dwa_core.OBSTACLE_FLOOR_M),
             float(permit.min_clearance_m))
-        self.planner.rejected_yaw_rates = tuple(
-            sorted(self._gate_rejected_yaw_rates))
         self.gate_reason = ""
         self.gate_blocked_since = None
         self.gate_detail = detail
@@ -144,8 +119,6 @@ class PersonBypassDwaFollower(DwaFollower):
         if not observations:
             self.qualifier.reset()
             threat = self.corridor_threat(0.0)
-            if threat is None:
-                self.reset_gate_rejections()
             return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
         return self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING")
@@ -162,7 +135,6 @@ class PersonBypassDwaFollower(DwaFollower):
                 return ordinary
             self.qualifier.reset()
             if threat is None or ordinary != GO_ROUND:
-                self.reset_gate_rejections()
                 self.publish_permit(self.inactive_permit(
                     now, "NEAREST_THREAT_NOT_PERSON"))
                 return ordinary
@@ -184,8 +156,6 @@ class PersonBypassDwaFollower(DwaFollower):
             if permit.active:
                 self.activate_trajectory_bypass(
                     permit, "static-object trajectory permit")
-            else:
-                self.reset_gate_rejections()
             return ordinary
 
         permit = self.observed_person_permit(now)
@@ -208,8 +178,6 @@ class PersonBypassDwaFollower(DwaFollower):
         self._permit_published_this_cycle = False
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
-        saved_rejected_yaws = getattr(
-            self.planner, "rejected_yaw_rates", ())
         now = rospy.Time.now()
         # PAUSED preflight needs qualification before the base hold ladder
         # returns. During motion avoidance_for performs the single update;
@@ -222,7 +190,6 @@ class PersonBypassDwaFollower(DwaFollower):
         finally:
             self.planner.max_speed = saved_max_speed
             dwa_core.OBSTACLE_FLOOR_M = saved_clearance
-            self.planner.rejected_yaw_rates = saved_rejected_yaws
             if not self._permit_published_this_cycle:
                 if self.tracking_state != "TRACKING":
                     self.qualifier.reset()

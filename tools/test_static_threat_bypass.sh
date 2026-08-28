@@ -40,14 +40,17 @@ case "$MODE" in
       src/static_livox_localization/test/test_person_bypass_policy.py \
       src/static_livox_localization/test/test_dwa_policy.py \
       src/static_livox_localization/test/test_gpu_dwa_backend.py \
+      tests/test_dwa_band.py \
       tests/test_person_bypass_runtime_surface.py \
       tests/test_python_node_packaging.py
     python3 -m compileall -q \
       src/static_livox_localization/scripts/dwa_core.py \
+      src/static_livox_localization/scripts/dwa_follower.py \
       src/static_livox_localization/scripts/gpu_dwa_backend.py \
       src/static_livox_localization/scripts/person_bypass_policy.py \
       src/static_livox_localization/scripts/person_bypass_dwa_follower.py \
-      src/static_livox_localization/scripts/person_bypass_preflight.py
+      src/static_livox_localization/scripts/person_bypass_preflight.py \
+      src/static_livox_localization/scripts/safety_gate.py
     printf 'STATIC_THREAT_HOST_TEST_PASS\n'
     ;;
   live-check)

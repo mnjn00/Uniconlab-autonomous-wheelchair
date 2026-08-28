@@ -779,14 +779,13 @@ def blocking_gate(follower, reason="OBSTACLE", held_s=2.0,
     follower.gate_blocked_for = lambda now: held_s
 
 
-def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
+def test_person_bypass_does_not_blacklist_the_gate_applied_yaw():
     module, _Stamp = load_follower("person_bypass_dwa_follower")
     follower = module.PersonBypassDwaFollower.__new__(
         module.PersonBypassDwaFollower)
     follower.gate_reason = ""
     follower.gate_blocked_since = None
     follower.gate_detail = ""
-    follower._gate_rejected_yaw_rates = set()
     message = types.SimpleNamespace(data=json.dumps({
         "reason": "OBSTACLE",
         "trajectory_override_reason": "REQUESTED_PATH_COLLISION",
@@ -795,7 +794,64 @@ def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
 
     follower.on_gate_status(message)
 
-    assert follower._gate_rejected_yaw_rates == {0.5}
+    assert not hasattr(follower, "_gate_rejected_yaw_rates")
+
+
+def test_final_stop_resynchronizes_the_dwa_command_ramp():
+    module, _Stamp = load_follower("dwa_follower")
+    follower = module.DwaFollower.__new__(module.DwaFollower)
+    follower.current_speed = 0.35
+    follower.last_yaw_rate = 0.2
+    follower.command_accel = 0.18
+    stopped = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.0),
+        angular=types.SimpleNamespace(z=0.0),
+    )
+
+    follower.on_accepted_command(stopped)
+
+    assert follower.current_speed == 0.0
+    assert follower.last_yaw_rate == 0.0
+    assert follower.command_accel == 0.0
+
+
+def test_floor_speed_collision_skips_useless_bisection(monkeypatch):
+    module, Stamp = load_follower("safety_gate")
+    gate = module.SafetyGate.__new__(module.SafetyGate)
+    gate.cloud = np.zeros((100, 3), dtype=float)
+    gate.cloud_stamp = Stamp(99.9)
+    gate.raw = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=module.SWEEP_MIN_SPEED_MPS),
+        angular=types.SimpleNamespace(z=0.2),
+    )
+    gate.motion = types.SimpleNamespace(
+        linear_speed_mps=0.0,
+        angular_speed_rps=0.2,
+    )
+    calls = []
+    monkeypatch.setattr(module, "motion_hold_reason", lambda *_args: "")
+    monkeypatch.setattr(
+        module,
+        "stopping_envelope",
+        lambda **_kwargs: types.SimpleNamespace(distance_m=1.0, horizon_s=2.0),
+    )
+    monkeypatch.setattr(
+        module,
+        "filter_obstacle_points",
+        lambda *_args, **_kwargs: np.array([[1.5, 0.8]], dtype=float),
+    )
+
+    def collision(*_args, **_kwargs):
+        calls.append(True)
+        return True
+
+    monkeypatch.setattr(module, "swept_footprint_collision", collision)
+
+    reason, cap = gate.motion_blocked(Stamp(100.0))
+
+    assert (reason, cap) == ("OBSTACLE_SWEEP", None)
+    assert len(calls) == 1
+    assert gate.evidence["sweep_calls"] == 1
 
 
 def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
@@ -817,8 +873,6 @@ def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
     follower.person_bypass_maximum_gap_s = 0.45
     follower.person_bypass_speed_mps = 0.35
     follower.person_bypass_clearance_m = 0.80
-    follower._gate_rejected_yaw_rates = set()
-    follower._gate_rejected_track_id = None
     follower.planner = types.SimpleNamespace(max_speed=0.8)
     threat = types.SimpleNamespace(
         is_person=False,
@@ -861,10 +915,7 @@ def test_enabled_static_object_cycle_publishes_only_its_active_permit(
         reset=lambda: None,
         inactive=lambda now_s, reason: types.SimpleNamespace(
             active=False, reason=reason))
-    follower._gate_rejected_yaw_rates = set()
-    follower._gate_rejected_track_id = None
-    follower.planner = types.SimpleNamespace(
-        max_speed=0.8, rejected_yaw_rates=())
+    follower.planner = types.SimpleNamespace(max_speed=0.8)
 
     def record_permit(permit):
         published.append(permit)
@@ -901,8 +952,7 @@ def test_enabled_cycle_does_not_prequalify_before_avoidance(monkeypatch):
         module.PersonBypassDwaFollower)
     follower.enabled = True
     follower.tracking_state = "TRACKING"
-    follower.planner = types.SimpleNamespace(
-        max_speed=0.8, rejected_yaw_rates=())
+    follower.planner = types.SimpleNamespace(max_speed=0.8)
     calls = []
     follower.observed_person_permit = lambda now: calls.append(now)
     monkeypatch.setattr(
@@ -920,8 +970,7 @@ def test_paused_cycle_keeps_preflight_qualification(monkeypatch):
         module.PersonBypassDwaFollower)
     follower.enabled = False
     follower.tracking_state = "TRACKING"
-    follower.planner = types.SimpleNamespace(
-        max_speed=0.8, rejected_yaw_rates=())
+    follower.planner = types.SimpleNamespace(max_speed=0.8)
     heartbeat = types.SimpleNamespace(active=False)
     published = []
     follower.observed_person_permit = lambda now: heartbeat
@@ -957,8 +1006,6 @@ def test_closer_static_object_does_not_overwrite_qualified_person_permit(
     follower.person_bypass_speed_mps = 0.35
     follower.person_bypass_clearance_m = 0.35
     follower.tracking_state = "TRACKING"
-    follower._gate_rejected_yaw_rates = set()
-    follower._gate_rejected_track_id = None
     follower.planner = types.SimpleNamespace(max_speed=0.8)
     published = []
     activated = []

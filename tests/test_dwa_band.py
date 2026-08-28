@@ -180,6 +180,12 @@ def test_a_speed_cap_below_the_floor_leaves_only_a_stop():
     assert dwa_core.speed_samples(max_speed=0.2) == (0.0,)
 
 
+def test_fixed_speed_cap_yields_one_executable_candidate():
+    assert dwa_core.speed_samples(
+        max_speed=dwa_core.TURN_FLOOR_SPEED,
+    ) == (0.0, dwa_core.TURN_FLOOR_SPEED)
+
+
 def test_turning_on_the_spot_is_never_a_candidate(scene):
     """Rotating in place below the rotation floor is the manoeuvre that put
     the chair at a wall three times on 2026-08-04."""

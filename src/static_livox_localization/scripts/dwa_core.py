@@ -259,7 +259,11 @@ def speed_samples(max_speed=MAX_SPEED, floor=TURN_FLOOR_SPEED,
         # which is the acceleration the chair has and not a planning error.
         high = max(floor, min(high, float(current) + room_up))
         low = max(low, min(high, float(current) - room_down))
-    return (0.0,) + tuple(np.linspace(low, high, max(count, 1)))
+    if abs(high - low) < 1e-6:
+        return 0.0, float(low)
+    sampled = np.unique(np.round(
+        np.linspace(low, high, max(count, 1)), 6))
+    return (0.0,) + tuple(float(value) for value in sampled)
 
 
 def yaw_samples(limit=MAX_YAW_RATE, count=YAW_SAMPLES):
@@ -410,8 +414,7 @@ class DwaPlanner:
         return np.concatenate([paths, grown], axis=1)
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
-             last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M,
-             rejected_yaw_rates=None):
+             last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -428,18 +431,13 @@ class DwaPlanner:
         """
         cap = self.max_speed if speed_cap is None else min(self.max_speed,
                                                            float(speed_cap))
-        rejected = tuple(
-            float(value) for value in (
-                getattr(self, "rejected_yaw_rates", ())
-                if rejected_yaw_rates is None else rejected_yaw_rates)
-            if math.isfinite(float(value)))
         pairs = [(v, w) for v in speed_samples(cap, current=last_speed)
                  if v > 0.0
                  # Turning on the spot is not something this chair does below
                  # its rotation floor, and it is the manoeuvre that put it at
                  # a wall on 2026-08-04. Excluded.
-                 for w in yaw_samples()
-                 if not any(abs(w - value) < 1e-6 for value in rejected)]
+                 for w in yaw_samples()]
+        self.last_candidate_count = len(pairs)
         if not pairs:
             # Not a planning failure and not an obstacle: the cap handed in
             # is below the speed the wheels will actually turn for, so there
@@ -447,8 +445,7 @@ class DwaPlanner:
             # unless it says so - on 2026-08-20 it cost a stall that took an
             # hour to attribute, because the name suggested the geometry had
             # run out. The caller that set the cap is the one to look at.
-            return 0.0, 0.0, (
-                "GATE_REJECTED" if rejected else "SPEED_BELOW_FLOOR")
+            return 0.0, 0.0, "SPEED_BELOW_FLOOR"
         span = self.preview_distance(last_speed)
         paths = self._rollouts(np.asarray(state, dtype=float), pairs, span)
         flat = paths[:, :, :2].reshape(-1, 2)

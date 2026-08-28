@@ -22,6 +22,7 @@ import json
 import math
 import os
 import sys
+import time
 
 import numpy as np
 import rospy
@@ -296,9 +297,11 @@ class SafetyGate:
         yaw_rates = [requested_yaw_rate]
         if abs(self.motion.angular_speed_rps - requested_yaw_rate) > 0.05:
             yaw_rates.append(self.motion.angular_speed_rps)
+        self.evidence["sweep_calls"] = 0
 
         def sweep_hits(candidate_speed):
             for yaw_rate in yaw_rates:
+                self.evidence["sweep_calls"] += 1
                 if swept_footprint_collision(
                         obstacles,
                         linear_speed_mps=candidate_speed,
@@ -318,6 +321,9 @@ class SafetyGate:
         # envelope's business, and OBSTACLE above has already ruled on it.
         if not sweep_hits(requested_speed):
             return "", None
+        if requested_speed <= SWEEP_MIN_SPEED_MPS + 1e-6:
+            self.evidence["sweep_clear_v"] = 0.0
+            return "OBSTACLE_SWEEP", None
         low, high = 0.0, requested_speed
         for _ in range(SWEEP_BISECTION_STEPS):
             middle = 0.5 * (low + high)
@@ -358,7 +364,10 @@ class SafetyGate:
                     abs(self.raw.linear.x) > MOTION_EPSILON or \
                     abs(self.raw.angular.z) > MOTION_EPSILON
                 if wants_motion:
+                    gate_started = time.perf_counter()
                     blocked, cap = self.motion_blocked(now)
+                    self.evidence["gate_ms"] = round(
+                        (time.perf_counter() - gate_started) * 1000.0, 3)
                     if self.policies:
                         reason = blocked
                         step = SWEEP_CAP_RELEASE_MPS2 / GATE_HZ
