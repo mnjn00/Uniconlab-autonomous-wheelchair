@@ -136,6 +136,27 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
         if reason not in ("OBSTACLE", "OBSTACLE_SWEEP"):
             return reason, cap
 
+        # The ordinary sweep includes its rear safety margin at t=0. During
+        # forward, nearly straight motion that margin can only move away from
+        # a return already behind the physical rear plane. Do not let a passed
+        # person or the chair's rear-edge returns restart the stop-go cycle.
+        # Meaningful turns retain every rear point because the tail can swing.
+        if reason == "OBSTACLE_SWEEP" and \
+                float(self.raw.linear.x) > base_gate.MOTION_EPSILON and \
+                abs(float(self.raw.angular.z)) < self.minimum_bypass_turn_rps:
+            obstacles = self.collision_points()
+            forward_obstacles = obstacles[
+                obstacles[:, 0] >= -base_gate.FOOTPRINT_REAR_M]
+            horizon_s = self.evidence.get("horizon_s")
+            if horizon_s is not None and not bypass_swept_footprint_collision(
+                    forward_obstacles,
+                    linear_speed_mps=float(self.raw.linear.x),
+                    angular_speed_rps=float(self.raw.angular.z),
+                    horizon_s=float(horizon_s)):
+                self.evidence["trajectory_override_reason"] = \
+                    "FULLY_BEHIND_CLEAR"
+                return "", cap
+
         now_s = now.to_sec()
         permit = self.fresh_active_permit(now_s)
         if permit is None:
