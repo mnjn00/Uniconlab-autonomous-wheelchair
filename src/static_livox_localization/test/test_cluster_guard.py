@@ -127,6 +127,26 @@ def test_an_object_already_on_top_of_the_chair_is_here_not_behind_it():
     assert threat.distance_m == 0.0
 
 
+def test_a_person_wholly_behind_the_chair_is_not_a_forward_threat():
+    passed = obj(-0.8, 0.2, size=(0.5, 0.5, 1.7),
+                 motion=ct.MOVING, label="person")
+
+    assert cg.nearest_threat(summary([passed]), 0.50) is None
+
+
+def test_a_passed_person_does_not_erase_front_obstacle_bypass_candidates():
+    passed = obj(-0.8, 0.2, size=(0.5, 0.5, 1.7),
+                 motion=ct.MOVING, label="person")
+    front = obj(1.8, 0.0, size=(0.5, 0.5, 1.0), motion=ct.STATIC)
+
+    blocks, points = cg.corridor_obstacle_points(
+        summary([passed, front]), half_width_m=1.0)
+
+    assert blocks
+    assert points
+    assert min(forward for forward, _lateral in points) > 1.0
+
+
 # -------------------------------------------------------- failure directions
 
 def test_an_unusable_summary_blocks_and_is_never_parked():

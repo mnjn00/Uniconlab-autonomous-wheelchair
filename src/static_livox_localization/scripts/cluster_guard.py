@@ -92,9 +92,9 @@ PERSON_LABEL = "person"
 # operator's side and went for their feet. Model at least a 0.70 m standing
 # footprint, while believing any larger observation.
 PERSON_MIN_HALF_EXTENT_M = 0.35
-# The chair is under 0.60 m wide. Keep its centre 0.50 m from obstacle
-# returns: 0.30 m physical half-width plus 0.20 m lateral reserve.
-PERSON_BYPASS_CLEARANCE_M = 0.50
+# The chair is under 0.60 m wide. Keep its centre 0.35 m from obstacle
+# returns: 0.30 m physical half-width plus 0.05 m lateral reserve.
+PERSON_BYPASS_CLEARANCE_M = 0.35
 PERSON_BYPASS_SPEED_MPS = 0.35
 
 
@@ -346,6 +346,8 @@ def object_points(item, lateral_shift_m, half_width_m):
     box = object_box(item)
     if box is None:
         return True, [(BLOCKED, lateral_shift_m)]
+    if box[0] + box[2] < 0.0:
+        return False, []
     low = lateral_shift_m - half_width_m
     high = lateral_shift_m + half_width_m
     profile = parsed_profile(item)
@@ -377,9 +379,12 @@ def corridor_reach(item, lateral_shift_m, half_width_m):
     and reads as MOVING, so a producer bug can neither hide an obstacle nor
     make one look parked enough to drive around.
     """
-    if object_box(item) is None:
+    box = object_box(item)
+    if box is None:
         return True, BLOCKED, MOVING
     motion = object_motion(item)
+    if box[0] + box[2] < 0.0:
+        return False, None, motion
     measured = profile_reach(item, lateral_shift_m, half_width_m)
     if measured is not None:
         blocks, distance = measured

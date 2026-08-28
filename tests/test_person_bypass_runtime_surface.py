@@ -48,7 +48,7 @@ def test_dwa_keeps_rtx_qualifies_while_paused_and_publishes_short_permit():
     # Permit qualification happens before the inherited hold ladder can
     # return for PAUSED, otherwise a person already in front makes `go`
     # impossible forever.
-    assert follower.index("self.publish_permit(self.observed_person_permit(now))") \
+    assert follower.index("if not self.enabled:") \
         < follower.index("super(PersonBypassDwaFollower, self).step()")
 
 
@@ -96,13 +96,20 @@ def test_activation_passes_the_reliability_tunables_to_the_follower():
         in activate
     assert "PERSON_BYPASS_LATERAL_HYSTERESIS_M" in activate
     assert "_person_bypass_lateral_hysteresis_m:" in activate
-    assert 'PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.50}"' \
+    assert 'PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.35}"' \
         in activate
     follower = text(SCRIPTS / "person_bypass_dwa_follower.py")
-    assert '"~person_bypass_clearance_m", 0.50' in follower
-    assert "PERSON_BYPASS_CLEARANCE_M=0.50" in hybrid
+    assert '"~person_bypass_clearance_m", 0.35' in follower
+    assert "PERSON_BYPASS_CLEARANCE_M=0.35" in hybrid
     guard = text(SCRIPTS / "cluster_guard.py")
-    assert "PERSON_BYPASS_CLEARANCE_M = 0.50" in guard
+    assert "PERSON_BYPASS_CLEARANCE_M = 0.35" in guard
+
+
+def test_success_profile_defaults_to_recorded_geometric_only_runtime():
+    hybrid = text(ROOT / "tools" / "hybrid.sh")
+
+    assert 'START_POINTPILLARS="${START_POINTPILLARS:-false}"' in hybrid
+    assert 'REQUIRE_LEARNED="${REQUIRE_LEARNED:-false}"' in hybrid
 
 
 def test_static_threat_test_entrypoint_is_non_driving_by_default():

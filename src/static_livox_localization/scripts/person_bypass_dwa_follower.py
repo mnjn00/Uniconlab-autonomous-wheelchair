@@ -62,7 +62,7 @@ class PersonBypassDwaFollower(DwaFollower):
         self.person_bypass_speed_mps = float(rospy.get_param(
             "~person_bypass_speed_mps", 0.35))
         self.person_bypass_clearance_m = float(rospy.get_param(
-            "~person_bypass_clearance_m", 0.50))
+            "~person_bypass_clearance_m", 0.35))
         self.qualifier = StaticPersonQualifier(
             confirmation_s=self.person_bypass_confirmation_s,
             maximum_gap_s=self.person_bypass_maximum_gap_s,
@@ -134,12 +134,6 @@ class PersonBypassDwaFollower(DwaFollower):
         semantic preflight needs the permit before motion may start. Reading
         perception here breaks that cycle without sending any command.
         """
-        threat = self.corridor_threat(0.0)
-        if threat is None or not threat.is_person:
-            self.qualifier.reset()
-            if threat is None:
-                self.reset_gate_rejections()
-            return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
         observations = person_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
@@ -147,6 +141,12 @@ class PersonBypassDwaFollower(DwaFollower):
                 self.person_bypass_maximum_lateral_m
                 + self.person_bypass_lateral_hysteresis_m),
         )
+        if not observations:
+            self.qualifier.reset()
+            threat = self.corridor_threat(0.0)
+            if threat is None:
+                self.reset_gate_rejections()
+            return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
         return self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING")
 
@@ -154,6 +154,12 @@ class PersonBypassDwaFollower(DwaFollower):
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
             now, threat, blocking)
         if threat is None or not threat.is_person:
+            person_permit = self.observed_person_permit(now)
+            if person_permit.active and ordinary == GO_ROUND:
+                self.publish_permit(person_permit)
+                self.activate_trajectory_bypass(
+                    person_permit, "static-person trajectory permit")
+                return ordinary
             self.qualifier.reset()
             if threat is None or ordinary != GO_ROUND:
                 self.reset_gate_rejections()
@@ -205,11 +211,12 @@ class PersonBypassDwaFollower(DwaFollower):
         saved_rejected_yaws = getattr(
             self.planner, "rejected_yaw_rates", ())
         now = rospy.Time.now()
-        # Publish a continuously refreshed qualification heartbeat before the
-        # base hold ladder can return for PAUSED/MANUAL/STARTUP. This does not
-        # bypass any guard; it only lets the later preflight distinguish a
-        # stable person from a moving or unknown one before enabling motion.
-        self.publish_permit(self.observed_person_permit(now))
+        # PAUSED preflight needs qualification before the base hold ladder
+        # returns. During motion avoidance_for performs the single update;
+        # evaluating here as well can reset a confirmed track on an
+        # intermediate perception frame and produce stop-go oscillation.
+        if not self.enabled:
+            self.publish_permit(self.observed_person_permit(now))
         try:
             super(PersonBypassDwaFollower, self).step()
         finally:

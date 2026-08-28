@@ -35,7 +35,7 @@ Important environment variables:
   PERSON_BYPASS_MAX_GAP_S=0.45
   PERSON_BYPASS_LATERAL_HYSTERESIS_M=0.25
   PERSON_BYPASS_SPEED_MPS=0.35
-  PERSON_BYPASS_CLEARANCE_M=0.50
+  PERSON_BYPASS_CLEARANCE_M=0.35
 EOF
 }
 
@@ -64,6 +64,9 @@ case "$COMMAND" in
       run_without_nounset "$SCRIPT_DIR/setup_rtx2060_pointpillars.sh" "$@"
     ;;
   start)
+    START_POINTPILLARS="${START_POINTPILLARS:-false}"
+    REQUIRE_LEARNED="${REQUIRE_LEARNED:-false}"
+    export START_POINTPILLARS REQUIRE_LEARNED
     run_without_nounset "$SCRIPT_DIR/start_hybrid_avoidance.sh" "$@" &&
       run_without_nounset "$SCRIPT_DIR/activate_person_bypass.sh" activate
     ;;
