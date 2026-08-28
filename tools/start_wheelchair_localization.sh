@@ -90,10 +90,6 @@ case "$AUTO_INIT_GLOBAL_ONLY" in
   *) echo "ERROR: AUTO_INIT_GLOBAL_ONLY must be true or false, got '$AUTO_INIT_GLOBAL_ONLY'" >&2
      exit 67 ;;
 esac
-EXPECTED_AUTO_INITIALIZATION_SOURCE="global_search"
-if [ "$AUTO_INIT_GLOBAL_ONLY" = "false" ]; then
-  EXPECTED_AUTO_INITIALIZATION_SOURCE="known_start_route"
-fi
 # Bound to ROUTE by SHA-256 (route_assets.validate_asset_binding), so these
 # three move together or the follower refuses to start.
 BAND="${BAND:-$HOME/wheelchair_localization_src/routes/20260816_route_v9_clearance_safety_band.json}"
@@ -470,11 +466,17 @@ while [ "$(date +%s)" -lt "$AUTO_INIT_DEADLINE" ]; do
     rosparam get /fast_lio_icp/auto_initialization_source 2>/dev/null ||
       echo none
   )
+  AUTO_INITIALIZATION_SOURCE_ALLOWED=false
+  if [ "$AUTO_INITIALIZATION_SOURCE" = "global_search" ] ||
+     { [ "$AUTO_INIT_GLOBAL_ONLY" = "false" ] &&
+       [ "$AUTO_INITIALIZATION_SOURCE" = "known_start_route" ]; }; then
+    AUTO_INITIALIZATION_SOURCE_ALLOWED=true
+  fi
   echo "  state: $STATE"
   if echo "$STATE" | grep -q TRACKING &&
      [ "$AUTO_INITIALIZATION_VERIFIED" = "true" ] &&
      [ "$AUTO_INITIALIZATION_STABLE" = "true" ] &&
-     [ "$AUTO_INITIALIZATION_SOURCE" = "$EXPECTED_AUTO_INITIALIZATION_SOURCE" ]; then
+     [ "$AUTO_INITIALIZATION_SOURCE_ALLOWED" = "true" ]; then
     LOCALIZED=1
     break
   fi
