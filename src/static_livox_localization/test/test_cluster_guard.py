@@ -309,3 +309,78 @@ def test_the_chair_resumes_by_the_threat_going_away_not_by_a_timer():
     the moment they are not. Nothing has to remember they were there."""
     assert decide(threat(1.5, ct.MOVING)) == cg.WAIT
     assert decide(None, blocking=False) == cg.CLEAR
+
+
+def watched(stamp, motion=None, track_id=17, distance=1.6):
+    if motion is None:
+        motion = ct.STATIC
+    return cg.Threat(
+        distance, motion, cg.PERSON_LABEL, track_id=track_id,
+        observed_stamp_s=stamp)
+
+
+def tick(clock, stamp, motion=None, track_id=17, extra_moving=False,
+         tracking_ok=True):
+    return cg.advance_person_bypass_clock(
+        clock, watched(stamp, motion=motion, track_id=track_id),
+        extra_moving=extra_moving, tracking_ok=tracking_ok)
+
+
+def test_three_seconds_of_static_same_track_authorizes_bypass():
+    """2026-08-27 live stack: 3.0 s same-track STATIC, not 10.0 s."""
+    clock = None
+    ready = False
+    for index in range(15):
+        ready, clock = tick(clock, 100.0 + index * 0.2)
+        assert not ready
+    ready, clock = tick(clock, 103.0)
+    assert ready
+    assert clock[4] == 17
+
+
+def test_one_missed_five_hertz_frame_does_not_zero_the_clock():
+    """The 0.35 s gap on 08-27 reset QUALIFYING at a median 1.2 s."""
+    clock = None
+    for index in range(10):
+        _ready, clock = tick(clock, 100.0 + index * 0.2)
+    ready, clock = tick(clock, 102.4)
+    assert not ready
+    ready, _clock = tick(clock, 103.0)
+    assert ready
+
+
+def test_a_brief_unknown_or_moving_flicker_freezes_instead_of_resetting():
+    clock = None
+    for index in range(10):
+        _ready, clock = tick(clock, 100.0 + index * 0.2)
+    _ready, clock = tick(clock, 102.0, motion=ct.UNKNOWN)
+    _ready, clock = tick(clock, 102.2, motion=ct.MOVING)
+    ready, _clock = tick(clock, 103.2)
+    assert ready
+
+
+def test_a_walking_person_still_revokes_a_committed_bypass():
+    clock = None
+    ready = False
+    for index in range(16):
+        ready, clock = tick(clock, 100.0 + index * 0.2)
+    assert ready
+    ready, _clock = tick(clock, 103.2, motion=ct.MOVING)
+    assert not ready
+
+
+def test_a_second_moving_person_blocks_qualification():
+    clock = None
+    for index in range(16):
+        ready, clock = tick(clock, 100.0 + index * 0.2, extra_moving=True)
+        assert not ready
+
+
+def test_an_empty_dropout_clears_the_clock():
+    clock = None
+    for index in range(16):
+        _ready, clock = tick(clock, 100.0 + index * 0.2)
+    ready, clock = cg.advance_person_bypass_clock(clock, None)
+    assert not ready
+    ready, _clock = tick(clock, 103.4)
+    assert not ready

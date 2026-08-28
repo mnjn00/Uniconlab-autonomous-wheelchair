@@ -72,10 +72,11 @@ from cluster_guard import (ACCUMULATION_S as CLUSTER_ACCUMULATION_S,
                            BYPASS_EDGE_KEEP_M, BYPASS_OFFSET_MAX_M,
                            BYPASS_OFFSET_MIN_M, BYPASS_OFFSETS,
                            BYPASS_PROBE_AHEAD_M, GO_ROUND, Threat,
-                           PERSON_BYPASS, PERSON_LABEL,
-                           avoidance_decision, bypass_offsets_for_room,
-                           is_stale, matching_threats, nearest_threat,
-                           parse_summary)
+                           PERSON_BYPASS, PERSON_BYPASS_CONFIRM_S,
+                           PERSON_BYPASS_MAX_GAP_S, PERSON_LABEL,
+                           advance_person_bypass_clock, avoidance_decision,
+                           bypass_offsets_for_room, is_stale,
+                           matching_threats, nearest_threat, parse_summary)
 from cluster_tracking import MOVING
 from drive_policy import OVERRIDE, POLICY, announce, evaluate_holds
 from localization_policy import SUPPRESSED_WHILE_PARKED
@@ -133,11 +134,9 @@ PERSON_MEMORY_S = 1.0
 # centimetres is wider than that envelope swing while still releasing a
 # person who actually clears the corridor or moves away.
 PERSON_STOP_RELEASE_MARGIN_M = 0.30
-# A tracked person is not a parked object after the producer's 1.5-second
-# STATIC confirmation. Bypass is a separate, longer authorization based on
-# direct same-track producer evidence; any missed 5 Hz frame resets it.
-PERSON_BYPASS_CONFIRM_S = 10.0
-PERSON_BYPASS_MAX_GAP_S = 0.35
+# Bypass qualification lives in cluster_guard.advance_person_bypass_clock.
+# Re-exported here so existing imports of this module still see the names.
+# 2026-08-27 bags: 3.0 s confirm, 1.0 s gap. A 0.35 s gap zeroed the clock.
 # The forward-cone and minimum-range constants that used to live here
 # belonged to the raw five-point scan check, removed 2026-08-05. The same
 # geometry still exists in safety_gate.py, which keeps its own independent
@@ -242,6 +241,7 @@ class WaypointFollower:
     person_static_track_id = None
     person_static_since_s = None
     person_static_last_stamp_s = None
+    person_static_last_static_s = None
     person_bypass_committed_track_id = None
 
     # Which control law this class turns a pose into a Twist with. Both
@@ -374,6 +374,7 @@ class WaypointFollower:
         self.person_static_track_id = None
         self.person_static_since_s = None
         self.person_static_last_stamp_s = None
+        self.person_static_last_static_s = None
         self.person_bypass_committed_track_id = None
         # Deliberately NOT behind ~safety_policies. The raw corridor check is
         # switched off with the rest of the judgements because it stops on
@@ -792,50 +793,41 @@ class WaypointFollower:
         self.person_static_track_id = None
         self.person_static_since_s = None
         self.person_static_last_stamp_s = None
+        self.person_static_last_static_s = None
         self.person_bypass_committed_track_id = None
 
     def person_bypass_ready(self, threat, _blocking):
-        """Direct same-track STATIC evidence required before a person arc."""
+        """Same-track STATIC evidence required before a person arc.
+
+        The nearest corridor threat may be a wall. Qualification still
+        watches the person in the bypass width so a closer kerb cannot
+        zero a clock that was 2 s from committing. One missed 5 Hz frame
+        also no longer restarts it.
+        """
         people = self.direct_person_threats
-        eligible = (
-            threat is not None
-            and threat.is_person
-            and threat.parked
-            and threat.distance_m < PLAN_AHEAD_M
-            and threat.directly_observed
-            and threat.track_id is not None
-            and threat.observed_stamp_s is not None
-            and threat.geometry_valid
-            and self.tracking_state == "TRACKING"
-            and len(people) == 1
-            and people[0].track_id == threat.track_id
-            and people[0].parked
-            and people[0].directly_observed
-            and people[0].geometry_valid
-        )
-        if not eligible:
-            self.reset_person_bypass_evidence()
-            return False
-        if self.person_bypass_committed_track_id == threat.track_id:
-            return True
-        stamp_s = threat.observed_stamp_s
-        if self.person_static_track_id != threat.track_id or \
-                self.person_static_last_stamp_s is None:
-            self.person_static_track_id = threat.track_id
-            self.person_static_since_s = stamp_s
-            self.person_static_last_stamp_s = stamp_s
-            return False
-        gap_s = stamp_s - self.person_static_last_stamp_s
-        if gap_s < 0.0 or gap_s > PERSON_BYPASS_MAX_GAP_S:
-            self.person_static_since_s = stamp_s
-            self.person_static_last_stamp_s = stamp_s
-            return False
-        if gap_s > 0.0:
-            self.person_static_last_stamp_s = stamp_s
-        ready = stamp_s - self.person_static_since_s >= \
-            PERSON_BYPASS_CONFIRM_S
-        if ready:
-            self.person_bypass_committed_track_id = threat.track_id
+        extra_moving = (
+            len(people) > 1 and any(not person.parked for person in people))
+        candidate = None
+        committed = self.person_bypass_committed_track_id
+        if committed is not None:
+            candidate = next((
+                person for person in people
+                if person.track_id == committed), None)
+        if candidate is None and len(people) == 1:
+            candidate = people[0]
+        elif candidate is None:
+            parked = [person for person in people if person.parked]
+            if len(parked) == 1:
+                candidate = parked[0]
+        ready, clock = advance_person_bypass_clock(
+            (self.person_static_track_id, self.person_static_since_s,
+             self.person_static_last_stamp_s, self.person_static_last_static_s,
+             self.person_bypass_committed_track_id),
+            candidate, extra_moving=extra_moving,
+            tracking_ok=self.tracking_state == "TRACKING")
+        (self.person_static_track_id, self.person_static_since_s,
+         self.person_static_last_stamp_s, self.person_static_last_static_s,
+         self.person_bypass_committed_track_id) = clock
         return ready
 
     def take_a_way_round(self, clear_for_m):

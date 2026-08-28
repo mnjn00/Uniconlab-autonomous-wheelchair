@@ -96,6 +96,91 @@ PERSON_MIN_HALF_EXTENT_M = 0.35
 # the slowest speed at which the loaded chair can still turn.
 PERSON_BYPASS_CLEARANCE_M = 0.80
 PERSON_BYPASS_SPEED_MPS = 0.35
+# 2026-08-27 night bags: the live stack asked for 3.0 s of same-track
+# STATIC. QUALIFYING median was 1.2 s because a 0.35 s gap (one missed 5 Hz
+# frame) zeroed the clock. Confirm at 3 s, tolerate 1 s of dropout/flicker.
+PERSON_BYPASS_CONFIRM_S = 3.0
+PERSON_BYPASS_MAX_GAP_S = 1.0
+PERSON_BYPASS_FLICKER_S = 1.0
+
+
+def _empty_person_bypass_clock():
+    return (None, None, None, None, None)
+
+
+def advance_person_bypass_clock(
+        clock, candidate, extra_moving=False, tracking_ok=True,
+        confirm_s=PERSON_BYPASS_CONFIRM_S,
+        max_gap_s=PERSON_BYPASS_MAX_GAP_S,
+        flicker_s=PERSON_BYPASS_FLICKER_S):
+    """Advance the person-bypass qualification clock.
+
+    clock is (track_id, since_s, last_stamp_s, last_static_stamp_s,
+    committed_id). candidate is the Threat being watched, or None.
+    Returns (ready, new_clock).
+
+    A closer wall as the corridor threat is the caller's problem: this
+    clock only looks at candidate, so a kerb nearer than the person does
+    not wipe 2 s of STATIC evidence. Brief UNKNOWN/MOVING on the same
+    track freezes the clock; sustained MOVING, a real dropout, a second
+    moving person, or a new track id starts it over.
+    """
+    empty = _empty_person_bypass_clock()
+    track_id, since_s, last_stamp_s, last_static_stamp_s, committed_id = (
+        clock if clock is not None else empty)
+    if extra_moving:
+        return False, empty
+    if candidate is None:
+        return False, empty
+    cid = candidate.track_id
+    stamp = candidate.observed_stamp_s
+    if (cid is None or stamp is None or not candidate.directly_observed
+            or not candidate.geometry_valid):
+        return False, empty
+    if not tracking_ok:
+        if committed_id == cid:
+            return True, (track_id, since_s, last_stamp_s,
+                          last_static_stamp_s, committed_id)
+        return False, (track_id, since_s, last_stamp_s,
+                       last_static_stamp_s, committed_id)
+
+    if committed_id is not None and committed_id != cid:
+        track_id = since_s = last_stamp_s = last_static_stamp_s = None
+        committed_id = None
+
+    if last_stamp_s is not None:
+        gap_s = stamp - last_stamp_s
+        if gap_s < 0.0 or gap_s > max_gap_s:
+            if committed_id == cid:
+                return False, empty
+            track_id = since_s = last_static_stamp_s = None
+            last_stamp_s = None
+            committed_id = None
+
+    if committed_id == cid:
+        if candidate.motion == MOVING:
+            return False, empty
+        last_static = stamp if candidate.motion == STATIC else last_static_stamp_s
+        return True, (cid, since_s, stamp, last_static, cid)
+
+    if candidate.motion == MOVING:
+        if (track_id == cid and last_static_stamp_s is not None
+                and 0.0 <= stamp - last_static_stamp_s <= flicker_s):
+            return False, (track_id, since_s, stamp, last_static_stamp_s, None)
+        return False, empty
+    if candidate.motion == UNKNOWN:
+        if (track_id == cid and last_stamp_s is not None
+                and 0.0 <= stamp - last_stamp_s <= flicker_s):
+            return False, (track_id, since_s, stamp, last_static_stamp_s, None)
+        return False, empty
+
+    if track_id != cid or since_s is None or last_stamp_s is None:
+        return False, (cid, stamp, stamp, stamp, None)
+    last_stamp_s = stamp
+    last_static_stamp_s = stamp
+    ready = stamp - since_s >= confirm_s - 1e-9
+    committed = cid if ready else None
+    return ready, (cid, since_s, last_stamp_s, last_static_stamp_s, committed)
 
 
 class Threat(object):
