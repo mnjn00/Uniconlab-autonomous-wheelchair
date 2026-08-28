@@ -186,6 +186,12 @@ def test_accumulator_uses_numpy_decoder():
     assert "np.array(list(read_points" not in text
 
 
+def test_vision_bridge_uses_the_rospy_zero_stamp_api():
+    text = (SCRIPTS / "vision_detection_bridge.py").read_text(encoding="utf-8")
+    assert "stamp == rospy.Time()" in text
+    assert ".isZero()" not in text
+
+
 def test_runtime_wiring_keeps_old_stack_as_rollback_and_checks_before_go():
     start = (ROOT / "tools" / "start_hybrid_avoidance.sh").read_text(encoding="utf-8")
     assert "PROFILE=dwa" in start and "start_wheelchair_localization.sh" in start

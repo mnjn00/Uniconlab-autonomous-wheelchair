@@ -167,7 +167,7 @@ class VisionDetectionBridge:
 
     def on_detections(self, message):
         stamp = message.header.stamp
-        if stamp.isZero():
+        if stamp == rospy.Time():
             stamp = rospy.Time.now()
         objects = []
         for index, detection in enumerate(message.detections):
