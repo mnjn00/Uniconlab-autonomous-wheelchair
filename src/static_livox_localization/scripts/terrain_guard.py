@@ -146,7 +146,7 @@ class TerrainGuard:
         self.pose = np.array([
             corrected[0, 3], corrected[1, 3], yaw], dtype=float)
         self.pose_stamp = message.header.stamp \
-            if not message.header.stamp.isZero() else rospy.Time.now()
+            if message.header.stamp != rospy.Time() else rospy.Time.now()
 
     @staticmethod
     def _reported_wheel_speeds(data):
@@ -193,7 +193,7 @@ class TerrainGuard:
     def _cliff_block(self, now):
         if not self.cliff_required:
             return ""
-        if self.cliff_stamp.isZero() or \
+        if self.cliff_stamp == rospy.Time() or \
                 (now - self.cliff_stamp).to_sec() > self.cliff_stale_s:
             return "CLIFF_STALE"
         if not self.cliff_safe:
@@ -239,7 +239,7 @@ class TerrainGuard:
             reason = "INPUT_STALE"
         elif self.pose is None or pose_age > self.pose_stale_s:
             reason = "POSE_STALE"
-        elif self.wheel_stamp.isZero() or wheel_age > self.wheel_stale_s:
+        elif self.wheel_stamp == rospy.Time() or wheel_age > self.wheel_stale_s:
             reason = "WHEEL_STALE"
         else:
             values = (

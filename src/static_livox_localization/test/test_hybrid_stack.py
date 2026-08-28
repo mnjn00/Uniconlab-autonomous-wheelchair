@@ -192,6 +192,12 @@ def test_vision_bridge_uses_the_rospy_zero_stamp_api():
     assert ".isZero()" not in text
 
 
+def test_terrain_guard_uses_the_rospy_zero_stamp_api():
+    text = (SCRIPTS / "terrain_guard.py").read_text(encoding="utf-8")
+    assert "rospy.Time()" in text
+    assert ".isZero()" not in text
+
+
 def test_runtime_wiring_keeps_old_stack_as_rollback_and_checks_before_go():
     start = (ROOT / "tools" / "start_hybrid_avoidance.sh").read_text(encoding="utf-8")
     assert "PROFILE=dwa" in start and "start_wheelchair_localization.sh" in start
