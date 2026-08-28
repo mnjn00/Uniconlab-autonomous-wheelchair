@@ -282,7 +282,7 @@ def test_recorded_stationary_person_eventually_allows_safe_bypass(monkeypatch):
     assert len(follower.planner.calls) == 1
     assert follower.planner.calls[0]["obstacles"], \
         "the recorded stationary person never reached DWA geometry planning"
-    assert follower.planner.calls[0]["obstacle_floor_m"] == 0.80
+    assert follower.planner.calls[0]["obstacle_floor_m"] == 0.50
     assert follower.planner.calls[0]["speed_cap"] <= 0.35
 
 
@@ -322,7 +322,7 @@ def test_committed_person_bypass_survives_lateral_arc(monkeypatch):
     assert len(lateral_calls) == 6
     assert all(call["obstacles"] for call in lateral_calls)
     assert all(
-        call["obstacle_floor_m"] == 0.80
+        call["obstacle_floor_m"] == 0.50
         for call in lateral_calls
     )
 

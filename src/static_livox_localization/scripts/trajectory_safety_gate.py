@@ -10,11 +10,13 @@ qualified static-person permit may replace that one verdict only when:
 * the motion the chair is still carrying is collision-free (or stopped), and
 * the requested curved swept footprint is clear against all raw points.
 
-Stale sensors, invalid input, reverse, unknown/moving people, straight motion,
-and ``OBSTACLE_SWEEP`` are never overridden. The old roughly 0.75 m expanded
-straight box is deliberately not recreated here: the current footprint and
-the requested curve are measured separately, so a clear curve can actually
-recover from the fixed-corridor deadlock this node exists to remove.
+Stale sensors, invalid input, reverse, unknown/moving people, and straight
+motion are never overridden. ``OBSTACLE_SWEEP`` enters the same independent
+trajectory check so a colliding yaw is reported back to DWA for retry; it is
+not waived. The old roughly 0.75 m expanded straight box is deliberately not
+recreated here: the current footprint and the requested curve are measured
+separately, so a clear curve can recover from the fixed-corridor deadlock this
+node exists to remove.
 """
 
 import json
@@ -100,8 +102,7 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
     def motion_blocked(self, now):
         reason, cap = super(TrajectorySafetyGate, self).motion_blocked(now)
         self.last_override = None
-        # This is deliberately the only replaceable verdict.
-        if reason != "OBSTACLE":
+        if reason not in ("OBSTACLE", "OBSTACLE_SWEEP"):
             return reason, cap
 
         now_s = now.to_sec()

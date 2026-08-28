@@ -41,7 +41,7 @@ def test_direct_same_track_static_person_becomes_bypassable():
     assert permit.active
     assert permit.track_id == 7
     assert permit.max_speed_mps == 0.35
-    assert permit.min_clearance_m == 0.80
+    assert permit.min_clearance_m == 0.50
 
 
 def test_moving_unknown_learned_only_and_multiple_people_never_authorize():

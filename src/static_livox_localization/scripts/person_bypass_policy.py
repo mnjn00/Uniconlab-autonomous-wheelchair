@@ -187,7 +187,7 @@ class StaticPersonQualifier:
                  lateral_hysteresis_m: float = 0.25,
                  minimum_near_distance_m: float = 0.60,
                  max_speed_mps: float = 0.35,
-                 min_clearance_m: float = 0.80):
+                 min_clearance_m: float = 0.50):
         values = (
             confirmation_s, maximum_gap_s, maximum_position_jump_m,
             permit_lifetime_s, maximum_forward_m, maximum_lateral_m,
@@ -310,7 +310,7 @@ def static_obstacle_permit(*, now_s: float, observed_stamp_s: float,
                            maximum_observation_age_s: float = 0.45,
                            permit_lifetime_s: float = 0.45,
                            max_speed_mps: float = 0.35,
-                           min_clearance_m: float = 0.80) -> BypassPermit:
+                           min_clearance_m: float = 0.50) -> BypassPermit:
     now_s = float(now_s)
 
     def inactive(reason: str) -> BypassPermit:

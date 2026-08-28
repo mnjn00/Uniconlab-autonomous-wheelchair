@@ -66,13 +66,13 @@ def test_semantic_exception_is_same_track_static_only():
 
 def test_raw_gate_replaces_only_fixed_corridor_obstacle_with_clear_curve():
     gate = text(SCRIPTS / "trajectory_safety_gate.py")
-    assert 'if reason != "OBSTACLE"' in gate
+    assert 'if reason not in ("OBSTACLE", "OBSTACLE_SWEEP")' in gate
     assert "evaluate_gate_override" in gate
     assert "requested_path_collision" in gate
     assert "carried_path_collision" in gate
     assert "immediate_collision" in gate
     assert 'return "", decision.speed_cap_mps' in gate
-    assert 'reason != "OBSTACLE_SWEEP"' not in gate
+    assert 'if reason != "OBSTACLE"' not in gate
     # SWEEP_MARGIN_M is already the protected current footprint. The branch
     # must not silently re-create the old ~0.75 m straight box with an extra
     # 0.10 m margin or a lower three-point threshold.
@@ -90,11 +90,19 @@ def test_branch_preflight_proves_new_implementations_not_only_node_names():
 
 def test_activation_passes_the_reliability_tunables_to_the_follower():
     activate = text(ROOT / "tools" / "activate_person_bypass.sh")
+    hybrid = text(ROOT / "tools" / "hybrid.sh")
 
     assert 'PERSON_BYPASS_MAX_GAP_S="${PERSON_BYPASS_MAX_GAP_S:-0.45}"' \
         in activate
     assert "PERSON_BYPASS_LATERAL_HYSTERESIS_M" in activate
     assert "_person_bypass_lateral_hysteresis_m:" in activate
+    assert 'PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.50}"' \
+        in activate
+    follower = text(SCRIPTS / "person_bypass_dwa_follower.py")
+    assert '"~person_bypass_clearance_m", 0.50' in follower
+    assert "PERSON_BYPASS_CLEARANCE_M=0.50" in hybrid
+    guard = text(SCRIPTS / "cluster_guard.py")
+    assert "PERSON_BYPASS_CLEARANCE_M = 0.50" in guard
 
 
 def test_static_threat_test_entrypoint_is_non_driving_by_default():

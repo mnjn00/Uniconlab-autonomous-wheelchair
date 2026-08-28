@@ -92,9 +92,9 @@ PERSON_LABEL = "person"
 # operator's side and went for their feet. Model at least a 0.70 m standing
 # footprint, while believing any larger observation.
 PERSON_MIN_HALF_EXTENT_M = 0.35
-# The field repair for that clipping used 0.80 m from the inflated body and
-# the slowest speed at which the loaded chair can still turn.
-PERSON_BYPASS_CLEARANCE_M = 0.80
+# The chair is under 0.60 m wide. Keep its centre 0.50 m from obstacle
+# returns: 0.30 m physical half-width plus 0.20 m lateral reserve.
+PERSON_BYPASS_CLEARANCE_M = 0.50
 PERSON_BYPASS_SPEED_MPS = 0.35
 
 
