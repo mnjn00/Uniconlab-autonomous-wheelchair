@@ -225,6 +225,30 @@ def test_bounded_proposal_buffer_matches_command_independent_of_arrival_order(
     assert gate.evidence["trajectory_proposal_seq"] == 20
 
 
+def test_raw_callback_cannot_replace_the_command_being_validated():
+    module, Stamp = load_follower("trajectory_safety_gate")
+    gate = module.TrajectorySafetyGate.__new__(module.TrajectorySafetyGate)
+    gate.raw_lock = threading.Lock()
+    first = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.10),
+        angular=types.SimpleNamespace(x=11.0, z=0.15))
+    second = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.20),
+        angular=types.SimpleNamespace(x=12.0, z=0.25))
+    gate.latest_raw = first
+    gate.latest_raw_stamp = Stamp(100.0)
+
+    gate.snapshot_raw_command()
+    gate.on_raw(second)
+
+    assert gate.raw is first
+    assert gate.raw.angular.x == 11.0
+    assert gate.latest_raw is second
+    gate.snapshot_raw_command()
+    assert gate.raw is second
+    assert gate.raw.angular.x == 12.0
+
+
 def test_exact_proposal_collision_current_footprint_and_carried_path_stop(
         monkeypatch):
     module, Stamp = load_follower("trajectory_safety_gate")

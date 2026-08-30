@@ -22,6 +22,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 
 import numpy as np
@@ -163,6 +164,9 @@ class SafetyGate:
         rospy.init_node("safety_gate")
         self.raw = Twist()
         self.raw_stamp = rospy.Time(0)
+        self.latest_raw = self.raw
+        self.latest_raw_stamp = self.raw_stamp
+        self.raw_lock = threading.Lock()
         profile = str(rospy.get_param("~body_frame_profile"))
         lidar_in_body, lidar_to_body_rotation = lidar_extrinsics(profile)
         self.accumulator = CloudAccumulator(
@@ -209,8 +213,14 @@ class SafetyGate:
         rospy.on_shutdown(lambda: self.pub.publish(Twist()))
 
     def on_raw(self, message):
-        self.raw = message
-        self.raw_stamp = rospy.Time.now()
+        with self.raw_lock:
+            self.latest_raw = message
+            self.latest_raw_stamp = rospy.Time.now()
+
+    def snapshot_raw_command(self):
+        with self.raw_lock:
+            self.raw = self.latest_raw
+            self.raw_stamp = self.latest_raw_stamp
 
     def on_cloud(self, message):
         self.accumulator.add_cloud(message, pc2.read_points)
@@ -352,6 +362,7 @@ class SafetyGate:
     def spin(self):
         rate = rospy.Rate(GATE_HZ)
         while not rospy.is_shutdown():
+            self.snapshot_raw_command()
             now = rospy.Time.now()
             out = Twist()
             reason = ""
