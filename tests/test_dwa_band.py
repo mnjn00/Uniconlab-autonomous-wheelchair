@@ -359,7 +359,8 @@ def test_actuator_state_and_proposal_are_immutable_json_contracts(scene):
     assert proposal.time_steps_s[5] == 0.05
     assert proposal.horizon_s == pytest.approx(sum(proposal.time_steps_s))
     assert proposal.target_yaw_rate_rps > 0.0
-    assert proposal.first_applied_yaw_rate_rps == proposal.yaw_rates_rps[0]
+    assert proposal.first_applied_speed_mps == proposal.speeds_mps[6]
+    assert proposal.first_applied_yaw_rate_rps == proposal.yaw_rates_rps[6]
     assert proposal == dwa_core.TrajectoryProposal.from_json(
         proposal.to_json())
     wrong_frame = json.loads(proposal.to_json())
@@ -492,6 +493,26 @@ def test_stopped_latency_keeps_first_yaw_zero_and_target_side(scene):
     assert result[2] == "OK"
     assert result[3].yaw_rates_rps[0] == 0.0
     assert result[3].target_yaw_rate_rps >= 0.08
+
+
+def test_stopped_latency_exposes_first_executable_command(scene):
+    _band, route, planner = scene
+
+    # Given a stopped chair whose validated proposal includes latency carry.
+    result = planner.plan(
+        on_route(route, 200),
+        actuator_state=dwa_core.ActuatorState(0.0, 0.0, 0.0),
+        committed_side="LEFT", minimum_turn_rps=0.08,
+        proposal_seq=45, stamp_s=127.0, permit_track_id=10,
+        latency_s=0.55, return_proposal=True)
+
+    # Then the published command is the first ramp sample after the six carry
+    # samples, while those carry samples remain in the validated trajectory.
+    assert result[2] == "OK"
+    proposal = result[3]
+    assert proposal.speeds_mps[:6] == (0.0,) * 6
+    assert proposal.first_applied_speed_mps == proposal.speeds_mps[6]
+    assert proposal.first_applied_speed_mps > 0.0
 
 
 def test_actuated_rollout_scores_the_applied_not_instant_target(scene):

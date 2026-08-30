@@ -56,6 +56,26 @@ def yaw_matches_side(side, yaw_rate_rps):
             or side == "RIGHT" and yaw_rate_rps < 0.0)
 
 
+def _first_executable_command(actuator_state, target_speed_mps,
+                              target_yaw_rate_rps):
+    dt = actuator_state.control_step_s
+    desired = min(max(
+        (target_speed_mps - actuator_state.speed_mps) / dt,
+        -MAX_DECEL_MPS2), MAX_ACCEL_MPS2)
+    jerk_room = MAX_JERK_MPS3 * dt
+    acceleration = min(max(
+        desired, actuator_state.acceleration_mps2 - jerk_room),
+        actuator_state.acceleration_mps2 + jerk_room)
+    speed = min(max(
+        actuator_state.speed_mps + acceleration * dt,
+        0.0), MAX_SPEED_MPS)
+    yaw_delta = min(max(
+        target_yaw_rate_rps - actuator_state.yaw_rate_rps,
+        -YAW_SLEW_RPS2 * dt), YAW_SLEW_RPS2 * dt)
+    yaw_rate = actuator_state.yaw_rate_rps + yaw_delta
+    return speed, yaw_rate if speed > 0.02 else 0.0
+
+
 @dataclass(frozen=True)  # noqa: SLOTS_OK - NUC Python 3.8
 class ActuatorState:
     speed_mps: float
@@ -246,12 +266,27 @@ class TrajectoryProposal:
                 "proposal series does not match deterministic rollout")
 
     @property
+    def _first_executable_index(self):
+        return len(_latency_steps(
+            self.latency_s, self.actuator_state.control_step_s))
+
+    @property
     def first_applied_speed_mps(self):
-        return self.speeds_mps[0]
+        index = self._first_executable_index
+        if index < len(self.speeds_mps):
+            return self.speeds_mps[index]
+        return _first_executable_command(
+            self.actuator_state, self.target_speed_mps,
+            self.target_yaw_rate_rps)[0]
 
     @property
     def first_applied_yaw_rate_rps(self):
-        return self.yaw_rates_rps[0]
+        index = self._first_executable_index
+        if index < len(self.yaw_rates_rps):
+            return self.yaw_rates_rps[index]
+        return _first_executable_command(
+            self.actuator_state, self.target_speed_mps,
+            self.target_yaw_rate_rps)[1]
 
     def to_json(self):
         return json.dumps({

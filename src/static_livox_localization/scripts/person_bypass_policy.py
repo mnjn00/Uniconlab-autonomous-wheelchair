@@ -20,6 +20,7 @@ PERSON = "person"
 PERMIT_SCHEMA = "static-threat-bypass/v2"
 STATIC_THREAT_BYPASS = "STATIC_THREAT_BYPASS"
 STATIC_THREAT_DROPOUT_GRACE = "STATIC_THREAT_DROPOUT_GRACE"
+QUALIFYING_STATIC_DROPOUT = "QUALIFYING_STATIC_DROPOUT"
 PERMIT_FIELDS = frozenset((
     "schema", "capable", "active", "stamp", "expires", "track_id",
     "target_x_m", "target_y_m", "threat_label", "static_for_s",
@@ -413,6 +414,20 @@ class StaticThreatBypassManager:
                 return self._permit(
                     now_s, self.last_observation, static_for_s, True,
                     STATIC_THREAT_DROPOUT_GRACE)
+            if (
+                    not self.committed
+                    and self.track_id is not None
+                    and not self.dropout_used
+                    and self.last_stamp_s is not None
+                    and reference_stamp_s - float(self.last_stamp_s)
+                    <= self.maximum_gap_s
+                    and self.last_observation is not None):
+                self.dropout_used = True
+                static_for_s = max(
+                    0.0, float(self.last_stamp_s) - float(self.first_stamp_s))
+                return self._permit(
+                    now_s, self.last_observation, static_for_s, False,
+                    QUALIFYING_STATIC_DROPOUT)
             return self._inactive_conflict(
                 now_s, "NO_THREAT", summary_stamp_s)
         if len(observations) != 1:

@@ -107,11 +107,81 @@ def test_qualification_updates_once_for_each_summary_stamp(monkeypatch):
     follower.person_bypass_lateral_hysteresis_m = 0.25
     monkeypatch.setattr(module, "threat_observations", lambda *args, **kwargs: ())
 
-    first = follower.observed_threat_permit(Stamp(10.1))
-    second = follower.observed_threat_permit(Stamp(10.2))
+    threat = types.SimpleNamespace(track_id=7)
+    first = follower.observed_threat_permit(Stamp(10.1), threat)
+    second = follower.observed_threat_permit(Stamp(10.2), threat)
 
     assert first is second
     assert len(calls) == 1
+
+
+def test_blocking_track_ignores_irrelevant_observation(monkeypatch):
+    module, Stamp, _Twist = load_follower("person_bypass_dwa_follower")
+    observation_type = getattr(
+        module.threat_observations, "__globals__")["StaticThreatObservation"]
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.qualifier = module.StaticThreatBypassManager()
+    follower.tracking_state = "TRACKING"
+    follower.person_bypass_maximum_forward_m = 8.0
+    follower.person_bypass_maximum_lateral_m = 1.0
+    follower.person_bypass_lateral_hysteresis_m = 0.25
+    follower._qualification_key = None
+    follower._latest_permit = None
+    follower.corridor_threat = lambda _offset: types.SimpleNamespace(track_id=7)
+
+    # Given one stationary corridor blocker and one unrelated observation.
+    def observations(_summary, **_kwargs):
+        stamp_s = follower.cluster_summary.stamp_s
+        return (
+            observation_type(
+                7, stamp_s, 1.5, 0.0, 0.5, 0.5,
+                "person", "static", "geometric"),
+            observation_type(
+                8, stamp_s, 4.0, 1.1, 0.5, 0.5,
+                "obstacle", "static", "geometric"),
+        )
+
+    monkeypatch.setattr(module, "threat_observations", observations)
+
+    # When the actual blocker remains static for exactly two seconds.
+    permit = None
+    for tick in range(11):
+        stamp_s = round(tick * 0.2, 1)
+        follower.cluster_summary = types.SimpleNamespace(
+            usable=True, stamp_s=stamp_s)
+        permit = follower.observed_threat_permit(Stamp(stamp_s))
+
+    # Then the unrelated observation cannot restart its qualification timer.
+    assert permit is not None and permit.active and permit.track_id == 7
+
+
+def test_precommit_dropout_preserves_candidate():
+    module, _Stamp, _Twist = load_follower("person_bypass_policy")
+    manager = module.StaticThreatBypassManager()
+
+    def observation(stamp_s):
+        return module.StaticThreatObservation(
+            7, stamp_s, 1.5, 0.0, 0.5, 0.5,
+            "person", "static", "geometric")
+
+    # Given one directly observed stationary track qualifying toward two seconds.
+    for stamp_s in np.arange(0.0, 1.2, 0.2):
+        manager.update(
+            (observation(float(stamp_s)),), float(stamp_s), True,
+            summary_stamp_s=float(stamp_s))
+
+    # When one healthy producer frame drops out inside the bounded gap.
+    dropout = manager.update((), 1.2, True, summary_stamp_s=1.2)
+    permit = dropout
+    for stamp_s in np.arange(1.4, 2.01, 0.2):
+        permit = manager.update(
+            (observation(float(stamp_s)),), float(stamp_s), True,
+            summary_stamp_s=float(stamp_s))
+
+    # Then motion stays unauthorized during dropout but commits at two seconds.
+    assert not dropout.active and permit.active
+    assert permit.static_for_s == pytest.approx(2.0)
 
 
 def test_gate_clear_release_requires_matching_proposal_and_three_cycles():

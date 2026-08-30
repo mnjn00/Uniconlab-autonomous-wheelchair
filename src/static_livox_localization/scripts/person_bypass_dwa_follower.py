@@ -123,14 +123,18 @@ class PersonBypassDwaFollower(DwaFollower):
     def inactive_permit(self, now, reason):
         return self.qualifier.inactive(now.to_sec(), reason)
 
-    def observed_threat_permit(self, now):
+    def observed_threat_permit(self, now, threat=None):
         """Update qualification even while the motion service is paused.
 
         The base follower returns from its hold ladder before asking
         ``avoidance_for`` when it is paused. Qualification here lets the
         shared permit become ready without sending a motion command.
         """
-        observations = threat_observations(
+        if threat is None:
+            threat = self.corridor_threat(0.0)
+        target_track_id = getattr(threat, "track_id", None)
+        observations = tuple(
+            observation for observation in threat_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
             maximum_lateral_m=(
@@ -139,7 +143,7 @@ class PersonBypassDwaFollower(DwaFollower):
             retained_track_id=(
                 getattr(self.qualifier, "track_id", None)
                 if getattr(self.qualifier, "committed", False) else None),
-        )
+            ) if observation.track_id == target_track_id)
         summary_healthy = (
             self.cluster_summary is not None
             and self.cluster_summary.usable)
@@ -148,7 +152,7 @@ class PersonBypassDwaFollower(DwaFollower):
             else None)
         qualification_key = (
             summary_stamp_s, summary_healthy,
-            self.tracking_state == "TRACKING")
+            self.tracking_state == "TRACKING", target_track_id)
         if qualification_key == getattr(self, "_qualification_key", None) and \
                 getattr(self, "_latest_permit", None) is not None:
             return self._latest_permit
@@ -165,7 +169,7 @@ class PersonBypassDwaFollower(DwaFollower):
         return permit
 
     def avoidance_for(self, now, threat, blocking):
-        permit = self.observed_threat_permit(now)
+        permit = self.observed_threat_permit(now, threat)
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
             now, threat, blocking, bypass_permit=permit)
         self.publish_permit(permit)

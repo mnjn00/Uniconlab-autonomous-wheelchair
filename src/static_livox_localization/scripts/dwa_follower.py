@@ -229,6 +229,7 @@ class DwaFollower(WaypointFollower):
         self.dwa_status = ""
         # Carried across cycles so the ramp has a slope to be limited against.
         self.command_accel = 0.0
+        self.accepted_speed = float(self.current_speed)
         self.gate_reason = ""
         self.gate_blocked_since = None
         self.gate_detail = ""
@@ -276,9 +277,12 @@ class DwaFollower(WaypointFollower):
     def on_accepted_command(self, message):
         accepted_speed = float(message.linear.x)
         accepted_yaw_rate = float(message.angular.z)
+        previous_accepted_speed = getattr(
+            self, "accepted_speed", self.current_speed)
+        self.accepted_speed = accepted_speed
         self.current_speed = accepted_speed
         self.last_yaw_rate = accepted_yaw_rate
-        if accepted_speed <= 0.02:
+        if previous_accepted_speed > 0.02 and accepted_speed <= 0.02:
             self.command_accel = 0.0
 
     def may_bypass_gate_stall(self, now, threat):

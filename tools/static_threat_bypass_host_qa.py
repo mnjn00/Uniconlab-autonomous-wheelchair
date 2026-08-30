@@ -107,6 +107,35 @@ def gate(permit: policy.BypassPermit | None, now_s: float, *,
     )
 
 
+def qualification_regressions() -> None:
+    manager = policy.StaticThreatBypassManager()
+    permit = manager.inactive(0.0, "NOT_STARTED")
+    for tick in range(11):
+        stamp_s = round(tick * 0.2, 1)
+        observations = (
+            observation(stamp_s, track_id=7),
+            observation(stamp_s, track_id=8, x_m=4.0),
+        )
+        target = tuple(item for item in observations if item.track_id == 7)
+        permit = manager.update(
+            target, stamp_s, True, summary_stamp_s=stamp_s)
+    emit("blocking_target_2s", permit.active and permit.track_id == 7,
+         static_for_s=permit.static_for_s, track_id=permit.track_id or -1)
+
+    manager = policy.StaticThreatBypassManager()
+    for tick in range(6):
+        stamp_s = round(tick * 0.2, 1)
+        manager.update((observation(stamp_s),), stamp_s, True,
+                       summary_stamp_s=stamp_s)
+    dropout = manager.update((), 1.2, True, summary_stamp_s=1.2)
+    for tick in range(7, 11):
+        stamp_s = round(tick * 0.2, 1)
+        permit = manager.update((observation(stamp_s),), stamp_s, True,
+                                summary_stamp_s=stamp_s)
+    emit("precommit_dropout", not dropout.active and permit.active,
+         dropout_reason=dropout.reason, static_for_s=permit.static_for_s)
+
+
 def adversarial_cases(active: policy.BypassPermit,
                       proposal: proposal_api.TrajectoryProposal) -> None:
     for case, threat in (
@@ -182,6 +211,7 @@ def adversarial_cases(active: policy.BypassPermit,
 
 
 def main() -> int:
+    qualification_regressions()
     person_manager, person_permit = qualify("person", report=True)
     qualify("object", report=True)
     side = person_manager.commit_pass_side("LEFT")
@@ -193,6 +223,7 @@ def main() -> int:
     emit("safe_left_proposal", safe.allowed and side == "left"
          and proposal.committed_side == "LEFT"
          and proposal.frame_id == "current_body"
+         and proposal.first_applied_speed_mps > 0.0
          and proposal.first_applied_yaw_rate_rps == 0.0
          and proposal.target_yaw_rate_rps > 0.0,
          distance_m=proposal.distance_m, first_applied_w=proposal.first_applied_yaw_rate_rps,
@@ -202,6 +233,7 @@ def main() -> int:
          time_step_count=len(proposal.time_steps_s))
     emit("stopped_target_turn_override",
          safe.allowed and proposal.first_applied_yaw_rate_rps == 0.0
+         and proposal.first_applied_speed_mps > 0.0
          and proposal.target_yaw_rate_rps >= 0.08,
          first_applied_v=proposal.first_applied_speed_mps,
          first_applied_w=proposal.first_applied_yaw_rate_rps,

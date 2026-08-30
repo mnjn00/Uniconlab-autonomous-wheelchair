@@ -260,10 +260,14 @@ def strict_wrapper(module, summary):
 
 
 def qualify_static_threat(follower, stamp_type, threat):
+    blocker = types.SimpleNamespace(track_id=threat["id"])
+    follower.corridor_threat = lambda _offset: blocker
     for stamp_s in np.arange(98.0, 100.0, 0.2):
         follower.cluster_summary = summary_at(float(stamp_s), [threat])
-        follower.observed_threat_permit(stamp_type(float(stamp_s)))
+        follower.observed_threat_permit(
+            stamp_type(float(stamp_s)), blocker)
     follower.cluster_summary = summary_at(100.0, [threat])
+    follower.observed_threat_permit(stamp_type(100.0), blocker)
 
 
 def test_the_dwa_profile_waits_for_someone_walking(monkeypatch):
@@ -834,6 +838,45 @@ def test_final_stop_resynchronizes_the_dwa_command_ramp():
     assert follower.current_speed == 0.0
     assert follower.last_yaw_rate == 0.0
     assert follower.command_accel == 0.0
+
+
+def test_accepted_zero_during_bootstrap_preserves_acceleration():
+    module, _Stamp = load_follower("dwa_follower")
+    follower = module.DwaFollower.__new__(module.DwaFollower)
+    follower.current_speed = 0.008
+    follower.last_yaw_rate = 0.0
+    follower.command_accel = 0.08
+    stopped = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.0),
+        angular=types.SimpleNamespace(z=0.0),
+    )
+
+    # Given downstream has not yet reproduced the first sub-deadband ramp.
+    follower.on_accepted_command(stopped)
+
+    # Then state resynchronizes, but the next ramp does not restart at zero.
+    assert follower.current_speed == 0.0
+    assert follower.last_yaw_rate == 0.0
+    assert follower.command_accel == 0.08
+
+
+def test_sub_deadband_accepted_history_ignores_planned_speed_lead():
+    module, _Stamp = load_follower("dwa_follower")
+    follower = module.DwaFollower.__new__(module.DwaFollower)
+    follower.current_speed = 0.024
+    follower.accepted_speed = 0.008
+    follower.last_yaw_rate = 0.0
+    follower.command_accel = 0.18
+    accepted = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.014),
+        angular=types.SimpleNamespace(z=0.0),
+    )
+
+    follower.on_accepted_command(accepted)
+
+    assert follower.current_speed == 0.014
+    assert follower.accepted_speed == 0.014
+    assert follower.command_accel == 0.18
 
 
 def test_small_final_command_lag_preserves_the_dwa_acceleration_ramp():
