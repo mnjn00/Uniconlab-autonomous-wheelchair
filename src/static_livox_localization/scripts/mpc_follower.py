@@ -57,7 +57,7 @@ from std_msgs.msg import String
 
 import mpc_core
 import mpc_speed
-from cluster_guard import GO_ROUND, PERSON_BYPASS, WAIT
+from cluster_guard import GO_ROUND, WAIT
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command
 from waypoint_follower import (WaypointFollower, CONTROL_HZ, MAX_YAW_RATE,
@@ -189,7 +189,7 @@ class MpcFollower(WaypointFollower):
         stop_m = self.stop_radius_for(threat)
         decision = self.avoidance_for(
             now, threat, self.threat_blocks(threat, stop_m))
-        if decision in (WAIT, PERSON_BYPASS):
+        if decision == WAIT:
             self.publish_state("HOLD:MPC_WAIT")
             self.mpc_status = "WAIT"
             self.send_stop()

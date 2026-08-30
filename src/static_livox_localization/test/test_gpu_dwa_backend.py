@@ -125,3 +125,104 @@ def test_accelerated_planner_accepts_clearance_input():
 
     assert first[2] == second[2] == "OK"
     assert second == first
+
+
+def test_accelerated_planner_shares_actuator_rollout_and_side_commitment():
+    base = dwa_core.DwaPlanner(
+        WideBand(), route(), route_mask=OpenMask())
+    GpuPlanner = make_gpu_planner(dwa_core.DwaPlanner, dwa_core)
+    accelerated = GpuPlanner(
+        WideBand(), route(), route_mask=OpenMask(),
+        prefer_gpu=False, require_gpu=False)
+    actuator = dwa_core.ActuatorState(0.0, 0.0, 0.0)
+    kwargs = {
+        "speed_cap": dwa_core.TURN_FLOOR_SPEED,
+        "actuator_state": actuator,
+        "committed_side": "RIGHT",
+        "proposal_seq": 7,
+        "stamp_s": 12.0,
+        "permit_track_id": 18,
+        "return_proposal": True,
+    }
+
+    expected = base.plan((0.0, 0.0, 0.0), **kwargs)
+    observed = accelerated.plan((0.0, 0.0, 0.0), **kwargs)
+
+    assert expected[2] == observed[2] == "OK"
+    assert expected[3] == observed[3]
+    assert observed[3].target_yaw_rate_rps < 0.0
+
+
+def test_cpu_and_gpu_fail_closed_on_invalid_proposal_metadata():
+    base = dwa_core.DwaPlanner(
+        WideBand(), route(), route_mask=OpenMask())
+    GpuPlanner = make_gpu_planner(dwa_core.DwaPlanner, dwa_core)
+    accelerated = GpuPlanner(
+        WideBand(), route(), route_mask=OpenMask(),
+        prefer_gpu=False, require_gpu=False)
+
+    expected = base.plan(
+        (0.0, 0.0, 0.0), actuator_state="invalid",
+        proposal_seq=1, stamp_s=2.0, permit_track_id=3,
+        return_proposal=True)
+    observed = accelerated.plan(
+        (0.0, 0.0, 0.0), actuator_state="invalid",
+        proposal_seq=1, stamp_s=2.0, permit_track_id=3,
+        return_proposal=True)
+
+    assert expected == observed == (
+        0.0, 0.0, "ACTUATOR_STATE_INVALID", None)
+
+
+def test_proposal_minimum_turn_excludes_straight_cpu_and_gpu_candidates():
+    base = dwa_core.DwaPlanner(
+        WideBand(), route(), route_mask=OpenMask())
+    GpuPlanner = make_gpu_planner(dwa_core.DwaPlanner, dwa_core)
+    accelerated = GpuPlanner(
+        WideBand(), route(), route_mask=OpenMask(),
+        prefer_gpu=False, require_gpu=False)
+    legacy_cpu = base.plan(
+        (0.0, 0.0, 0.0), speed_cap=dwa_core.TURN_FLOOR_SPEED)
+    legacy_gpu = accelerated.plan(
+        (0.0, 0.0, 0.0), speed_cap=dwa_core.TURN_FLOOR_SPEED)
+    assert legacy_cpu == legacy_gpu == (dwa_core.TURN_FLOOR_SPEED, 0.0, "OK")
+    kwargs = {
+        "speed_cap": dwa_core.TURN_FLOOR_SPEED,
+        "actuator_state": dwa_core.ActuatorState(0.0, 0.0, 0.0),
+        "proposal_seq": 31,
+        "stamp_s": 50.0,
+        "permit_track_id": 7,
+        "minimum_turn_rps": 0.08,
+        "return_proposal": True,
+    }
+
+    expected = base.plan((0.0, 0.0, 0.0), **kwargs)
+    observed = accelerated.plan((0.0, 0.0, 0.0), **kwargs)
+
+    assert expected[2] == observed[2] == "OK"
+    assert expected[3] == observed[3]
+    assert abs(observed[3].target_yaw_rate_rps) >= 0.08
+
+
+@pytest.mark.parametrize("invalid_turn", [float("nan"), float("inf"), -0.01,
+                                           True, "0.08"])
+def test_invalid_proposal_minimum_turn_fails_closed_cpu_and_gpu(invalid_turn):
+    base = dwa_core.DwaPlanner(
+        WideBand(), route(), route_mask=OpenMask())
+    GpuPlanner = make_gpu_planner(dwa_core.DwaPlanner, dwa_core)
+    accelerated = GpuPlanner(
+        WideBand(), route(), route_mask=OpenMask(),
+        prefer_gpu=False, require_gpu=False)
+    kwargs = {
+        "actuator_state": dwa_core.ActuatorState(0.0, 0.0, 0.0),
+        "proposal_seq": 32,
+        "stamp_s": 51.0,
+        "permit_track_id": 7,
+        "minimum_turn_rps": invalid_turn,
+        "return_proposal": True,
+    }
+
+    assert base.plan((0.0, 0.0, 0.0), **kwargs) == (
+        0.0, 0.0, "ACTUATOR_STATE_INVALID", None)
+    assert accelerated.plan((0.0, 0.0, 0.0), **kwargs) == (
+        0.0, 0.0, "ACTUATOR_STATE_INVALID", None)

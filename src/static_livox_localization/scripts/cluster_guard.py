@@ -55,6 +55,7 @@ import json
 import math
 
 from cluster_tracking import MOVING, STATIC, UNKNOWN
+from person_bypass_policy import permit_matches_threat
 
 # Must match obstacle_clusters.WINDOW_S; test_cluster_guard pins the pair.
 # The consumer needs it to size the stopping envelope: an object's reported
@@ -94,8 +95,8 @@ PERSON_LABEL = "person"
 PERSON_MIN_HALF_EXTENT_M = 0.35
 # The chair is under 0.60 m wide. Keep its centre 0.35 m from obstacle
 # returns: 0.30 m physical half-width plus 0.05 m lateral reserve.
-PERSON_BYPASS_CLEARANCE_M = 0.35
-PERSON_BYPASS_SPEED_MPS = 0.35
+BYPASS_CLEARANCE_M = 0.35
+BYPASS_SPEED_MPS = 0.35
 
 
 class Threat(object):
@@ -103,7 +104,8 @@ class Threat(object):
 
     def __init__(self, distance_m, motion, label="", lateral_m=None,
                  track_id=None, observed_stamp_s=None,
-                 directly_observed=True, geometry_valid=True):
+                 directly_observed=True, geometry_valid=True,
+                 center_x_m=None, center_y_m=None):
         self.distance_m = distance_m
         self.motion = motion
         self.label = label
@@ -111,6 +113,8 @@ class Threat(object):
         self.observed_stamp_s = observed_stamp_s
         self.directly_observed = directly_observed
         self.geometry_valid = geometry_valid
+        self.center_x_m = center_x_m
+        self.center_y_m = center_y_m
         # Signed offset from the corridor centreline, chair frame, left
         # positive. None when the producer did not give a parseable box.
         #
@@ -423,7 +427,9 @@ def matching_threats(summary, half_width_m, lateral_shift_m=0.0,
             distance, motion, str(item.get("class", "")),
             lateral_m=lateral, track_id=track_id,
             observed_stamp_s=summary.stamp_s,
-            geometry_valid=object_geometry_valid(item)))
+            geometry_valid=object_geometry_valid(item),
+            center_x_m=None if box is None else box[0],
+            center_y_m=None if box is None else box[1]))
     return sorted(found, key=lambda threat: threat.distance_m)
 
 
@@ -485,13 +491,12 @@ def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
 
 
 GO_ROUND = "go_round"
-PERSON_BYPASS = "person_bypass"
 WAIT = "wait"
 CLEAR = "clear"
 
 
-def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
-                       bypass_after_s, person_bypass_ready=False):
+def avoidance_decision(threat, blocking, plan_ahead_m,
+                       bypass_permit=None, now_s=None):
     """What to do about the nearest thing in the corridor.
 
     GO_ROUND for something the tracker has watched stand still, and taken
@@ -503,28 +508,16 @@ def avoidance_decision(threat, blocking, blocked_for_s, plan_ahead_m,
     Nothing here resumes the chair explicitly: once they leave the corridor
     the threat is gone, the answer becomes CLEAR, and it drives on.
 
-    A person is waited out by default. The caller may supply a separate
-    person_bypass_ready authorization only after longer, direct same-track
-    STATIC evidence; that produces a distinct result so only a controller
-    with current geometry and hard-mask rollout checks can execute it.
-    Standing still for the tracker's CONFIRM_S alone is never enough.
-
-    blocked_for_s is the fallback for sources that carry no identity. A
-    raw-scan return is UNKNOWN forever, so standing in the way is the only
-    evidence of parkedness it can ever offer - but it never overrules a
-    tracker that says the thing is moving.
+    A bound static-threat permit is the only authority for GO_ROUND. This
+    function never infers permission from elapsed time, a label, or STATIC.
     """
     if threat is None:
         return CLEAR
-    if threat.is_person:
-        if threat.parked and threat.distance_m < plan_ahead_m:
-            return PERSON_BYPASS if person_bypass_ready else WAIT
-        return WAIT if blocking else CLEAR
     if threat.parked and threat.distance_m < plan_ahead_m:
-        return GO_ROUND
-    if blocking and blocked_for_s is not None and \
-            blocked_for_s > bypass_after_s and threat.motion != MOVING:
-        return GO_ROUND
+        if now_s is not None and permit_matches_threat(
+                bypass_permit, threat, now_s):
+            return GO_ROUND
+        return WAIT
     return WAIT if blocking else CLEAR
 
 

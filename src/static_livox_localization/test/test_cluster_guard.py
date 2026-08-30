@@ -40,6 +40,7 @@ def load(name):
 
 cg = load("cluster_guard")
 ct = load("cluster_tracking")
+policy = load("person_bypass_policy")
 
 
 def summary(objects, status="OK", stamp=100.0):
@@ -213,21 +214,37 @@ def test_the_accumulation_window_matches_the_producer():
 
 # ------------------------------------------------------------ what to do next
 
-def threat(distance, motion):
-    return cg.Threat(distance, motion)
+def threat(distance, motion, label="obstacle"):
+    return cg.Threat(
+        distance, motion, label, lateral_m=0.0, track_id=1,
+        observed_stamp_s=3.0, geometry_valid=True,
+        center_x_m=distance, center_y_m=0.0)
 
 
-def decide(threat_in, blocking=True, blocked_for_s=0.0,
-           person_bypass_ready=False):
+def permit_for(threat_in):
+    manager = policy.StaticThreatBypassManager()
+    for stamp in (1.0, 1.4, 1.8, 2.2, 2.6, 3.0):
+        permit = manager.update((policy.StaticThreatObservation(
+            track_id=threat_in.track_id, stamp_s=stamp,
+            x_m=threat_in.center_x_m, y_m=threat_in.center_y_m,
+            size_x_m=0.5, size_y_m=0.5, label=threat_in.label,
+            motion="static", source="geometric"),), stamp, True)
+    return permit
+
+
+def decide(threat_in, blocking=True, blocked_for_s=0.0, authorized=False):
     return cg.avoidance_decision(
-        threat_in, blocking, blocked_for_s, 5.0, 3.0,
-        person_bypass_ready=person_bypass_ready)
+        threat_in, blocking, 5.0,
+        bypass_permit=permit_for(threat_in) if authorized else None,
+        now_s=3.0)
 
 
 def test_something_watched_standing_still_is_gone_around_from_a_distance():
     """The behaviour asked for: seen from far off and parked, drift past it
     rather than driving up to it and stopping."""
-    assert decide(threat(4.0, ct.STATIC), blocking=False) == cg.GO_ROUND
+    assert decide(
+        threat(4.0, ct.STATIC), blocking=False,
+        authorized=True) == cg.GO_ROUND
 
 
 def test_a_parked_thing_still_far_off_is_left_alone():
@@ -246,14 +263,12 @@ def test_a_moving_thing_is_never_gone_around_however_long_it_blocks():
     assert decide(threat(1.0, ct.MOVING), blocked_for_s=30.0) == cg.WAIT
 
 
-def test_an_untrackable_return_that_has_not_moved_for_3s_is_gone_around():
-    """The raw scan has no identity, so standing there is all the evidence
-    it can offer, and this is the pre-existing behaviour it keeps."""
-    assert decide(threat(1.0, ct.UNKNOWN), blocked_for_s=4.0) == cg.GO_ROUND
+def test_elapsed_blocked_time_never_authorizes_an_unknown_return():
+    assert decide(threat(1.0, ct.UNKNOWN), blocked_for_s=4.0) == cg.WAIT
 
 
 def person(distance, motion):
-    return cg.Threat(distance, motion, cg.PERSON_LABEL)
+    return threat(distance, motion, cg.PERSON_LABEL)
 
 
 def test_a_person_standing_still_is_waited_for_not_driven_around():
@@ -279,22 +294,22 @@ def test_a_person_needs_explicit_static_bypass_authorization():
     assert decide(
         person(1.0, ct.STATIC),
         blocked_for_s=30.0,
-        person_bypass_ready=True) == cg.PERSON_BYPASS
+        authorized=True) == cg.GO_ROUND
     assert decide(
         person(1.0, ct.MOVING),
         blocked_for_s=30.0,
-        person_bypass_ready=True) == cg.WAIT
+        authorized=True) == cg.WAIT
 
 
 def test_a_static_person_is_stopped_and_watched_before_blocking():
     assert decide(
         person(4.0, ct.STATIC),
         blocking=False,
-        person_bypass_ready=False) == cg.WAIT
+        authorized=False) == cg.WAIT
     assert decide(
         person(4.0, ct.STATIC),
         blocking=False,
-        person_bypass_ready=True) == cg.PERSON_BYPASS
+        authorized=True) == cg.GO_ROUND
 
 
 def test_a_person_who_leaves_the_corridor_clears_it():
@@ -305,7 +320,65 @@ def test_a_person_who_leaves_the_corridor_clears_it():
 def test_the_same_geometry_without_the_label_is_still_gone_around():
     """The exclusion is the label, not a general loss of nerve: a parked
     motorcycle at the same range is still a thing to drift past."""
-    assert decide(threat(4.0, ct.STATIC), blocking=False) == cg.GO_ROUND
+    assert decide(
+        threat(4.0, ct.STATIC), blocking=False,
+        authorized=True) == cg.GO_ROUND
+
+
+def test_static_person_and_object_are_stop_only_until_shared_permit_is_ready():
+    for candidate in (threat(2.0, ct.STATIC), person(2.0, ct.STATIC)):
+        assert cg.avoidance_decision(
+            candidate, True, 5.0, bypass_permit=None,
+            now_s=3.0) == cg.WAIT
+        assert cg.avoidance_decision(
+            candidate, True, 5.0, bypass_permit=permit_for(candidate),
+            now_s=3.0) == cg.GO_ROUND
+
+
+def test_blocked_time_alone_never_authorizes_unknown_geometry():
+    assert cg.avoidance_decision(
+        threat(1.0, ct.UNKNOWN), True, 5.0,
+        bypass_permit=None, now_s=3.0) == cg.WAIT
+
+
+def test_decision_binds_permit_to_actual_corridor_track_label_and_geometry():
+    manager = policy.StaticThreatBypassManager()
+    for stamp in (1.0, 1.4, 1.8, 2.2, 2.6, 3.0):
+        permit = manager.update((policy.StaticThreatObservation(
+            track_id=7, stamp_s=stamp, x_m=2.0, y_m=0.2,
+            size_x_m=0.6, size_y_m=0.6, label="box", motion="static",
+            source="geometric"),), stamp, True)
+    actual = cg.Threat(
+        1.7, ct.STATIC, "box", lateral_m=0.2, track_id=7,
+        observed_stamp_s=3.0, directly_observed=True,
+        geometry_valid=True, center_x_m=2.0, center_y_m=0.2)
+    assert cg.avoidance_decision(
+        actual, True, 5.0, bypass_permit=permit,
+        now_s=3.0) == cg.GO_ROUND
+
+    for mismatch in (
+        cg.Threat(1.7, ct.STATIC, "box", lateral_m=0.2, track_id=8,
+                  observed_stamp_s=3.0, geometry_valid=True,
+                  center_x_m=2.0, center_y_m=0.2),
+        cg.Threat(1.7, ct.STATIC, "person", lateral_m=0.2, track_id=7,
+                  observed_stamp_s=3.0, geometry_valid=True,
+                  center_x_m=2.0, center_y_m=0.2),
+        cg.Threat(1.7, ct.STATIC, "box", lateral_m=0.2, track_id=7,
+                  observed_stamp_s=3.0, geometry_valid=False,
+                  center_x_m=2.0, center_y_m=0.2),
+        cg.Threat(1.7, ct.STATIC, "box", lateral_m=0.2, track_id=7,
+                  observed_stamp_s=3.0, geometry_valid=True,
+                  center_x_m=3.0, center_y_m=0.2),
+        cg.Threat(1.7, ct.STATIC, "box", lateral_m=0.2, track_id=7,
+                  observed_stamp_s=2.0, geometry_valid=True,
+                  center_x_m=2.0, center_y_m=0.2),
+    ):
+        assert cg.avoidance_decision(
+            mismatch, True, 5.0, bypass_permit=permit,
+            now_s=3.0) == cg.WAIT
+    assert cg.avoidance_decision(
+        None, False, 5.0, bypass_permit=permit,
+        now_s=3.0) == cg.CLEAR
 
 
 @pytest.mark.parametrize("label", ["Person", " person ", "PERSON"])

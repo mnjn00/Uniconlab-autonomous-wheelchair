@@ -9,6 +9,7 @@ import json
 import math
 import re
 import sys
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import numpy as np
@@ -327,6 +328,236 @@ def test_an_object_in_the_corridor_is_cleared_or_refused(scene):
 def test_clearance_is_infinite_with_nothing_to_clear():
     path = dwa_core.rollout(np.array([0.0, 0.0, 0.0]), 0.5, 0.0)
     assert not np.isfinite(dwa_core.obstacle_clearance(path, ()))
+
+
+def test_actuator_state_and_proposal_are_immutable_json_contracts(scene):
+    _band, route, planner = scene
+    state = on_route(route, 200)
+    actuator = dwa_core.ActuatorState(
+        speed_mps=0.0, yaw_rate_rps=0.0, acceleration_mps2=0.0)
+    assert actuator == dwa_core.ActuatorState.from_json(actuator.to_json())
+
+    result = planner.plan(
+        state,
+        speed_cap=dwa_core.TURN_FLOOR_SPEED,
+        actuator_state=actuator,
+        committed_side="LEFT",
+        proposal_seq=41,
+        stamp_s=123.5,
+        permit_track_id=8,
+        return_proposal=True,
+    )
+
+    assert result[2] == "OK"
+    proposal = result[3]
+    assert proposal.frame_id == "body"
+    assert proposal.actuator_state == actuator
+    assert proposal.horizon_s == pytest.approx(
+        len(proposal.poses) * actuator.control_step_s)
+    assert proposal.target_yaw_rate_rps > 0.0
+    assert proposal.first_applied_yaw_rate_rps == proposal.yaw_rates_rps[0]
+    assert proposal == dwa_core.TrajectoryProposal.from_json(
+        proposal.to_json())
+    wrong_frame = json.loads(proposal.to_json())
+    wrong_frame["frame_id"] = "map"
+    with pytest.raises(dwa_core.ProposalValidationError):
+        dwa_core.TrajectoryProposal.from_json(json.dumps(wrong_frame))
+    with pytest.raises(FrozenInstanceError):
+        proposal.target_speed_mps = 0.0
+
+
+def test_proposal_json_rejects_non_finite_and_mismatched_series():
+    payload = {
+        "schema": "wheelchair.trajectory_proposal/v1",
+        "proposal_seq": 1,
+        "stamp_s": 2.0,
+        "permit_track_id": 3,
+        "committed_side": "LEFT",
+        "frame_id": "body",
+        "horizon_s": 0.1,
+        "actuator_state": {
+            "schema": "wheelchair.actuator_state/v1",
+            "speed_mps": 0.0,
+            "yaw_rate_rps": 0.0,
+            "acceleration_mps2": 0.0,
+            "control_step_s": 0.1,
+        },
+        "target_speed_mps": 0.35,
+        "target_yaw_rate_rps": 0.2,
+        "first_applied_speed_mps": float("nan"),
+        "first_applied_yaw_rate_rps": 0.1,
+        "step_s": 0.1,
+        "poses": [[0.0, 0.0, 0.0]],
+        "speeds_mps": [float("nan")],
+        "yaw_rates_rps": [],
+    }
+
+    with pytest.raises(dwa_core.ProposalValidationError):
+        dwa_core.TrajectoryProposal.from_json(json.dumps(payload))
+    with pytest.raises(dwa_core.ProposalValidationError):
+        dwa_core.ActuatorState.from_json(json.dumps({
+            "schema": "wheelchair.actuator_state/v1",
+            "speed_mps": float("nan"),
+            "yaw_rate_rps": 0.0,
+            "acceleration_mps2": 0.0,
+            "control_step_s": 0.1,
+        }))
+
+
+def test_proposal_mode_requires_identity_metadata(scene):
+    _band, route, planner = scene
+
+    result = planner.plan(
+        on_route(route, 200),
+        actuator_state=dwa_core.ActuatorState(0.0, 0.0, 0.0),
+        return_proposal=True,
+    )
+
+    assert result == (0.0, 0.0, "ACTUATOR_STATE_INVALID", None)
+
+
+def test_actuated_rollout_scores_the_applied_not_instant_target(scene):
+    _band, route, planner = scene
+    state = on_route(route, 200)
+    actuator = dwa_core.ActuatorState(0.0, 0.0, 0.0)
+
+    v, w, status, proposal = planner.plan(
+        state,
+        speed_cap=dwa_core.TURN_FLOOR_SPEED,
+        actuator_state=actuator,
+        proposal_seq=9,
+        stamp_s=10.0,
+        permit_track_id=4,
+        return_proposal=True,
+    )
+
+    assert status == "OK"
+    assert (v, w) == (proposal.target_speed_mps,
+                      proposal.target_yaw_rate_rps)
+    assert proposal.first_applied_speed_mps < proposal.target_speed_mps
+    poses, speeds, yaw_rates = dwa_core.rollout_actuation(
+        dwa_core.RolloutSpec(
+            pose=tuple(state[:3]),
+            target_speed_mps=v,
+            target_yaw_rate_rps=w,
+            actuator_state=actuator,
+            distance_m=planner.preview_distance(None),
+        ))
+    heading = state[2]
+    cosine, sine = math.cos(heading), math.sin(heading)
+    relative = tuple((
+        cosine * (x - state[0]) + sine * (y - state[1]),
+        -sine * (x - state[0]) + cosine * (y - state[1]),
+        math.atan2(math.sin(yaw - heading), math.cos(yaw - heading)),
+    ) for x, y, yaw in poses)
+    assert np.allclose(
+        np.asarray(proposal.poses), np.asarray(relative), atol=1e-9)
+    assert proposal.speeds_mps == speeds
+    assert proposal.yaw_rates_rps == yaw_rates
+
+
+def test_actuator_rollout_slews_before_reaching_target_yaw():
+    poses, speeds, yaw_rates = dwa_core.rollout_actuation(
+        dwa_core.RolloutSpec(
+            pose=(0.0, 0.0, 0.0),
+            target_speed_mps=0.35,
+            target_yaw_rate_rps=0.5,
+            actuator_state=dwa_core.ActuatorState(0.0, 0.0, 0.0),
+            distance_m=0.1,
+        ))
+
+    assert len(poses) == len(speeds) == len(yaw_rates)
+    assert speeds[0] == pytest.approx(0.008)
+    assert yaw_rates[0] == 0.0
+    assert yaw_rates[0] < 0.5
+    assert max(yaw_rates) == pytest.approx(0.5)
+
+
+def test_identical_applied_candidate_trajectories_are_deduplicated(scene):
+    _band, route, planner = scene
+    state = on_route(route, 200)
+    pairs = [
+        (dwa_core.TURN_FLOOR_SPEED, yaw)
+        for _duplicate in range(5)
+        for yaw in dwa_core.yaw_samples()
+    ]
+
+    unique, paths, full_paths, speeds, yaw_rates, travelled = \
+        planner._candidate_rollouts(
+            state, pairs, planner.distance_m,
+            dwa_core.ActuatorState(0.0, 0.0, 0.0))
+
+    assert len(unique) == len(paths) == len(full_paths) == len(speeds) == \
+        len(yaw_rates) == len(travelled) == len(dwa_core.yaw_samples())
+
+
+@pytest.mark.parametrize("actuator", [
+    dwa_core.ActuatorState(0.0, 0.0, 0.0),
+    dwa_core.ActuatorState(0.8, 0.0, 0.18),
+])
+def test_actuated_rollout_reaches_scoring_span_from_rest_or_deceleration(
+        actuator):
+    span = 1.05
+    poses, _speeds, _yaw_rates = dwa_core.rollout_actuation(
+        dwa_core.RolloutSpec(
+            pose=(0.0, 0.0, 0.0),
+            target_speed_mps=0.35,
+            target_yaw_rate_rps=0.2,
+            actuator_state=actuator,
+            distance_m=span,
+        ))
+    points = np.vstack((np.zeros((1, 2)), np.asarray(poses)[:, :2]))
+    travelled = np.linalg.norm(np.diff(points, axis=0), axis=1).sum()
+
+    assert travelled >= span
+    assert travelled < span + dwa_core.MAX_SPEED * actuator.control_step_s
+
+
+def test_body_proposal_reconstructs_nonzero_world_start(scene):
+    _band, route, planner = scene
+    state = on_route(route, 300)
+    actuator = dwa_core.ActuatorState(0.2, 0.1, 0.0)
+    _v, _w, status, proposal = planner.plan(
+        state,
+        speed_cap=0.35,
+        actuator_state=actuator,
+        proposal_seq=80,
+        stamp_s=90.0,
+        permit_track_id=12,
+        return_proposal=True,
+    )
+
+    assert status == "OK"
+    cosine, sine = math.cos(state[2]), math.sin(state[2])
+    world = np.asarray([(
+        state[0] + cosine * x - sine * y,
+        state[1] + sine * x + cosine * y,
+        state[2] + yaw,
+    ) for x, y, yaw in proposal.poses])
+    direct, _speeds, _yaw_rates = dwa_core.rollout_actuation(
+        dwa_core.RolloutSpec(
+            pose=tuple(state[:3]),
+            target_speed_mps=proposal.target_speed_mps,
+            target_yaw_rate_rps=proposal.target_yaw_rate_rps,
+            actuator_state=actuator,
+            distance_m=planner.preview_distance(None),
+        ))
+
+    assert np.allclose(world, np.asarray(direct), atol=1e-9)
+
+
+def test_obstacle_preview_extends_from_actual_travelled_distance(scene):
+    _band, _route, planner = scene
+    pairs, _paths, full_paths, _speeds, _yaw_rates, travelled = \
+        planner._candidate_rollouts(
+            np.zeros(3), [(0.35, 0.0)], planner.distance_m,
+            dwa_core.ActuatorState(0.0, 0.0, 0.0))
+
+    watched = planner._obstacle_paths(
+        full_paths, travelled, dwa_core.OBSTACLE_PREVIEW_M)
+
+    assert pairs == [(0.35, 0.0)]
+    assert watched[0, -1, 0] >= dwa_core.OBSTACLE_PREVIEW_M - 1e-6
 
 
 # ------------------------------------------------------- speed and refusal

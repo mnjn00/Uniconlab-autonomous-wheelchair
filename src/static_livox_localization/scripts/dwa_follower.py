@@ -83,13 +83,13 @@ from std_msgs.msg import String
 
 import dwa_core
 import mpc_speed
-from cluster_guard import (GO_ROUND, PERSON_BYPASS,
-                           PERSON_BYPASS_CLEARANCE_M,
-                           PERSON_BYPASS_SPEED_MPS, WAIT,
+from cluster_guard import (BYPASS_CLEARANCE_M, BYPASS_SPEED_MPS, GO_ROUND,
+                           WAIT,
                            corridor_obstacle_points)
 from mpc_anchor import DEFAULT_GAIN, StateAnchor
 from mpc_command import MAX_COMMAND_GAP_S, advance_command, jerk_limited
 from route_mask import RouteMask
+from trajectory_proposal import ActuatorState
 from waypoint_follower import (WaypointFollower, CONTROL_HZ, CREEP_SPEED,
                                GUARD_SLOW_EXTRA_M, MAX_ACCEL, MAX_DECEL,
                                MAX_SPEED, MAX_YAW_RATE, PLAN_AHEAD_M)
@@ -100,6 +100,7 @@ from waypoint_follower import (WaypointFollower, CONTROL_HZ, CREEP_SPEED,
 # acceleration for the same reason the pursuit follower allows it: stopping
 # sooner is never the unsafe direction.
 YAW_SLEW_RPS2 = 1.5
+BYPASS_MINIMUM_TURN_RPS = 0.08
 
 # Actuation lag, measured 2026-08-11 (see led_state). Overridable with
 # ~latency_s for a vehicle this has not been measured on; at 0.0 the lead is
@@ -231,6 +232,10 @@ class DwaFollower(WaypointFollower):
         self.gate_reason = ""
         self.gate_blocked_since = None
         self.gate_detail = ""
+        self.proposal_seq = 0
+        self.proposal_pub = rospy.Publisher(
+            "/static_threat_bypass/proposal", String,
+            queue_size=1, latch=False)
         rospy.Subscriber("/safety_gate/status", String,
                          self.on_gate_status, queue_size=1)
         accepted_cmd_topic = str(rospy.get_param(
@@ -258,6 +263,10 @@ class DwaFollower(WaypointFollower):
             reason or "clear",
             "?" if nearest is None else nearest,
             "?" if envelope is None else envelope)
+        self.consume_bypass_gate_report(report)
+
+    def consume_bypass_gate_report(self, report):
+        return None
 
     def gate_blocked_for(self, now):
         if self.gate_blocked_since is None:
@@ -271,6 +280,41 @@ class DwaFollower(WaypointFollower):
         self.last_yaw_rate = accepted_yaw_rate
         if accepted_speed <= 0.02:
             self.command_accel = 0.0
+
+    def may_bypass_gate_stall(self, now, threat):
+        return False
+
+    def bypass_proposal_identity(self, now, threat, decision):
+        return None
+
+    def accept_bypass_proposal(self, proposal):
+        return proposal
+
+    def request_bypass_proposal(
+            self, state, obstacles, speed_cap, actuator_state,
+            track_id, committed_side, proposal_seq, stamp_s):
+        return self.planner.plan(
+            state, obstacles, speed_cap=speed_cap,
+            last_yaw_rate=self.last_yaw_rate,
+            last_speed=self.current_speed,
+            obstacle_floor_m=BYPASS_CLEARANCE_M,
+            actuator_state=actuator_state,
+            committed_side=committed_side,
+            proposal_seq=proposal_seq,
+            stamp_s=stamp_s,
+            permit_track_id=track_id,
+            return_proposal=True,
+            minimum_turn_rps=BYPASS_MINIMUM_TURN_RPS)
+
+    def publish_bypass_diagnostics(self, proposal, planner_ms):
+        return None
+
+    def publish_proposal_command(self, proposal, message_type=Twist):
+        command = message_type()
+        command.linear.x = proposal.first_applied_speed_mps
+        command.angular.z = proposal.first_applied_yaw_rate_rps
+        self.proposal_pub.publish(String(data=proposal.to_json()))
+        self.cmd_pub.publish(command)
 
     def send_stop(self):
         # The jerk limit shapes driving, never braking. Dropping the carried
@@ -380,15 +424,10 @@ class DwaFollower(WaypointFollower):
             self.send_stop()
             self.last_command_stamp = None
             return
-        if decision == PERSON_BYPASS and self.tracking_state != "TRACKING":
-            self.publish_state("HOLD:PERSON_BYPASS_TRACKING", "HOLD")
-            self.send_stop()
-            self.last_command_stamp = None
-            return
-
         # Past our own WAIT, so whatever the gate is holding, it is not
         # something the cluster producer gave us. Say so and stop asking.
-        if gate_stall(self.gate_reason, self.gate_blocked_for(now)):
+        if gate_stall(self.gate_reason, self.gate_blocked_for(now)) and \
+                not self.may_bypass_gate_stall(now, threat):
             if self.dwa_status != "GATE_STALL":
                 rospy.logwarn(
                     "gate is refusing an obstacle the follower cannot see: "
@@ -408,13 +447,12 @@ class DwaFollower(WaypointFollower):
         if threat is not None:
             cap = approach_cap(cap, threat.distance_m, stop_m,
                                dwa_core.TURN_FLOOR_SPEED)
-        if decision == PERSON_BYPASS:
-            cap = min(cap, PERSON_BYPASS_SPEED_MPS)
+        if decision == GO_ROUND:
+            cap = min(cap, BYPASS_SPEED_MPS)
 
         # Geometry only when going round it. Handing the planner an object it
         # is not allowed to go round would let it sidestep anyway.
-        obstacles = self.obstacle_points(state) if decision in (
-            GO_ROUND, PERSON_BYPASS) else ()
+        obstacles = self.obstacle_points(state) if decision == GO_ROUND else ()
         # Plan from where the chair will be when the command lands, not from
         # where it is. The gap was measured on 2026-08-11 by cross-correlating
         # commanded angular.z against the yaw rate differentiated from
@@ -424,15 +462,45 @@ class DwaFollower(WaypointFollower):
         # travel at 0.6 m/s and 0.55 m at 1.0 - the planner correcting for
         # where the chair no longer is, which is what lateral hunting is.
         state = self.led_state(state)
+        elapsed = 1.0 / CONTROL_HZ
+        if self.last_command_stamp is not None:
+            elapsed = (now - self.last_command_stamp).to_sec()
+        if elapsed > MAX_COMMAND_GAP_S:
+            rospy.logwarn_throttle(
+                5.0, "control loop gap %.2f s - resyncing command to measured",
+                elapsed)
+            self.current_speed = float(state[3])
+            self.last_yaw_rate = float(state[4])
+            elapsed = 1.0 / CONTROL_HZ
+        step = max(elapsed, 1e-3)
+        identity = self.bypass_proposal_identity(now, threat, decision)
         planner_started = time.perf_counter()
-        target_v, target_w, status = self.planner.plan(
-            state, obstacles, speed_cap=cap,
-            last_yaw_rate=self.last_yaw_rate,
-            last_speed=self.current_speed,
-            obstacle_floor_m=(
-                PERSON_BYPASS_CLEARANCE_M
-                if decision == PERSON_BYPASS
-                else dwa_core.OBSTACLE_FLOOR_M))
+        if identity is None:
+            target_v, target_w, status = self.planner.plan(
+                state, obstacles, speed_cap=cap,
+                last_yaw_rate=self.last_yaw_rate,
+                last_speed=self.current_speed,
+                obstacle_floor_m=(
+                    BYPASS_CLEARANCE_M
+                    if decision == GO_ROUND
+                    else dwa_core.OBSTACLE_FLOOR_M))
+            proposal = None
+        else:
+            track_id, committed_side = identity
+            actuator_state = ActuatorState(
+                speed_mps=self.current_speed,
+                yaw_rate_rps=self.last_yaw_rate,
+                acceleration_mps2=self.command_accel,
+                control_step_s=step)
+            next_seq = self.proposal_seq + 1
+            target_v, target_w, status, proposal = \
+                self.request_bypass_proposal(
+                    state, obstacles, cap, actuator_state,
+                    track_id, committed_side, next_seq, now.to_sec())
+            if proposal is not None:
+                proposal = self.accept_bypass_proposal(proposal)
+                if proposal is None:
+                    status = "BYPASS_TURN_TOO_SMALL"
         planner_ms = (time.perf_counter() - planner_started) * 1000.0
         if status != "OK":
             if status != self.dwa_status:
@@ -453,35 +521,36 @@ class DwaFollower(WaypointFollower):
             return
         self.dwa_status = status
 
-        elapsed = 1.0 / CONTROL_HZ
-        if self.last_command_stamp is not None:
-            elapsed = (now - self.last_command_stamp).to_sec()
-        if elapsed > MAX_COMMAND_GAP_S:
-            rospy.logwarn_throttle(
-                5.0, "control loop gap %.2f s - resyncing command to measured",
-                elapsed)
-            self.current_speed = float(state[3])
-            self.last_yaw_rate = float(state[4])
         self.last_command_stamp = now
-        step = max(elapsed, 1e-3)
-        wanted_accel = np.clip((target_v - self.current_speed) / step,
-                               -MAX_DECEL, MAX_ACCEL)
-        self.command_accel = jerk_limited(
-            wanted_accel, self.command_accel, step)
-        accel = np.array([
-            self.command_accel,
-            np.clip((target_w - self.last_yaw_rate) / step,
-                    -YAW_SLEW_RPS2, YAW_SLEW_RPS2)])
-        speed, yaw_rate = advance_command(
-            self.current_speed, self.last_yaw_rate, accel, elapsed,
-            dwa_core.MAX_SPEED, MAX_YAW_RATE)
+        if proposal is not None:
+            self.proposal_seq = proposal.proposal_seq
+            self.publish_bypass_diagnostics(proposal, planner_ms)
+            self.publish_proposal_command(proposal)
+            self.command_accel = (
+                (proposal.first_applied_speed_mps - self.current_speed) / step)
+            self.current_speed = proposal.first_applied_speed_mps
+            self.last_yaw_rate = proposal.first_applied_yaw_rate_rps
+            speed = self.current_speed
+            yaw_rate = self.last_yaw_rate
+        else:
+            wanted_accel = np.clip((target_v - self.current_speed) / step,
+                                   -MAX_DECEL, MAX_ACCEL)
+            self.command_accel = jerk_limited(
+                wanted_accel, self.command_accel, step)
+            accel = np.array([
+                self.command_accel,
+                np.clip((target_w - self.last_yaw_rate) / step,
+                        -YAW_SLEW_RPS2, YAW_SLEW_RPS2)])
+            speed, yaw_rate = advance_command(
+                self.current_speed, self.last_yaw_rate, accel, elapsed,
+                dwa_core.MAX_SPEED, MAX_YAW_RATE)
 
-        command = Twist()
-        command.linear.x = speed
-        command.angular.z = yaw_rate if speed > 0.02 else 0.0
-        self.cmd_pub.publish(command)
-        self.current_speed = speed
-        self.last_yaw_rate = yaw_rate
+            command = Twist()
+            command.linear.x = speed
+            command.angular.z = yaw_rate if speed > 0.02 else 0.0
+            self.cmd_pub.publish(command)
+            self.current_speed = speed
+            self.last_yaw_rate = yaw_rate
         self.publish_state(
             "DWA wp=%d/%d v=%.2f w=%+.2f target %.2f/%+.2f "
             "plan=%.1fms n=%d%s" % (

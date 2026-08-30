@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""RTX DWA follower that conditionally passes a continuously static person.
+"""RTX DWA follower that conditionally passes a continuously static threat.
 
-The stock hybrid follower intentionally waits for every person. This wrapper
-changes only that policy transition: after direct same-track STATIC evidence,
-DWA may plan around exactly one person at the turn-speed floor. Moving,
-unknown, learned-only, too-close, multiple, stale, or geometrically invalid
-people remain stop-only.
+The base follower intentionally waits for every threat without a shared
+permit. This wrapper changes only that policy transition: after direct
+same-track STATIC evidence, DWA may plan around exactly one threat at the
+turn-speed floor. Moving, unknown, learned-only, too-close, multiple, stale,
+or geometrically invalid threats remain stop-only.
 """
 
+import json
+from dataclasses import replace
 import os
 import sys
 
@@ -26,11 +28,12 @@ from gpu_dwa_backend import GpuRequiredError, install_gpu_planner
 # ROS params still choose CuPy or the diagnostic CPU path.
 install_gpu_planner(dwa_core)
 from cluster_guard import GO_ROUND  # noqa: E402
-from dwa_follower import DwaFollower  # noqa: E402
+from dwa_follower import (BYPASS_MINIMUM_TURN_RPS, DwaFollower)  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
-    StaticPersonQualifier,
-    person_observations,
-    static_obstacle_permit,
+    STATIC,
+    StaticThreatBypassManager,
+    permit_matches_threat,
+    threat_observations,
 )
 
 
@@ -40,26 +43,26 @@ class PersonBypassDwaFollower(DwaFollower):
     def __init__(self):
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
-            "~person_bypass_confirmation_s", 3.0))
+            "~static_threat_bypass_confirmation_s", 2.0))
         self.person_bypass_maximum_gap_s = float(rospy.get_param(
-            "~person_bypass_maximum_gap_s", 0.45))
+            "~static_threat_bypass_maximum_gap_s", 0.45))
         self.person_bypass_position_jump_m = float(rospy.get_param(
-            "~person_bypass_position_jump_m", 0.35))
+            "~static_threat_bypass_position_jump_m", 0.35))
         self.person_bypass_permit_lifetime_s = float(rospy.get_param(
-            "~person_bypass_permit_lifetime_s", 0.45))
+            "~static_threat_bypass_permit_lifetime_s", 0.45))
         self.person_bypass_maximum_forward_m = float(rospy.get_param(
-            "~person_bypass_maximum_forward_m", 8.0))
+            "~static_threat_bypass_maximum_forward_m", 8.0))
         self.person_bypass_maximum_lateral_m = float(rospy.get_param(
-            "~person_bypass_maximum_lateral_m", 1.0))
+            "~static_threat_bypass_maximum_lateral_m", 1.0))
         self.person_bypass_lateral_hysteresis_m = float(rospy.get_param(
-            "~person_bypass_lateral_hysteresis_m", 0.25))
+            "~static_threat_bypass_lateral_hysteresis_m", 0.25))
         self.person_bypass_minimum_near_m = float(rospy.get_param(
-            "~person_bypass_minimum_near_m", 0.60))
+            "~static_threat_bypass_minimum_near_m", 0.60))
         self.person_bypass_speed_mps = float(rospy.get_param(
-            "~person_bypass_speed_mps", 0.35))
+            "~static_threat_bypass_speed_mps", 0.35))
         self.person_bypass_clearance_m = float(rospy.get_param(
-            "~person_bypass_clearance_m", 0.35))
-        self.qualifier = StaticPersonQualifier(
+            "~static_threat_bypass_clearance_m", 0.35))
+        self.qualifier = StaticThreatBypassManager(
             confirmation_s=self.person_bypass_confirmation_s,
             maximum_gap_s=self.person_bypass_maximum_gap_s,
             maximum_position_jump_m=self.person_bypass_position_jump_m,
@@ -71,12 +74,23 @@ class PersonBypassDwaFollower(DwaFollower):
             max_speed_mps=self.person_bypass_speed_mps,
             min_clearance_m=self.person_bypass_clearance_m,
         )
+        permit_topic = str(rospy.get_param(
+            "~static_threat_bypass_permit_topic",
+            "/static_threat_bypass/permit"))
         self.permit_pub = rospy.Publisher(
-            "/person_bypass/permit", String, queue_size=1, latch=False)
+            permit_topic, String, queue_size=1, latch=False)
+        self.bypass_status_pub = rospy.Publisher(
+            "/static_threat_bypass/status", String,
+            queue_size=1, latch=False)
         self._permit_published_this_cycle = False
-        rospy.set_param("~person_bypass_capable", True)
+        self._qualification_key = None
+        self._latest_permit = None
+        self.active_proposal_seq = None
+        self._clear_released = False
+        rospy.set_param("~static_threat_bypass_capable", True)
+        rospy.set_param("~static_threat_bypass_proposal_capable", True)
         rospy.loginfo(
-            "stationary-person bypass: %.1f s same-track STATIC, "
+            "stationary-threat bypass: %.1f s same-track STATIC, "
             "v<=%.2f m/s, clearance>=%.2f m",
             self.person_bypass_confirmation_s,
             self.person_bypass_speed_mps,
@@ -85,6 +99,16 @@ class PersonBypassDwaFollower(DwaFollower):
     def publish_permit(self, permit):
         self.permit_pub.publish(String(data=permit.to_json()))
         self._permit_published_this_cycle = True
+        self.bypass_status_pub.publish(String(data=json.dumps({
+            "active": bool(permit.active),
+            "clear_frames": int(self.qualifier.clear_frames),
+            "committed_side": self.qualifier.pass_side,
+            "lifecycle": self.qualifier.lifecycle,
+            "proposal_seq": self.active_proposal_seq,
+            "reason": permit.reason,
+            "static_for_s": round(float(permit.static_for_s), 3),
+            "track_id": permit.track_id,
+        }, separators=(",", ":"), sort_keys=True)))
 
     def activate_trajectory_bypass(self, permit, detail):
         self.planner.max_speed = min(
@@ -99,92 +123,129 @@ class PersonBypassDwaFollower(DwaFollower):
     def inactive_permit(self, now, reason):
         return self.qualifier.inactive(now.to_sec(), reason)
 
-    def observed_person_permit(self, now):
+    def observed_threat_permit(self, now):
         """Update qualification even while the motion service is paused.
 
         The base follower returns from its hold ladder before asking
-        ``avoidance_for`` when it is paused. If qualification lived only in
-        that method, a person already standing in front of the chair would
-        make ``go`` impossible forever: the permit needs motion to start and
-        semantic preflight needs the permit before motion may start. Reading
-        perception here breaks that cycle without sending any command.
+        ``avoidance_for`` when it is paused. Qualification here lets the
+        shared permit become ready without sending a motion command.
         """
-        observations = person_observations(
+        observations = threat_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
             maximum_lateral_m=(
                 self.person_bypass_maximum_lateral_m
                 + self.person_bypass_lateral_hysteresis_m),
+            retained_track_id=(
+                getattr(self.qualifier, "track_id", None)
+                if getattr(self.qualifier, "committed", False) else None),
         )
-        if not observations:
-            self.qualifier.reset()
-            threat = self.corridor_threat(0.0)
-            return self.inactive_permit(now, "NEAREST_THREAT_NOT_PERSON")
-        return self.qualifier.update(
-            observations, now.to_sec(), self.tracking_state == "TRACKING")
+        summary_healthy = (
+            self.cluster_summary is not None
+            and self.cluster_summary.usable)
+        summary_stamp_s = (
+            self.cluster_summary.stamp_s if self.cluster_summary is not None
+            else None)
+        qualification_key = (
+            summary_stamp_s, summary_healthy,
+            self.tracking_state == "TRACKING")
+        if qualification_key == getattr(self, "_qualification_key", None) and \
+                getattr(self, "_latest_permit", None) is not None:
+            return self._latest_permit
+        dynamic_conflict = any(
+            observation.motion.strip().lower() != STATIC
+            for observation in observations)
+        permit = self.qualifier.update(
+            observations, now.to_sec(), self.tracking_state == "TRACKING",
+            summary_healthy=summary_healthy,
+            dynamic_conflict=dynamic_conflict,
+            summary_stamp_s=summary_stamp_s)
+        self._qualification_key = qualification_key
+        self._latest_permit = permit
+        return permit
 
     def avoidance_for(self, now, threat, blocking):
+        permit = self.observed_threat_permit(now)
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
-            now, threat, blocking)
-        if threat is None or not threat.is_person:
-            person_permit = self.observed_person_permit(now)
-            if person_permit.active and ordinary == GO_ROUND:
-                self.publish_permit(person_permit)
-                self.activate_trajectory_bypass(
-                    person_permit, "static-person trajectory permit")
-                return ordinary
-            self.qualifier.reset()
-            if threat is None or ordinary != GO_ROUND:
-                self.publish_permit(self.inactive_permit(
-                    now, "NEAREST_THREAT_NOT_PERSON"))
-                return ordinary
-            permit = static_obstacle_permit(
-                now_s=now.to_sec(),
-                observed_stamp_s=threat.observed_stamp_s,
-                track_id=threat.track_id,
-                target_x_m=threat.distance_m,
-                target_y_m=threat.lateral_m,
-                motion=threat.motion,
-                directly_observed=threat.directly_observed,
-                geometry_valid=threat.geometry_valid,
-                maximum_observation_age_s=self.person_bypass_maximum_gap_s,
-                permit_lifetime_s=self.person_bypass_permit_lifetime_s,
-                max_speed_mps=self.person_bypass_speed_mps,
-                min_clearance_m=self.person_bypass_clearance_m,
-            )
-            self.publish_permit(permit)
-            if permit.active:
-                self.activate_trajectory_bypass(
-                    permit, "static-object trajectory permit")
-            return ordinary
-
-        permit = self.observed_person_permit(now)
+            now, threat, blocking, bypass_permit=permit)
         self.publish_permit(permit)
-        if not permit.active:
+        if not permit.active or ordinary != GO_ROUND:
             return ordinary
 
-        # DWA-only authorization. The semantic and raw trajectory gates both
-        # consume the same short-lived permit; neither can infer authorization
-        # from a class label or from this return value alone.
-        # The base GATE_STALL diagnostic is for an obstacle absent from planner
-        # geometry. This person is present in geometry and the trajectory
-        # gate is now the authority, so the old fixed-corridor reason must not
-        # pre-empt the DWA cycle before a curved proposal exists.
+        # DWA, semantic supervision, and raw trajectory validation consume
+        # this same short-lived authorization. No stage infers it from a label.
         self.activate_trajectory_bypass(
-            permit, "static-person trajectory permit")
-        return GO_ROUND
+            permit, "static-threat trajectory permit")
+        return ordinary
+
+    def may_bypass_gate_stall(self, now, threat):
+        return permit_matches_threat(
+            getattr(self, "_latest_permit", None), threat, now.to_sec())
+
+    def bypass_proposal_identity(self, now, threat, decision):
+        permit = getattr(self, "_latest_permit", None)
+        if decision != GO_ROUND or not permit_matches_threat(
+                permit, threat, now.to_sec()):
+            return None
+        return permit.track_id, self.qualifier.pass_side
+
+    def accept_bypass_proposal(self, proposal):
+        if abs(proposal.target_yaw_rate_rps) < BYPASS_MINIMUM_TURN_RPS:
+            return None
+        proposed_side = (
+            "left" if proposal.target_yaw_rate_rps > 0.0 else "right")
+        committed_side = self.qualifier.commit_pass_side(proposed_side)
+        accepted = replace(proposal, committed_side=committed_side.upper())
+        self.active_proposal_seq = accepted.proposal_seq
+        return accepted
+
+    def publish_bypass_diagnostics(self, proposal, planner_ms):
+        self.bypass_status_pub.publish(String(data=json.dumps({
+            "applied_v": round(proposal.first_applied_speed_mps, 4),
+            "applied_w": round(proposal.first_applied_yaw_rate_rps, 4),
+            "candidate_count": int(getattr(
+                self.planner, "last_candidate_count", 0)),
+            "committed_side": proposal.committed_side,
+            "event": "PROPOSAL_SELECTED",
+            "planner_ms": round(float(planner_ms), 3),
+            "proposal_seq": proposal.proposal_seq,
+            "target_v": round(proposal.target_speed_mps, 4),
+            "target_w": round(proposal.target_yaw_rate_rps, 4),
+            "track_id": proposal.permit_track_id,
+        }, separators=(",", ":"), sort_keys=True)))
+
+    def consume_bypass_gate_report(self, report):
+        qualifier = getattr(self, "qualifier", None)
+        if qualifier is None or not getattr(qualifier, "committed", False) or \
+                qualifier.pass_side is None:
+            return
+        sequence = report.get("trajectory_proposal_seq")
+        track_id = report.get("static_threat_bypass_track_id")
+        matched = (
+            isinstance(sequence, int) and not isinstance(sequence, bool)
+            and sequence == self.active_proposal_seq
+            and isinstance(track_id, int) and not isinstance(track_id, bool)
+            and track_id == qualifier.track_id)
+        clear = (
+            matched
+            and report.get("static_threat_target_behind") is True
+            and report.get("static_threat_tail_clear") is True)
+        released = qualifier.observe_tail_clear(clear)
+        if released:
+            self.active_proposal_seq = None
+            self._qualification_key = None
+            self._latest_permit = None
+            self._clear_released = True
 
     def step(self):
         self._permit_published_this_cycle = False
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
         now = rospy.Time.now()
-        # PAUSED preflight needs qualification before the base hold ladder
-        # returns. During motion avoidance_for performs the single update;
-        # evaluating here as well can reset a confirmed track on an
-        # intermediate perception frame and produce stop-go oscillation.
+        # PAUSED preflight qualifies without motion. During driving,
+        # avoidance_for remains the single update point for each control cycle.
         if not self.enabled:
-            self.publish_permit(self.observed_person_permit(now))
+            self.publish_permit(self.observed_threat_permit(now))
         try:
             super(PersonBypassDwaFollower, self).step()
         finally:
@@ -194,7 +255,7 @@ class PersonBypassDwaFollower(DwaFollower):
                 if self.tracking_state != "TRACKING":
                     self.qualifier.reset()
                 self.publish_permit(self.inactive_permit(
-                    now, "FOLLOWER_NOT_EVALUATING_PERSON"))
+                    now, "FOLLOWER_NOT_EVALUATING_THREAT"))
 
 
 if __name__ == "__main__":

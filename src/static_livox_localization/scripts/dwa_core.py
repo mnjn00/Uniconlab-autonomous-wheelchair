@@ -45,6 +45,12 @@ import math
 
 import numpy as np
 
+from trajectory_proposal import (ActuatorState, ProposalMetadata,
+                                 ProposalValidationError, RolloutSpec,
+                                 TrajectoryProposal, normalize_side,
+                                 normalize_minimum_turn, rollout_actuation,
+                                 yaw_matches_side)
+
 # The follower's constants. Kept literal rather than imported because
 # waypoint_follower pulls in rospy and this has to stay testable at a desk.
 MAX_SPEED = 0.8
@@ -385,6 +391,68 @@ class DwaPlanner:
         dy = np.cumsum(v * np.sin(yaw) * dt, axis=1)
         return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
 
+    def _candidate_rollouts(self, state, pairs, span, actuator_state=None):
+        if actuator_state is None:
+            paths = self._rollouts(state, pairs, span)
+            speeds = tuple(tuple([pair[0]] * self.steps) for pair in pairs)
+            yaw_rates = tuple(tuple([pair[1]] * self.steps) for pair in pairs)
+            full_paths = tuple(tuple(tuple(point) for point in path)
+                               for path in paths)
+            travelled = tuple([float(span)] * len(pairs))
+            return pairs, paths, full_paths, speeds, yaw_rates, travelled
+
+        unique_pairs, scored_paths, full_paths = [], [], []
+        unique_speeds, unique_yaw_rates, travelled = [], [], []
+        seen = set()
+        for pair in pairs:
+            poses, speeds, yaw_rates = rollout_actuation(RolloutSpec(
+                pose=tuple(state[:3]),
+                target_speed_mps=pair[0],
+                target_yaw_rate_rps=pair[1],
+                actuator_state=actuator_state,
+                distance_m=span,
+            ))
+            key = (np.round(np.asarray(poses), 12).tobytes()
+                   + np.round(np.asarray(speeds), 12).tobytes()
+                   + np.round(np.asarray(yaw_rates), 12).tobytes())
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_pairs.append(pair)
+            source = np.vstack((np.asarray(state[:3], dtype=float),
+                                np.asarray(poses, dtype=float)))
+            cumulative = np.concatenate((
+                [0.0],
+                np.cumsum(np.asarray(speeds) * actuator_state.control_step_s),
+            ))
+            sample_distance = np.linspace(
+                float(span) / self.steps, float(span), self.steps)
+            yaw = np.interp(
+                sample_distance, cumulative, np.unwrap(source[:, 2]))
+            scored_paths.append(np.stack([
+                np.interp(sample_distance, cumulative, source[:, 0]),
+                np.interp(sample_distance, cumulative, source[:, 1]),
+                yaw,
+            ], axis=1))
+            full_paths.append(poses)
+            unique_speeds.append(speeds)
+            unique_yaw_rates.append(yaw_rates)
+            travelled.append(sum(speeds) * actuator_state.control_step_s)
+        return (unique_pairs, np.asarray(scored_paths, dtype=float),
+                tuple(full_paths), tuple(unique_speeds),
+                tuple(unique_yaw_rates), tuple(travelled))
+
+    @staticmethod
+    def _body_relative(path, state):
+        heading = float(state[2])
+        cosine, sine = math.cos(heading), math.sin(heading)
+        return tuple((
+            cosine * (point[0] - state[0]) + sine * (point[1] - state[1]),
+            -sine * (point[0] - state[0]) + cosine * (point[1] - state[1]),
+            math.atan2(math.sin(point[2] - heading),
+                       math.cos(point[2] - heading)),
+        ) for point in path)
+
     def _obstacle_paths(self, paths, span_m, reach_m):
         """The scored arc continued straight, out to the veto horizon.
 
@@ -398,23 +466,40 @@ class DwaPlanner:
         The extension is used ONLY to see obstacles. Corridor containment
         stays on the short arc, so the candidate count is untouched.
         """
-        extra = float(reach_m) - float(span_m)
-        if extra <= 0.0:
-            return paths
-        spacing = float(span_m) / self.steps
-        count = int(math.ceil(extra / spacing))
-        if count <= 0:
-            return paths
-        tail = paths[:, -1, :]
-        k = np.arange(1, count + 1)[None, :] * spacing
-        yaw = tail[:, 2][:, None]
-        xs = tail[:, 0][:, None] + k * np.cos(yaw)
-        ys = tail[:, 1][:, None] + k * np.sin(yaw)
-        grown = np.stack([xs, ys, np.repeat(yaw, count, axis=1)], axis=2)
-        return np.concatenate([paths, grown], axis=1)
+        if np.isscalar(span_m):
+            travelled = tuple([float(span_m)] * len(paths))
+        else:
+            travelled = tuple(float(value) for value in span_m)
+        grown_paths = []
+        for path, distance in zip(paths, travelled):
+            extra = max(float(reach_m) - distance, 0.0)
+            spacing = max(distance / len(path), 1e-3)
+            count = int(math.ceil(extra / spacing))
+            if count:
+                offsets = np.minimum(
+                    np.arange(1, count + 1, dtype=float) * spacing, extra)
+                tail = path[-1]
+                extension = np.stack([
+                    tail[0] + offsets * math.cos(tail[2]),
+                    tail[1] + offsets * math.sin(tail[2]),
+                    np.full(len(offsets), tail[2]),
+                ], axis=1)
+                path = np.concatenate([path, extension], axis=0)
+            grown_paths.append(path)
+        width = max(len(path) for path in grown_paths)
+        return np.asarray([
+            np.concatenate([
+                path,
+                np.repeat(path[-1][None, :], width - len(path), axis=0),
+            ], axis=0)
+            for path in grown_paths
+        ])
 
     def plan(self, state, obstacles=(), speed_cap=None, last_yaw_rate=0.0,
-             last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M):
+             last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M,
+             actuator_state=None, committed_side=None, proposal_seq=None,
+             stamp_s=None, permit_track_id=None, return_proposal=False,
+             minimum_turn_rps=0.0):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -429,6 +514,22 @@ class DwaPlanner:
         here, never a choice - it is what the caller does when this returns
         a reason instead of a command.
         """
+        metadata = None
+        try:
+            side = normalize_side(committed_side)
+            turn_floor = normalize_minimum_turn(minimum_turn_rps)
+            if return_proposal:
+                if not isinstance(actuator_state, ActuatorState):
+                    raise ProposalValidationError("actuator_state is invalid")
+                metadata = ProposalMetadata(
+                    proposal_seq, stamp_s, permit_track_id, side)
+            elif actuator_state is not None and not isinstance(
+                    actuator_state, ActuatorState):
+                raise ProposalValidationError("actuator_state is invalid")
+        except ProposalValidationError:
+            if return_proposal:
+                return 0.0, 0.0, "ACTUATOR_STATE_INVALID", None
+            raise
         cap = self.max_speed if speed_cap is None else min(self.max_speed,
                                                            float(speed_cap))
         pairs = [(v, w) for v in speed_samples(cap, current=last_speed)
@@ -436,7 +537,9 @@ class DwaPlanner:
                  # Turning on the spot is not something this chair does below
                  # its rotation floor, and it is the manoeuvre that put it at
                  # a wall on 2026-08-04. Excluded.
-                 for w in yaw_samples()]
+                 for w in yaw_samples()
+                 if (yaw_matches_side(side, w)
+                     and abs(float(w)) + 1e-12 >= turn_floor)]
         self.last_candidate_count = len(pairs)
         if not pairs:
             # Not a planning failure and not an obstacle: the cap handed in
@@ -445,9 +548,15 @@ class DwaPlanner:
             # unless it says so - on 2026-08-20 it cost a stall that took an
             # hour to attribute, because the name suggested the geometry had
             # run out. The caller that set the cap is the one to look at.
-            return 0.0, 0.0, "SPEED_BELOW_FLOOR"
+            result = (0.0, 0.0, "SPEED_BELOW_FLOOR")
+            return result + (None,) if return_proposal else result
         span = self.preview_distance(last_speed)
-        paths = self._rollouts(np.asarray(state, dtype=float), pairs, span)
+        pairs, paths, proposal_paths, applied_speeds, applied_yaw_rates, \
+            travelled = \
+            self._candidate_rollouts(
+                np.asarray(state, dtype=float), pairs, span, actuator_state)
+        self.last_candidate_count = len(pairs)
+        path_steps = paths.shape[1]
         flat = paths[:, :, :2].reshape(-1, 2)
         # ONE pass over the band geometry, used twice: to reject the arcs that
         # leave the corridor, and below to score how near its edge the rest of
@@ -461,17 +570,19 @@ class DwaPlanner:
             # Without an independent physical map there is no authority for
             # deciding that an off-band point is safe, so retain the original
             # hard-band behavior.
-            ok = band_inside.reshape(len(pairs), self.steps).all(axis=1)
+            ok = band_inside.reshape(len(pairs), path_steps).all(axis=1)
         else:
             # The mask, not the preferred band, is the immutable boundary.
             ok = self.route_mask.contains_many(flat).reshape(
-                len(pairs), self.steps).all(axis=1)
+                len(pairs), path_steps).all(axis=1)
             ok &= self.route_mask.paths_are_contained(paths[:, :, :2])
         if not ok.any():
-            return 0.0, 0.0, "OFF_BAND"
+            result = (0.0, 0.0, "OFF_BAND")
+            return result + (None,) if return_proposal else result
         if len(obstacles):
             pts = np.asarray(obstacles, dtype=float).reshape(-1, 2)
-            watched = self._obstacle_paths(paths, span, OBSTACLE_PREVIEW_M)
+            watched = self._obstacle_paths(
+                proposal_paths, travelled, OBSTACLE_PREVIEW_M)
             # Nearest-neighbour rather than every pair. The brute force this
             # replaces materialised candidates x steps x points distances -
             # 126 x 65 x 2000 is 16 million per cycle, 371 ms on this NUC,
@@ -487,9 +598,10 @@ class DwaPlanner:
             clear = np.full(len(pairs), np.inf)
         ok &= clear >= float(obstacle_floor_m)
         if not ok.any():
-            return 0.0, 0.0, "OBSTACLE"
+            result = (0.0, 0.0, "OBSTACLE")
+            return result + (None,) if return_proposal else result
         d, idx = self.tree.query(flat, workers=-1)
-        route_distance = d.reshape(len(pairs), self.steps)
+        route_distance = d.reshape(len(pairs), path_steps)
         path_cost = route_distance.mean(axis=1)
         route_deviation = np.square(route_distance).mean(axis=1)
         here = self.arc_at(state[:2])
@@ -499,7 +611,7 @@ class DwaPlanner:
         # How far off the corridor's own direction each arc leaves the chair,
         # averaged over the rollout. The route indices come free from the
         # path-distance query above.
-        ref = self.heading[idx].reshape(len(pairs), self.steps)
+        ref = self.heading[idx].reshape(len(pairs), path_steps)
         aim = np.abs(np.arctan2(np.sin(paths[:, :, 2] - ref),
                                 np.cos(paths[:, :, 2] - ref))).mean(axis=1)
         steer = np.abs(np.asarray([p[1] for p in pairs]) - float(last_yaw_rate))
@@ -514,21 +626,21 @@ class DwaPlanner:
         half = np.maximum((hi - lo) / 2.0, 1e-6)
         edge = np.abs(lateral - (hi + lo) / 2.0) / half
         centre = np.square(np.minimum(edge, 1.0)).reshape(
-            len(pairs), self.steps).mean(axis=1)
+            len(pairs), path_steps).mean(axis=1)
         overflow = np.maximum(lo - lateral, 0.0) + \
             np.maximum(lateral - hi, 0.0)
         escaped = (~band_inside).reshape(
-            len(pairs), self.steps).any(axis=1)
+            len(pairs), path_steps).any(axis=1)
         band_escape = (
             BAND_ESCAPE_BASE_COST * escaped.astype(float)
             + W_BAND_OVERFLOW * np.square(overflow).reshape(
-                len(pairs), self.steps).mean(axis=1)
+                len(pairs), path_steps).mean(axis=1)
         )
         if self.route_mask is None:
             mask_boundary = np.zeros(len(pairs), dtype=float)
         else:
             mask_boundary = self.route_mask.boundary_cost_many(flat).reshape(
-                len(pairs), self.steps).mean(axis=1)
+                len(pairs), path_steps).mean(axis=1)
         cost = (W_SPEED * speed_change
                 - W_VELOCITY * np.asarray([p[0] for p in pairs])
                 + W_PATH * path_cost + W_ROUTE_DEVIATION * route_deviation
@@ -537,4 +649,23 @@ class DwaPlanner:
                 + band_escape + W_MASK_BOUNDARY * mask_boundary)
         cost = np.where(ok, cost, np.inf)
         best = int(np.argmin(cost))
-        return float(pairs[best][0]), float(pairs[best][1]), "OK"
+        selected = None
+        if return_proposal:
+            selected = TrajectoryProposal(
+                proposal_seq=metadata.proposal_seq,
+                stamp_s=metadata.stamp_s,
+                permit_track_id=metadata.permit_track_id,
+                committed_side=metadata.committed_side,
+                frame_id="body",
+                horizon_s=(len(proposal_paths[best])
+                           * actuator_state.control_step_s),
+                actuator_state=actuator_state,
+                target_speed_mps=pairs[best][0],
+                target_yaw_rate_rps=pairs[best][1],
+                poses=self._body_relative(
+                    proposal_paths[best], np.asarray(state, dtype=float)),
+                speeds_mps=applied_speeds[best],
+                yaw_rates_rps=applied_yaw_rates[best],
+            )
+        result = (float(pairs[best][0]), float(pairs[best][1]), "OK")
+        return result + (selected,) if return_proposal else result

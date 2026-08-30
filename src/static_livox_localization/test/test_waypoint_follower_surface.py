@@ -80,13 +80,19 @@ def test_obstacle_stop_radius_covers_braking_distance_at_full_speed():
     assert "guard_slow = guard_stop + GUARD_SLOW_EXTRA_M" in text
 
 
-def test_follower_bypasses_static_obstacles_only_inside_band():
-    text = follower_text()
-    assert "BYPASS_AFTER_S" in text
-    assert "bypass_target_ok" in text
-    wait = text.index("no side of this has room in the band - waiting")
-    bypass = text.index("going round a parked obstacle")
-    assert bypass < wait
+def test_base_follower_has_no_static_threat_bypass_authority():
+    waypoint = follower_text()
+    dwa = (ROOT / "scripts" / "dwa_follower.py").read_text(encoding="utf-8")
+    mpc = (ROOT / "scripts" / "mpc_follower.py").read_text(encoding="utf-8")
+    wrapper = (ROOT / "scripts" / "person_bypass_dwa_follower.py").read_text(
+        encoding="utf-8")
+
+    for text in (waypoint, dwa, mpc):
+        assert "PERSON_BYPASS" not in text
+        assert "BYPASS_AFTER_S" not in text
+    assert "bypass_permit=bypass_permit" in method_body(
+        waypoint, "avoidance_for")
+    assert wrapper.count("bypass_permit=permit") == 1
 
 
 def test_the_band_still_vets_a_way_round_when_the_policies_are_off():
