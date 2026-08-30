@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import dataclasses
 from pathlib import Path
 import subprocess
 import sys
@@ -107,6 +108,29 @@ def test_catkin_installs_static_threat_nodes_and_proposal_contract():
     )
     # Then every node and sibling wire contract is packaged.
     assert all(name in cmake for name in required)
+
+
+def test_proposal_contract_imports_with_python38_dataclass(monkeypatch):
+    # Given the Python 3.8 dataclass API used by the NUC
+    native_dataclass = dataclasses.dataclass
+
+    def python38_dataclass(*args, **kwargs):
+        assert "slots" not in kwargs, \
+            "Python 3.8 dataclass does not accept slots"
+        return native_dataclass(*args, **kwargs)
+
+    monkeypatch.setattr(dataclasses, "dataclass", python38_dataclass)
+    spec = importlib.util.spec_from_file_location(
+        "python38_trajectory_proposal", SCRIPTS / "trajectory_proposal.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+
+    # When the proposal contract is imported
+    spec.loader.exec_module(module)
+
+    # Then its strict value types are available without Python 3.10 features.
+    assert module.TrajectoryProposal.__name__ == "TrajectoryProposal"
 
 
 def test_runtime_surface_uses_only_generic_static_threat_contract():

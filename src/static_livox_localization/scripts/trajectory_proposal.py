@@ -56,7 +56,7 @@ def yaw_matches_side(side, yaw_rate_rps):
             or side == "RIGHT" and yaw_rate_rps < 0.0)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - NUC Python 3.8
 class ActuatorState:
     speed_mps: float
     yaw_rate_rps: float
@@ -102,7 +102,7 @@ class ActuatorState:
                    payload["acceleration_mps2"], payload["control_step_s"])
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - NUC Python 3.8
 class ProposalMetadata:
     proposal_seq: int
     stamp_s: float
@@ -123,7 +123,7 @@ class ProposalMetadata:
             self, "committed_side", normalize_side(self.committed_side))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - NUC Python 3.8
 class RolloutSpec:
     pose: tuple
     target_speed_mps: float
@@ -153,7 +153,7 @@ class RolloutSpec:
         object.__setattr__(self, "latency_s", normalize_latency(self.latency_s))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)  # noqa: SLOTS_OK - NUC Python 3.8
 class TrajectoryProposal:
     proposal_seq: int
     stamp_s: float
