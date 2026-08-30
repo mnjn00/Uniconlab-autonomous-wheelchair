@@ -4,8 +4,9 @@
 The stock hybrid follower intentionally waits for every person. This wrapper
 changes only that policy transition: after direct same-track STATIC evidence,
 DWA may plan around exactly one person at the turn-speed floor. Moving,
-unknown, learned-only, too-close, multiple, stale, or geometrically invalid
-people remain stop-only.
+unknown, learned-only, multiple, stale, or geometrically invalid people remain
+stop-only. A qualified person that is already safely beside the chair does
+not force another stop merely because its longitudinal distance is small.
 """
 
 import json
@@ -186,6 +187,15 @@ class PersonBypassDwaFollower(DwaFollower):
             if threat is not None and not threat.is_person and (
                     ordinary == WAIT or not threat.parked):
                 return WAIT
+            if permit.reason == "STATIC_PERSON_PASSED_SIDE" and threat is None:
+                # The qualified person has cleared the forward corridor. Do
+                # not keep bending around a target now beside/behind us: the
+                # normal route follower may resume straight ahead. The
+                # semantic supervisor still caps this heartbeat to bypass
+                # speed, and the unmodified raw gate checks the real swept
+                # footprint before any command reaches the base.
+                self.active_trajectory_permit = None
+                return CLEAR
             self.activate_trajectory_bypass(
                 permit, "static-person trajectory permit")
             return GO_ROUND
