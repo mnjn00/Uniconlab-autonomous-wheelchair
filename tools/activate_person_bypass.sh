@@ -75,6 +75,11 @@ PERSON_BYPASS_MIN_NEAR_M="${PERSON_BYPASS_MIN_NEAR_M:-0.60}"
 PERSON_BYPASS_SPEED_MPS="${PERSON_BYPASS_SPEED_MPS:-0.35}"
 PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.50}"
 PERSON_BYPASS_MIN_TURN_RPS="${PERSON_BYPASS_MIN_TURN_RPS:-0.08}"
+POST_PASS_STRAIGHT_DISTANCE_M="${POST_PASS_STRAIGHT_DISTANCE_M:-0.80}"
+POST_PASS_STRAIGHT_YAW_RATE="${POST_PASS_STRAIGHT_YAW_RATE:-0.05}"
+POST_PASS_RECOVERY_YAW_RATE="${POST_PASS_RECOVERY_YAW_RATE:-0.08}"
+POST_PASS_ALIGNMENT_LATERAL_M="${POST_PASS_ALIGNMENT_LATERAL_M:-0.25}"
+POST_PASS_ALIGNMENT_HEADING_RAD="${POST_PASS_ALIGNMENT_HEADING_RAD:-0.12}"
 
 say "replacing stop-only person policy while the chair remains paused"
 for node in /waypoint_follower /semantic_safety_supervisor /safety_gate; do
@@ -137,6 +142,11 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _person_bypass_minimum_near_m:="$PERSON_BYPASS_MIN_NEAR_M" \
   _person_bypass_speed_mps:="$PERSON_BYPASS_SPEED_MPS" \
   _person_bypass_clearance_m:="$PERSON_BYPASS_CLEARANCE_M" \
+  _post_pass_straight_distance_m:="$POST_PASS_STRAIGHT_DISTANCE_M" \
+  _post_pass_straight_yaw_rate:="$POST_PASS_STRAIGHT_YAW_RATE" \
+  _post_pass_recovery_yaw_rate:="$POST_PASS_RECOVERY_YAW_RATE" \
+  _post_pass_alignment_lateral_m:="$POST_PASS_ALIGNMENT_LATERAL_M" \
+  _post_pass_alignment_heading_rad:="$POST_PASS_ALIGNMENT_HEADING_RAD" \
   > "$LOG/live_person_bypass_dwa.log" 2>&1 < /dev/null &
 
 say "semantic supervisor with target-only static-person exception"
@@ -187,6 +197,8 @@ cat <<EOF
   moving/unknown object : WAIT
   bypass speed          : <= ${PERSON_BYPASS_SPEED_MPS} m/s
   person clearance      : >= ${PERSON_BYPASS_CLEARANCE_M} m
+  post-pass straight    : ${POST_PASS_STRAIGHT_DISTANCE_M} m, |w| <= ${POST_PASS_STRAIGHT_YAW_RATE} rad/s
+  gentle route rejoin   : until route/heading align, |w| <= ${POST_PASS_RECOVERY_YAW_RATE} rad/s
   raw gate              : fixed corridor replaced only by clear curved sweep
   terrain/tip/UART      : unchanged and still downstream
 
