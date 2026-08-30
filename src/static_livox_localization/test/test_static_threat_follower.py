@@ -166,9 +166,10 @@ def test_accepted_zero_keeps_committed_side():
     assert follower.qualifier.pass_side == "right"
 
 
-def test_publish_proposal_immediately_before_matching_command():
+def test_published_command_and_proposal_share_exact_sequence():
     module, _Stamp, Twist = load_follower("dwa_follower")
-    events = []
+    proposals = []
+    commands = []
     proposal = types.SimpleNamespace(
         proposal_seq=4,
         first_applied_speed_mps=0.35,
@@ -176,18 +177,17 @@ def test_publish_proposal_immediately_before_matching_command():
         to_json=lambda: json.dumps({"proposal_seq": 4}))
     follower = module.DwaFollower.__new__(module.DwaFollower)
     follower.proposal_pub = types.SimpleNamespace(
-        publish=lambda message: events.append(("proposal", json.loads(message.data))))
+        publish=lambda message: proposals.append(json.loads(message.data)))
     follower.cmd_pub = types.SimpleNamespace(
-        publish=lambda message: events.append(
-            ("command", message.linear.x, message.angular.z,
-             message.angular.x)))
+        publish=lambda message: commands.append(message))
 
     follower.publish_proposal_command(proposal, Twist)
 
-    assert events == [
-        ("proposal", {"proposal_seq": 4}),
-        ("command", 0.35, 0.15, 4.0),
-    ]
+    assert proposals == [{"proposal_seq": 4}]
+    assert len(commands) == 1
+    assert commands[0].linear.x == 0.35
+    assert commands[0].angular.z == 0.15
+    assert commands[0].angular.x == proposals[0]["proposal_seq"]
 
 
 def test_raw_only_gate_stall_remains_stop_only():
