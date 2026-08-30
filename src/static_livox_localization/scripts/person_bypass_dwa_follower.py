@@ -9,7 +9,6 @@ stop-only. A qualified person that is already safely beside the chair does
 not force another stop merely because its longitudinal distance is small.
 """
 
-import json
 import math
 import os
 import sys
@@ -42,8 +41,8 @@ class PersonBypassDwaFollower(DwaFollower):
     CONTROL_LAW = "dwa"
 
     def __init__(self):
-        self._gate_rejected_yaw_rates = set()
-        self._gate_rejected_track_id = None
+        self._committed_bypass_track_id = None
+        self._committed_bypass_side = 0
         self.active_trajectory_permit = None
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
@@ -64,6 +63,8 @@ class PersonBypassDwaFollower(DwaFollower):
             "~person_bypass_lateral_hysteresis_m", 0.25))
         self.person_bypass_minimum_near_m = float(rospy.get_param(
             "~person_bypass_minimum_near_m", 0.60))
+        self.person_bypass_passed_side_grace_s = float(rospy.get_param(
+            "~person_bypass_passed_side_grace_s", 1.0))
         self.person_bypass_speed_mps = float(rospy.get_param(
             "~person_bypass_speed_mps", 0.35))
         self.person_bypass_clearance_m = float(rospy.get_param(
@@ -80,6 +81,7 @@ class PersonBypassDwaFollower(DwaFollower):
             maximum_lateral_m=self.person_bypass_maximum_lateral_m,
             lateral_hysteresis_m=self.person_bypass_lateral_hysteresis_m,
             minimum_near_distance_m=self.person_bypass_minimum_near_m,
+            passed_side_grace_s=self.person_bypass_passed_side_grace_s,
             max_speed_mps=self.person_bypass_speed_mps,
             min_clearance_m=self.person_bypass_clearance_m,
         )
@@ -99,34 +101,34 @@ class PersonBypassDwaFollower(DwaFollower):
         self.permit_pub.publish(String(data=permit.to_json()))
         self._permit_published_this_cycle = True
 
-    def on_gate_status(self, message):
-        super(PersonBypassDwaFollower, self).on_gate_status(message)
-        try:
-            report = json.loads(message.data)
-            reason = str(report.get("trajectory_override_reason") or "")
-            requested_yaw = float(report.get("trajectory_requested_w"))
-        except (TypeError, ValueError):
-            return
-        if reason in ("REQUESTED_PATH_COLLISION", "TURN_TOO_SMALL") and \
-                math.isfinite(requested_yaw):
-            self._gate_rejected_yaw_rates.add(requested_yaw)
-
-    def reset_gate_rejections(self):
-        self._gate_rejected_yaw_rates.clear()
-        self._gate_rejected_track_id = None
+    def reset_bypass_commitment(self):
+        self._committed_bypass_track_id = None
+        self._committed_bypass_side = 0
 
     def activate_trajectory_bypass(self, permit, detail):
         self.active_trajectory_permit = permit
-        if self._gate_rejected_track_id != permit.track_id:
-            self._gate_rejected_yaw_rates.clear()
-            self._gate_rejected_track_id = permit.track_id
+        if self._committed_bypass_track_id != permit.track_id:
+            # Commit away from the observed obstacle/person for the whole
+            # pass. A stable side prevents small point-cloud changes from
+            # alternating the winning DWA candidate left/right every frame.
+            lateral = float(permit.target_y_m or 0.0)
+            if abs(lateral) > 1e-3:
+                self._committed_bypass_side = -1 if lateral > 0.0 else 1
+            elif abs(getattr(self, "last_yaw_rate", 0.0)) > 1e-3:
+                self._committed_bypass_side = (
+                    1 if self.last_yaw_rate > 0.0 else -1)
+            else:
+                self._committed_bypass_side = 1
+            self._committed_bypass_track_id = permit.track_id
         self.planner.max_speed = min(
             float(self.planner.max_speed), float(permit.max_speed_mps))
         dwa_core.OBSTACLE_FLOOR_M = max(
             float(dwa_core.OBSTACLE_FLOOR_M),
             float(permit.min_clearance_m))
-        self.planner.rejected_yaw_rates = tuple(
-            sorted(self._gate_rejected_yaw_rates))
+        # Gate failures are checked again from the current raw cloud every
+        # cycle. Never blacklist a yaw for the lifetime of a track: an arc
+        # that was blocked one frame can become safe as the chair advances.
+        self.planner.rejected_yaw_rates = ()
         self.gate_reason = ""
         self.gate_blocked_since = None
         self.gate_detail = detail
@@ -161,7 +163,7 @@ class PersonBypassDwaFollower(DwaFollower):
         permit = self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING")
         if not permit.active:
-            self.reset_gate_rejections()
+            self.reset_bypass_commitment()
         return permit
 
     def avoidance_for(self, now, threat, blocking):
@@ -174,7 +176,7 @@ class PersonBypassDwaFollower(DwaFollower):
             # that this directly observed person moved or disappeared.
             self.publish_permit(permit)
             if not permit.active:
-                self.reset_gate_rejections()
+                self.reset_bypass_commitment()
                 # Qualification may start in the wider observation region.
                 # Outside the dynamic braking envelope, keep approaching;
                 # the raw/semantic collision layers remain fully active.
@@ -188,14 +190,14 @@ class PersonBypassDwaFollower(DwaFollower):
                     ordinary == WAIT or not threat.parked):
                 return WAIT
             if permit.reason == "STATIC_PERSON_PASSED_SIDE" and threat is None:
-                # The qualified person has cleared the forward corridor. Do
-                # not keep bending around a target now beside/behind us: the
-                # normal route follower may resume straight ahead. The
-                # semantic supervisor still caps this heartbeat to bypass
-                # speed, and the unmodified raw gate checks the real swept
-                # footprint before any command reaches the base.
-                self.active_trajectory_permit = None
-                return CLEAR
+                # Keep the same maneuver active while the person is beside
+                # the chair. Straight is now a valid candidate when its real
+                # swept footprint is clear, but an abrupt opposite turn back
+                # to the centreline is withheld until the person has left the
+                # side region. This removes the observed S-shaped snap-back.
+                self.activate_trajectory_bypass(
+                    permit, "static person safely passing down the side")
+                return GO_ROUND
             self.activate_trajectory_bypass(
                 permit, "static-person trajectory permit")
             return GO_ROUND
@@ -204,7 +206,7 @@ class PersonBypassDwaFollower(DwaFollower):
         # arc. NO_PERSON has already reset the qualifier above.
         if threat is not None and threat.is_person:
             self.publish_permit(permit)
-            self.reset_gate_rejections()
+            self.reset_bypass_commitment()
             # The base decision already applies the dynamic braking radius:
             # CLEAR outside it and WAIT inside it.  Replacing that result with
             # unconditional WAIT caused the 2026-08-30 stop at 8.3 m.
@@ -212,7 +214,7 @@ class PersonBypassDwaFollower(DwaFollower):
             # direct qualification disappeared at collision distance.
             return WAIT if blocking else ordinary
         if threat is None or ordinary != GO_ROUND:
-            self.reset_gate_rejections()
+            self.reset_bypass_commitment()
             self.publish_permit(permit)
             return ordinary
         permit = static_obstacle_permit(
@@ -234,17 +236,28 @@ class PersonBypassDwaFollower(DwaFollower):
             self.activate_trajectory_bypass(
                 permit, "static-object trajectory permit")
         else:
-            self.reset_gate_rejections()
+            self.reset_bypass_commitment()
         return ordinary
 
     def planner_candidate_veto(self, now, _decision, command_for_target):
         if self.active_trajectory_permit is None:
             return None
-        return make_raw_gate_candidate_veto(
+        raw_veto = make_raw_gate_candidate_veto(
             self.cloud, self.motion,
             (now - self.cloud_stamp).to_sec(), command_for_target,
             minimum_turn_rps=self.minimum_person_bypass_turn_rps,
             now_s=now.to_sec())
+        committed_side = self._committed_bypass_side
+
+        def veto(target_v, target_w):
+            # Zero yaw is intentionally allowed: if its exact raw sweep is
+            # clear, continuing forward is safer and smoother than forcing a
+            # turn. Only a turn toward the opposite side is suppressed.
+            if committed_side and float(target_w) * committed_side < -1e-6:
+                return True
+            return raw_veto(target_v, target_w)
+
+        return veto
 
     def step(self):
         self.active_trajectory_permit = None

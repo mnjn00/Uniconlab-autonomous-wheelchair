@@ -207,6 +207,27 @@ def test_passed_person_dropout_gets_only_a_short_clearance_heartbeat():
     assert not permit.active and permit.reason == "NO_PERSON"
 
 
+def test_one_stale_side_observation_does_not_erase_a_safe_pass():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=.4, maximum_gap_s=.45, passed_side_grace_s=1.0,
+        minimum_near_distance_m=.60, min_clearance_m=.50)
+    for stamp in (1.0, 1.2, 1.4):
+        qualifier.update(person_observations(summary(
+            stamp, [person(x=2.0, y=.9)])), stamp, True)
+    for stamp, x_m in ((1.6, 1.7), (1.8, 1.4), (2.0, 1.1), (2.2, .8)):
+        permit = qualifier.update(person_observations(summary(
+            stamp, [person(x=x_m, y=.9)])), stamp, True)
+    assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
+
+    stale = person_observations(summary(2.2, [person(x=.7, y=.9)]))
+    permit = qualifier.update(stale, 2.75, True)
+    assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
+
+    fresh = person_observations(summary(2.8, [person(x=.6, y=.9)]))
+    permit = qualifier.update(fresh, 2.8, True)
+    assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
+
+
 def test_permit_round_trip_freshness_and_target_match():
     qualifier = StaticPersonQualifier(confirmation_s=.2)
     qualifier.update(person_observations(summary(1.0, [person()])), 1.0, True)
@@ -261,7 +282,7 @@ def test_object_permit_cannot_suppress_the_person_semantic_stop():
     assert not permit_matches_observation(permit, observation)
 
 
-def test_raw_gate_override_requires_curved_clear_path_and_stopped_carried_path():
+def test_raw_gate_override_accepts_any_clear_swept_path_and_rejects_collisions():
     permit = qualify(StaticPersonQualifier(confirmation_s=3.0))
     common = dict(
         permit=permit, now_s=permit.stamp_s + .05,
@@ -272,8 +293,9 @@ def test_raw_gate_override_requires_curved_clear_path_and_stopped_carried_path()
     )
     decision = evaluate_gate_override(**common)
     assert decision.allowed and decision.speed_cap_mps == .35
-    assert not evaluate_gate_override(
-        **dict(common, requested_w_rps=.01)).allowed
+    straight = evaluate_gate_override(
+        **dict(common, requested_w_rps=0.0))
+    assert straight.allowed
     assert not evaluate_gate_override(
         **dict(common, immediate_collision=True)).allowed
     assert not evaluate_gate_override(

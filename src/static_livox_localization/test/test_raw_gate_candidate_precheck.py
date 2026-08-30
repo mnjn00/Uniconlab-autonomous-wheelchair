@@ -31,9 +31,9 @@ def test_current_footprint_collision_rejects(monkeypatch):
     assert fixture_veto(monkeypatch, [(0.0, 0.0)] * 5)(0.35, 0.3)
 
 
-def test_checks_ramped_command_not_target(monkeypatch):
+def test_clear_nearly_straight_ramped_command_is_allowed(monkeypatch):
     veto = fixture_veto(monkeypatch, command=lambda v, w: (0.1, 0.03, 0.0))
-    assert veto(0.35, 0.5)
+    assert not veto(0.35, 0.5)
 
 
 @pytest.mark.parametrize('age', [1.01, -0.1, float('nan')])

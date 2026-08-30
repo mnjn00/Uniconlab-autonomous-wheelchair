@@ -780,14 +780,15 @@ def blocking_gate(follower, reason="OBSTACLE", held_s=2.0,
     follower.gate_blocked_for = lambda now: held_s
 
 
-def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
+def test_person_bypass_does_not_blacklist_a_yaw_rejected_by_one_frame():
     module, _Stamp = load_follower("person_bypass_dwa_follower")
     follower = module.PersonBypassDwaFollower.__new__(
         module.PersonBypassDwaFollower)
     follower.gate_reason = ""
     follower.gate_blocked_since = None
     follower.gate_detail = ""
-    follower._gate_rejected_yaw_rates = set()
+    follower._committed_bypass_track_id = None
+    follower._committed_bypass_side = 0
     message = types.SimpleNamespace(data=json.dumps({
         "reason": "OBSTACLE",
         "trajectory_override_reason": "REQUESTED_PATH_COLLISION",
@@ -796,7 +797,7 @@ def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
 
     follower.on_gate_status(message)
 
-    assert follower._gate_rejected_yaw_rates == {0.5}
+    assert not hasattr(follower, "_gate_rejected_yaw_rates")
 
 
 def test_final_stop_resynchronizes_the_dwa_command_ramp():
@@ -851,8 +852,8 @@ def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
     follower.person_bypass_maximum_gap_s = 0.45
     follower.person_bypass_speed_mps = 0.35
     follower.person_bypass_clearance_m = 0.80
-    follower._gate_rejected_yaw_rates = set()
-    follower._gate_rejected_track_id = None
+    follower._committed_bypass_track_id = None
+    follower._committed_bypass_side = 0
     follower.planner = types.SimpleNamespace(max_speed=0.8)
     threat = types.SimpleNamespace(
         is_person=False,
@@ -884,8 +885,9 @@ def bypass_fixture(monkeypatch):
     follower.person_bypass_maximum_lateral_m = 1.0
     follower.person_bypass_lateral_hysteresis_m = 0.25
     follower.tracking_state = "TRACKING"
-    follower._gate_rejected_yaw_rates = set()
-    follower._gate_rejected_track_id = None
+    follower._committed_bypass_track_id = None
+    follower._committed_bypass_side = 0
+    follower.last_yaw_rate = 0.0
     follower.active_trajectory_permit = None
     follower.planner = types.SimpleNamespace(max_speed=0.8)
     permits = []
@@ -1075,9 +1077,9 @@ def test_passed_side_person_returns_to_forward_route_without_losing_safety(monke
             stamp, [dict(person, x=x_m, y=.9)])
         permit = follower.observed_person_permit(Stamp(stamp))
     assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
-    assert follower.avoidance_for(Stamp(14.0), None, False) == module.CLEAR
+    assert follower.avoidance_for(Stamp(14.0), None, False) == module.GO_ROUND
     assert permits[-1].reason == "STATIC_PERSON_PASSED_SIDE"
-    assert follower.active_trajectory_permit is None
+    assert follower.active_trajectory_permit is not None
 
     semantic, _ = load_follower('person_bypass_semantic_supervisor')
     supervisor = semantic.PersonBypassSemanticSupervisor.__new__(
@@ -1091,6 +1093,26 @@ def test_passed_side_person_returns_to_forward_route_without_losing_safety(monke
     supervisor.bypass_lateral_hysteresis_m = .25
     accepted, observation = supervisor.validated_bypass(14.0)
     assert accepted is not None and observation is None
+
+
+def test_bypass_candidate_keeps_committed_side_but_allows_clear_straight(monkeypatch):
+    module, Stamp, follower, _permits = bypass_fixture(monkeypatch)
+    follower.active_trajectory_permit = types.SimpleNamespace(active=True)
+    follower._committed_bypass_side = -1
+    follower.cloud = np.zeros((100, 3))
+    follower.cloud_stamp = Stamp(9.9)
+    follower.motion = types.SimpleNamespace(valid=True)
+    follower.minimum_person_bypass_turn_rps = .08
+    monkeypatch.setattr(
+        module, "make_raw_gate_candidate_veto", lambda *a, **k: (
+            lambda _v, _w: False))
+
+    veto = follower.planner_candidate_veto(
+        Stamp(10.0), module.GO_ROUND, lambda v, w: (v, w, 0.0))
+
+    assert not veto(.35, -.2)
+    assert not veto(.35, 0.0)
+    assert veto(.35, .2)
 
 
 def test_person_qualification_while_paused_does_not_send_motion(monkeypatch):

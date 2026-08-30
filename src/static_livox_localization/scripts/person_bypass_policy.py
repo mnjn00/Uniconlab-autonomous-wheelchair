@@ -195,13 +195,15 @@ class StaticPersonQualifier:
                  maximum_lateral_m: float = 1.0,
                  lateral_hysteresis_m: float = 0.25,
                  minimum_near_distance_m: float = 0.60,
+                 passed_side_grace_s: float = 1.0,
                  max_speed_mps: float = 0.35,
                  min_clearance_m: float = 0.50):
         values = (
             confirmation_s, maximum_gap_s, maximum_position_jump_m,
             permit_lifetime_s, maximum_forward_m, observation_forward_m,
             maximum_lateral_m,
-            lateral_hysteresis_m, minimum_near_distance_m, max_speed_mps,
+            lateral_hysteresis_m, minimum_near_distance_m,
+            passed_side_grace_s, max_speed_mps,
             min_clearance_m,
         )
         if not all(math.isfinite(float(value)) and float(value) > 0.0
@@ -219,6 +221,7 @@ class StaticPersonQualifier:
         self.maximum_lateral_m = float(maximum_lateral_m)
         self.lateral_hysteresis_m = float(lateral_hysteresis_m)
         self.minimum_near_distance_m = float(minimum_near_distance_m)
+        self.passed_side_grace_s = float(passed_side_grace_s)
         self.max_speed_mps = float(max_speed_mps)
         self.min_clearance_m = float(min_clearance_m)
         self.reset()
@@ -289,6 +292,33 @@ class StaticPersonQualifier:
         if not person.eligible_static:
             self.reset()
             return self.inactive(now_s, "PERSON_NOT_CONFIRMED_STATIC")
+        stamp_s = float(person.stamp_s)
+        observation_age_s = now_s - stamp_s
+        if stamp_s > now_s + 0.05 or observation_age_s > self.maximum_gap_s:
+            # Once the same qualified person is safely down the side, one
+            # delayed fusion message must not erase that maneuver state and
+            # immediately turn the same box into PERSON_TOO_CLOSE.  Keep the
+            # permit only for a tightly bounded grace period and only while
+            # the stale box still proves lateral clearance. Moving/unknown,
+            # changed-ID, multiple-person and localization failures have
+            # already failed above and remain stop-only.
+            safely_beside = same_track and self.passed_side and \
+                person.lateral_clearance_m >= self.min_clearance_m
+            if safely_beside and -0.05 <= observation_age_s <= \
+                    self.passed_side_grace_s:
+                static_for_s = max(
+                    0.0, float(self.last_stamp_s) - float(self.first_stamp_s))
+                remembered = PersonObservation(
+                    track_id=person.track_id,
+                    stamp_s=float(self.last_stamp_s),
+                    x_m=person.x_m, y_m=person.y_m,
+                    size_x_m=person.size_x_m, size_y_m=person.size_y_m,
+                    motion=person.motion, source=person.source)
+                return self.active(
+                    now_s, remembered, static_for_s,
+                    "STATIC_PERSON_PASSED_SIDE")
+            self.reset()
+            return self.inactive(now_s, "PERSON_OBSERVATION_STALE")
         if person.near_distance_m < self.minimum_near_distance_m:
             qualified = same_track and self.first_stamp_s is not None and \
                 self.last_stamp_s is not None and \
@@ -307,11 +337,6 @@ class StaticPersonQualifier:
             self.reset()
             return self.inactive(now_s, "PERSON_OUTSIDE_MANEUVER_REGION")
 
-        stamp_s = float(person.stamp_s)
-        if stamp_s > now_s + 0.05 or now_s - stamp_s > self.maximum_gap_s:
-            self.reset()
-            return self.inactive(now_s, "PERSON_OBSERVATION_STALE")
-
         if not same_track or self.last_stamp_s is None:
             self.track_id = person.track_id
             self.first_stamp_s = stamp_s
@@ -320,7 +345,11 @@ class StaticPersonQualifier:
             return self.inactive(now_s, "QUALIFYING_STATIC_PERSON")
 
         gap_s = stamp_s - float(self.last_stamp_s)
-        if gap_s < -1e-6 or gap_s > self.maximum_gap_s:
+        allowed_gap_s = (
+            self.passed_side_grace_s if self.passed_side
+            and person.lateral_clearance_m >= self.min_clearance_m
+            else self.maximum_gap_s)
+        if gap_s < -1e-6 or gap_s > allowed_gap_s:
             self.reset()
             return self.update((person,), now_s, localization_tracking)
         if self.last_xy is not None:
@@ -508,7 +537,12 @@ def evaluate_gate_override(*, permit: Optional[BypassPermit], now_s: float,
                            carried_path_collision: bool,
                            minimum_turn_rps: float = 0.08,
                            maximum_permit_age_s: float = 0.45) -> GateOverrideDecision:
-    """Allow only a fresh, genuinely curved, collision-free static-person arc."""
+    """Allow a fresh collision-free command for a qualified static person.
+
+    A straight command is valid when its *actual swept footprint* is clear.
+    The old minimum-turn rule rejected that safest option merely because a
+    bypass permit existed, causing forced bends and left/right oscillation.
+    """
     if permit is None or not permit.active:
         return GateOverrideDecision(False, "NO_ACTIVE_PERMIT", None)
     if not permit_is_fresh(permit, now_s, maximum_permit_age_s):
@@ -518,8 +552,6 @@ def evaluate_gate_override(*, permit: Optional[BypassPermit], now_s: float,
         return GateOverrideDecision(False, "COMMAND_INVALID", None)
     if requested_v_mps <= 0.0:
         return GateOverrideDecision(False, "NO_FORWARD_MOTION", None)
-    if abs(requested_w_rps) < float(minimum_turn_rps):
-        return GateOverrideDecision(False, "TURN_TOO_SMALL", None)
     if immediate_collision:
         return GateOverrideDecision(False, "IMMEDIATE_FOOTPRINT", None)
     if carried_path_collision:

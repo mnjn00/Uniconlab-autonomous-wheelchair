@@ -5,13 +5,13 @@ The ordinary safety gate remains unchanged for every condition except its
 fixed straight forward-corridor ``OBSTACLE`` verdict. A fresh, independently
 qualified static-person permit may replace that one verdict only when:
 
-* the command is a real curved DWA proposal,
+* the command's actual straight or curved swept footprint is clear,
 * the person is not already inside the protected current footprint,
 * the motion the chair is still carrying is collision-free (or stopped), and
 * the requested curved swept footprint is clear against all raw points.
 
-Stale sensors, invalid input, reverse, unknown/moving people, and straight
-motion are never overridden. ``OBSTACLE_SWEEP`` enters the same independent
+Stale sensors, invalid input, reverse, and unknown/moving people are never
+overridden. ``OBSTACLE_SWEEP`` enters the same independent
 trajectory check so a colliding yaw is reported back to DWA for retry; it is
 not waived. The old roughly 0.75 m expanded straight box is deliberately not
 recreated here: the current footprint and the requested curve are measured
@@ -95,9 +95,6 @@ def make_raw_gate_candidate_veto(
         if requested_v <= base_gate.MOTION_EPSILON:
             cache[key] = False
             return False
-        if abs(requested_w) < minimum_turn_rps:
-            cache[key] = True
-            return True
         envelope = base_gate.stopping_envelope(
             measured_speed_mps=motion.linear_speed_mps,
             requested_speed_mps=requested_v,
