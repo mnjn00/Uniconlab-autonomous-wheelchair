@@ -142,6 +142,7 @@ def test_accelerated_planner_shares_actuator_rollout_and_side_commitment():
         "proposal_seq": 7,
         "stamp_s": 12.0,
         "permit_track_id": 18,
+        "latency_s": 0.55,
         "return_proposal": True,
     }
 
@@ -219,6 +220,30 @@ def test_invalid_proposal_minimum_turn_fails_closed_cpu_and_gpu(invalid_turn):
         "stamp_s": 51.0,
         "permit_track_id": 7,
         "minimum_turn_rps": invalid_turn,
+        "return_proposal": True,
+    }
+
+    assert base.plan((0.0, 0.0, 0.0), **kwargs) == (
+        0.0, 0.0, "ACTUATOR_STATE_INVALID", None)
+    assert accelerated.plan((0.0, 0.0, 0.0), **kwargs) == (
+        0.0, 0.0, "ACTUATOR_STATE_INVALID", None)
+
+
+@pytest.mark.parametrize("invalid_latency", [float("nan"), float("inf"),
+                                               -0.01, True, "0.55"])
+def test_invalid_proposal_latency_fails_closed_cpu_and_gpu(invalid_latency):
+    base = dwa_core.DwaPlanner(
+        WideBand(), route(), route_mask=OpenMask())
+    GpuPlanner = make_gpu_planner(dwa_core.DwaPlanner, dwa_core)
+    accelerated = GpuPlanner(
+        WideBand(), route(), route_mask=OpenMask(),
+        prefer_gpu=False, require_gpu=False)
+    kwargs = {
+        "actuator_state": dwa_core.ActuatorState(0.0, 0.0, 0.0),
+        "proposal_seq": 33,
+        "stamp_s": 52.0,
+        "permit_track_id": 7,
+        "latency_s": invalid_latency,
         "return_proposal": True,
     }
 

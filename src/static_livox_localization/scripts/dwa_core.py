@@ -48,7 +48,8 @@ import numpy as np
 from trajectory_proposal import (ActuatorState, ProposalMetadata,
                                  ProposalValidationError, RolloutSpec,
                                  TrajectoryProposal, normalize_side,
-                                 normalize_minimum_turn, rollout_actuation,
+                                 normalize_latency, normalize_minimum_turn,
+                                 rollout_actuation, rollout_actuation_timed,
                                  yaw_matches_side)
 
 # The follower's constants. Kept literal rather than imported because
@@ -391,42 +392,51 @@ class DwaPlanner:
         dy = np.cumsum(v * np.sin(yaw) * dt, axis=1)
         return np.stack([state[0] + dx, state[1] + dy, yaw], axis=2)
 
-    def _candidate_rollouts(self, state, pairs, span, actuator_state=None):
+    def _candidate_rollouts(self, state, pairs, span, actuator_state=None,
+                            latency_s=0.0):
         if actuator_state is None:
             paths = self._rollouts(state, pairs, span)
             speeds = tuple(tuple([pair[0]] * self.steps) for pair in pairs)
             yaw_rates = tuple(tuple([pair[1]] * self.steps) for pair in pairs)
             full_paths = tuple(tuple(tuple(point) for point in path)
                                for path in paths)
+            body_paths = tuple(self._body_relative(path, state)
+                               for path in full_paths)
+            time_steps = tuple(tuple(
+                [float(span) / (pair[0] * self.steps)] * self.steps)
+                for pair in pairs)
             travelled = tuple([float(span)] * len(pairs))
-            return pairs, paths, full_paths, speeds, yaw_rates, travelled
+            return (pairs, paths, full_paths, body_paths, speeds, yaw_rates,
+                    time_steps, travelled)
 
-        unique_pairs, scored_paths, full_paths = [], [], []
-        unique_speeds, unique_yaw_rates, travelled = [], [], []
+        unique_pairs, scored_paths, full_paths, body_paths = [], [], [], []
+        unique_speeds, unique_yaw_rates, time_steps, travelled = [], [], [], []
         seen = set()
         for pair in pairs:
-            poses, speeds, yaw_rates = rollout_actuation(RolloutSpec(
-                pose=tuple(state[:3]),
+            body, speeds, yaw_rates, steps = rollout_actuation_timed(RolloutSpec(
+                pose=(0.0, 0.0, 0.0),
                 target_speed_mps=pair[0],
                 target_yaw_rate_rps=pair[1],
                 actuator_state=actuator_state,
                 distance_m=span,
+                latency_s=latency_s,
             ))
-            key = (np.round(np.asarray(poses), 12).tobytes()
+            key = (np.round(np.asarray(body), 12).tobytes()
                    + np.round(np.asarray(speeds), 12).tobytes()
-                   + np.round(np.asarray(yaw_rates), 12).tobytes())
+                   + np.round(np.asarray(yaw_rates), 12).tobytes()
+                   + np.round(np.asarray(steps), 12).tobytes())
             if key in seen:
                 continue
             seen.add(key)
             unique_pairs.append(pair)
+            poses = self._world_from_body(body, state)
             source = np.vstack((np.asarray(state[:3], dtype=float),
                                 np.asarray(poses, dtype=float)))
             cumulative = np.concatenate((
                 [0.0],
-                np.cumsum(np.asarray(speeds) * actuator_state.control_step_s),
+                np.cumsum(np.asarray(speeds) * np.asarray(steps)),
             ))
-            sample_distance = np.linspace(
-                float(span) / self.steps, float(span), self.steps)
+            sample_distance = np.linspace(0.0, float(span), self.steps)
             yaw = np.interp(
                 sample_distance, cumulative, np.unwrap(source[:, 2]))
             scored_paths.append(np.stack([
@@ -435,12 +445,15 @@ class DwaPlanner:
                 yaw,
             ], axis=1))
             full_paths.append(poses)
+            body_paths.append(body)
             unique_speeds.append(speeds)
             unique_yaw_rates.append(yaw_rates)
-            travelled.append(sum(speeds) * actuator_state.control_step_s)
+            time_steps.append(steps)
+            travelled.append(sum(speed * step for speed, step
+                                 in zip(speeds, steps)))
         return (unique_pairs, np.asarray(scored_paths, dtype=float),
-                tuple(full_paths), tuple(unique_speeds),
-                tuple(unique_yaw_rates), tuple(travelled))
+                tuple(full_paths), tuple(body_paths), tuple(unique_speeds),
+                tuple(unique_yaw_rates), tuple(time_steps), tuple(travelled))
 
     @staticmethod
     def _body_relative(path, state):
@@ -451,6 +464,16 @@ class DwaPlanner:
             -sine * (point[0] - state[0]) + cosine * (point[1] - state[1]),
             math.atan2(math.sin(point[2] - heading),
                        math.cos(point[2] - heading)),
+        ) for point in path)
+
+    @staticmethod
+    def _world_from_body(path, state):
+        heading = float(state[2])
+        cosine, sine = math.cos(heading), math.sin(heading)
+        return tuple((
+            state[0] + cosine * point[0] - sine * point[1],
+            state[1] + sine * point[0] + cosine * point[1],
+            heading + point[2],
         ) for point in path)
 
     def _obstacle_paths(self, paths, span_m, reach_m):
@@ -499,7 +522,7 @@ class DwaPlanner:
              last_speed=None, obstacle_floor_m=OBSTACLE_FLOOR_M,
              actuator_state=None, committed_side=None, proposal_seq=None,
              stamp_s=None, permit_track_id=None, return_proposal=False,
-             minimum_turn_rps=0.0):
+             minimum_turn_rps=0.0, latency_s=0.0):
         """Best executable (v, w) from here, or a stop with a reason.
 
         Returns (v, w, status). status is OK, or the reason every candidate
@@ -518,6 +541,7 @@ class DwaPlanner:
         try:
             side = normalize_side(committed_side)
             turn_floor = normalize_minimum_turn(minimum_turn_rps)
+            latency = normalize_latency(latency_s)
             if return_proposal:
                 if not isinstance(actuator_state, ActuatorState):
                     raise ProposalValidationError("actuator_state is invalid")
@@ -551,10 +575,11 @@ class DwaPlanner:
             result = (0.0, 0.0, "SPEED_BELOW_FLOOR")
             return result + (None,) if return_proposal else result
         span = self.preview_distance(last_speed)
-        pairs, paths, proposal_paths, applied_speeds, applied_yaw_rates, \
-            travelled = \
+        pairs, paths, proposal_paths, body_paths, applied_speeds, \
+            applied_yaw_rates, applied_time_steps, travelled = \
             self._candidate_rollouts(
-                np.asarray(state, dtype=float), pairs, span, actuator_state)
+                np.asarray(state, dtype=float), pairs, span, actuator_state,
+                latency)
         self.last_candidate_count = len(pairs)
         path_steps = paths.shape[1]
         flat = paths[:, :, :2].reshape(-1, 2)
@@ -656,16 +681,17 @@ class DwaPlanner:
                 stamp_s=metadata.stamp_s,
                 permit_track_id=metadata.permit_track_id,
                 committed_side=metadata.committed_side,
-                frame_id="body",
-                horizon_s=(len(proposal_paths[best])
-                           * actuator_state.control_step_s),
+                frame_id="current_body",
+                horizon_s=sum(applied_time_steps[best]),
+                distance_m=span,
+                latency_s=latency,
                 actuator_state=actuator_state,
                 target_speed_mps=pairs[best][0],
                 target_yaw_rate_rps=pairs[best][1],
-                poses=self._body_relative(
-                    proposal_paths[best], np.asarray(state, dtype=float)),
+                poses=body_paths[best],
                 speeds_mps=applied_speeds[best],
                 yaw_rates_rps=applied_yaw_rates[best],
+                time_steps_s=applied_time_steps[best],
             )
         result = (float(pairs[best][0]), float(pairs[best][1]), "OK")
         return result + (selected,) if return_proposal else result

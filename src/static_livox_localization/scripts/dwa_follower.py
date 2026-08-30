@@ -287,6 +287,11 @@ class DwaFollower(WaypointFollower):
     def bypass_proposal_identity(self, now, threat, decision):
         return None
 
+    def planner_state(self, anchored_state, bypass_identity):
+        if bypass_identity is not None:
+            return anchored_state
+        return self.led_state(anchored_state)
+
     def accept_bypass_proposal(self, proposal):
         return proposal
 
@@ -304,7 +309,8 @@ class DwaFollower(WaypointFollower):
             stamp_s=stamp_s,
             permit_track_id=track_id,
             return_proposal=True,
-            minimum_turn_rps=BYPASS_MINIMUM_TURN_RPS)
+            minimum_turn_rps=BYPASS_MINIMUM_TURN_RPS,
+            latency_s=self.latency_s)
 
     def publish_bypass_diagnostics(self, proposal, planner_ms):
         return None
@@ -461,7 +467,8 @@ class DwaFollower(WaypointFollower):
         # upstream of the ICP correction. Unfixed, that lag costs 0.33 m of
         # travel at 0.6 m/s and 0.55 m at 1.0 - the planner correcting for
         # where the chair no longer is, which is what lateral hunting is.
-        state = self.led_state(state)
+        identity = self.bypass_proposal_identity(now, threat, decision)
+        state = self.planner_state(state, identity)
         elapsed = 1.0 / CONTROL_HZ
         if self.last_command_stamp is not None:
             elapsed = (now - self.last_command_stamp).to_sec()
@@ -473,7 +480,6 @@ class DwaFollower(WaypointFollower):
             self.last_yaw_rate = float(state[4])
             elapsed = 1.0 / CONTROL_HZ
         step = max(elapsed, 1e-3)
-        identity = self.bypass_proposal_identity(now, threat, decision)
         planner_started = time.perf_counter()
         if identity is None:
             target_v, target_w, status = self.planner.plan(

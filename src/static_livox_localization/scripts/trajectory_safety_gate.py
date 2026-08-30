@@ -13,6 +13,7 @@ import json
 import math
 import os
 import sys
+import threading
 
 import numpy as np
 import rospy
@@ -124,6 +125,8 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             "~static_threat_proposal_linear_tolerance_mps", 0.02))
         self.proposal_angular_tolerance_rps = float(rospy.get_param(
             "~static_threat_proposal_angular_tolerance_rps", 0.03))
+        self.proposal_buffer_size = int(rospy.get_param(
+            "~static_threat_proposal_buffer_size", 8))
         # Zero by default: SWEEP_MARGIN_M already expands the measured chair
         # footprint by 0.15 m. Adding the previous extra 0.10 m recreated the
         # 0.75 m straight gate that made a valid curved bypass impossible.
@@ -149,6 +152,13 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
         if self.immediate_point_count <= 0:
             raise rospy.ROSInitException(
                 "~static_threat_bypass_immediate_point_count must be positive")
+        if self.proposal_buffer_size <= 0:
+            raise rospy.ROSInitException(
+                "~static_threat_proposal_buffer_size must be positive")
+        self.trajectory_proposals = []
+        self.highest_proposal_seq = -1
+        self.proposal_receive_reason = "NO_PROPOSAL"
+        self.proposal_lock = threading.Lock()
         permit_topic = str(rospy.get_param(
             "~static_threat_bypass_permit_topic",
             "/static_threat_bypass/permit"))
@@ -159,9 +169,6 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             "/static_threat_bypass/proposal"))
         rospy.Subscriber(proposal_topic, String, self.on_trajectory_proposal,
                          queue_size=2)
-        self.trajectory_proposal = None
-        self.highest_proposal_seq = -1
-        self.proposal_receive_reason = "NO_PROPOSAL"
         self.last_override = None
         rospy.set_param("~static_threat_bypass_capable", True)
         rospy.set_param("~static_threat_bypass_proposal_capable", True)
@@ -178,14 +185,66 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             proposal = proposal_contract.TrajectoryProposal.from_json(
                 message.data)
         except proposal_contract.ProposalValidationError:
-            self.proposal_receive_reason = "PROPOSAL_MALFORMED"
+            with self.proposal_lock:
+                self.proposal_receive_reason = "PROPOSAL_MALFORMED"
             return
-        if proposal.proposal_seq <= self.highest_proposal_seq:
-            self.proposal_receive_reason = "PROPOSAL_SEQUENCE_STALE"
-            return
-        self.trajectory_proposal = proposal
-        self.highest_proposal_seq = proposal.proposal_seq
-        self.proposal_receive_reason = "PROPOSAL_RECEIVED"
+        with self.proposal_lock:
+            if proposal.proposal_seq <= self.highest_proposal_seq:
+                self.proposal_receive_reason = "PROPOSAL_SEQUENCE_STALE"
+                return
+            self.trajectory_proposals.append(proposal)
+            self.trajectory_proposals = self.trajectory_proposals[
+                -self.proposal_buffer_size:]
+            self.highest_proposal_seq = proposal.proposal_seq
+            self.proposal_receive_reason = "PROPOSAL_RECEIVED"
+
+    def matching_proposal(self, now_s, permit):
+        with self.proposal_lock:
+            proposals = list(self.trajectory_proposals)
+            highest_proposal_seq = self.highest_proposal_seq
+            receive_reason = self.proposal_receive_reason
+        if not proposals:
+            return None, receive_reason
+        if max(proposal.proposal_seq for proposal in proposals) < \
+                highest_proposal_seq:
+            return None, "PROPOSAL_SEQUENCE_STALE"
+        fresh = []
+        stale_seen = False
+        for proposal in proposals:
+            age_s = now_s - proposal.stamp_s
+            if -0.05 <= age_s <= self.maximum_proposal_age_s:
+                fresh.append(proposal)
+            else:
+                stale_seen = True
+        if not fresh:
+            return None, "PROPOSAL_STALE" if stale_seen else "NO_PROPOSAL"
+        raw_speed = float(self.raw.linear.x)
+        raw_yaw = float(self.raw.angular.z)
+        if not math.isfinite(raw_speed) or not math.isfinite(raw_yaw):
+            return None, "PROPOSAL_COMMAND_MISMATCH"
+        mismatch_reason = None
+        for proposal in sorted(
+                fresh, key=lambda value: value.proposal_seq, reverse=True):
+            if proposal.permit_track_id != permit.track_id:
+                if mismatch_reason is None:
+                    mismatch_reason = "PROPOSAL_TRACK_MISMATCH"
+                continue
+            target_yaw = proposal.target_yaw_rate_rps
+            if proposal.committed_side == "NONE" or \
+                    not proposal_contract.yaw_matches_side(
+                        proposal.committed_side, target_yaw):
+                if mismatch_reason is None:
+                    mismatch_reason = "PROPOSAL_SIDE_MISMATCH"
+                continue
+            if abs(raw_speed - proposal.first_applied_speed_mps) > \
+                    self.proposal_linear_tolerance_mps or \
+                    abs(raw_yaw - proposal.first_applied_yaw_rate_rps) > \
+                    self.proposal_angular_tolerance_rps:
+                if mismatch_reason is None:
+                    mismatch_reason = "PROPOSAL_COMMAND_MISMATCH"
+                continue
+            return proposal, "PROPOSAL_MATCHED"
+        return None, mismatch_reason or "NO_PROPOSAL"
 
     def fresh_active_permit(self, now_s):
         permit = self.person_bypass_permit
@@ -201,7 +260,7 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             "static_threat_target_behind": False,
             "static_threat_tail_clear": False,
         })
-        if reason not in ("OBSTACLE", "OBSTACLE_SWEEP"):
+        if reason not in ("", "OBSTACLE", "OBSTACLE_SWEEP"):
             return reason, cap
 
         snapshot = getattr(self, "collision_snapshot", None)
@@ -220,49 +279,18 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             self.evidence["trajectory_override_reason"] = "NO_FRESH_PERMIT"
             return reason, cap
 
-        if self.proposal_receive_reason != "PROPOSAL_RECEIVED":
-            self.evidence["trajectory_override_reason"] = \
-                self.proposal_receive_reason
-            return reason, cap
-        proposal = self.trajectory_proposal
+        proposal, proposal_reason = self.matching_proposal(now_s, permit)
         if proposal is None:
-            self.evidence["trajectory_override_reason"] = "NO_PROPOSAL"
-            return reason, cap
-        if proposal.proposal_seq != self.highest_proposal_seq:
-            self.evidence["trajectory_override_reason"] = \
-                "PROPOSAL_SEQUENCE_STALE"
+            self.evidence["trajectory_override_reason"] = proposal_reason
             return reason, cap
         proposal_age_s = now_s - proposal.stamp_s
-        if proposal_age_s < -0.05 or \
-                proposal_age_s > self.maximum_proposal_age_s:
-            self.evidence["trajectory_override_reason"] = "PROPOSAL_STALE"
-            return reason, cap
-        if proposal.permit_track_id != permit.track_id:
-            self.evidence["trajectory_override_reason"] = \
-                "PROPOSAL_TRACK_MISMATCH"
-            return reason, cap
         applied_speed = proposal.first_applied_speed_mps
         applied_yaw = proposal.first_applied_yaw_rate_rps
-        if proposal.committed_side == "NONE" or \
-                not proposal_contract.yaw_matches_side(
-                    proposal.committed_side, applied_yaw):
-            self.evidence["trajectory_override_reason"] = \
-                "PROPOSAL_SIDE_MISMATCH"
-            return reason, cap
-        raw_speed = float(self.raw.linear.x)
-        raw_yaw = float(self.raw.angular.z)
-        if abs(raw_speed - applied_speed) > \
-                self.proposal_linear_tolerance_mps or \
-                abs(raw_yaw - applied_yaw) > \
-                self.proposal_angular_tolerance_rps:
-            self.evidence["trajectory_override_reason"] = \
-                "PROPOSAL_COMMAND_MISMATCH"
-            return reason, cap
         requested_speed = max(0.0, min(
             base_gate.HARD_V_LIMIT, applied_speed,
             float(permit.max_speed_mps)))
         requested_yaw = max(-base_gate.HARD_W_LIMIT, min(
-            base_gate.HARD_W_LIMIT, applied_yaw))
+            base_gate.HARD_W_LIMIT, proposal.target_yaw_rate_rps))
         try:
             horizon_s = float(self.evidence["horizon_s"])
         except (KeyError, TypeError, ValueError):
@@ -337,6 +365,8 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             "trajectory_target_w": round(proposal.target_yaw_rate_rps, 3),
         })
         if not decision.allowed:
+            return reason, cap
+        if reason == "":
             return reason, cap
         return "", decision.speed_cap_mps
 

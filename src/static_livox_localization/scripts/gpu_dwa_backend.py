@@ -212,12 +212,13 @@ def make_gpu_planner(base_class, core_module):
                  obstacle_floor_m=core_module.OBSTACLE_FLOOR_M,
                  actuator_state=None, committed_side=None, proposal_seq=None,
                  stamp_s=None, permit_track_id=None, return_proposal=False,
-                 minimum_turn_rps=0.0):
+                 minimum_turn_rps=0.0, latency_s=0.0):
             metadata = None
             try:
                 side = core_module.normalize_side(committed_side)
                 turn_floor = core_module.normalize_minimum_turn(
                     minimum_turn_rps)
+                latency = core_module.normalize_latency(latency_s)
                 if return_proposal:
                     if not isinstance(
                             actuator_state, core_module.ActuatorState):
@@ -249,11 +250,11 @@ def make_gpu_planner(base_class, core_module):
                 return result + (None,) if return_proposal else result
 
             span = self.preview_distance(last_speed)
-            pairs, paths, proposal_paths, applied_speeds, \
-                applied_yaw_rates, travelled = \
+            pairs, paths, proposal_paths, body_paths, applied_speeds, \
+                applied_yaw_rates, applied_time_steps, travelled = \
                 self._candidate_rollouts(
                     np.asarray(state, dtype=float), pairs, span,
-                    actuator_state)
+                    actuator_state, latency)
             self.last_candidate_count = len(pairs)
             path_steps = paths.shape[1]
             flat = paths[:, :, :2].reshape(-1, 2)
@@ -350,16 +351,17 @@ def make_gpu_planner(base_class, core_module):
                     stamp_s=metadata.stamp_s,
                     permit_track_id=metadata.permit_track_id,
                     committed_side=metadata.committed_side,
-                    frame_id="body",
-                    horizon_s=(len(proposal_paths[best])
-                               * actuator_state.control_step_s),
+                    frame_id="current_body",
+                    horizon_s=sum(applied_time_steps[best]),
+                    distance_m=span,
+                    latency_s=latency,
                     actuator_state=actuator_state,
                     target_speed_mps=pairs[best][0],
                     target_yaw_rate_rps=pairs[best][1],
-                    poses=self._body_relative(
-                        proposal_paths[best], np.asarray(state, dtype=float)),
+                    poses=body_paths[best],
                     speeds_mps=applied_speeds[best],
                     yaw_rates_rps=applied_yaw_rates[best],
+                    time_steps_s=applied_time_steps[best],
                 )
             result = (float(pairs[best][0]), float(pairs[best][1]), "OK")
             return result + (selected,) if return_proposal else result

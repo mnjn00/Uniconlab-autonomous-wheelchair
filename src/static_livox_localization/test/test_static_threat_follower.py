@@ -299,7 +299,7 @@ def test_bypass_planner_requires_curved_candidate_even_when_straight_is_cheapest
     curved = types.SimpleNamespace(target_yaw_rate_rps=0.1)
 
     def plan(*args, **kwargs):
-        calls.append(kwargs)
+        calls.append(dict(kwargs, state=args[0]))
         if kwargs.get("minimum_turn_rps", 0.0) >= 0.08:
             return 0.35, 0.1, "OK", curved
         return 0.35, 0.0, "OK", types.SimpleNamespace(
@@ -307,14 +307,22 @@ def test_bypass_planner_requires_curved_candidate_even_when_straight_is_cheapest
 
     follower = module.DwaFollower.__new__(module.DwaFollower)
     follower.planner = types.SimpleNamespace(plan=plan)
-    follower.current_speed = 0.0
-    follower.last_yaw_rate = 0.0
-    actuator = module.ActuatorState(0.0, 0.0, 0.0, 0.1)
+    follower.current_speed = 0.2
+    follower.last_yaw_rate = -0.1
+    follower.latency_s = 0.55
+    actuator = module.ActuatorState(0.2, -0.1, 0.05, 0.1)
+    anchored = np.array([4.0, -2.0, 0.4, 0.2, -0.1])
+    follower.led_state = lambda state: (_ for _ in ()).throw(
+        AssertionError("bypass must not pre-lead anchored state"))
 
     _v, yaw, status, proposal = follower.request_bypass_proposal(
-        np.zeros(5), (), 0.35, actuator, 7, None, 1, 2.0)
+        follower.planner_state(anchored, (7, None)),
+        (), 0.35, actuator, 7, None, 1, 2.0)
 
     assert calls[0]["minimum_turn_rps"] == 0.08
+    assert calls[0]["latency_s"] == 0.55
+    assert calls[0]["actuator_state"] == actuator
+    assert np.array_equal(calls[0]["state"], anchored)
     assert status == "OK"
     assert yaw == 0.1
     assert proposal is curved

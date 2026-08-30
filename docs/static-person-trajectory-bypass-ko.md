@@ -41,14 +41,33 @@ track 변경, 움직임 확인 또는 절대 안전 veto는 즉시 0 명령을 �
 
 우회 허가는 센서 점을 지우지 않는다. DWA가 평가한 actuator-ramped proposal을
 raw gate가 같은 collision snapshot으로 검사하며, semantic/raw/terrain/tip 중
-하나라도 절대 veto를 내면 최종 명령은 0이다.
+하나라도 절대 veto를 내면 최종 명령은 0이다. tail clear 3회 뒤에는 일반
+route policy가 `CLEAR`를 반환하므로 permit 없이 원 경로의 비영점 명령을 다시
+낼 수 있다.
+
+## strict trajectory proposal v2
+
+`/static_threat_bypass/proposal`은
+`wheelchair.trajectory_proposal/v2`만 허용한다. 좌표계는 proposal 생성 시점의
+`current_body`이고, `distance_m`, `latency_s`, 각 sample의 `time_steps_s`를
+반드시 포함한다. poses/speeds/yaw-rates/time-steps는 `RolloutSpec`과
+`rollout_actuation_timed()`로 재생성한 canonical 결과와 정확히 일치해야 한다.
+임의 sample, 누락 필드, horizon 불일치 또는 한 점이라도 변조된 payload는
+`ProposalValidationError`로 폐기된다.
+
+정지 상태에서는 첫 적용 yaw가 `0.0`일 수 있다. raw gate는 수신 명령을 첫
+적용 `v,w`와 대조하지만, 좌/우 commit과 최소 회전 의도는 proposal의
+`target_yaw_rate_rps`로 판정한다. 따라서 첫 `w=0`이라는 이유만으로 안전한
+곡선 시작을 영구 차단하지 않는다. bounded proposal buffer는 callback 순서가
+뒤섞여도 현재 raw 명령과 일치하는 최신 유효 proposal을 고르고, stale/replay,
+track·side·command 불일치는 계속 정지한다.
 
 ## 진단 토픽과 필드
 
 | 토픽 | 확인할 값 |
 |---|---|
 | `/static_threat_bypass/permit` | `active`, `track_id`, `threat_label`, `static_for_s`, `reason` |
-| `/static_threat_bypass/proposal` | `proposal_seq`, `permit_track_id`, `committed_side`, target/applied `v,w` |
+| `/static_threat_bypass/proposal` | v2 schema, `current_body`, `proposal_seq`, `distance_m`, `latency_s`, `time_steps_s`, target/applied `v,w` |
 | `/static_threat_bypass/status` | lifecycle, committed side, planner timing |
 | `/semantic_safety/status` | permit validation, dynamic conflict |
 | `/safety_gate/status` | base reason, proposal match, collision snapshot, tail clear |
@@ -70,12 +89,15 @@ bash tools/test_static_threat_bypass.sh host
 # STATIC_THREAT_HOST_TEST_PASS
 ```
 
-생산 policy/proposal/gate API를 이용한 결정론적 JSONL 수명주기 QA:
+생산 policy/proposal/gate/route API를 이용한 결정론적 JSONL 수명주기 QA:
 
 ```bash
 bash tools/test_static_threat_bypass.sh qa
 # STATIC_THREAT_HOST_QA_PASS
 ```
+
+QA는 strict v2 canonical rollout, 정지 첫 `w=0`에서 target turn 허용, payload
+변조 거부, tail release 뒤 일반 route의 `0.35 m/s` 복귀까지 확인한다.
 
 두 명령은 ROS master에 연결하지 않고 노드를 시작·종료하거나 코드를 배포하지
 않는다. 현재 결과는 **호스트에서만 검증됨**이다. NUC 배포, 바퀴 구동 또는

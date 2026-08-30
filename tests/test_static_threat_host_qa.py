@@ -18,18 +18,28 @@ def test_ros_free_driver_covers_lifecycle_and_absolute_vetoes():
     required = {
         "person_wait_0_0", "person_wait_1_8", "person_commit_2_0",
         "object_wait_0_0", "object_wait_1_8", "object_commit_2_0",
-        "safe_left_proposal", "accepted_zero_side_persistence",
+        "safe_left_proposal", "stopped_target_turn_override",
+        "accepted_zero_side_persistence",
         "single_dropout", "passing_behind", "tail_clear_1",
         "tail_clear_2", "tail_clear_3_release", "resume",
         "moving", "unknown", "learned_only", "changed_id",
         "second_dynamic_threat", "raw_only_blockage", "legacy_permit",
-        "stale_permit", "stale_proposal", "mismatched_proposal",
+        "stale_permit", "proposal_tamper_rejected", "stale_proposal",
+        "mismatched_proposal",
         "immediate_collision", "carried_collision", "proposal_collision",
         "localization_fault", "perception_fault", "odom_fault",
         "terrain_fault", "summary",
     }
     assert required <= cases.keys()
     assert all(record["passed"] is True for record in records)
+    assert cases["safe_left_proposal"]["frame_id"] == "current_body"
+    assert cases["safe_left_proposal"]["distance_m"] > 0.0
+    assert cases["safe_left_proposal"]["latency_s"] > 0.0
+    assert cases["safe_left_proposal"]["time_step_count"] > 1
+    assert cases["stopped_target_turn_override"]["first_applied_w"] == 0.0
+    assert cases["stopped_target_turn_override"]["target_w"] >= 0.08
+    assert cases["resume"]["route_decision"] == "clear"
+    assert cases["resume"]["command_v"] > 0.0
     assert cases["summary"]["result"] == "STATIC_THREAT_HOST_QA_PASS"
 
 

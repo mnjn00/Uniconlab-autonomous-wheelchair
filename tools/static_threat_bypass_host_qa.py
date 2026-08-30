@@ -20,6 +20,7 @@ import person_bypass_policy as policy  # noqa: E402
 import trajectory_proposal as proposal_api  # noqa: E402
 import motion_safety  # noqa: E402
 import terrain_guard_policy  # noqa: E402
+import cluster_guard  # noqa: E402
 
 
 FAILED = False
@@ -73,29 +74,34 @@ def qualify(label: str, *, report: bool) -> tuple[
 
 def safe_left_proposal(permit: policy.BypassPermit) -> \
         proposal_api.TrajectoryProposal:
-    actuator = proposal_api.ActuatorState(0.10, 0.10, 0.0, 0.1)
+    actuator = proposal_api.ActuatorState(0.008, 0.0, 0.0, 0.1)
     spec = proposal_api.RolloutSpec(
         pose=(0.0, 0.0, 0.0), target_speed_mps=0.35,
         target_yaw_rate_rps=0.50, actuator_state=actuator, distance_m=0.30,
+        latency_s=0.05,
     )
-    poses, speeds, yaw_rates = proposal_api.rollout_actuation(spec)
+    poses, speeds, yaw_rates, time_steps = \
+        proposal_api.rollout_actuation_timed(spec)
     proposal = proposal_api.TrajectoryProposal(
         proposal_seq=11, stamp_s=2.0, permit_track_id=permit.track_id,
-        committed_side="LEFT", frame_id="body",
-        horizon_s=len(poses) * actuator.control_step_s,
+        committed_side="LEFT", frame_id="current_body",
+        horizon_s=sum(time_steps), distance_m=spec.distance_m,
+        latency_s=spec.latency_s,
         actuator_state=actuator, target_speed_mps=spec.target_speed_mps,
         target_yaw_rate_rps=spec.target_yaw_rate_rps, poses=poses,
         speeds_mps=speeds, yaw_rates_rps=yaw_rates,
+        time_steps_s=time_steps,
     )
     return proposal_api.TrajectoryProposal.from_json(proposal.to_json())
 
 
 def gate(permit: policy.BypassPermit | None, now_s: float, *,
          immediate: bool = False, carried: bool = False,
-         proposal_collision: bool = False) -> policy.GateOverrideDecision:
+         proposal_collision: bool = False, requested_v_mps: float = 0.35,
+         requested_w_rps: float = 0.25) -> policy.GateOverrideDecision:
     return policy.evaluate_gate_override(
-        permit=permit, now_s=now_s, requested_v_mps=0.35,
-        requested_w_rps=0.25, immediate_collision=immediate,
+        permit=permit, now_s=now_s, requested_v_mps=requested_v_mps,
+        requested_w_rps=requested_w_rps, immediate_collision=immediate,
         requested_path_collision=proposal_collision,
         carried_path_collision=carried,
     )
@@ -133,6 +139,14 @@ def adversarial_cases(active: policy.BypassPermit,
     emit("stale_permit", not stale.allowed, command_v=0.0, reason=stale.reason)
 
     parsed = proposal_api.TrajectoryProposal.from_json(proposal.to_json())
+    tampered_payload = json.loads(proposal.to_json())
+    tampered_payload["poses"][0][0] += 0.001
+    tamper_rejected = False
+    try:
+        proposal_api.TrajectoryProposal.from_json(json.dumps(tampered_payload))
+    except proposal_api.ProposalValidationError:
+        tamper_rejected = True
+    emit("proposal_tamper_rejected", tamper_rejected, command_v=0.0)
     stale_proposal = 2.4 - parsed.stamp_s > 0.30
     emit("stale_proposal", stale_proposal, command_v=0.0)
     mismatch = parsed.permit_track_id != active.track_id + 1
@@ -172,11 +186,26 @@ def main() -> int:
     qualify("object", report=True)
     side = person_manager.commit_pass_side("LEFT")
     proposal = safe_left_proposal(person_permit)
-    safe = gate(person_permit, 2.1)
+    safe = gate(
+        person_permit, 2.1,
+        requested_v_mps=proposal.first_applied_speed_mps,
+        requested_w_rps=proposal.target_yaw_rate_rps)
     emit("safe_left_proposal", safe.allowed and side == "left"
          and proposal.committed_side == "LEFT"
-         and proposal.first_applied_yaw_rate_rps > 0.0,
-         proposal_seq=proposal.proposal_seq, side=side)
+         and proposal.frame_id == "current_body"
+         and proposal.first_applied_yaw_rate_rps == 0.0
+         and proposal.target_yaw_rate_rps > 0.0,
+         distance_m=proposal.distance_m, first_applied_w=proposal.first_applied_yaw_rate_rps,
+         frame_id=proposal.frame_id, latency_s=proposal.latency_s,
+         proposal_seq=proposal.proposal_seq, side=side,
+         target_w=proposal.target_yaw_rate_rps,
+         time_step_count=len(proposal.time_steps_s))
+    emit("stopped_target_turn_override",
+         safe.allowed and proposal.first_applied_yaw_rate_rps == 0.0
+         and proposal.target_yaw_rate_rps >= 0.08,
+         first_applied_v=proposal.first_applied_speed_mps,
+         first_applied_w=proposal.first_applied_yaw_rate_rps,
+         target_w=proposal.target_yaw_rate_rps)
     downstream_stop = gate(person_permit, 2.1, immediate=True)
     emit("accepted_zero_side_persistence",
          not downstream_stop.allowed and person_manager.committed
@@ -198,8 +227,13 @@ def main() -> int:
         emit(f"tail_clear_{frame}" + ("_release" if frame == 3 else ""),
              released is (frame == 3), released=released)
     resumed = person_manager.update((), 4.0, True, summary_stamp_s=4.0)
-    emit("resume", not resumed.active and not person_manager.committed,
-         command_v=0.0, reason=resumed.reason)
+    route = cluster_guard.avoidance_decision(
+        None, False, 8.0, bypass_permit=None, now_s=4.0)
+    ordinary_command_v = 0.35 if route == cluster_guard.CLEAR else 0.0
+    emit("resume", not resumed.active and not person_manager.committed
+         and ordinary_command_v > 0.0,
+         command_v=ordinary_command_v, reason=resumed.reason,
+         route_decision=route)
 
     adversarial_cases(person_permit, proposal)
     emit("summary", not FAILED, result="STATIC_THREAT_HOST_QA_PASS")

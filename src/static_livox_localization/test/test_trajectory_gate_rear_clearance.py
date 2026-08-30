@@ -1,3 +1,4 @@
+import threading
 import types
 
 import numpy as np
@@ -164,6 +165,8 @@ def test_rear_margin_stop_is_replaced_only_by_matched_exact_proposal(
     gate.maximum_proposal_age_s = 0.30
     gate.proposal_linear_tolerance_mps = 0.02
     gate.proposal_angular_tolerance_rps = 0.03
+    gate.proposal_buffer_size = 8
+    gate.proposal_lock = threading.Lock()
     gate.immediate_front_margin_m = 0.0
     gate.immediate_side_margin_m = 0.0
     gate.immediate_point_count = 5
@@ -174,13 +177,20 @@ def test_rear_margin_stop_is_replaced_only_by_matched_exact_proposal(
         min_clearance_m=0.50,
         reason=module.bypass_policy.STATIC_THREAT_BYPASS)
     state = module.proposal_contract.ActuatorState(0.08, 0.0, 0.0, 0.1)
-    gate.trajectory_proposal = module.proposal_contract.TrajectoryProposal(
+    rollout = module.proposal_contract.rollout_actuation_timed(
+        module.proposal_contract.RolloutSpec(
+            pose=(0.0, 0.0, 0.0), target_speed_mps=0.35,
+            target_yaw_rate_rps=0.50, actuator_state=state,
+            distance_m=0.25, latency_s=0.0))
+    poses, speeds, yaw_rates, time_steps = rollout
+    gate.trajectory_proposals = [module.proposal_contract.TrajectoryProposal(
         proposal_seq=12, stamp_s=100.0, permit_track_id=7,
-        committed_side="LEFT", frame_id="body", horizon_s=0.2,
+        committed_side="LEFT", frame_id="current_body",
+        horizon_s=sum(time_steps), distance_m=0.25, latency_s=0.0,
         actuator_state=state, target_speed_mps=0.35,
         target_yaw_rate_rps=0.50,
-        poses=((0.01, 0.001, 0.02), (0.02, 0.003, 0.04)),
-        speeds_mps=(0.10, 0.10), yaw_rates_rps=(0.15, 0.15))
+        poses=poses, speeds_mps=speeds, yaw_rates_rps=yaw_rates,
+        time_steps_s=time_steps)]
     gate.highest_proposal_seq = 12
     gate.proposal_receive_reason = "PROPOSAL_RECEIVED"
     gate.motion = types.SimpleNamespace(
