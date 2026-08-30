@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Fail-closed readiness check for the stationary-person bypass branch."""
-
 import json
 import os
 import sys
@@ -10,7 +8,7 @@ from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from person_bypass_policy import permit_from_payload, permit_is_fresh
+from person_bypass_policy import PERMIT_SCHEMA, permit_from_payload, permit_is_fresh
 
 
 class Failure(RuntimeError):
@@ -38,35 +36,49 @@ def main():
     maximum_permit_age_s = float(rospy.get_param(
         "~maximum_permit_age_s", 0.60))
 
-    permit_data, permit_raw = wait_json("/person_bypass/permit", timeout_s)
+    permit_data, permit_raw = wait_json(
+        "/static_threat_bypass/permit", timeout_s)
     permit = permit_from_payload(permit_raw)
+    if permit_data.get("schema") != PERMIT_SCHEMA:
+        raise Failure("static-threat permit is not strict v2")
     if permit is None or not permit.capable:
-        raise Failure("person-bypass permit publisher is not capable")
+        raise Failure("static-threat permit publisher is not capable")
     if not permit_is_fresh(
             permit, rospy.Time.now().to_sec(), maximum_permit_age_s):
-        raise Failure("person-bypass permit heartbeat is stale")
+        raise Failure("static-threat permit heartbeat is stale")
 
     semantic, _ = wait_json("/semantic_safety/status", timeout_s)
-    if semantic.get("person_bypass_capable") is not True:
+    if semantic.get("static_threat_bypass_capable") is not True:
         raise Failure("semantic supervisor is the stop-only implementation")
 
     gate, _ = wait_json("/safety_gate/status", timeout_s)
-    if gate.get("trajectory_person_bypass_capable") is not True:
+    if gate.get("static_threat_bypass_capable") is not True:
         raise Failure("raw safety gate is the fixed-corridor implementation")
+    if gate.get("static_threat_bypass_proposal_capable") is not True:
+        raise Failure("raw safety gate cannot validate trajectory proposals")
 
     parameters = (
-        ("/waypoint_follower/person_bypass_capable", True),
-        ("/semantic_safety_supervisor/person_bypass_capable", True),
-        ("/safety_gate/trajectory_person_bypass_capable", True),
+        ("/waypoint_follower/static_threat_bypass_capable", True),
+        ("/waypoint_follower/static_threat_bypass_proposal_capable", True),
+        ("/semantic_safety_supervisor/static_threat_bypass_capable", True),
+        ("/safety_gate/static_threat_bypass_capable", True),
+        ("/safety_gate/static_threat_bypass_proposal_capable", True),
     )
     for name, expected in parameters:
         if rospy.get_param(name, None) is not expected:
             raise Failure("%s does not prove the bypass implementation" % name)
 
-    print("PERSON_BYPASS_PREFLIGHT_OK")
-    print("  qualifier : continuous same-track STATIC")
-    print("  semantic  : target-only static-person exception")
-    print("  raw gate  : curved swept-footprint validation")
+    confirmation_name = (
+        "/waypoint_follower/static_threat_bypass_confirmation_s")
+    confirmation_s = rospy.get_param(confirmation_name, None)
+    if isinstance(confirmation_s, bool) or not isinstance(
+            confirmation_s, (int, float)) or float(confirmation_s) != 2.0:
+        raise Failure("%s must be exactly 2.0" % confirmation_name)
+
+    print("STATIC_THREAT_BYPASS_PREFLIGHT_OK")
+    print("  qualifier : person or object, same-track STATIC for 2.0 s")
+    print("  semantic  : one qualified static-threat exception")
+    print("  raw gate  : exact trajectory-proposal validation")
     print("  permit    : %s" % permit_data.get("reason"))
 
 
@@ -74,5 +86,5 @@ if __name__ == "__main__":
     try:
         main()
     except Failure as error:
-        sys.stderr.write("PERSON_BYPASS_PREFLIGHT_FAILED: %s\n" % error)
+        sys.stderr.write("STATIC_THREAT_BYPASS_PREFLIGHT_FAILED: %s\n" % error)
         raise SystemExit(1)

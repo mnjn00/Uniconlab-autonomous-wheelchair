@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Replace the stop-only person policy and fixed-corridor raw gate while the
-# hybrid stack is paused. The existing perception, localization, terrain,
-# tip/UART, and RTX PointPillars processes remain in place.
 set -eo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -23,8 +20,8 @@ export ROS_MASTER_URI="${ROS_MASTER_URI:-http://127.0.0.1:11311}"
 
 check_only() {
   rosrun static_livox_localization person_bypass_preflight.py \
-    _timeout_s:="${PERSON_BYPASS_PREFLIGHT_TIMEOUT_S:-5.0}" \
-    _maximum_permit_age_s:="${PERSON_BYPASS_PREFLIGHT_MAX_AGE_S:-0.60}"
+    _timeout_s:="${STATIC_THREAT_BYPASS_PREFLIGHT_TIMEOUT_S:-5.0}" \
+    _maximum_permit_age_s:="${STATIC_THREAT_BYPASS_PREFLIGHT_MAX_AGE_S:-0.60}"
 }
 
 case "$MODE" in
@@ -63,19 +60,19 @@ for pair in "SAFETY_POLICIES:$SAFETY_POLICIES" \
   case "$value" in true|false) ;; *) fail "$name must be true or false (got $value)" ;; esac
 done
 
-PERSON_BYPASS_CONFIRM_S="${PERSON_BYPASS_CONFIRM_S:-3.0}"
-PERSON_BYPASS_MAX_GAP_S="${PERSON_BYPASS_MAX_GAP_S:-0.45}"
-PERSON_BYPASS_MAX_JUMP_M="${PERSON_BYPASS_MAX_JUMP_M:-0.35}"
-PERSON_BYPASS_PERMIT_LIFETIME_S="${PERSON_BYPASS_PERMIT_LIFETIME_S:-0.45}"
-PERSON_BYPASS_MAX_FORWARD_M="${PERSON_BYPASS_MAX_FORWARD_M:-8.0}"
-PERSON_BYPASS_MAX_LATERAL_M="${PERSON_BYPASS_MAX_LATERAL_M:-1.0}"
-PERSON_BYPASS_LATERAL_HYSTERESIS_M="${PERSON_BYPASS_LATERAL_HYSTERESIS_M:-0.25}"
-PERSON_BYPASS_MIN_NEAR_M="${PERSON_BYPASS_MIN_NEAR_M:-0.60}"
-PERSON_BYPASS_SPEED_MPS="${PERSON_BYPASS_SPEED_MPS:-0.35}"
-PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.35}"
-PERSON_BYPASS_MIN_TURN_RPS="${PERSON_BYPASS_MIN_TURN_RPS:-0.08}"
+STATIC_THREAT_BYPASS_CONFIRM_S="${STATIC_THREAT_BYPASS_CONFIRM_S:-2.0}"
+STATIC_THREAT_BYPASS_MAX_GAP_S="${STATIC_THREAT_BYPASS_MAX_GAP_S:-0.45}"
+STATIC_THREAT_BYPASS_MAX_JUMP_M="${STATIC_THREAT_BYPASS_MAX_JUMP_M:-0.35}"
+STATIC_THREAT_BYPASS_PERMIT_LIFETIME_S="${STATIC_THREAT_BYPASS_PERMIT_LIFETIME_S:-0.45}"
+STATIC_THREAT_BYPASS_MAX_FORWARD_M="${STATIC_THREAT_BYPASS_MAX_FORWARD_M:-8.0}"
+STATIC_THREAT_BYPASS_MAX_LATERAL_M="${STATIC_THREAT_BYPASS_MAX_LATERAL_M:-1.0}"
+STATIC_THREAT_BYPASS_LATERAL_HYSTERESIS_M="${STATIC_THREAT_BYPASS_LATERAL_HYSTERESIS_M:-0.25}"
+STATIC_THREAT_BYPASS_MIN_NEAR_M="${STATIC_THREAT_BYPASS_MIN_NEAR_M:-0.60}"
+STATIC_THREAT_BYPASS_SPEED_MPS="${STATIC_THREAT_BYPASS_SPEED_MPS:-0.35}"
+STATIC_THREAT_BYPASS_CLEARANCE_M="${STATIC_THREAT_BYPASS_CLEARANCE_M:-0.35}"
+STATIC_THREAT_BYPASS_MIN_TURN_RPS="${STATIC_THREAT_BYPASS_MIN_TURN_RPS:-0.08}"
 
-say "replacing stop-only person policy while the chair remains paused"
+say "replacing stop-only threat policy while the chair remains paused"
 for node in /waypoint_follower /semantic_safety_supervisor /safety_gate; do
   rosnode kill "$node" >/dev/null 2>&1 || true
 done
@@ -105,11 +102,11 @@ setsid nohup env $SINGLE_THREAD_ENV \
   __name:=safety_gate \
   _body_frame_profile:="$BODY_FRAME_PROFILE" \
   _safety_policies:="$SAFETY_POLICIES" \
-  _maximum_person_bypass_permit_age_s:="$PERSON_BYPASS_PERMIT_LIFETIME_S" \
-  _minimum_person_bypass_turn_rps:="$PERSON_BYPASS_MIN_TURN_RPS" \
+  _static_threat_bypass_maximum_permit_age_s:="$STATIC_THREAT_BYPASS_PERMIT_LIFETIME_S" \
+  _static_threat_bypass_minimum_turn_rps:="$STATIC_THREAT_BYPASS_MIN_TURN_RPS" \
   > "$LOG/live_trajectory_safety_gate.log" 2>&1 < /dev/null &
 
-say "RTX DWA with same-track static-person qualification"
+say "RTX DWA with same-track static-threat qualification"
 setsid nohup env $SINGLE_THREAD_ENV \
   WHEELCHAIR_DWA_GPU="$([ "$PREFER_GPU" = true ] && echo 1 || echo 0)" \
   WHEELCHAIR_REQUIRE_GPU="$([ "$REQUIRE_GPU" = true ] && echo 1 || echo 0)" \
@@ -124,26 +121,26 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _prefer_gpu:="$PREFER_GPU" \
   _require_gpu:="$REQUIRE_GPU" \
   _cmd_topic:=/cmd_vel_planned \
-  _person_bypass_confirmation_s:="$PERSON_BYPASS_CONFIRM_S" \
-  _person_bypass_maximum_gap_s:="$PERSON_BYPASS_MAX_GAP_S" \
-  _person_bypass_position_jump_m:="$PERSON_BYPASS_MAX_JUMP_M" \
-  _person_bypass_permit_lifetime_s:="$PERSON_BYPASS_PERMIT_LIFETIME_S" \
-  _person_bypass_maximum_forward_m:="$PERSON_BYPASS_MAX_FORWARD_M" \
-  _person_bypass_maximum_lateral_m:="$PERSON_BYPASS_MAX_LATERAL_M" \
-  _person_bypass_lateral_hysteresis_m:="$PERSON_BYPASS_LATERAL_HYSTERESIS_M" \
-  _person_bypass_minimum_near_m:="$PERSON_BYPASS_MIN_NEAR_M" \
-  _person_bypass_speed_mps:="$PERSON_BYPASS_SPEED_MPS" \
-  _person_bypass_clearance_m:="$PERSON_BYPASS_CLEARANCE_M" \
-  > "$LOG/live_person_bypass_dwa.log" 2>&1 < /dev/null &
+  _static_threat_bypass_confirmation_s:="$STATIC_THREAT_BYPASS_CONFIRM_S" \
+  _static_threat_bypass_maximum_gap_s:="$STATIC_THREAT_BYPASS_MAX_GAP_S" \
+  _static_threat_bypass_position_jump_m:="$STATIC_THREAT_BYPASS_MAX_JUMP_M" \
+  _static_threat_bypass_permit_lifetime_s:="$STATIC_THREAT_BYPASS_PERMIT_LIFETIME_S" \
+  _static_threat_bypass_maximum_forward_m:="$STATIC_THREAT_BYPASS_MAX_FORWARD_M" \
+  _static_threat_bypass_maximum_lateral_m:="$STATIC_THREAT_BYPASS_MAX_LATERAL_M" \
+  _static_threat_bypass_lateral_hysteresis_m:="$STATIC_THREAT_BYPASS_LATERAL_HYSTERESIS_M" \
+  _static_threat_bypass_minimum_near_m:="$STATIC_THREAT_BYPASS_MIN_NEAR_M" \
+  _static_threat_bypass_speed_mps:="$STATIC_THREAT_BYPASS_SPEED_MPS" \
+  _static_threat_bypass_clearance_m:="$STATIC_THREAT_BYPASS_CLEARANCE_M" \
+  > "$LOG/live_static_threat_bypass_dwa.log" 2>&1 < /dev/null &
 
-say "semantic supervisor with target-only static-person exception"
+say "semantic supervisor with target-only static-threat exception"
 setsid nohup env $SINGLE_THREAD_ENV \
   rosrun static_livox_localization person_bypass_semantic_supervisor.py \
   __name:=semantic_safety_supervisor \
-  _maximum_person_bypass_permit_age_s:="$PERSON_BYPASS_PERMIT_LIFETIME_S" \
-  _person_bypass_maximum_forward_m:="$PERSON_BYPASS_MAX_FORWARD_M" \
-  _person_bypass_maximum_lateral_m:="$PERSON_BYPASS_MAX_LATERAL_M" \
-  > "$LOG/live_person_bypass_semantic.log" 2>&1 < /dev/null &
+  _static_threat_bypass_maximum_permit_age_s:="$STATIC_THREAT_BYPASS_PERMIT_LIFETIME_S" \
+  _static_threat_bypass_maximum_forward_m:="$STATIC_THREAT_BYPASS_MAX_FORWARD_M" \
+  _static_threat_bypass_maximum_lateral_m:="$STATIC_THREAT_BYPASS_MAX_LATERAL_M" \
+  > "$LOG/live_static_threat_bypass_semantic.log" 2>&1 < /dev/null &
 
 for node in /safety_gate /waypoint_follower /semantic_safety_supervisor; do
   for _ in $(seq 1 30); do
@@ -152,38 +149,40 @@ for node in /safety_gate /waypoint_follower /semantic_safety_supervisor; do
   done
   rosnode ping -c1 "$node" >/dev/null 2>&1 || {
     tail -80 "$LOG/live_trajectory_safety_gate.log" >&2 || true
-    tail -80 "$LOG/live_person_bypass_dwa.log" >&2 || true
-    tail -80 "$LOG/live_person_bypass_semantic.log" >&2 || true
+    tail -80 "$LOG/live_static_threat_bypass_dwa.log" >&2 || true
+    tail -80 "$LOG/live_static_threat_bypass_semantic.log" >&2 || true
     fail "$node did not restart"
   }
 done
 
-for topic in /person_bypass/permit /semantic_safety/status /safety_gate/status; do
+for topic in /static_threat_bypass/permit /semantic_safety/status \
+             /safety_gate/status; do
   timeout 5 rostopic echo -n1 "$topic" >/dev/null 2>&1 || \
     fail "$topic is silent"
 done
-check_only || fail "stationary-person bypass preflight failed"
+check_only || fail "static-threat bypass preflight failed"
 
 mkdir -p "$HOME/localization_trials"
 setsid nohup rosbag record --lz4 \
-  -O "$HOME/localization_trials/person_bypass_$(date +%Y%m%d_%H%M%S)" \
-  /person_bypass/permit /waypoint_follower/status \
-  /semantic_safety/status /safety_gate/status \
-  /cmd_vel_planned /cmd_vel_raw /cmd_vel_gated \
-  > "$LOG/live_person_bypass_blackbox.log" 2>&1 < /dev/null &
+  -O "$HOME/localization_trials/static_threat_bypass_$(date +%Y%m%d_%H%M%S)" \
+  /static_threat_bypass/permit /static_threat_bypass/proposal \
+  /static_threat_bypass/status /waypoint_follower/status \
+  /semantic_safety/status /safety_gate/status /terrain_guard/status \
+  /tip_guard/status /cmd_vel_planned /cmd_vel_raw /cmd_vel_gated \
+  /cmd_vel_terrain_safe /cmd_vel /wheel_cmd /wheel_status /mode_cmd \
+  > "$LOG/live_static_threat_bypass_blackbox.log" 2>&1 < /dev/null &
 
 cat <<EOF
 
 ==============================================================
  STATIC-THREAT TRAJECTORY BYPASS READY - PAUSED
 
-  moving/unknown person : WAIT
-  one static person     : qualify ${PERSON_BYPASS_CONFIRM_S}s, then RTX DWA
-  tracked static object : RTX DWA with raw-trajectory permit
-  moving/unknown object : WAIT
-  bypass speed          : <= ${PERSON_BYPASS_SPEED_MPS} m/s
-  person clearance      : >= ${PERSON_BYPASS_CLEARANCE_M} m
-  raw gate              : fixed corridor replaced only by clear curved sweep
+  person or object      : same track STATIC for ${STATIC_THREAT_BYPASS_CONFIRM_S}s, then RTX DWA
+  moving/unknown threat : WAIT
+  bypass speed          : <= ${STATIC_THREAT_BYPASS_SPEED_MPS} m/s
+  threat clearance      : >= ${STATIC_THREAT_BYPASS_CLEARANCE_M} m
+  raw-only obstacle veto: replaceable only by the exact clear proposal
+  absolute safety veto  : stop-only; never bypassed
   terrain/tip/UART      : unchanged and still downstream
 
   check : bash $REPO_ROOT/tools/activate_person_bypass.sh --check

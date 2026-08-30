@@ -146,6 +146,7 @@ install(
     scripts/localization_exclusion_policy.py
     scripts/semantic_safety_policy.py
     scripts/person_bypass_policy.py
+    scripts/trajectory_proposal.py
     scripts/terrain_guard_policy.py
     scripts/initial_pose_candidates.py
     scripts/initial_pose_global_search.py

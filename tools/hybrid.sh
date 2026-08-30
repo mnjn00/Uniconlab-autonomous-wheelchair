@@ -14,15 +14,19 @@ Usage:
   bash tools/hybrid.sh go    [go_hybrid.sh options]
   bash tools/hybrid.sh stop
   bash tools/hybrid.sh gpu-status
-  bash tools/hybrid.sh person-bypass-status
+  bash tools/hybrid.sh static-threat-bypass-status
 
 `setup-gpu` installs/verifies both RTX paths:
   1. CuPy nearest-neighbour acceleration for DWA
   2. NVIDIA CUDA-PointPillars + FP16 TensorRT object detection
 
 `start` first brings up the ordinary paused hybrid graph, then replaces the
-stop-only person policy and fixed-corridor raw gate with the reviewed
-stationary-threat trajectory-bypass nodes. Moving/unknown threats still stop.
+stop-only threat policy and fixed-corridor raw gate with the reviewed
+stationary-threat trajectory-bypass nodes. A person or object must remain the
+same directly observed track in STATIC state for exactly 2.0 seconds. Only the
+raw obstacle veto may be replaced by a matching clear proposal; localization,
+staleness, current-footprint, carried-path, terrain, tip, and UART vetoes are
+absolute stop-only decisions.
 
 Important environment variables:
   START_POINTPILLARS=true|false
@@ -31,11 +35,11 @@ Important environment variables:
   POINTPILLARS_MODEL=/path/to/pointpillar.plan
   POINTPILLARS_REQUIRE_RTX2060=true|false
   CLIFF_REQUIRED=false|true
-  PERSON_BYPASS_CONFIRM_S=3.0
-  PERSON_BYPASS_MAX_GAP_S=0.45
-  PERSON_BYPASS_LATERAL_HYSTERESIS_M=0.25
-  PERSON_BYPASS_SPEED_MPS=0.35
-  PERSON_BYPASS_CLEARANCE_M=0.35
+  STATIC_THREAT_BYPASS_CONFIRM_S=2.0
+  STATIC_THREAT_BYPASS_MAX_GAP_S=0.45
+  STATIC_THREAT_BYPASS_LATERAL_HYSTERESIS_M=0.25
+  STATIC_THREAT_BYPASS_SPEED_MPS=0.35
+  STATIC_THREAT_BYPASS_CLEARANCE_M=0.35
 EOF
 }
 
@@ -73,7 +77,7 @@ case "$COMMAND" in
   go)
     run_without_nounset "$SCRIPT_DIR/go_hybrid.sh" "$@"
     ;;
-  person-bypass-status)
+  static-threat-bypass-status)
     run_without_nounset "$SCRIPT_DIR/activate_person_bypass.sh" --check
     ;;
   gpu-status)
