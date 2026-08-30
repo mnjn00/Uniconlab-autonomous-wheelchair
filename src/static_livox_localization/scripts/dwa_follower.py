@@ -309,6 +309,10 @@ class DwaFollower(WaypointFollower):
         """Optional downstream-geometry veto, supplied by guarded profiles."""
         return None
 
+    def planner_excluded_track_ids(self):
+        """Tracks omitted only from DWA geometry, never from raw safety."""
+        return ()
+
     def send_stop(self):
         # The jerk limit shapes driving, never braking. Dropping the carried
         # acceleration here is what keeps a stop as abrupt as it was before.
@@ -342,7 +346,8 @@ class DwaFollower(WaypointFollower):
             return ()
         blocks, points = corridor_obstacle_points(
             self.cluster_summary, OBSTACLE_HALF_WIDTH_M,
-            max_distance_m=PLAN_AHEAD_M)
+            max_distance_m=PLAN_AHEAD_M,
+            exclude_track_ids=self.planner_excluded_track_ids())
         if not blocks or not points:
             return ()
         heading = np.array([math.cos(state[2]), math.sin(state[2])])

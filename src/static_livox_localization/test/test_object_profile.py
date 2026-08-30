@@ -385,6 +385,18 @@ def test_the_planner_is_given_every_object_in_the_way_not_only_the_nearest():
     assert min(y for _, y in points) < 0.0 < max(y for _, y in points)
 
 
+def test_a_safely_passed_track_can_be_omitted_without_hiding_others():
+    passed = {"id": 7, "class": "obstacle", "x": 1.0, "y": .7,
+              "size": [.4, .4, 1.0], "motion": ct.STATIC}
+    ahead = {"id": 8, "class": "obstacle", "x": 3.0, "y": -.7,
+             "size": [.4, .4, 1.0], "motion": ct.STATIC}
+    blocks, points = cg.corridor_obstacle_points(
+        summary([passed, ahead]), PLANNER_HALF_WIDTH,
+        exclude_track_ids=(7,))
+    assert blocks and points
+    assert min(x for x, _ in points) == pytest.approx(2.8)
+
+
 def test_the_point_set_is_capped_however_many_objects_arrive():
     crowd = [{"class": "obstacle", "x": 2.0 + 0.1 * k, "y": 0.0,
               "size": [0.4, 0.4, 1.2], "points": 40, "motion": ct.STATIC}

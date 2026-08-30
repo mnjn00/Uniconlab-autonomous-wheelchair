@@ -103,7 +103,9 @@ class Threat(object):
 
     def __init__(self, distance_m, motion, label="", lateral_m=None,
                  track_id=None, observed_stamp_s=None,
-                 directly_observed=True, geometry_valid=True):
+                 directly_observed=True, geometry_valid=True,
+                 centre_forward_m=None, half_forward_m=None,
+                 half_lateral_m=None):
         self.distance_m = distance_m
         self.motion = motion
         self.label = label
@@ -111,6 +113,9 @@ class Threat(object):
         self.observed_stamp_s = observed_stamp_s
         self.directly_observed = directly_observed
         self.geometry_valid = geometry_valid
+        self.centre_forward_m = centre_forward_m
+        self.half_forward_m = half_forward_m
+        self.half_lateral_m = half_lateral_m
         # Signed offset from the corridor centreline, chair frame, left
         # positive. None when the producer did not give a parseable box.
         #
@@ -418,7 +423,10 @@ def matching_threats(summary, half_width_m, lateral_shift_m=0.0,
             distance, motion, str(item.get("class", "")),
             lateral_m=lateral, track_id=track_id,
             observed_stamp_s=summary.stamp_s,
-            geometry_valid=object_geometry_valid(item)))
+            geometry_valid=object_geometry_valid(item),
+            centre_forward_m=None if box is None else float(box[0]),
+            half_forward_m=None if box is None else float(box[2]),
+            half_lateral_m=None if box is None else float(box[3])))
     return sorted(found, key=lambda threat: threat.distance_m)
 
 
@@ -438,7 +446,8 @@ def nearest_threat(summary, half_width_m, lateral_shift_m=0.0,
 
 def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
                              max_distance_m=None,
-                             max_objects=MAX_OBSTACLE_OBJECTS):
+                             max_objects=MAX_OBSTACLE_OBJECTS,
+                             exclude_track_ids=()):
     """(blocks, points) for everything in the way, as geometry.
 
     The planner-facing companion to nearest_threat. That one answers "is
@@ -462,8 +471,13 @@ def corridor_obstacle_points(summary, half_width_m, lateral_shift_m=0.0,
     """
     if not summary.usable:
         return True, [(BLOCKED, lateral_shift_m)]
+    excluded = {
+        value for value in exclude_track_ids
+        if isinstance(value, int) and not isinstance(value, bool)}
     found = []
     for item in summary.objects:
+        if item.get("id") in excluded:
+            continue
         blocks, points = object_points(item, lateral_shift_m, half_width_m)
         if not blocks or not points:
             continue
