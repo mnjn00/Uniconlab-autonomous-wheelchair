@@ -12,6 +12,7 @@ not force another stop merely because its longitudinal distance is small.
 import math
 import os
 import sys
+from dataclasses import replace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -39,10 +40,20 @@ from person_bypass_policy import (  # noqa: E402
 
 class PersonBypassDwaFollower(DwaFollower):
     CONTROL_LAW = "dwa"
+    BYPASS_SIDE_LOOKAHEAD_WAYPOINTS = 16  # about 3 m on the v9 route
 
     def __init__(self):
         self._committed_bypass_track_id = None
         self._committed_bypass_side = 0
+        self._static_object_track_id = None
+        self._static_object_world_xy = None
+        self._static_object_half_forward_m = 0.0
+        self._static_object_half_lateral_m = 0.0
+        self._static_object_passed_side = False
+        self._post_pass_track_id = None
+        self._post_pass_origin_xy = None
+        self._maneuver_track_previous_cycle = None
+        self._maneuver_track_this_cycle = None
         self.active_trajectory_permit = None
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
@@ -69,6 +80,16 @@ class PersonBypassDwaFollower(DwaFollower):
             "~person_bypass_speed_mps", 0.35))
         self.person_bypass_clearance_m = float(rospy.get_param(
             "~person_bypass_clearance_m", 0.50))
+        self.post_pass_straight_distance_m = float(rospy.get_param(
+            "~post_pass_straight_distance_m", 0.80))
+        self.post_pass_straight_yaw_rate = float(rospy.get_param(
+            "~post_pass_straight_yaw_rate", 0.05))
+        self.post_pass_recovery_yaw_rate = float(rospy.get_param(
+            "~post_pass_recovery_yaw_rate", 0.08))
+        self.post_pass_alignment_lateral_m = float(rospy.get_param(
+            "~post_pass_alignment_lateral_m", 0.25))
+        self.post_pass_alignment_heading_rad = float(rospy.get_param(
+            "~post_pass_alignment_heading_rad", 0.12))
         self.minimum_person_bypass_turn_rps = float(rospy.get_param(
             "/safety_gate/minimum_person_bypass_turn_rps", 0.08))
         self.qualifier = StaticPersonQualifier(
@@ -104,15 +125,263 @@ class PersonBypassDwaFollower(DwaFollower):
     def reset_bypass_commitment(self):
         self._committed_bypass_track_id = None
         self._committed_bypass_side = 0
+        self._static_object_track_id = None
+        self._static_object_world_xy = None
+        self._static_object_half_forward_m = 0.0
+        self._static_object_half_lateral_m = 0.0
+        self._static_object_passed_side = False
+
+    def reset_post_pass_recovery(self):
+        self._post_pass_track_id = None
+        self._post_pass_origin_xy = None
+
+    def remember_maneuver_cycle(self, track_id):
+        if track_id is not None:
+            self._maneuver_track_this_cycle = track_id
+
+    def route_alignment_error(self):
+        """Distance and heading error to the ideal route at the chair."""
+        pose = getattr(self, "pose_xy", None)
+        yaw = getattr(self, "pose_yaw", None)
+        planner = getattr(self, "planner", None)
+        if pose is None or yaw is None or planner is None:
+            return None
+        try:
+            distance, index = planner.tree.query(pose)
+            heading = float(planner.heading[int(index)])
+            yaw = float(yaw)
+            distance = float(distance)
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return None
+        heading_error = abs(math.atan2(
+            math.sin(yaw - heading), math.cos(yaw - heading)))
+        if not math.isfinite(distance) or not math.isfinite(heading_error):
+            return None
+        return distance, heading_error
+
+    def latch_post_pass_recovery(self, permit):
+        """Remember where a safe side-pass completed.
+
+        Losing the cluster is expected just after a pass.  It must not switch
+        directly from the low-speed straight pass to unrestricted route
+        recovery: both recorded passes on 2026-08-30 jumped from w=0 to the
+        +0.50 rad/s limit as soon as the PERSON track disappeared.  Distance
+        from this map-frame origin keeps the recovery independent of cluster
+        flicker and chair rotation.
+        """
+        pose = getattr(self, "pose_xy", None)
+        track_id = getattr(permit, "track_id", None)
+        self.latch_post_pass_track(track_id, pose)
+
+    def latch_post_pass_track(self, track_id, pose=None):
+        """Start gentle recovery for one completed/interrupted maneuver."""
+        if pose is None:
+            pose = getattr(self, "pose_xy", None)
+        if pose is None or track_id is None:
+            return
+        try:
+            origin = (float(pose[0]), float(pose[1]))
+        except (IndexError, TypeError, ValueError):
+            return
+        if not all(math.isfinite(value) for value in origin):
+            return
+        if self._post_pass_track_id != track_id or \
+                self._post_pass_origin_xy is None:
+            self._post_pass_track_id = track_id
+            self._post_pass_origin_xy = origin
+
+    def finish_maneuver_cycle(self):
+        previous_track = getattr(self, "_maneuver_track_previous_cycle", None)
+        current_track = getattr(self, "_maneuver_track_this_cycle", None)
+        if previous_track is not None and current_track is None and \
+                abs(float(getattr(self, "last_yaw_rate", 0.0))) >= 0.05:
+            # A qualified maneuver disappeared before PASSED_SIDE.  The
+            # 00:01 trial lost track 1689 during chair rotation, then the
+            # ordinary route cost selected +0.50 rad/s.  Enter the same
+            # gentle recovery used after a clean pass; semantic and raw
+            # gates still stop rather than authorizing an unseen person.
+            self.latch_post_pass_track(previous_track)
+        self._maneuver_track_previous_cycle = current_track
+
+    def post_pass_distance_m(self):
+        pose = getattr(self, "pose_xy", None)
+        origin = getattr(self, "_post_pass_origin_xy", None)
+        if pose is None or origin is None:
+            return None
+        try:
+            distance = math.hypot(
+                float(pose[0]) - float(origin[0]),
+                float(pose[1]) - float(origin[1]))
+        except (IndexError, TypeError, ValueError):
+            return None
+        return distance if math.isfinite(distance) else None
+
+    def post_pass_yaw_cap(self):
+        """Return the gentle-rejoin yaw cap until pose and heading align."""
+        distance = self.post_pass_distance_m()
+        if distance is None:
+            return None
+        straight_distance = max(
+            float(getattr(self, "post_pass_straight_distance_m", .8)), 0.0)
+        if distance < straight_distance:
+            return max(float(getattr(
+                self, "post_pass_straight_yaw_rate", .05)), 0.0)
+        alignment = self.route_alignment_error()
+        if alignment is not None and \
+                alignment[0] <= float(getattr(
+                    self, "post_pass_alignment_lateral_m", .25)) and \
+                alignment[1] <= float(getattr(
+                    self, "post_pass_alignment_heading_rad", .12)):
+            self.reset_post_pass_recovery()
+            return None
+        return max(float(getattr(
+            self, "post_pass_recovery_yaw_rate", .08)), 0.0)
+
+    def post_pass_recovery_active(self):
+        return self.post_pass_yaw_cap() is not None
+
+    def update_static_object_pass(self, threat):
+        """Track a confirmed-static object in map coordinates.
+
+        The live cluster can appear to stay ahead while the chair turns.
+        Anchoring its first confirmed-static geometry in the map applies ego
+        motion exactly once and provides the side-pass state that a semantic
+        PERSON track already has. Raw LiDAR remains the final authority.
+        """
+        pose = getattr(self, "pose_xy", None)
+        yaw = getattr(self, "pose_yaw", None)
+        track_id = getattr(threat, "track_id", None)
+        lateral = getattr(threat, "lateral_m", None)
+        if pose is None or yaw is None or track_id is None or lateral is None:
+            return False
+        try:
+            yaw = float(yaw)
+            centre_x = getattr(threat, "centre_forward_m", None)
+            half_x = getattr(threat, "half_forward_m", None)
+            half_y = getattr(threat, "half_lateral_m", None)
+            half_x = 0.0 if half_x is None else max(0.0, float(half_x))
+            half_y = 0.0 if half_y is None else max(0.0, float(half_y))
+            centre_x = (float(threat.distance_m) + half_x
+                        if centre_x is None else float(centre_x))
+            lateral = float(lateral)
+            px, py = float(pose[0]), float(pose[1])
+        except (IndexError, TypeError, ValueError):
+            return False
+        values = (yaw, centre_x, lateral, half_x, half_y, px, py)
+        if not all(math.isfinite(value) for value in values):
+            return False
+        if self._static_object_track_id != track_id or \
+                self._static_object_world_xy is None:
+            cosine, sine = math.cos(yaw), math.sin(yaw)
+            self._static_object_track_id = track_id
+            self._static_object_world_xy = (
+                px + cosine * centre_x - sine * lateral,
+                py + sine * centre_x + cosine * lateral)
+            self._static_object_half_forward_m = half_x
+            self._static_object_half_lateral_m = half_y
+            self._static_object_passed_side = False
+
+        dx = self._static_object_world_xy[0] - px
+        dy = self._static_object_world_xy[1] - py
+        cosine, sine = math.cos(yaw), math.sin(yaw)
+        relative_x = cosine * dx + sine * dy
+        relative_y = -sine * dx + cosine * dy
+        near_forward = relative_x - self._static_object_half_forward_m
+        lateral_clearance = (
+            abs(relative_y) - self._static_object_half_lateral_m)
+        if near_forward < self.person_bypass_minimum_near_m and \
+                lateral_clearance >= self.person_bypass_clearance_m:
+            self._static_object_passed_side = True
+        return self._static_object_passed_side
+
+    def planner_excluded_track_ids(self):
+        # Exclude only after ego-compensated safe-side confirmation. The raw
+        # gate still receives the complete point cloud and vetoes every real
+        # collision, while DWA stops re-planning around an object already
+        # safely down the side.
+        excluded = []
+        if self._static_object_passed_side and \
+                self._static_object_track_id is not None:
+            excluded.append(self._static_object_track_id)
+        if self.post_pass_recovery_active() and \
+                self._post_pass_track_id is not None and \
+                self._post_pass_track_id not in excluded:
+            excluded.append(self._post_pass_track_id)
+        return tuple(excluded)
+
+    @staticmethod
+    def room_preferred_side(lo_m, hi_m, current_lateral_m,
+                            target_y_m, clearance_m):
+        """Choose the side with more v9 room after clearing the obstacle.
+
+        Limits are chair-centre offsets from the recorded route.  The target
+        is in the current chair frame, so translate the two pass positions by
+        the chair's current cross-track offset before comparing their slack.
+        Positive is left and negative is right, matching ROS yaw.
+        """
+        values = (lo_m, hi_m, current_lateral_m, target_y_m, clearance_m)
+        if not all(math.isfinite(float(value)) for value in values):
+            return 0
+        left_pass_m = (float(current_lateral_m) + float(target_y_m)
+                       + float(clearance_m))
+        right_pass_m = (float(current_lateral_m) + float(target_y_m)
+                        - float(clearance_m))
+        left_slack_m = float(hi_m) - left_pass_m
+        right_slack_m = right_pass_m - float(lo_m)
+        if left_slack_m < 0.0 and right_slack_m < 0.0:
+            return 0
+        return 1 if left_slack_m >= right_slack_m else -1
+
+    def v9_room_preferred_side(self, permit):
+        """Use the restrictive current+forward v9 widths for side choice."""
+        pose_xy = getattr(self, "pose_xy", None)
+        band = getattr(self, "band", None)
+        waypoints = getattr(self, "waypoints", ())
+        if pose_xy is None or band is None or not len(waypoints) or \
+                permit.target_y_m is None:
+            return 0
+        start = max(0, int(getattr(self, "nearest_index", 0)))
+        end = min(len(waypoints),
+                  start + self.BYPASS_SIDE_LOOKAHEAD_WAYPOINTS)
+        points = [pose_xy]
+        # A few forward samples are enough; lateral_limits itself applies the
+        # more restrictive pair of v9 stations at every sample.
+        points.extend(waypoints[start:end:4])
+        limits = []
+        for point in points:
+            try:
+                lateral, lo, hi = band.lateral_limits(point)
+            except (AttributeError, TypeError, ValueError):
+                return 0
+            if not all(math.isfinite(float(value))
+                       for value in (lateral, lo, hi)):
+                return 0
+            limits.append((float(lateral), float(lo), float(hi)))
+        if not limits:
+            return 0
+        current_lateral = limits[0][0]
+        # A side is only as wide as its narrowest point over the maneuver.
+        lo = max(value[1] for value in limits)
+        hi = min(value[2] for value in limits)
+        return self.room_preferred_side(
+            lo, hi, current_lateral, float(permit.target_y_m),
+            float(permit.min_clearance_m))
 
     def activate_trajectory_bypass(self, permit, detail):
         self.active_trajectory_permit = permit
+        self.remember_maneuver_cycle(getattr(permit, "track_id", None))
+        if str(getattr(permit, "reason", "")).endswith("_PASSED_SIDE"):
+            self.latch_post_pass_recovery(permit)
         if self._committed_bypass_track_id != permit.track_id:
-            # Commit away from the observed obstacle/person for the whole
-            # pass. A stable side prevents small point-cloud changes from
-            # alternating the winning DWA candidate left/right every frame.
+            # Prefer the side with more usable v9 width over the next ~3 m.
+            # The previous target-opposite rule sent the 23:01 bicycle trial
+            # into the 0.80 m right side while v9 exposed 2.55 m on the left.
+            # Raw point sweeps and the hard route mask still veto collisions.
             lateral = float(permit.target_y_m or 0.0)
-            if abs(lateral) > 1e-3:
+            preferred = self.v9_room_preferred_side(permit)
+            if preferred:
+                self._committed_bypass_side = preferred
+            elif abs(lateral) > 1e-3:
                 self._committed_bypass_side = -1 if lateral > 0.0 else 1
             elif abs(getattr(self, "last_yaw_rate", 0.0)) > 1e-3:
                 self._committed_bypass_side = (
@@ -135,6 +404,34 @@ class PersonBypassDwaFollower(DwaFollower):
 
     def inactive_permit(self, now, reason):
         return self.qualifier.inactive(now.to_sec(), reason)
+
+    def ego_compensated_person_observations(self, observations):
+        """Attach map-frame identity coordinates to body-frame detections.
+
+        The permit still carries current body-frame x/y for planning.  Only
+        the same-track jump check uses these map coordinates, so rotating the
+        chair no longer makes one stationary person appear to teleport from
+        y=-0.2 to y=+1.2 m and erase an active bypass.
+        """
+        pose = getattr(self, "pose_xy", None)
+        yaw = getattr(self, "pose_yaw", None)
+        if pose is None or yaw is None:
+            return observations
+        try:
+            px, py = float(pose[0]), float(pose[1])
+            yaw = float(yaw)
+        except (IndexError, TypeError, ValueError):
+            return observations
+        if not all(math.isfinite(value) for value in (px, py, yaw)):
+            return observations
+        cosine, sine = math.cos(yaw), math.sin(yaw)
+        compensated = []
+        for observation in observations:
+            world_x = px + cosine * observation.x_m - sine * observation.y_m
+            world_y = py + sine * observation.x_m + cosine * observation.y_m
+            compensated.append(replace(
+                observation, tracking_x_m=world_x, tracking_y_m=world_y))
+        return tuple(compensated)
 
     def observed_person_permit(self, now):
         """Update qualification even while the motion service is paused.
@@ -160,13 +457,21 @@ class PersonBypassDwaFollower(DwaFollower):
                 self.person_bypass_maximum_lateral_m
                 + self.person_bypass_lateral_hysteresis_m),
         )
+        observations = self.ego_compensated_person_observations(observations)
         permit = self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING")
-        if not permit.active:
+        if permit.active and \
+                str(getattr(permit, "reason", "")).endswith("_PASSED_SIDE"):
+            self.latch_post_pass_recovery(permit)
+        if not permit.active and permit.reason != "NO_PERSON":
             self.reset_bypass_commitment()
         return permit
 
     def avoidance_for(self, now, threat, blocking):
+        if self.post_pass_recovery_active():
+            self.planner.max_speed = min(
+                float(self.planner.max_speed),
+                float(self.person_bypass_speed_mps))
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
             now, threat, blocking)
         permit = self.observed_person_permit(now)
@@ -230,6 +535,10 @@ class PersonBypassDwaFollower(DwaFollower):
             permit_lifetime_s=self.person_bypass_permit_lifetime_s,
             max_speed_mps=self.person_bypass_speed_mps,
             min_clearance_m=self.person_bypass_clearance_m,
+            permit_reason=(
+                "STATIC_OBJECT_PASSED_SIDE"
+                if self.update_static_object_pass(threat)
+                else "STATIC_OBJECT_BYPASS"),
         )
         self.publish_permit(permit)
         if permit.active:
@@ -240,41 +549,59 @@ class PersonBypassDwaFollower(DwaFollower):
         return ordinary
 
     def planner_candidate_veto(self, now, _decision, command_for_target):
-        if self.active_trajectory_permit is None:
+        recovery_yaw_cap = self.post_pass_yaw_cap()
+        if self.active_trajectory_permit is None and recovery_yaw_cap is None:
             return None
-        raw_veto = make_raw_gate_candidate_veto(
-            self.cloud, self.motion,
-            (now - self.cloud_stamp).to_sec(), command_for_target,
-            minimum_turn_rps=self.minimum_person_bypass_turn_rps,
-            now_s=now.to_sec())
-        committed_side = self._committed_bypass_side
+        raw_veto = None
+        committed_side = 0
+        if self.active_trajectory_permit is not None:
+            raw_veto = make_raw_gate_candidate_veto(
+                self.cloud, self.motion,
+                (now - self.cloud_stamp).to_sec(), command_for_target,
+                minimum_turn_rps=self.minimum_person_bypass_turn_rps,
+                now_s=now.to_sec())
+            committed_side = self._committed_bypass_side
 
         def veto(target_v, target_w):
+            if recovery_yaw_cap is not None and \
+                    abs(float(target_w)) > recovery_yaw_cap + 1e-6:
+                return True
             # Zero yaw is intentionally allowed: if its exact raw sweep is
             # clear, continuing forward is safer and smoother than forcing a
             # turn. Only a turn toward the opposite side is suppressed.
             if committed_side and float(target_w) * committed_side < -1e-6:
                 return True
-            return raw_veto(target_v, target_w)
+            return raw_veto is not None and raw_veto(target_v, target_w)
 
         return veto
 
     def step(self):
         self.active_trajectory_permit = None
+        self._maneuver_track_this_cycle = None
         self._permit_published_this_cycle = False
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
         saved_rejected_yaws = getattr(
             self.planner, "rejected_yaw_rates", ())
         now = rospy.Time.now()
-        # Publish a continuously refreshed qualification heartbeat before the
-        # base hold ladder can return for PAUSED/MANUAL/STARTUP. This does not
-        # bypass any guard; it only lets the later preflight distinguish a
-        # stable person from a moving or unknown one before enabling motion.
-        self.publish_permit(self.observed_person_permit(now))
+        if not getattr(self, "enabled", False) or (
+                getattr(self, "drive_mode", None) not in (None, 65)):
+            self.reset_post_pass_recovery()
+        # Publish person evidence before the base hold ladder can return for
+        # PAUSED/MANUAL/STARTUP.  Do not publish the ordinary NO_PERSON value
+        # here: on an active cycle avoidance_for may issue a generic
+        # STATIC_OBJECT_BYPASS a few milliseconds later. Publishing both made
+        # the raw gate see an alternating inactive/active permit and broke
+        # bypass of static bicycles and other unclassified geometry. The
+        # finally block still publishes a fail-closed inactive heartbeat when
+        # the follower returns before evaluating an object.
+        person_permit = self.observed_person_permit(now)
+        if person_permit.reason != "NO_PERSON":
+            self.publish_permit(person_permit)
         try:
             super(PersonBypassDwaFollower, self).step()
         finally:
+            self.finish_maneuver_cycle()
             self.planner.max_speed = saved_max_speed
             dwa_core.OBSTACLE_FLOOR_M = saved_clearance
             self.planner.rejected_yaw_rates = saved_rejected_yaws

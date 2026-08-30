@@ -876,6 +876,216 @@ def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
     assert published[-1].reason == "STATIC_OBJECT_BYPASS"
 
 
+def test_unclassified_but_directly_observed_static_geometry_gets_a_permit(
+        monkeypatch):
+    module, Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    published = []
+    follower.observed_person_permit = lambda now: types.SimpleNamespace(
+        active=False, reason="NO_PERSON")
+    follower.publish_permit = lambda permit: published.append(permit)
+    follower.person_bypass_permit_lifetime_s = .45
+    follower.person_bypass_maximum_gap_s = .45
+    follower.person_bypass_speed_mps = .35
+    follower.person_bypass_clearance_m = .60
+    follower._committed_bypass_track_id = None
+    follower._committed_bypass_side = 0
+    follower.last_yaw_rate = 0.0
+    follower.planner = types.SimpleNamespace(max_speed=.8)
+    # Empty/unknown class is intentional. Authorization depends on current
+    # geometric identity and STATIC motion, not a semantic object name.
+    threat = types.SimpleNamespace(
+        label="", is_person=False, parked=True, motion="static",
+        track_id=3024, observed_stamp_s=99.8,
+        distance_m=1.8, lateral_m=-.25,
+        directly_observed=True, geometry_valid=True)
+    monkeypatch.setattr(
+        module.DwaFollower, "avoidance_for",
+        lambda self, now, observed, blocking: module.GO_ROUND)
+
+    decision = follower.avoidance_for(Stamp(100.0), threat, True)
+
+    assert decision == module.GO_ROUND
+    assert published[-1].active
+    assert published[-1].track_id == 3024
+    assert published[-1].reason == "STATIC_OBJECT_BYPASS"
+
+
+def test_v9_room_choice_uses_wide_left_instead_of_object_opposite_right():
+    module, _Stamp = load_follower("person_bypass_dwa_follower")
+    choose = module.PersonBypassDwaFollower.room_preferred_side
+
+    # Recorded at v9 station 663 in the 23:01 trial: after edge insets the
+    # left remains much wider. The object is slightly left, but there is
+    # still more clearance beyond it than in the narrow right branch.
+    assert choose(-.725, 2.475, 0.0, .577, .60) == 1
+
+
+def test_v9_room_choice_can_still_use_right_when_object_consumes_left():
+    module, _Stamp = load_follower("person_bypass_dwa_follower")
+    choose = module.PersonBypassDwaFollower.room_preferred_side
+
+    assert choose(-1.8, 1.0, 0.0, .8, .60) == -1
+
+
+def test_v9_room_choice_refuses_to_invent_a_side_when_neither_fits():
+    module, _Stamp = load_follower("person_bypass_dwa_follower")
+    choose = module.PersonBypassDwaFollower.room_preferred_side
+
+    assert choose(-.2, .2, 0.0, 0.0, .60) == 0
+
+
+def test_static_object_pass_uses_ego_motion_and_excludes_only_that_track():
+    module, _Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.pose_xy = np.array([0.0, 0.0])
+    follower.pose_yaw = 0.0
+    follower.person_bypass_minimum_near_m = .60
+    follower.person_bypass_clearance_m = .60
+    follower._static_object_track_id = None
+    follower._static_object_world_xy = None
+    follower._static_object_half_forward_m = 0.0
+    follower._static_object_half_lateral_m = 0.0
+    follower._static_object_passed_side = False
+    threat = types.SimpleNamespace(
+        track_id=91, distance_m=1.8, lateral_m=.9,
+        centre_forward_m=2.0, half_forward_m=.2,
+        half_lateral_m=.2)
+
+    assert not follower.update_static_object_pass(threat)
+    follower.pose_xy = np.array([1.7, 0.0])
+    assert follower.update_static_object_pass(threat)
+    assert follower.planner_excluded_track_ids() == (91,)
+
+
+def post_pass_recovery_fixture():
+    module, _Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.pose_xy = np.array([10.0, 5.0])
+    follower.pose_yaw = 0.0
+    follower._post_pass_track_id = None
+    follower._post_pass_origin_xy = None
+    follower.post_pass_straight_distance_m = .8
+    follower.post_pass_straight_yaw_rate = .05
+    follower.post_pass_recovery_yaw_rate = .08
+    follower.post_pass_alignment_lateral_m = .25
+    follower.post_pass_alignment_heading_rad = .12
+    follower.route_error_m = .5
+    follower.planner = types.SimpleNamespace(
+        tree=types.SimpleNamespace(
+            query=lambda _pose: (follower.route_error_m, 0)),
+        heading=np.array([0.0]))
+    permit = types.SimpleNamespace(track_id=250)
+    follower.latch_post_pass_recovery(permit)
+    return module, follower
+
+
+def test_passed_person_holds_near_straight_then_gently_rejoins():
+    _module, follower = post_pass_recovery_fixture()
+
+    follower.pose_xy = np.array([10.4, 5.0])
+    assert follower.post_pass_yaw_cap() == pytest.approx(.05)
+
+    follower.pose_xy = np.array([11.0, 5.0])
+    assert follower.post_pass_yaw_cap() == pytest.approx(.08)
+
+    # Distance alone no longer ends recovery. It ends only after both the
+    # ideal route and its heading have been reached gently.
+    follower.pose_xy = np.array([12.01, 5.0])
+    assert follower.post_pass_yaw_cap() == pytest.approx(.08)
+    follower.route_error_m = .20
+    follower.pose_yaw = .05
+    assert follower.post_pass_yaw_cap() is None
+    assert follower._post_pass_track_id is None
+
+
+def test_post_pass_recovery_vetoes_the_recorded_half_rad_s_snap_back():
+    _module, follower = post_pass_recovery_fixture()
+    follower.pose_xy = np.array([10.4, 5.0])
+    follower.active_trajectory_permit = None
+
+    veto = follower.planner_candidate_veto(
+        types.SimpleNamespace(to_sec=lambda: 100.0), None,
+        lambda v, w: (v, w))
+
+    assert not veto(.35, .05)
+    assert veto(.35, .10)
+    assert veto(.35, .50)
+
+
+def test_ordinary_commitment_reset_keeps_post_pass_recovery():
+    _module, follower = post_pass_recovery_fixture()
+    follower._committed_bypass_track_id = 250
+    follower._committed_bypass_side = 1
+    follower._static_object_track_id = None
+    follower._static_object_world_xy = None
+    follower._static_object_half_forward_m = 0.0
+    follower._static_object_half_lateral_m = 0.0
+    follower._static_object_passed_side = False
+
+    follower.reset_bypass_commitment()
+
+    assert follower._post_pass_track_id == 250
+    assert follower.post_pass_recovery_active()
+
+
+def test_post_pass_recovery_excludes_only_the_passed_track_from_dwa():
+    _module, follower = post_pass_recovery_fixture()
+    follower._static_object_passed_side = False
+    follower._static_object_track_id = None
+
+    assert follower.planner_excluded_track_ids() == (250,)
+
+
+def test_interrupted_active_bypass_enters_gentle_recovery():
+    _module, follower = post_pass_recovery_fixture()
+    follower.reset_post_pass_recovery()
+    follower._maneuver_track_previous_cycle = 1689
+    follower._maneuver_track_this_cycle = None
+    follower.last_yaw_rate = .15
+
+    follower.finish_maneuver_cycle()
+
+    assert follower._post_pass_track_id == 1689
+    assert follower.post_pass_yaw_cap() == pytest.approx(.05)
+
+
+def test_interrupted_bypass_without_a_turn_does_not_slow_the_route():
+    _module, follower = post_pass_recovery_fixture()
+    follower.reset_post_pass_recovery()
+    follower._maneuver_track_previous_cycle = 1442
+    follower._maneuver_track_this_cycle = None
+    follower.last_yaw_rate = 0.0
+
+    follower.finish_maneuver_cycle()
+
+    assert follower._post_pass_track_id is None
+
+
+def test_person_identity_coordinates_are_compensated_for_ego_rotation():
+    module, _Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    observation_type = module.person_observations.__globals__["PersonObservation"]
+    observation = observation_type(
+        track_id=1689, stamp_s=1.0, x_m=0.0, y_m=-2.0,
+        size_x_m=.6, size_y_m=.6, motion="static", source="geometric")
+    # The chair is one metre along x and has turned left 90 degrees. The
+    # stationary person is therefore still at map (3, 0).
+    follower.pose_xy = np.array([1.0, 0.0])
+    follower.pose_yaw = np.pi / 2.0
+
+    compensated = follower.ego_compensated_person_observations((observation,))
+
+    assert compensated[0].tracking_x_m == pytest.approx(3.0)
+    assert compensated[0].tracking_y_m == pytest.approx(0.0)
+    assert compensated[0].x_m == 0.0
+    assert compensated[0].y_m == -2.0
+
+
 def bypass_fixture(monkeypatch):
     module, Stamp = load_follower("person_bypass_dwa_follower")
     follower = module.PersonBypassDwaFollower.__new__(module.PersonBypassDwaFollower)
