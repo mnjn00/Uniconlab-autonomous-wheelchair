@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Semantic supervisor that permits one independently qualified static person.
-
-Moving/unknown people and objects remain stop-only. A static person is omitted
-from the person latch only while a fresh DWA permit matches the same current
-geometric track. The permit cannot authorize motion by itself: stale
-perception, a changed track, another moving object, or an invalid command still
-produces a stop.
-"""
+"""Strict v2 semantic supervisor for one qualified static-threat track."""
 
 import copy
 import json
@@ -24,23 +17,23 @@ from cluster_guard import (  # noqa: E402
     PERSON_LABEL,
     Threat,
     corridor_reach,
-    nearest_threat,
+    matching_threats,
+    object_box,
 )
 from cluster_tracking import STATIC  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
+    STATIC_THREAT_DROPOUT_GRACE,
     permit_from_payload,
     permit_is_fresh,
     permit_matches_observation,
-    person_observations,
+    threat_observations,
 )
 from semantic_safety_policy import (  # noqa: E402
     SemanticDecision,
     decide_semantic_stop,
     stopping_distance,
 )
-from semantic_safety_supervisor import (  # noqa: E402
-    SemanticSafetySupervisor,
-)
+from semantic_safety_supervisor import SemanticSafetySupervisor  # noqa: E402
 
 
 def nearest_dynamic_threat(summary, half_width_m):
@@ -55,7 +48,18 @@ def nearest_dynamic_threat(summary, half_width_m):
             item, 0.0, float(half_width_m))
         if not blocks or motion == STATIC:
             continue
-        threat = Threat(distance, motion, str(item.get("class", "")))
+        track_id = item.get("id")
+        if isinstance(track_id, bool) or not isinstance(track_id, int):
+            track_id = None
+        box = object_box(item)
+        threat = Threat(
+            distance, motion, str(item.get("class", "")),
+            track_id=track_id, observed_stamp_s=summary.stamp_s,
+            directly_observed=item.get("directly_observed", True) is True,
+            geometry_valid=item.get("geometry_valid", True) is True,
+            center_x_m=None if box is None else box[0],
+            center_y_m=None if box is None else box[1],
+        )
         if nearest is None or threat.distance_m < nearest.distance_m:
             nearest = threat
     return nearest
@@ -66,13 +70,13 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
         super(PersonBypassSemanticSupervisor, self).__init__()
         self.bypass_permit = None
         self.maximum_permit_age_s = float(rospy.get_param(
-            "~maximum_person_bypass_permit_age_s", 0.45))
+            "~static_threat_bypass_maximum_permit_age_s", 0.45))
         self.maximum_target_error_m = float(rospy.get_param(
-            "~maximum_person_bypass_target_error_m", 0.45))
+            "~static_threat_bypass_maximum_target_error_m", 0.45))
         self.bypass_maximum_forward_m = float(rospy.get_param(
-            "~person_bypass_maximum_forward_m", 8.0))
+            "~static_threat_bypass_maximum_forward_m", 8.0))
         self.bypass_maximum_lateral_m = float(rospy.get_param(
-            "~person_bypass_maximum_lateral_m", 1.0))
+            "~static_threat_bypass_maximum_lateral_m", 1.0))
         for name in (
                 "maximum_permit_age_s", "maximum_target_error_m",
                 "bypass_maximum_forward_m", "bypass_maximum_lateral_m"):
@@ -81,12 +85,13 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
                 raise rospy.ROSInitException(
                     "~%s must be finite and positive" % name)
         permit_topic = str(rospy.get_param(
-            "~person_bypass_permit_topic", "/person_bypass/permit"))
+            "~static_threat_bypass_permit_topic",
+            "/static_threat_bypass/permit"))
         rospy.Subscriber(permit_topic, String, self.on_bypass_permit,
                          queue_size=2)
-        rospy.set_param("~person_bypass_capable", True)
+        rospy.set_param("~static_threat_bypass_capable", True)
         rospy.loginfo(
-            "semantic static-person bypass enabled; permit=%s max-age=%.2f s",
+            "semantic static-threat bypass enabled; permit=%s max-age=%.2f s",
             permit_topic, self.maximum_permit_age_s)
 
     def on_bypass_permit(self, message):
@@ -94,21 +99,25 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
 
     def validated_bypass(self, now_s):
         permit = self.bypass_permit
-        if permit is None or not permit.active or not permit_is_fresh(
-                permit, now_s, self.maximum_permit_age_s):
-            return None, None
-        observations = person_observations(
+        dynamic = nearest_dynamic_threat(self.summary, self.corridor_half_width_m)
+        if permit is None or not permit.active:
+            return None, None, "", dynamic
+        if not permit_is_fresh(permit, now_s, self.maximum_permit_age_s):
+            return None, None, "STATIC_THREAT_PERMIT_STALE", dynamic
+        observations = threat_observations(
             self.summary,
             maximum_forward_m=self.bypass_maximum_forward_m,
             maximum_lateral_m=self.bypass_maximum_lateral_m,
         )
-        if len(observations) != 1:
-            return None, None
-        observation = observations[0]
-        if not permit_matches_observation(
-                permit, observation, self.maximum_target_error_m):
-            return None, None
-        return permit, observation
+        matching = tuple(observation for observation in observations
+                         if observation.track_id == permit.track_id)
+        if len(matching) == 1 and permit_matches_observation(
+                permit, matching[0], self.maximum_target_error_m):
+            return permit, matching[0], "", dynamic
+        if permit.reason == STATIC_THREAT_DROPOUT_GRACE and \
+                not observations and dynamic is None:
+            return permit, None, "", None
+        return None, None, "STATIC_THREAT_PERMIT_MISMATCH", dynamic
 
     def step(self):
         now = rospy.Time.now()
@@ -116,36 +125,39 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
         command_age = (now - self.command_stamp).to_sec()
         summary_age = math.inf
         summary_usable = False
-        person = None
         nearest_dynamic = None
         if self.summary is not None:
             summary_age = now_s - self.summary.stamp_s
             summary_usable = self.summary.usable and \
                 self.summary_frame == self.expected_summary_frame
-            if summary_usable:
-                person = nearest_threat(
-                    self.summary, self.person_half_width_m,
-                    labels=(PERSON_LABEL,))
-                if person is not None:
-                    self.person_memory = (self.summary.stamp_s, person)
-                elif self.person_memory is not None:
-                    memory_stamp, remembered = self.person_memory
-                    memory_age = self.summary.stamp_s - memory_stamp
-                    if 0.0 <= memory_age <= self.person_memory_s:
-                        person = remembered
-                    else:
-                        self.person_memory = None
-                nearest_dynamic = nearest_dynamic_threat(
-                    self.summary, self.corridor_half_width_m)
-
-        permit, bypass_person = self.validated_bypass(now_s) \
-            if summary_usable else (None, None)
+        permit, bypass_target, permit_fault, nearest_dynamic = \
+            self.validated_bypass(now_s) if summary_usable \
+            else (None, None, "", None)
         bypass_active = permit is not None
-        if bypass_active:
-            self.person_latch.reset()
-            person_for_stop = None
-        else:
-            person_for_stop = person
+        permitted_person_id = permit.track_id if bypass_active and \
+            permit.threat_label == PERSON_LABEL else None
+        objects_valid = summary_usable and all(
+            isinstance(item, dict) for item in self.summary.objects)
+        people = matching_threats(
+            self.summary, self.person_half_width_m, labels=(PERSON_LABEL,)) \
+            if objects_valid else ()
+        people = tuple(
+            threat for threat in people
+            if threat.track_id != permitted_person_id)
+        person_for_stop = people[0] if people else None
+        if person_for_stop is not None:
+            self.person_memory = (self.summary.stamp_s, person_for_stop)
+        elif self.person_memory is not None:
+            memory_stamp, remembered = self.person_memory
+            memory_age = self.summary.stamp_s - memory_stamp
+            if remembered.track_id == permitted_person_id:
+                self.person_memory = None
+            elif 0.0 <= memory_age <= self.person_memory_s:
+                person_for_stop = remembered
+            else:
+                self.person_memory = None
+        if permitted_person_id is not None:
+            self.person_latch.release_track(permitted_person_id)
 
         stop_m = stopping_distance(
             measured_speed_mps=self.measured_speed,
@@ -168,6 +180,15 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
             nearest=self._view(nearest_dynamic),
             person_latch=self.person_latch,
         )
+        if not decision.blocked and bypass_active and \
+                nearest_dynamic is not None:
+            decision = SemanticDecision(
+                "DYNAMIC_THREAT_CONFLICT", decision.stop_distance_m,
+                decision.release_distance_m)
+        if not decision.blocked and permit_fault:
+            decision = SemanticDecision(
+                permit_fault, decision.stop_distance_m,
+                decision.release_distance_m)
 
         out = Twist()
         if not decision.blocked:
@@ -212,19 +233,24 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
                 round(float(chosen.distance_m), 3),
             "planned_v": round(float(self.command.linear.x), 3),
             "out_v": round(float(out.linear.x), 3),
-            "person_bypass_capable": True,
-            "person_bypass_active": bypass_active,
-            "person_bypass_track_id": None if permit is None
-                                      else permit.track_id,
-            "person_bypass_static_for_s": None if permit is None
-                                         else round(permit.static_for_s, 3),
-            "person_bypass_permit_age_s": None if permit_age is None
-                                          or not math.isfinite(permit_age)
-                                          else round(permit_age, 3),
+            "static_threat_bypass_capable": True,
+            "static_threat_bypass_active": bypass_active,
+            "static_threat_bypass_validation": permit_fault or (
+                "VALID" if bypass_active else "INACTIVE"),
+            "static_threat_bypass_track_id": None if permit is None
+                                             else permit.track_id,
+            "static_threat_bypass_label": None if permit is None
+                                          else permit.threat_label,
+            "static_threat_bypass_static_for_s": None if permit is None
+                                                else round(
+                                                    permit.static_for_s, 3),
+            "static_threat_bypass_permit_age_s": None if permit_age is None
+                                                 or not math.isfinite(permit_age)
+                                                 else round(permit_age, 3),
         }
-        if bypass_person is not None:
-            report["person_bypass_target_x_m"] = round(bypass_person.x_m, 3)
-            report["person_bypass_target_y_m"] = round(bypass_person.y_m, 3)
+        if bypass_target is not None:
+            report["static_threat_bypass_target_x_m"] = round(bypass_target.x_m, 3)
+            report["static_threat_bypass_target_y_m"] = round(bypass_target.y_m, 3)
         self.status_pub.publish(String(data=json.dumps(
             report, separators=(",", ":"), sort_keys=True)))
 

@@ -1,6 +1,8 @@
 from pathlib import Path
 import importlib.util
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[3]
 SAFETY_GATE = ROOT / "src" / "wheelchair_safety" / "scripts" / "safety_gate.py"
 spec = importlib.util.spec_from_file_location("safety_gate", SAFETY_GATE)
@@ -177,3 +179,63 @@ def test_changed_same_sequence_is_rejected():
     changed = SignalEvidence(**{**changed.__dict__, "reason_mask": safety_gate.GRAPH_TOPOLOGY})
     decision = core.evaluate(valid_inputs(topology=changed))
     assert decision.reason_mask & safety_gate.CORRUPT_DATA
+
+
+STATIC_SCRIPTS = ROOT / "src" / "static_livox_localization" / "scripts"
+MOTION_SAFETY = STATIC_SCRIPTS / "motion_safety.py"
+motion_spec = importlib.util.spec_from_file_location(
+    "static_motion_safety", MOTION_SAFETY)
+motion_safety = importlib.util.module_from_spec(motion_spec)
+motion_spec.loader.exec_module(motion_safety)
+
+
+def test_collision_snapshot_exposes_filtered_points_without_rebuilding():
+    points = np.array([
+        [0.80, 0.00], [0.81, 0.01], [0.79, -0.01],
+        [0.80, 0.01], [0.80, -0.01],
+    ])
+
+    snapshot = motion_safety.CollisionSnapshot(
+        points_xy=points, source_point_count=123)
+
+    assert snapshot.source_point_count == 123
+    assert snapshot.obstacle_point_count == 5
+    assert snapshot.points_xy is points
+
+
+def test_arbitrary_pose_footprint_validator_is_pose_aware_and_pure():
+    points = np.array([
+        [1.00, 0.50], [1.01, 0.50], [0.99, 0.50],
+        [1.00, 0.51], [1.00, 0.49],
+    ])
+    before = points.copy()
+
+    collides = motion_safety.footprint_collision_at_pose(
+        points, pose_x_m=1.0, pose_y_m=0.5, pose_yaw_rad=0.7,
+        front_m=0.50, rear_m=0.50, half_width_m=0.30,
+        margin_m=0.05, min_points=5)
+    clear = motion_safety.footprint_collision_at_pose(
+        points, pose_x_m=2.0, pose_y_m=2.0, pose_yaw_rad=-0.4,
+        front_m=0.50, rear_m=0.50, half_width_m=0.30,
+        margin_m=0.05, min_points=5)
+
+    assert collides
+    assert not clear
+    assert np.array_equal(points, before)
+
+
+def test_sweep_reports_every_arbitrary_pose_check():
+    points = np.array([
+        [0.00, 0.60], [0.01, 0.60], [-0.01, 0.60],
+        [0.00, 0.61], [0.00, 0.59],
+    ])
+    checked = []
+
+    collision = motion_safety.swept_footprint_collision(
+        points, linear_speed_mps=0.3, angular_speed_rps=0.2,
+        horizon_s=0.1, front_m=0.50, rear_m=0.50,
+        half_width_m=0.30, margin_m=0.05, min_points=5,
+        pose_checked=lambda: checked.append(True))
+
+    assert not collision
+    assert len(checked) > 0

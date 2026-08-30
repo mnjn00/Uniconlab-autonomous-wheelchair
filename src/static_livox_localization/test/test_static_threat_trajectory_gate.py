@@ -1,0 +1,247 @@
+import types
+
+import numpy as np
+
+from test_dwa_policy import load_follower
+
+
+def _permit(module, track_id=7, stamp_s=100.0, target_x_m=1.0):
+    return module.bypass_policy.BypassPermit(
+        capable=True, active=True, stamp_s=stamp_s, expires_s=100.45,
+        track_id=track_id, target_x_m=target_x_m, target_y_m=0.0,
+        threat_label="person", static_for_s=2.0, max_speed_mps=0.35,
+        min_clearance_m=0.50,
+        reason=module.bypass_policy.STATIC_THREAT_BYPASS)
+
+
+def _proposal(module, *, sequence=11, track_id=7, side="LEFT",
+              stamp_s=100.0, applied_v=0.10, applied_w=0.15,
+              target_v=0.35, target_w=0.50, poses=None):
+    if poses is None:
+        poses = ((0.01, 0.75, 0.02), (0.03, 0.78, 0.04))
+    state = module.proposal_contract.ActuatorState(0.08, 0.0, 0.0, 0.1)
+    return module.proposal_contract.TrajectoryProposal(
+        proposal_seq=sequence, stamp_s=stamp_s,
+        permit_track_id=track_id, committed_side=side, frame_id="body",
+        horizon_s=len(poses) * 0.1, actuator_state=state,
+        target_speed_mps=target_v, target_yaw_rate_rps=target_w,
+        poses=poses, speeds_mps=(applied_v,) * len(poses),
+        yaw_rates_rps=(applied_w,) * len(poses))
+
+
+def _gate(module, *, obstacles=None, raw_v=0.10, raw_w=0.15,
+          target_x_m=1.0):
+    gate = module.TrajectorySafetyGate.__new__(module.TrajectorySafetyGate)
+    gate.maximum_permit_age_s = 0.45
+    gate.maximum_proposal_age_s = 0.30
+    gate.proposal_linear_tolerance_mps = 0.02
+    gate.proposal_angular_tolerance_rps = 0.03
+    gate.minimum_bypass_turn_rps = 0.08
+    gate.immediate_front_margin_m = 0.0
+    gate.immediate_side_margin_m = 0.0
+    gate.immediate_point_count = 5
+    gate.person_bypass_permit = _permit(
+        module, target_x_m=target_x_m)
+    gate.trajectory_proposal = _proposal(module)
+    gate.highest_proposal_seq = 11
+    gate.proposal_receive_reason = "PROPOSAL_RECEIVED"
+    gate.raw = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=raw_v),
+        angular=types.SimpleNamespace(z=raw_w))
+    gate.motion = types.SimpleNamespace(
+        linear_speed_mps=0.0, angular_speed_rps=0.0)
+    gate.evidence = {"horizon_s": 1.0}
+    points = np.empty((0, 2), dtype=float) if obstacles is None else obstacles
+    gate.collision_snapshot = module.base_gate.CollisionSnapshot(
+        points_xy=points, source_point_count=len(points))
+    gate.last_override = None
+    return gate
+
+
+def _base_reason(monkeypatch, module, reason):
+    monkeypatch.setattr(
+        module.base_gate.SafetyGate, "motion_blocked",
+        lambda self, now: (reason, None))
+
+
+def test_exact_actuator_curve_can_replace_fixed_corridor_obstacle(monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    obstacles = np.repeat([[1.0, 0.0]], 5, axis=0)
+    gate = _gate(module, obstacles=obstacles)
+    _base_reason(monkeypatch, module, "OBSTACLE")
+
+    reason, cap = gate.motion_blocked(Stamp(100.1))
+
+    assert (reason, cap) == ("", 0.35)
+    assert gate.evidence["trajectory_override_reason"] == \
+        "STATIC_THREAT_TRAJECTORY_CLEAR"
+    assert gate.evidence["trajectory_proposal_seq"] == 11
+    assert gate.evidence["static_threat_bypass_track_id"] == 7
+
+
+def test_gate_matches_incoming_command_to_first_applied_not_target(monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    gate = _gate(module, raw_v=0.10, raw_w=0.15)
+    gate.trajectory_proposal = _proposal(
+        module, applied_v=0.10, applied_w=0.15,
+        target_v=0.35, target_w=0.50)
+    _base_reason(monkeypatch, module, "OBSTACLE")
+
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+
+    assert reason == ""
+    assert gate.evidence["trajectory_applied_v"] == 0.10
+    assert gate.evidence["trajectory_applied_w"] == 0.15
+    assert gate.evidence["trajectory_target_w"] == 0.50
+
+
+def test_command_track_side_stale_and_replayed_proposals_never_waive_stop(
+        monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    _base_reason(monkeypatch, module, "OBSTACLE")
+    cases = (
+        (_proposal(module, track_id=8), "PROPOSAL_TRACK_MISMATCH"),
+        (_proposal(module, side="NONE"), "PROPOSAL_SIDE_MISMATCH"),
+        (_proposal(module, side="RIGHT", applied_w=0.15),
+         "PROPOSAL_SIDE_MISMATCH"),
+        (_proposal(module, stamp_s=99.0), "PROPOSAL_STALE"),
+        (_proposal(module, sequence=10), "PROPOSAL_SEQUENCE_STALE"),
+    )
+    for proposal, expected in cases:
+        gate = _gate(module)
+        gate.trajectory_proposal = proposal
+        gate.highest_proposal_seq = 11
+        reason, cap = gate.motion_blocked(Stamp(100.1))
+        assert (reason, cap) == ("OBSTACLE", None)
+        assert gate.evidence["trajectory_override_reason"] == expected
+
+    gate = _gate(module, raw_v=0.14)
+    reason, cap = gate.motion_blocked(Stamp(100.1))
+    assert (reason, cap) == ("OBSTACLE", None)
+    assert gate.evidence["trajectory_override_reason"] == \
+        "PROPOSAL_COMMAND_MISMATCH"
+
+
+def test_malformed_proposal_is_rejected_without_replacing_last_valid_one():
+    module, _ = load_follower("trajectory_safety_gate")
+    gate = _gate(module)
+    valid = gate.trajectory_proposal
+    message = types.SimpleNamespace(data='{"schema":"wrong"}')
+
+    gate.on_trajectory_proposal(message)
+
+    assert gate.trajectory_proposal is valid
+    assert gate.proposal_receive_reason == "PROPOSAL_MALFORMED"
+
+
+def test_exact_proposal_collision_current_footprint_and_carried_path_stop(
+        monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    _base_reason(monkeypatch, module, "OBSTACLE")
+
+    proposal_hit = np.repeat([[0.03, 0.78]], 5, axis=0)
+    gate = _gate(module, obstacles=proposal_hit)
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+    assert reason == "OBSTACLE"
+    assert gate.evidence["trajectory_override_reason"] == \
+        "PROPOSAL_PATH_COLLISION"
+
+    immediate_hit = np.repeat([[0.20, 0.0]], 5, axis=0)
+    gate = _gate(module, obstacles=immediate_hit)
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+    assert reason == "OBSTACLE"
+    assert gate.evidence["trajectory_override_reason"] == \
+        "IMMEDIATE_FOOTPRINT"
+
+    gate = _gate(module, obstacles=np.repeat([[0.80, 0.0]], 5, axis=0))
+    gate.motion = types.SimpleNamespace(
+        linear_speed_mps=0.35, angular_speed_rps=0.0)
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+    assert reason == "OBSTACLE"
+    assert gate.evidence["trajectory_override_reason"] == \
+        "CARRIED_PATH_COLLISION"
+
+
+def test_collision_between_proposal_samples_cannot_pass(monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    obstacles = np.repeat([[1.0, 0.75]], 5, axis=0)
+    gate = _gate(module, obstacles=obstacles)
+    gate.trajectory_proposal = _proposal(
+        module, poses=((0.0, 0.75, 0.02), (2.0, 0.75, 0.04)))
+    _base_reason(monkeypatch, module, "OBSTACLE")
+
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+
+    assert reason == "OBSTACLE"
+    assert gate.evidence["trajectory_override_reason"] == \
+        "PROPOSAL_PATH_COLLISION"
+
+
+def test_absolute_base_reasons_are_never_replaced(monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    for base_reason in (
+            "NO_CLOUD", "ODOM_STALE", "INPUT_STALE", "CLOUD_STALE",
+            "INPUT_INVALID", "REVERSE"):
+        gate = _gate(module)
+        _base_reason(monkeypatch, module, base_reason)
+        assert gate.motion_blocked(Stamp(100.1)) == (base_reason, None)
+
+
+def test_tail_clear_status_requires_target_behind_and_real_selected_path_clear(
+        monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    gate = _gate(module, target_x_m=-0.60)
+    _base_reason(monkeypatch, module, "OBSTACLE")
+
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+
+    assert reason == ""
+    assert gate.evidence["static_threat_target_behind"] is True
+    assert gate.evidence["static_threat_tail_clear"] is True
+
+    rear_hit = np.repeat([[-0.524, 0.22]], 5, axis=0)
+    gate = _gate(module, obstacles=rear_hit, target_x_m=-0.60)
+    gate.trajectory_proposal = _proposal(
+        module, poses=((0.0, 0.0, 0.1), (0.02, 0.002, 0.2)))
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+    assert reason == "OBSTACLE"
+    assert gate.evidence["static_threat_tail_clear"] is False
+
+    forward_hit = np.repeat([[0.03, 0.78]], 5, axis=0)
+    gate = _gate(module, obstacles=forward_hit, target_x_m=-0.60)
+    reason, _ = gate.motion_blocked(Stamp(100.1))
+    assert reason == "OBSTACLE"
+    assert gate.evidence["static_threat_target_behind"] is True
+    assert gate.evidence["static_threat_tail_clear"] is False
+
+
+def test_exact_override_reuses_the_single_base_collision_snapshot(monkeypatch):
+    module, Stamp = load_follower("trajectory_safety_gate")
+    obstacles = np.repeat([[0.80, 0.0]], 5, axis=0)
+    gate = _gate(module)
+    gate.cloud = np.zeros((100, 3), dtype=float)
+    gate.cloud_stamp = Stamp(99.9)
+    gate.motion = types.SimpleNamespace(
+        valid=True, linear_speed_mps=0.0, angular_speed_rps=0.0,
+        source_stamp_s=100.0, receipt_stamp_s=100.0, reason="OK")
+    filter_calls = []
+    monkeypatch.setattr(
+        module.base_gate, "motion_hold_reason", lambda *_args: "")
+    monkeypatch.setattr(
+        module.base_gate, "stopping_envelope",
+        lambda **_kwargs: types.SimpleNamespace(
+            distance_m=1.0, horizon_s=1.0))
+
+    def filtered(*_args, **_kwargs):
+        filter_calls.append(True)
+        return obstacles
+
+    monkeypatch.setattr(module.base_gate, "filter_obstacle_points", filtered)
+
+    reason, cap = gate.motion_blocked(Stamp(100.1))
+
+    assert (reason, cap) == ("", 0.35)
+    assert len(filter_calls) == 1
+    assert gate.evidence["filter_calls"] == 1
+    assert gate.evidence["snapshot_builds"] == 1
+    assert gate.collision_snapshot.points_xy is obstacles

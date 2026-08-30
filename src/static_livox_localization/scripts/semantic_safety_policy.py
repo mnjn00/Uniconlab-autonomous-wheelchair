@@ -77,6 +77,12 @@ class PersonStopLatch:
         self.track_id = None
         self.release_distance_m = None
 
+    def release_track(self, track_id: int) -> bool:
+        if self.track_id != track_id:
+            return False
+        self.reset()
+        return True
+
     def update(self, threat: Optional[ThreatView], stop_distance_m: float) -> bool:
         if threat is None or not threat.is_person:
             self.reset()

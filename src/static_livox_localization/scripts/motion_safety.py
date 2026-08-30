@@ -1,7 +1,7 @@
 """ROS-independent motion and swept-footprint safety calculations."""
 
 import math
-from typing import NamedTuple, Optional, Sequence
+from typing import Callable, NamedTuple, Optional, Sequence
 
 import numpy as np
 
@@ -70,6 +70,31 @@ class StoppingEnvelope(NamedTuple):
 
 class MotionSafetyInputError(ValueError):
     pass
+
+
+class CollisionSnapshot:
+    """Obstacle points produced by one cloud-filter pass in one gate cycle.
+
+    The snapshot deliberately contains no policy decision. A downstream
+    trajectory validator can reuse the exact same obstacle array that the
+    ordinary gate inspected without decoding or filtering the cloud again.
+    """
+
+    __slots__ = ("points_xy", "source_point_count")
+
+    def __init__(self, points_xy: np.ndarray, source_point_count: int):
+        points = np.asarray(points_xy)
+        if points.ndim != 2 or points.shape[1] != 2:
+            raise MotionSafetyInputError("points_xy must have shape (N, 2)")
+        if int(source_point_count) < len(points):
+            raise MotionSafetyInputError(
+                "source_point_count cannot be smaller than obstacle count")
+        self.points_xy = points
+        self.source_point_count = int(source_point_count)
+
+    @property
+    def obstacle_point_count(self) -> int:
+        return int(len(self.points_xy))
 
 
 class _PoseSample(NamedTuple):
@@ -441,6 +466,55 @@ def filter_obstacle_points(
     return points[keep, :2]
 
 
+def _footprint_collision_at_pose(
+        points_xy: np.ndarray,
+        pose_x_m: float,
+        pose_y_m: float,
+        pose_yaw_rad: float,
+        front_m: float,
+        rear_m: float,
+        half_width_m: float,
+        margin_m: float,
+        min_points: int) -> bool:
+    dx = points_xy[:, 0] - pose_x_m
+    dy = points_xy[:, 1] - pose_y_m
+    cosine = math.cos(pose_yaw_rad)
+    sine = math.sin(pose_yaw_rad)
+    local_x = np.add(np.multiply(dx, cosine), np.multiply(dy, sine))
+    local_y = np.subtract(np.multiply(dy, cosine), np.multiply(dx, sine))
+    inside = ((local_x >= -rear_m - margin_m) &
+              (local_x <= front_m + margin_m) &
+              (np.abs(local_y) <= half_width_m + margin_m))
+    return bool(np.count_nonzero(inside) >= min_points)
+
+
+def footprint_collision_at_pose(
+        points_xy: np.ndarray,
+        pose_x_m: float,
+        pose_y_m: float,
+        pose_yaw_rad: float,
+        front_m: float,
+        rear_m: float,
+        half_width_m: float,
+        margin_m: float,
+        min_points: int = 5) -> bool:
+    points = np.asarray(points_xy, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise MotionSafetyInputError("points_xy must have shape (N, 2)")
+    limits = (pose_x_m, pose_y_m, pose_yaw_rad, front_m, rear_m,
+              half_width_m, margin_m)
+    if not all(math.isfinite(value) for value in limits) or \
+            min(front_m, rear_m, half_width_m, margin_m) < 0.0 or \
+            min_points < 1:
+        raise MotionSafetyInputError("invalid footprint limits")
+    points = points[np.all(np.isfinite(points), axis=1)]
+    if len(points) < min_points:
+        return False
+    return _footprint_collision_at_pose(
+        points, pose_x_m, pose_y_m, pose_yaw_rad, front_m, rear_m,
+        half_width_m, margin_m, min_points)
+
+
 def swept_footprint_collision(
         points_xy: np.ndarray,
         linear_speed_mps: float,
@@ -452,7 +526,8 @@ def swept_footprint_collision(
         margin_m: float,
         min_points: int = 5,
         max_step_s: float = 0.02,
-        max_boundary_step_m: float = 0.02) -> bool:
+        max_boundary_step_m: float = 0.02,
+        pose_checked: Optional[Callable[[], None]] = None) -> bool:
     points = np.asarray(points_xy, dtype=np.float64)
     if points.ndim != 2 or points.shape[1] != 2:
         raise MotionSafetyInputError("points_xy must have shape (N, 2)")
@@ -489,17 +564,10 @@ def swept_footprint_collision(
             radius_of_turn = linear_speed_mps / angular_speed_rps
             x = radius_of_turn * math.sin(yaw)
             y = radius_of_turn * (1.0 - math.cos(yaw))
-        dx = points[:, 0] - x
-        dy = points[:, 1] - y
-        cosine = math.cos(yaw)
-        sine = math.sin(yaw)
-        local_x = np.add(
-            np.multiply(dx, cosine), np.multiply(dy, sine))
-        local_y = np.subtract(
-            np.multiply(dy, cosine), np.multiply(dx, sine))
-        inside = ((local_x >= -rear_m - margin_m) &
-                  (local_x <= front_m + margin_m) &
-                  (np.abs(local_y) <= half_width_m + margin_m))
-        if np.count_nonzero(inside) >= min_points:
+        if pose_checked is not None:
+            pose_checked()
+        if _footprint_collision_at_pose(
+                points, x, y, yaw, front_m, rear_m, half_width_m,
+                margin_m, min_points):
             return True
     return False

@@ -44,7 +44,8 @@ from body_frame import CHAIR_CENTRE_IN_BODY_XYZ, lidar_extrinsics
 from cloud_points import (COLLISION_MAX_HEIGHT_M,
                           COLLISION_MIN_HEIGHT_M)
 from drive_policy import announce
-from motion_safety import (MotionEstimate, PoseMotionEstimator,
+from motion_safety import (CollisionSnapshot, MotionEstimate,
+                           PoseMotionEstimator,
                            filter_obstacle_points,
                            ground_reference, motion_hold_reason,
                            stopping_envelope,
@@ -173,6 +174,7 @@ class SafetyGate:
             False, 0.0, 0.0, 0.0, 0.0, "ODOM_INITIALIZING")
         self.cloud = None
         self.cloud_stamp = rospy.Time(0)
+        self.collision_snapshot = None
         self.blocked_reason = ""
         self.evidence = {}
         self.sweep_cap = HARD_V_LIMIT
@@ -229,9 +231,13 @@ class SafetyGate:
 
     def motion_blocked(self, now):
         """Check visible obstacles; drop safety remains map-band containment."""
+        self.collision_snapshot = None
         self.evidence = {
             "cloud_points": 0 if self.cloud is None else int(len(self.cloud)),
             "cloud_age_s": round(max(0.0, (now - self.cloud_stamp).to_sec()), 3),
+            "snapshot_builds": 0,
+            "filter_calls": 0,
+            "pose_checks": 0,
         }
         if self.cloud is None or len(self.cloud) < 100:
             return "NO_CLOUD", None
@@ -265,6 +271,10 @@ class SafetyGate:
             self_x_max_m=RIDER_EXCLUDE_X_MAX_M,
             self_half_width_m=RIDER_EXCLUDE_HALF_WIDTH_M,
             self_y_centre_m=CHAIR_CENTRE_IN_BODY_XYZ[1])
+        self.evidence["filter_calls"] += 1
+        self.collision_snapshot = CollisionSnapshot(
+            points_xy=obstacles, source_point_count=len(self.cloud))
+        self.evidence["snapshot_builds"] += 1
 
         self.evidence["requested_v"] = round(requested_speed, 3)
         self.evidence["requested_w"] = round(requested_yaw_rate, 3)
@@ -303,14 +313,17 @@ class SafetyGate:
             for yaw_rate in yaw_rates:
                 self.evidence["sweep_calls"] += 1
                 if swept_footprint_collision(
-                        obstacles,
+                        self.collision_snapshot.points_xy,
                         linear_speed_mps=candidate_speed,
                         angular_speed_rps=yaw_rate,
                         horizon_s=envelope.horizon_s,
                         front_m=FOOTPRINT_FRONT_M,
                         rear_m=FOOTPRINT_REAR_M,
                         half_width_m=FOOTPRINT_HALF_WIDTH_M,
-                        margin_m=SWEEP_MARGIN_M):
+                        margin_m=SWEEP_MARGIN_M,
+                        pose_checked=lambda: self.evidence.__setitem__(
+                            "pose_checks",
+                            self.evidence["pose_checks"] + 1)):
                     return True
             return False
 
