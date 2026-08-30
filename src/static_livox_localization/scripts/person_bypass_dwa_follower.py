@@ -30,7 +30,6 @@ install_gpu_planner(dwa_core)
 from cluster_guard import GO_ROUND  # noqa: E402
 from dwa_follower import (BYPASS_MINIMUM_TURN_RPS, DwaFollower)  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
-    STATIC,
     StaticThreatBypassManager,
     permit_matches_threat,
     threat_observations,
@@ -132,16 +131,19 @@ class PersonBypassDwaFollower(DwaFollower):
         """
         if threat is None:
             threat = self.corridor_threat(0.0)
-        target_track_id = getattr(threat, "track_id", None)
+        retained_track_id = (
+            getattr(self.qualifier, "track_id", None)
+            if getattr(self.qualifier, "committed", False) else None)
+        target_track_id = retained_track_id \
+            if retained_track_id is not None \
+            else getattr(threat, "track_id", None)
         all_observations = threat_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
             maximum_lateral_m=(
                 self.person_bypass_maximum_lateral_m
                 + self.person_bypass_lateral_hysteresis_m),
-            retained_track_id=(
-                getattr(self.qualifier, "track_id", None)
-                if getattr(self.qualifier, "committed", False) else None),
+            retained_track_id=retained_track_id,
             )
         observations = tuple(
             observation for observation in all_observations
@@ -158,13 +160,9 @@ class PersonBypassDwaFollower(DwaFollower):
         if qualification_key == getattr(self, "_qualification_key", None) and \
                 getattr(self, "_latest_permit", None) is not None:
             return self._latest_permit
-        dynamic_conflict = any(
-            observation.motion.strip().lower() != STATIC
-            for observation in all_observations)
         permit = self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING",
             summary_healthy=summary_healthy,
-            dynamic_conflict=dynamic_conflict,
             summary_stamp_s=summary_stamp_s)
         self._qualification_key = qualification_key
         self._latest_permit = permit

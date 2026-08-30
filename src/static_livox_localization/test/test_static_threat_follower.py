@@ -156,8 +156,61 @@ def test_blocking_track_ignores_irrelevant_observation(monkeypatch):
     assert permit is not None and permit.active and permit.track_id == 7
 
 
+def test_committed_blocker_stays_permitted_when_narrow_corridor_loses_side_track(
+        monkeypatch):
+    module, Stamp, _Twist = load_follower("person_bypass_dwa_follower")
+    observation_type = getattr(
+        module.threat_observations, "__globals__")["StaticThreatObservation"]
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.qualifier = module.StaticThreatBypassManager()
+    follower.tracking_state = "TRACKING"
+    follower.person_bypass_maximum_forward_m = 8.0
+    follower.person_bypass_maximum_lateral_m = 1.0
+    follower.person_bypass_lateral_hysteresis_m = 0.25
+    follower._qualification_key = None
+    follower._latest_permit = None
+    blocker = types.SimpleNamespace(track_id=7)
+    position = {"x": 1.5, "y": 0.0}
+
+    def observations(_summary, **_kwargs):
+        stamp_s = follower.cluster_summary.stamp_s
+        return (observation_type(
+            7, stamp_s, position["x"], position["y"], 0.5, 0.5,
+            "person", "static", "geometric"),)
+
+    monkeypatch.setattr(module, "threat_observations", observations)
+    for tick in range(11):
+        stamp_s = round(tick * 0.2, 1)
+        follower.cluster_summary = types.SimpleNamespace(
+            usable=True, stamp_s=stamp_s)
+        permit = follower.observed_threat_permit(Stamp(stamp_s), blocker)
+    assert permit.active
+    follower.qualifier.commit_pass_side("left")
+
+    # The same observed track moves beside the chair and leaves the narrower
+    # corridor query before its rear edge and tail sweep are clear.
+    follower.corridor_threat = lambda _offset: (
+        blocker if position["y"] < 0.75 else None)
+    side_positions = (
+        (2.2, 1.3, 0.15), (2.4, 1.1, 0.30),
+        (2.6, 0.9, 0.45), (2.8, 0.7, 0.60),
+        (3.0, 0.5, 0.75), (3.2, 0.3, 0.90),
+    )
+    for stamp_s, x_m, y_m in side_positions:
+        position.update(x=x_m, y=y_m)
+        follower.cluster_summary = types.SimpleNamespace(
+            usable=True, stamp_s=stamp_s)
+        permit = follower.observed_threat_permit(Stamp(stamp_s))
+        assert permit.active, (
+            "committed side-pass was dropped before rear/tail clearance: %s"
+            % permit.reason)
+        assert permit.track_id == 7
+
+
 @pytest.mark.parametrize("motion", ["moving", "unknown"])
-def test_second_dynamic_observation_vetoes_blocking_track(monkeypatch, motion):
+def test_second_dynamic_observation_does_not_revoke_follower_commit(
+        monkeypatch, motion):
     module, Stamp, _Twist = load_follower("person_bypass_dwa_follower")
     observation_type = getattr(
         module.threat_observations, "__globals__")["StaticThreatObservation"]
@@ -201,10 +254,11 @@ def test_second_dynamic_observation_vetoes_blocking_track(monkeypatch, motion):
     monkeypatch.setattr(module, "threat_observations", with_dynamic)
     follower.cluster_summary = types.SimpleNamespace(usable=True, stamp_s=2.2)
 
-    # Then the all-observation veto disables bypass despite target matching.
+    # Then the follower keeps one stable authority. The semantic supervisor
+    # independently stops a dynamic object that overlaps its live corridor.
     permit = follower.observed_threat_permit(Stamp(2.2), blocker)
-    assert not permit.active
-    assert permit.reason == "DYNAMIC_CONFLICT"
+    assert permit.active
+    assert permit.track_id == 7
 
 
 def test_precommit_dropout_preserves_candidate():
