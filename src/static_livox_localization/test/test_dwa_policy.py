@@ -780,14 +780,15 @@ def blocking_gate(follower, reason="OBSTACLE", held_s=2.0,
     follower.gate_blocked_for = lambda now: held_s
 
 
-def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
+def test_person_bypass_does_not_accumulate_yaws_rejected_by_raw_gate():
     module, _Stamp = load_follower("person_bypass_dwa_follower")
     follower = module.PersonBypassDwaFollower.__new__(
         module.PersonBypassDwaFollower)
     follower.gate_reason = ""
     follower.gate_blocked_since = None
     follower.gate_detail = ""
-    follower._gate_rejected_yaw_rates = set()
+    follower._bypass_turn_sign = None
+    follower._bypass_requires_turn = False
     message = types.SimpleNamespace(data=json.dumps({
         "reason": "OBSTACLE",
         "trajectory_override_reason": "REQUESTED_PATH_COLLISION",
@@ -796,7 +797,79 @@ def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
 
     follower.on_gate_status(message)
 
-    assert follower._gate_rejected_yaw_rates == {0.5}
+    assert follower._bypass_turn_sign is None
+    assert follower._bypass_requires_turn is False
+
+
+def test_side_person_does_not_force_a_turn_when_gate_is_clear(monkeypatch):
+    module, Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.active_trajectory_permit = object()
+    follower._bypass_turn_sign = None
+    follower._bypass_requires_turn = False
+    follower.minimum_person_bypass_turn_rps = .08
+    follower.cloud = object()
+    follower.motion = object()
+    follower.cloud_stamp = Stamp(9.9)
+    minimum_turns = []
+
+    def candidate_veto(*_args, **kwargs):
+        minimum_turns.append(kwargs["minimum_turn_rps"])
+        return lambda _v, _w: False
+
+    monkeypatch.setattr(module, "make_raw_gate_candidate_veto", candidate_veto)
+    command = lambda v, w: (v, w, 0.0)
+    veto = follower.planner_candidate_veto(Stamp(10.0), module.GO_ROUND, command)
+
+    assert minimum_turns == [0.0]
+    assert not veto(.35, 0.0)
+    assert follower._bypass_turn_sign is None
+
+
+def test_required_bypass_commits_one_turn_side(monkeypatch):
+    module, Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.active_trajectory_permit = object()
+    follower._bypass_turn_sign = None
+    follower._bypass_requires_turn = True
+    follower.minimum_person_bypass_turn_rps = .08
+    follower.cloud = object()
+    follower.motion = object()
+    follower.cloud_stamp = Stamp(9.9)
+    monkeypatch.setattr(
+        module, "make_raw_gate_candidate_veto",
+        lambda *_args, **_kwargs: (lambda _v, _w: False))
+    command = lambda v, w: (v, w, 0.0)
+    veto = follower.planner_candidate_veto(Stamp(10.0), module.GO_ROUND, command)
+
+    assert not veto(.35, .2)
+    assert follower._bypass_turn_sign == 1.0
+    assert veto(.35, -.2)
+    assert not veto(.35, .2)
+
+
+def test_raw_collision_on_straight_also_commits_the_clear_curve(monkeypatch):
+    module, Stamp = load_follower("person_bypass_dwa_follower")
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.active_trajectory_permit = object()
+    follower._bypass_turn_sign = None
+    follower._bypass_requires_turn = False
+    follower.minimum_person_bypass_turn_rps = .08
+    follower.cloud = object()
+    follower.motion = object()
+    follower.cloud_stamp = Stamp(9.9)
+    monkeypatch.setattr(
+        module, "make_raw_gate_candidate_veto",
+        lambda *_args, **_kwargs: (lambda _v, w: abs(w) < .08))
+    command = lambda v, w: (v, w, 0.0)
+    veto = follower.planner_candidate_veto(Stamp(10.0), module.GO_ROUND, command)
+
+    assert not veto(.35, -.2)
+    assert follower._bypass_turn_sign == -1.0
+    assert veto(.35, .2)
 
 
 def test_final_stop_resynchronizes_the_dwa_command_ramp():
@@ -851,8 +924,8 @@ def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
     follower.person_bypass_maximum_gap_s = 0.45
     follower.person_bypass_speed_mps = 0.35
     follower.person_bypass_clearance_m = 0.80
-    follower._gate_rejected_yaw_rates = set()
-    follower._gate_rejected_track_id = None
+    follower._bypass_turn_sign = None
+    follower._bypass_requires_turn = False
     follower.planner = types.SimpleNamespace(max_speed=0.8)
     threat = types.SimpleNamespace(
         is_person=False,
@@ -884,8 +957,8 @@ def bypass_fixture(monkeypatch):
     follower.person_bypass_maximum_lateral_m = 1.0
     follower.person_bypass_lateral_hysteresis_m = 0.25
     follower.tracking_state = "TRACKING"
-    follower._gate_rejected_yaw_rates = set()
-    follower._gate_rejected_track_id = None
+    follower._bypass_turn_sign = None
+    follower._bypass_requires_turn = False
     follower.active_trajectory_permit = None
     follower.planner = types.SimpleNamespace(max_speed=0.8)
     permits = []

@@ -9,8 +9,6 @@ stop-only. A qualified person that is already safely beside the chair does
 not force another stop merely because its longitudinal distance is small.
 """
 
-import json
-import math
 import os
 import sys
 
@@ -42,8 +40,8 @@ class PersonBypassDwaFollower(DwaFollower):
     CONTROL_LAW = "dwa"
 
     def __init__(self):
-        self._gate_rejected_yaw_rates = set()
-        self._gate_rejected_track_id = None
+        self._bypass_turn_sign = None
+        self._bypass_requires_turn = False
         self.active_trajectory_permit = None
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
@@ -100,33 +98,26 @@ class PersonBypassDwaFollower(DwaFollower):
         self._permit_published_this_cycle = True
 
     def on_gate_status(self, message):
+        # Candidate precheck already evaluates every proposal with the raw
+        # gate's footprint.  Do not accumulate rejected yaw samples across
+        # frames: that progressively removes both sides and ends in
+        # GATE_TRAJECTORY even after the point cloud changes.
         super(PersonBypassDwaFollower, self).on_gate_status(message)
-        try:
-            report = json.loads(message.data)
-            reason = str(report.get("trajectory_override_reason") or "")
-            requested_yaw = float(report.get("trajectory_requested_w"))
-        except (TypeError, ValueError):
-            return
-        if reason in ("REQUESTED_PATH_COLLISION", "TURN_TOO_SMALL") and \
-                math.isfinite(requested_yaw):
-            self._gate_rejected_yaw_rates.add(requested_yaw)
 
     def reset_gate_rejections(self):
-        self._gate_rejected_yaw_rates.clear()
-        self._gate_rejected_track_id = None
+        self._bypass_turn_sign = None
+        self._bypass_requires_turn = False
 
     def activate_trajectory_bypass(self, permit, detail):
         self.active_trajectory_permit = permit
-        if self._gate_rejected_track_id != permit.track_id:
-            self._gate_rejected_yaw_rates.clear()
-            self._gate_rejected_track_id = permit.track_id
+        if getattr(self, "gate_reason", "") in (
+                "OBSTACLE", "OBSTACLE_SWEEP"):
+            self._bypass_requires_turn = True
         self.planner.max_speed = min(
             float(self.planner.max_speed), float(permit.max_speed_mps))
         dwa_core.OBSTACLE_FLOOR_M = max(
             float(dwa_core.OBSTACLE_FLOOR_M),
             float(permit.min_clearance_m))
-        self.planner.rejected_yaw_rates = tuple(
-            sorted(self._gate_rejected_yaw_rates))
         self.gate_reason = ""
         self.gate_blocked_since = None
         self.gate_detail = detail
@@ -240,19 +231,42 @@ class PersonBypassDwaFollower(DwaFollower):
     def planner_candidate_veto(self, now, _decision, command_for_target):
         if self.active_trajectory_permit is None:
             return None
-        return make_raw_gate_candidate_veto(
+        require_turn = bool(getattr(self, "_bypass_requires_turn", False))
+        minimum_turn = (
+            self.minimum_person_bypass_turn_rps if require_turn else 0.0)
+        raw_veto = make_raw_gate_candidate_veto(
             self.cloud, self.motion,
             (now - self.cloud_stamp).to_sec(), command_for_target,
-            minimum_turn_rps=self.minimum_person_bypass_turn_rps,
+            minimum_turn_rps=minimum_turn,
             now_s=now.to_sec())
+
+        def stable_side_veto(target_v, target_w):
+            _requested_v, requested_w, _accel = command_for_target(
+                target_v, target_w)
+            committed = getattr(self, "_bypass_turn_sign", None)
+            if committed is not None and abs(requested_w) >= \
+                    self.minimum_person_bypass_turn_rps and \
+                    requested_w * committed < 0.0:
+                return True
+            if raw_veto(target_v, target_w):
+                return True
+            # A side is committed only when the gate actually requires a
+            # curved override or its exact precheck says straight is unsafe.
+            # If straight is already safe, leave it legal and let normal
+            # route following pass the side object smoothly.
+            straight_blocked = raw_veto(target_v, 0.0)
+            if (require_turn or straight_blocked) and committed is None and \
+                    abs(requested_w) >= self.minimum_person_bypass_turn_rps:
+                self._bypass_turn_sign = 1.0 if requested_w > 0.0 else -1.0
+            return False
+
+        return stable_side_veto
 
     def step(self):
         self.active_trajectory_permit = None
         self._permit_published_this_cycle = False
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
-        saved_rejected_yaws = getattr(
-            self.planner, "rejected_yaw_rates", ())
         now = rospy.Time.now()
         # Publish a continuously refreshed qualification heartbeat before the
         # base hold ladder can return for PAUSED/MANUAL/STARTUP. This does not
@@ -264,7 +278,6 @@ class PersonBypassDwaFollower(DwaFollower):
         finally:
             self.planner.max_speed = saved_max_speed
             dwa_core.OBSTACLE_FLOOR_M = saved_clearance
-            self.planner.rejected_yaw_rates = saved_rejected_yaws
             if not self._permit_published_this_cycle:
                 if self.tracking_state != "TRACKING":
                     self.qualifier.reset()
