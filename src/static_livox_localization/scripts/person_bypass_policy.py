@@ -31,6 +31,8 @@ class PersonObservation:
     size_y_m: float
     motion: str
     source: str
+    tracking_x_m: Optional[float] = None
+    tracking_y_m: Optional[float] = None
 
     @property
     def near_distance_m(self) -> float:
@@ -45,6 +47,15 @@ class PersonObservation:
     def lateral_clearance_m(self) -> float:
         """Clearance from the route centreline to the near side of the box."""
         return max(0.0, abs(self.y_m) - 0.5 * self.size_y_m)
+
+    @property
+    def tracking_xy(self) -> Tuple[float, float]:
+        """Identity position, optionally compensated into the map frame."""
+        values = (self.tracking_x_m, self.tracking_y_m)
+        if all(value is not None and math.isfinite(float(value))
+               for value in values):
+            return float(values[0]), float(values[1])
+        return float(self.x_m), float(self.y_m)
 
     @property
     def eligible_static(self) -> bool:
@@ -231,6 +242,7 @@ class StaticPersonQualifier:
         self.first_stamp_s = None
         self.last_stamp_s = None
         self.last_xy = None
+        self.last_tracking_xy = None
         self.passed_side = False
 
     def active(self, now_s: float, person: PersonObservation,
@@ -342,6 +354,7 @@ class StaticPersonQualifier:
             self.first_stamp_s = stamp_s
             self.last_stamp_s = stamp_s
             self.last_xy = (person.x_m, person.y_m)
+            self.last_tracking_xy = person.tracking_xy
             return self.inactive(now_s, "QUALIFYING_STATIC_PERSON")
 
         gap_s = stamp_s - float(self.last_stamp_s)
@@ -352,15 +365,18 @@ class StaticPersonQualifier:
         if gap_s < -1e-6 or gap_s > allowed_gap_s:
             self.reset()
             return self.update((person,), now_s, localization_tracking)
-        if self.last_xy is not None:
+        if self.last_tracking_xy is not None:
+            tracking_xy = person.tracking_xy
             jump = math.hypot(
-                person.x_m - self.last_xy[0], person.y_m - self.last_xy[1])
+                tracking_xy[0] - self.last_tracking_xy[0],
+                tracking_xy[1] - self.last_tracking_xy[1])
             if jump > self.maximum_position_jump_m:
                 self.reset()
                 return self.update((person,), now_s, localization_tracking)
         if gap_s > 1e-6:
             self.last_stamp_s = stamp_s
             self.last_xy = (person.x_m, person.y_m)
+            self.last_tracking_xy = person.tracking_xy
 
         static_for_s = max(0.0, stamp_s - float(self.first_stamp_s))
         if static_for_s + 1e-6 < self.confirmation_s:
@@ -406,7 +422,9 @@ def static_obstacle_permit(*, now_s: float, observed_stamp_s: float,
                            maximum_observation_age_s: float = 0.45,
                            permit_lifetime_s: float = 0.45,
                            max_speed_mps: float = 0.35,
-                           min_clearance_m: float = 0.50) -> BypassPermit:
+                           min_clearance_m: float = 0.50,
+                           permit_reason: str = "STATIC_OBJECT_BYPASS"
+                           ) -> BypassPermit:
     now_s = float(now_s)
 
     def inactive(reason: str) -> BypassPermit:
@@ -451,7 +469,7 @@ def static_obstacle_permit(*, now_s: float, observed_stamp_s: float,
         target_y_m=float(target_y_m), static_for_s=0.0,
         max_speed_mps=float(max_speed_mps),
         min_clearance_m=float(min_clearance_m),
-        reason="STATIC_OBJECT_BYPASS",
+        reason=str(permit_reason),
     )
 
 

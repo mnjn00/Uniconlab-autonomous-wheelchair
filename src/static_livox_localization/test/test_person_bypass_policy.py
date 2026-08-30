@@ -1,10 +1,12 @@
 from pathlib import Path
 import sys
+from dataclasses import replace
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from person_bypass_policy import (  # noqa: E402
+    PersonObservation,
     StaticPersonQualifier,
     evaluate_gate_override,
     permit_from_payload,
@@ -77,6 +79,31 @@ def test_dropout_identity_change_jump_and_tracking_loss_reset_the_timer():
         person_observations(summary(3.4, [person(x=3.8)])), 3.4, True).active
     assert not qualifier.update(
         person_observations(summary(4.0, [person()])), 4.0, False).active
+
+
+def test_map_compensated_identity_ignores_body_frame_rotation_jump():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=.3, maximum_position_jump_m=.35)
+    first = PersonObservation(
+        track_id=1689, stamp_s=1.0, x_m=3.35, y_m=-.20,
+        size_x_m=.6, size_y_m=.6, motion="static", source="geometric",
+        tracking_x_m=20.0, tracking_y_m=5.0)
+    # The recorded body-frame y moved 0.93 m while the chair turned. The
+    # map-frame identity remained the same stationary person.
+    second = replace(
+        first, stamp_s=1.2, x_m=3.25, y_m=.73,
+        tracking_x_m=20.04, tracking_y_m=5.02)
+    third = replace(
+        second, stamp_s=1.4, x_m=3.05, y_m=1.20,
+        tracking_x_m=20.06, tracking_y_m=5.03)
+
+    assert not qualifier.update((first,), 1.0, True).active
+    assert not qualifier.update((second,), 1.2, True).active
+    permit = qualifier.update((third,), 1.4, True)
+
+    assert permit.active
+    assert permit.track_id == 1689
+    assert permit.target_y_m == 1.20
 
 
 def test_fusion_cadence_jitter_does_not_reset_a_static_person():
