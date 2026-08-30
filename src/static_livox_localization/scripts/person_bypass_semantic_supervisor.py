@@ -109,6 +109,14 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
             maximum_lateral_m=(self.bypass_maximum_lateral_m
                                + self.bypass_lateral_hysteresis_m),
         )
+        if permit.reason == "STATIC_PERSON_PASSED_SIDE" and not observations:
+            # The qualifier only emits this short heartbeat after a directly
+            # observed, same-track, confirmed-static person has safely cleared
+            # to the side. Accept it without fabricating a current target so
+            # the old front-corridor memory can be retired. A new/multiple
+            # person, stale permit, moving object, or raw collision still
+            # follows the normal fail-closed path.
+            return permit, None
         if len(observations) != 1:
             return None, None
         observation = observations[0]
@@ -150,6 +158,9 @@ class PersonBypassSemanticSupervisor(SemanticSafetySupervisor):
         bypass_active = permit is not None
         if bypass_active:
             self.person_latch.reset()
+            if permit.reason == "STATIC_PERSON_PASSED_SIDE" and \
+                    bypass_person is None:
+                self.person_memory = None
             person_for_stop = None
         else:
             person_for_stop = person

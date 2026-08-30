@@ -139,6 +139,74 @@ def test_too_close_person_is_stop_only():
         observations, 1.0, True).reason == "PERSON_TOO_CLOSE"
 
 
+def test_qualified_person_safely_beside_remains_authorized():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=.4, minimum_near_distance_m=.60,
+        min_clearance_m=.50)
+    for stamp in (1.0, 1.2, 1.4):
+        permit = qualifier.update(person_observations(
+            summary(stamp, [person(x=2.0, y=.9)])), stamp, True)
+    assert permit.active
+
+    for stamp, x_m in ((1.6, 1.7), (1.8, 1.4), (2.0, 1.1), (2.2, .8)):
+        beside = person_observations(summary(
+            stamp, [person(x=x_m, y=.9, motion="static")]))
+        permit = qualifier.update(beside, stamp, True)
+
+    assert permit.active
+    assert permit.reason == "STATIC_PERSON_PASSED_SIDE"
+    assert permit_matches_observation(permit, beside[0])
+
+    moving = person_observations(summary(
+        2.4, [person(x=.7, y=.9, motion="moving")]))
+    revoked = qualifier.update(moving, 2.4, True)
+    assert not revoked.active
+    assert revoked.reason == "PERSON_NOT_CONFIRMED_STATIC"
+
+
+def test_person_near_the_path_cannot_use_passed_side_permission():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=.4, minimum_near_distance_m=.60,
+        min_clearance_m=.50)
+    for stamp in (1.0, 1.2, 1.4):
+        qualifier.update(person_observations(
+            summary(stamp, [person(x=2.0, y=.9)])), stamp, True)
+
+    permit = qualifier.update(person_observations(summary(
+        1.6, [person(x=.7, y=.6)])), 1.6, True)
+
+    assert not permit.active
+    assert permit.reason == "PERSON_TOO_CLOSE"
+
+
+def test_unqualified_or_moving_side_person_remains_stop_only():
+    for motion in ("static", "moving", "unknown"):
+        qualifier = StaticPersonQualifier(
+            confirmation_s=.4, minimum_near_distance_m=.60,
+            min_clearance_m=.50)
+        permit = qualifier.update(person_observations(summary(
+            1.0, [person(x=.7, y=.9, motion=motion)])), 1.0, True)
+        assert not permit.active
+
+
+def test_passed_person_dropout_gets_only_a_short_clearance_heartbeat():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=.4, maximum_gap_s=.45,
+        minimum_near_distance_m=.60, min_clearance_m=.50)
+    for stamp in (1.0, 1.2, 1.4):
+        qualifier.update(person_observations(
+            summary(stamp, [person(x=2.0, y=.9)])), stamp, True)
+    for stamp, x_m in ((1.6, 1.7), (1.8, 1.4), (2.0, 1.1), (2.2, .8)):
+        permit = qualifier.update(person_observations(summary(
+            stamp, [person(x=x_m, y=.9)])), stamp, True)
+    assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
+
+    permit = qualifier.update((), 2.4, True)
+    assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
+    permit = qualifier.update((), 2.7, True)
+    assert not permit.active and permit.reason == "NO_PERSON"
+
+
 def test_permit_round_trip_freshness_and_target_match():
     qualifier = StaticPersonQualifier(confirmation_s=.2)
     qualifier.update(person_observations(summary(1.0, [person()])), 1.0, True)

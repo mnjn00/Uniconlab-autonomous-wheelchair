@@ -1065,6 +1065,34 @@ def test_semantic_validation_retains_same_track_in_qualifier_hysteresis(monkeypa
     assert supervisor.validated_bypass(13.4) == (None,None)
 
 
+def test_passed_side_person_returns_to_forward_route_without_losing_safety(monkeypatch):
+    module, Stamp, follower, permits = bypass_fixture(monkeypatch)
+    person = dict(recorded_side_person(), x=2., y=.9, size=[.7,.7,1.7])
+    assert qualify_bypass_fixture(follower, Stamp, [person]).active
+    for stamp, x_m in ((13.4, 1.7), (13.6, 1.4),
+                       (13.8, 1.1), (14.0, .8)):
+        follower.cluster_summary = summary_at(
+            stamp, [dict(person, x=x_m, y=.9)])
+        permit = follower.observed_person_permit(Stamp(stamp))
+    assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
+    assert follower.avoidance_for(Stamp(14.0), None, False) == module.CLEAR
+    assert permits[-1].reason == "STATIC_PERSON_PASSED_SIDE"
+    assert follower.active_trajectory_permit is None
+
+    semantic, _ = load_follower('person_bypass_semantic_supervisor')
+    supervisor = semantic.PersonBypassSemanticSupervisor.__new__(
+        semantic.PersonBypassSemanticSupervisor)
+    supervisor.bypass_permit = permits[-1]
+    supervisor.summary = summary_at(14.0, [])
+    supervisor.maximum_permit_age_s = .45
+    supervisor.maximum_target_error_m = .45
+    supervisor.bypass_maximum_forward_m = 8.
+    supervisor.bypass_maximum_lateral_m = 1.
+    supervisor.bypass_lateral_hysteresis_m = .25
+    accepted, observation = supervisor.validated_bypass(14.0)
+    assert accepted is not None and observation is None
+
+
 def test_person_qualification_while_paused_does_not_send_motion(monkeypatch):
     module, Stamp, follower, permits = bypass_fixture(monkeypatch)
     # The real wrapper step must publish qualification even when the base

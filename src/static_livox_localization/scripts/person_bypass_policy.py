@@ -4,6 +4,9 @@ A person is never bypassed from a class label alone. Motion must be STATIC,
 the same geometrically-backed track must be observed continuously, and the
 permit expires faster than one perception cycle can go stale. Moving,
 unknown, learned-only, malformed, or multiple people reset authorization.
+After an authorized person is safely beside the chair, longitudinal proximity
+alone no longer revokes the permit; raw trajectory collision checks still
+guard every command while the chair completes the pass.
 """
 
 from __future__ import annotations
@@ -37,6 +40,11 @@ class PersonObservation:
     def geometrically_backed(self) -> bool:
         source = self.source.strip().lower()
         return bool(source) and source not in ("learned_only", "learned")
+
+    @property
+    def lateral_clearance_m(self) -> float:
+        """Clearance from the route centreline to the near side of the box."""
+        return max(0.0, abs(self.y_m) - 0.5 * self.size_y_m)
 
     @property
     def eligible_static(self) -> bool:
@@ -220,6 +228,20 @@ class StaticPersonQualifier:
         self.first_stamp_s = None
         self.last_stamp_s = None
         self.last_xy = None
+        self.passed_side = False
+
+    def active(self, now_s: float, person: PersonObservation,
+               static_for_s: float, reason: str) -> BypassPermit:
+        return BypassPermit(
+            capable=True, active=True, stamp_s=float(now_s),
+            expires_s=float(now_s) + self.permit_lifetime_s,
+            track_id=person.track_id,
+            target_x_m=person.x_m, target_y_m=person.y_m,
+            static_for_s=float(static_for_s),
+            max_speed_mps=self.max_speed_mps,
+            min_clearance_m=self.min_clearance_m,
+            reason=reason,
+        )
 
     def inactive(self, now_s: float, reason: str) -> BypassPermit:
         now_s = float(now_s)
@@ -240,6 +262,24 @@ class StaticPersonQualifier:
         if not localization_tracking:
             self.reset()
             return self.inactive(now_s, "LOCALIZATION_NOT_TRACKING")
+        if not observations and self.passed_side and \
+                self.last_stamp_s is not None and self.last_xy is not None and \
+                now_s - float(self.last_stamp_s) <= self.maximum_gap_s:
+            # The qualified box has just left the forward observation region.
+            # Keep one short heartbeat so the semantic supervisor can discard
+            # its remembered *front* threat instead of stopping after the
+            # person has already passed down the side. The raw gate remains
+            # authoritative and another observed person never enters here.
+            remembered = PersonObservation(
+                track_id=int(self.track_id), stamp_s=float(self.last_stamp_s),
+                x_m=float(self.last_xy[0]), y_m=float(self.last_xy[1]),
+                size_x_m=0.01, size_y_m=0.01, motion=STATIC,
+                source="geometric")
+            static_for_s = max(
+                0.0, float(self.last_stamp_s) - float(self.first_stamp_s))
+            return self.active(
+                now_s, remembered, static_for_s,
+                "STATIC_PERSON_PASSED_SIDE")
         if len(observations) != 1:
             self.reset()
             return self.inactive(
@@ -250,8 +290,16 @@ class StaticPersonQualifier:
             self.reset()
             return self.inactive(now_s, "PERSON_NOT_CONFIRMED_STATIC")
         if person.near_distance_m < self.minimum_near_distance_m:
-            self.reset()
-            return self.inactive(now_s, "PERSON_TOO_CLOSE")
+            qualified = same_track and self.first_stamp_s is not None and \
+                self.last_stamp_s is not None and \
+                float(self.last_stamp_s) - float(self.first_stamp_s) + 1e-6 \
+                >= self.confirmation_s
+            safely_beside = qualified and \
+                person.lateral_clearance_m >= self.min_clearance_m
+            if not safely_beside:
+                self.reset()
+                return self.inactive(now_s, "PERSON_TOO_CLOSE")
+            self.passed_side = True
         lateral_limit_m = self.maximum_lateral_m + (
             self.lateral_hysteresis_m if same_track else 0.0)
         if person.near_distance_m > self.observation_forward_m or \
@@ -297,6 +345,10 @@ class StaticPersonQualifier:
                 min_clearance_m=self.min_clearance_m,
                 reason="QUALIFYING_STATIC_PERSON",
             )
+        if self.passed_side:
+            return self.active(
+                now_s, person, static_for_s,
+                "STATIC_PERSON_PASSED_SIDE")
         if person.near_distance_m > self.maximum_forward_m:
             # Keep the same-track timer warm while the person is visible in
             # the approach region, but do not authorize a trajectory until
@@ -314,16 +366,8 @@ class StaticPersonQualifier:
                 min_clearance_m=self.min_clearance_m,
                 reason="STATIC_PERSON_READY_OUTSIDE_MANEUVER_REGION",
             )
-        return BypassPermit(
-            capable=True, active=True, stamp_s=now_s,
-            expires_s=now_s + self.permit_lifetime_s,
-            track_id=person.track_id,
-            target_x_m=person.x_m, target_y_m=person.y_m,
-            static_for_s=static_for_s,
-            max_speed_mps=self.max_speed_mps,
-            min_clearance_m=self.min_clearance_m,
-            reason="STATIC_PERSON_BYPASS",
-        )
+        return self.active(
+            now_s, person, static_for_s, "STATIC_PERSON_BYPASS")
 
 
 def static_obstacle_permit(*, now_s: float, observed_stamp_s: float,
@@ -443,7 +487,8 @@ def permit_matches_observation(permit: Optional[BypassPermit],
                                observation: PersonObservation,
                                maximum_position_error_m: float = 0.45) -> bool:
     if permit is None or not permit.active or \
-            permit.reason != "STATIC_PERSON_BYPASS" or \
+            permit.reason not in (
+                "STATIC_PERSON_BYPASS", "STATIC_PERSON_PASSED_SIDE") or \
             not observation.eligible_static:
         return False
     if permit.track_id != observation.track_id or \
