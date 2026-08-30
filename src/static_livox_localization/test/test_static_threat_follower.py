@@ -170,6 +170,7 @@ def test_publish_proposal_immediately_before_matching_command():
     module, _Stamp, Twist = load_follower("dwa_follower")
     events = []
     proposal = types.SimpleNamespace(
+        proposal_seq=4,
         first_applied_speed_mps=0.35,
         first_applied_yaw_rate_rps=0.15,
         to_json=lambda: json.dumps({"proposal_seq": 4}))
@@ -178,13 +179,14 @@ def test_publish_proposal_immediately_before_matching_command():
         publish=lambda message: events.append(("proposal", json.loads(message.data))))
     follower.cmd_pub = types.SimpleNamespace(
         publish=lambda message: events.append(
-            ("command", message.linear.x, message.angular.z)))
+            ("command", message.linear.x, message.angular.z,
+             message.angular.x)))
 
     follower.publish_proposal_command(proposal, Twist)
 
     assert events == [
         ("proposal", {"proposal_seq": 4}),
-        ("command", 0.35, 0.15),
+        ("command", 0.35, 0.15, 4.0),
     ]
 
 

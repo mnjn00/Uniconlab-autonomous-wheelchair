@@ -220,11 +220,20 @@ class TrajectorySafetyGate(base_gate.SafetyGate):
             return None, "PROPOSAL_STALE" if stale_seen else "NO_PROPOSAL"
         raw_speed = float(self.raw.linear.x)
         raw_yaw = float(self.raw.angular.z)
-        if not math.isfinite(raw_speed) or not math.isfinite(raw_yaw):
+        raw_sequence_value = float(self.raw.angular.x)
+        if not math.isfinite(raw_speed) or not math.isfinite(raw_yaw) or \
+                not math.isfinite(raw_sequence_value):
             return None, "PROPOSAL_COMMAND_MISMATCH"
+        if raw_sequence_value < 0.0 or not raw_sequence_value.is_integer():
+            return None, "PROPOSAL_SEQUENCE_MISMATCH"
+        raw_sequence = int(raw_sequence_value)
         mismatch_reason = None
         for proposal in sorted(
                 fresh, key=lambda value: value.proposal_seq, reverse=True):
+            if proposal.proposal_seq != raw_sequence:
+                if mismatch_reason is None:
+                    mismatch_reason = "PROPOSAL_SEQUENCE_MISMATCH"
+                continue
             if proposal.permit_track_id != permit.track_id:
                 if mismatch_reason is None:
                     mismatch_reason = "PROPOSAL_TRACK_MISMATCH"

@@ -318,6 +318,7 @@ class DwaFollower(WaypointFollower):
     def publish_proposal_command(self, proposal, message_type=Twist):
         command = message_type()
         command.linear.x = proposal.first_applied_speed_mps
+        command.angular.x = float(proposal.proposal_seq)
         command.angular.z = proposal.first_applied_yaw_rate_rps
         self.proposal_pub.publish(String(data=proposal.to_json()))
         self.cmd_pub.publish(command)

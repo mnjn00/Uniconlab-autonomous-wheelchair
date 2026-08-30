@@ -14,7 +14,7 @@ def gate_with_rear_points(
     gate.minimum_bypass_turn_rps = 0.08
     gate.raw = types.SimpleNamespace(
         linear=types.SimpleNamespace(x=linear_speed_mps),
-        angular=types.SimpleNamespace(z=yaw_rate_rps))
+        angular=types.SimpleNamespace(x=12.0, z=yaw_rate_rps))
     gate.evidence = {"horizon_s": horizon_s}
     points = np.repeat([point], 5, axis=0)
     gate.collision_snapshot = module.base_gate.CollisionSnapshot(
@@ -32,7 +32,7 @@ def full_cycle_gate(module, Stamp, monkeypatch, obstacles, reason_speed,
     gate.cloud_stamp = Stamp(99.9)
     gate.raw = types.SimpleNamespace(
         linear=types.SimpleNamespace(x=reason_speed),
-        angular=types.SimpleNamespace(z=yaw_rate))
+        angular=types.SimpleNamespace(x=0.0, z=yaw_rate))
     gate.motion = types.SimpleNamespace(
         linear_speed_mps=0.0, angular_speed_rps=yaw_rate)
     gate.fresh_active_permit = lambda _now_s: None

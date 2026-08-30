@@ -58,7 +58,7 @@ def load_supervisor():
         "geometry_msgs.msg": geometry_msgs_msg,
         "std_msgs": std_msgs,
         "std_msgs.msg": std_msgs_msg,
-    } 
+    }
     saved = {name: sys.modules.get(name) for name in replacements}
     cached_scripts = {
         name: value for name, value in sys.modules.items()
@@ -159,6 +159,7 @@ def make_subject(module, objects, permit):
     subject.summary_frame = "chair_centre"
     subject.command = module.TestTwist()
     subject.command.linear.x = 0.35
+    subject.command.angular.x = 11.0
     subject.command.angular.z = 0.2
     subject.command_stamp = module.TestStamp(10.0)
     subject.measured_speed = 0.0
@@ -207,6 +208,7 @@ def test_malformed_object_fails_closed_even_with_matching_permit():
 
     # Then: malformed input emits zero instead of crashing or being skipped.
     assert subject.test_published[-1].linear.x == 0.0
+    assert subject.test_published[-1].angular.x == 0.0
     assert subject.test_statuses[-1]["reason"] == "MOVING_OBJECT"
 
 
@@ -255,6 +257,7 @@ def test_step_passes_matching_static_threat_with_generic_status(label):
 
     # Then: motion passes under the permit cap and status is generic v2 state.
     assert subject.test_published[-1].linear.x == 0.35
+    assert subject.test_published[-1].angular.x == 11.0
     report = subject.test_statuses[-1]
     assert report["static_threat_bypass_active"] is True
     assert report["static_threat_bypass_label"] == label

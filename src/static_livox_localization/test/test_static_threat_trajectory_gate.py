@@ -39,7 +39,7 @@ def _proposal(module, *, sequence=11, track_id=7, side="LEFT",
         time_steps_s=time_steps)
 
 
-def _gate(module, *, obstacles=None, raw_v=0.10, raw_w=0.15,
+def _gate(module, *, obstacles=None, raw_v=0.10, raw_w=0.15, raw_seq=11,
           target_x_m=1.0):
     gate = module.TrajectorySafetyGate.__new__(module.TrajectorySafetyGate)
     gate.maximum_permit_age_s = 0.45
@@ -59,7 +59,7 @@ def _gate(module, *, obstacles=None, raw_v=0.10, raw_w=0.15,
     gate.proposal_receive_reason = "PROPOSAL_RECEIVED"
     gate.raw = types.SimpleNamespace(
         linear=types.SimpleNamespace(x=raw_v),
-        angular=types.SimpleNamespace(z=raw_w))
+        angular=types.SimpleNamespace(x=float(raw_seq), z=raw_w))
     gate.motion = types.SimpleNamespace(
         linear_speed_mps=0.0, angular_speed_rps=0.0)
     gate.evidence = {"horizon_s": 1.0}
@@ -156,6 +156,12 @@ def test_command_track_side_stale_and_replayed_proposals_never_waive_stop(
     assert gate.evidence["trajectory_override_reason"] == \
         "PROPOSAL_COMMAND_MISMATCH"
 
+    gate = _gate(module, raw_seq=10)
+    reason, cap = gate.motion_blocked(Stamp(100.1))
+    assert (reason, cap) == ("OBSTACLE", None)
+    assert gate.evidence["trajectory_override_reason"] == \
+        "PROPOSAL_SEQUENCE_MISMATCH"
+
 
 def test_malformed_proposal_is_rejected_without_replacing_last_valid_one():
     module, _ = load_follower("trajectory_safety_gate")
@@ -176,6 +182,7 @@ def test_bounded_proposal_buffer_matches_command_independent_of_arrival_order(
     gate.trajectory_proposals = []
     gate.highest_proposal_seq = -1
     gate.proposal_receive_reason = "NO_PROPOSAL"
+    gate.raw.angular.x = 10.0
     previous = _proposal(
         module, sequence=10, applied_v=0.10, applied_w=0.15)
     newest = _proposal(
@@ -191,6 +198,7 @@ def test_bounded_proposal_buffer_matches_command_independent_of_arrival_order(
 
     gate.raw.linear.x = 0.20
     gate.raw.angular.z = 0.25
+    gate.raw.angular.x = 11.0
     assert gate.motion_blocked(Stamp(100.1)) == ("", 0.35)
     assert gate.evidence["trajectory_proposal_seq"] == 11
 
@@ -209,6 +217,10 @@ def test_bounded_proposal_buffer_matches_command_independent_of_arrival_order(
             types.SimpleNamespace(data=buffered.to_json()))
     assert len(gate.trajectory_proposals) == 8
     assert gate.trajectory_proposals[0].proposal_seq == 13
+    assert gate.motion_blocked(Stamp(100.1)) == ("OBSTACLE", None)
+    assert gate.evidence["trajectory_override_reason"] == \
+        "PROPOSAL_SEQUENCE_MISMATCH"
+    gate.raw.angular.x = 20.0
     assert gate.motion_blocked(Stamp(100.1)) == ("", 0.35)
     assert gate.evidence["trajectory_proposal_seq"] == 20
 

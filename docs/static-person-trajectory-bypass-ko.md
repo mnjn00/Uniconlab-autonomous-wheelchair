@@ -58,9 +58,12 @@ route policy가 `CLEAR`를 반환하므로 permit 없이 원 경로의 비영점
 정지 상태에서는 첫 적용 yaw가 `0.0`일 수 있다. raw gate는 수신 명령을 첫
 적용 `v,w`와 대조하지만, 좌/우 commit과 최소 회전 의도는 proposal의
 `target_yaw_rate_rps`로 판정한다. 따라서 첫 `w=0`이라는 이유만으로 안전한
-곡선 시작을 영구 차단하지 않는다. bounded proposal buffer는 callback 순서가
-뒤섞여도 현재 raw 명령과 일치하는 최신 유효 proposal을 고르고, stale/replay,
-track·side·command 불일치는 계속 정지한다.
+곡선 시작을 영구 차단하지 않는다. 우회 `Twist.angular.x`에는 단조 증가하는
+`proposal_seq`가 실리고 semantic supervisor가 이를 그대로 `/cmd_vel_raw`까지
+전달한다. bounded proposal buffer는 callback 순서와 무관하게 raw 명령과 같은
+sequence의 proposal만 고른다. stale/replay, sequence·track·side·command
+불일치는 계속 정지한다. safety gate는 새 출력의 `linear.x`와 `angular.z`만
+채우므로 이 식별자는 `/cmd_vel_gated` 이후 구동 계층으로 전달되지 않는다.
 
 ## 진단 토픽과 필드
 
