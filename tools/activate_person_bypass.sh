@@ -124,6 +124,7 @@ setsid nohup env $SINGLE_THREAD_ENV \
   _prefer_gpu:="$PREFER_GPU" \
   _require_gpu:="$REQUIRE_GPU" \
   _cmd_topic:=/cmd_vel_planned \
+  _accepted_cmd_topic:=/cmd_vel \
   _person_bypass_confirmation_s:="$PERSON_BYPASS_CONFIRM_S" \
   _person_bypass_maximum_gap_s:="$PERSON_BYPASS_MAX_GAP_S" \
   _person_bypass_position_jump_m:="$PERSON_BYPASS_MAX_JUMP_M" \

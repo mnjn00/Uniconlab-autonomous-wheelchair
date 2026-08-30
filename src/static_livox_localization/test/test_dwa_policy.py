@@ -799,6 +799,42 @@ def test_person_bypass_remembers_the_yaw_rejected_by_the_raw_gate():
     assert follower._gate_rejected_yaw_rates == {0.5}
 
 
+def test_final_stop_resynchronizes_the_dwa_command_ramp():
+    module, _Stamp = load_follower("dwa_follower")
+    follower = module.DwaFollower.__new__(module.DwaFollower)
+    follower.current_speed = 0.35
+    follower.last_yaw_rate = 0.2
+    follower.command_accel = 0.18
+    stopped = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.0),
+        angular=types.SimpleNamespace(z=0.0),
+    )
+
+    follower.on_accepted_command(stopped)
+
+    assert follower.current_speed == 0.0
+    assert follower.last_yaw_rate == 0.0
+    assert follower.command_accel == 0.0
+
+
+def test_small_final_command_lag_preserves_the_dwa_acceleration_ramp():
+    module, _Stamp = load_follower("dwa_follower")
+    follower = module.DwaFollower.__new__(module.DwaFollower)
+    follower.current_speed = 0.10
+    follower.last_yaw_rate = 0.2
+    follower.command_accel = 0.08
+    accepted = types.SimpleNamespace(
+        linear=types.SimpleNamespace(x=0.09),
+        angular=types.SimpleNamespace(z=0.18),
+    )
+
+    follower.on_accepted_command(accepted)
+
+    assert follower.current_speed == 0.09
+    assert follower.last_yaw_rate == 0.18
+    assert follower.command_accel == 0.08
+
+
 def test_static_non_person_threat_publishes_a_trajectory_permit(monkeypatch):
     module, Stamp = load_follower("person_bypass_dwa_follower")
     follower = module.PersonBypassDwaFollower.__new__(

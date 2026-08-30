@@ -100,6 +100,11 @@ def test_activation_passes_the_reliability_tunables_to_the_follower():
     assert '_person_bypass_lateral_hysteresis_m:="$PERSON_BYPASS_LATERAL_HYSTERESIS_M"' in supervisor_command
     assert 'PERSON_BYPASS_CLEARANCE_M="${PERSON_BYPASS_CLEARANCE_M:-0.50}"' \
         in activate
+    assert "_cmd_topic:=/cmd_vel_planned" in activate
+    assert "_accepted_cmd_topic:=/cmd_vel" in activate
+    dwa = text(SCRIPTS / "dwa_follower.py")
+    assert '"~accepted_cmd_topic", "/cmd_vel"' in dwa
+    assert "self.on_accepted_command" in dwa
     follower = text(SCRIPTS / "person_bypass_dwa_follower.py")
     assert '"~person_bypass_clearance_m", 0.50' in follower
     assert "PERSON_BYPASS_CLEARANCE_M=0.50" in hybrid

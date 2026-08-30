@@ -232,6 +232,14 @@ class DwaFollower(WaypointFollower):
         self.gate_detail = ""
         rospy.Subscriber("/safety_gate/status", String,
                          self.on_gate_status, queue_size=1)
+        # Keep the planner's command state tied to what the downstream
+        # safety stack actually released, not merely what DWA requested.
+        # In the person-bypass graph the requested command is published on
+        # /cmd_vel_planned while /cmd_vel is the final accepted command.
+        self.accepted_cmd_topic = str(rospy.get_param(
+            "~accepted_cmd_topic", "/cmd_vel"))
+        rospy.Subscriber(self.accepted_cmd_topic, Twist,
+                         self.on_accepted_command, queue_size=1)
         rospy.loginfo(
             "DWA profile: sim %.2f m, %d speeds x %d yaw rates, band and "
             "drivable mask as hard rejects", self.planner.distance_m,
@@ -258,6 +266,20 @@ class DwaFollower(WaypointFollower):
         if self.gate_blocked_since is None:
             return None
         return (now - self.gate_blocked_since).to_sec()
+
+    def on_accepted_command(self, message):
+        """Resynchronise the DWA ramp with the command that reached base.
+
+        A lower non-zero accepted command can simply be normal downstream
+        lag, so retain the acceleration slope.  A final stop is different:
+        carrying acceleration through it recreates the stop-go sawtooth on
+        the next planning cycle, and must reset the ramp.
+        """
+        accepted_speed = float(message.linear.x)
+        self.current_speed = accepted_speed
+        self.last_yaw_rate = float(message.angular.z)
+        if accepted_speed <= 0.02:
+            self.command_accel = 0.0
 
     def command_for_target(self, target_v, target_w, elapsed):
         """The raw command the ramp will publish for one planner target.
