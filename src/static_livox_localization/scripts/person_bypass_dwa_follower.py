@@ -27,7 +27,7 @@ from gpu_dwa_backend import GpuRequiredError, install_gpu_planner
 # Install before DwaFollower constructs dwa_core.DwaPlanner. Environment and
 # ROS params still choose CuPy or the diagnostic CPU path.
 install_gpu_planner(dwa_core)
-from cluster_guard import GO_ROUND, WAIT  # noqa: E402
+from cluster_guard import CLEAR, GO_ROUND, WAIT  # noqa: E402
 from trajectory_safety_gate import make_raw_gate_candidate_veto  # noqa: E402
 from dwa_follower import DwaFollower  # noqa: E402
 from person_bypass_policy import (  # noqa: E402
@@ -55,6 +55,8 @@ class PersonBypassDwaFollower(DwaFollower):
             "~person_bypass_permit_lifetime_s", 0.45))
         self.person_bypass_maximum_forward_m = float(rospy.get_param(
             "~person_bypass_maximum_forward_m", 8.0))
+        self.person_bypass_observation_forward_m = float(rospy.get_param(
+            "~person_bypass_observation_forward_m", 10.0))
         self.person_bypass_maximum_lateral_m = float(rospy.get_param(
             "~person_bypass_maximum_lateral_m", 1.0))
         self.person_bypass_lateral_hysteresis_m = float(rospy.get_param(
@@ -73,6 +75,7 @@ class PersonBypassDwaFollower(DwaFollower):
             maximum_position_jump_m=self.person_bypass_position_jump_m,
             permit_lifetime_s=self.person_bypass_permit_lifetime_s,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
+            observation_forward_m=self.person_bypass_observation_forward_m,
             maximum_lateral_m=self.person_bypass_maximum_lateral_m,
             lateral_hysteresis_m=self.person_bypass_lateral_hysteresis_m,
             minimum_near_distance_m=self.person_bypass_minimum_near_m,
@@ -149,7 +152,7 @@ class PersonBypassDwaFollower(DwaFollower):
         # multiple, stale, changed-ID and too-close observations.
         observations = person_observations(
             self.cluster_summary,
-            maximum_forward_m=self.person_bypass_maximum_forward_m,
+            maximum_forward_m=self.person_bypass_observation_forward_m,
             maximum_lateral_m=(
                 self.person_bypass_maximum_lateral_m
                 + self.person_bypass_lateral_hysteresis_m),
@@ -171,6 +174,14 @@ class PersonBypassDwaFollower(DwaFollower):
             self.publish_permit(permit)
             if not permit.active:
                 self.reset_gate_rejections()
+                # Qualification may start in the wider observation region.
+                # Outside the dynamic braking envelope, keep approaching;
+                # the raw/semantic collision layers remain fully active.
+                # Once threat_blocks says the chair must stop, WAIT remains
+                # mandatory until the same-track static permit is active.
+                if not blocking and (
+                        threat is None or threat.is_person):
+                    return ordinary if ordinary != WAIT else CLEAR
                 return WAIT
             if threat is not None and not threat.is_person and (
                     ordinary == WAIT or not threat.parked):
@@ -184,7 +195,12 @@ class PersonBypassDwaFollower(DwaFollower):
         if threat is not None and threat.is_person:
             self.publish_permit(permit)
             self.reset_gate_rejections()
-            return WAIT
+            # The base decision already applies the dynamic braking radius:
+            # CLEAR outside it and WAIT inside it.  Replacing that result with
+            # unconditional WAIT caused the 2026-08-30 stop at 8.3 m.
+            # Do not, however, accept a remembered PERSON_BYPASS result after
+            # direct qualification disappeared at collision distance.
+            return WAIT if blocking else ordinary
         if threat is None or ordinary != GO_ROUND:
             self.reset_gate_rejections()
             self.publish_permit(permit)

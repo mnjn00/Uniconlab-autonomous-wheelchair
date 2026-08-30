@@ -183,6 +183,7 @@ class StaticPersonQualifier:
                  maximum_position_jump_m: float = 0.35,
                  permit_lifetime_s: float = 0.45,
                  maximum_forward_m: float = 8.0,
+                 observation_forward_m: float = 10.0,
                  maximum_lateral_m: float = 1.0,
                  lateral_hysteresis_m: float = 0.25,
                  minimum_near_distance_m: float = 0.60,
@@ -190,7 +191,8 @@ class StaticPersonQualifier:
                  min_clearance_m: float = 0.50):
         values = (
             confirmation_s, maximum_gap_s, maximum_position_jump_m,
-            permit_lifetime_s, maximum_forward_m, maximum_lateral_m,
+            permit_lifetime_s, maximum_forward_m, observation_forward_m,
+            maximum_lateral_m,
             lateral_hysteresis_m, minimum_near_distance_m, max_speed_mps,
             min_clearance_m,
         )
@@ -202,6 +204,10 @@ class StaticPersonQualifier:
         self.maximum_position_jump_m = float(maximum_position_jump_m)
         self.permit_lifetime_s = float(permit_lifetime_s)
         self.maximum_forward_m = float(maximum_forward_m)
+        self.observation_forward_m = float(observation_forward_m)
+        if self.observation_forward_m < self.maximum_forward_m:
+            raise ValueError(
+                "static-person observation range must cover maneuver range")
         self.maximum_lateral_m = float(maximum_lateral_m)
         self.lateral_hysteresis_m = float(lateral_hysteresis_m)
         self.minimum_near_distance_m = float(minimum_near_distance_m)
@@ -248,7 +254,7 @@ class StaticPersonQualifier:
             return self.inactive(now_s, "PERSON_TOO_CLOSE")
         lateral_limit_m = self.maximum_lateral_m + (
             self.lateral_hysteresis_m if same_track else 0.0)
-        if person.near_distance_m > self.maximum_forward_m or \
+        if person.near_distance_m > self.observation_forward_m or \
                 abs(person.y_m) - 0.5 * person.size_y_m > lateral_limit_m:
             self.reset()
             return self.inactive(now_s, "PERSON_OUTSIDE_MANEUVER_REGION")
@@ -290,6 +296,23 @@ class StaticPersonQualifier:
                 max_speed_mps=self.max_speed_mps,
                 min_clearance_m=self.min_clearance_m,
                 reason="QUALIFYING_STATIC_PERSON",
+            )
+        if person.near_distance_m > self.maximum_forward_m:
+            # Keep the same-track timer warm while the person is visible in
+            # the approach region, but do not authorize a trajectory until
+            # they enter the bounded maneuver region.  This avoids the field
+            # deadlock where DWA saw a person at 8.3 m while the 8.0 m
+            # qualifier repeatedly returned NO_PERSON and forced an early
+            # stop that prevented the range from ever closing.
+            return BypassPermit(
+                capable=True, active=False, stamp_s=now_s,
+                expires_s=now_s + self.permit_lifetime_s,
+                track_id=person.track_id,
+                target_x_m=person.x_m, target_y_m=person.y_m,
+                static_for_s=static_for_s,
+                max_speed_mps=self.max_speed_mps,
+                min_clearance_m=self.min_clearance_m,
+                reason="STATIC_PERSON_READY_OUTSIDE_MANEUVER_REGION",
             )
         return BypassPermit(
             capable=True, active=True, stamp_s=now_s,

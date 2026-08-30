@@ -880,6 +880,7 @@ def bypass_fixture(monkeypatch):
     follower = module.PersonBypassDwaFollower.__new__(module.PersonBypassDwaFollower)
     follower.qualifier = module.StaticPersonQualifier()
     follower.person_bypass_maximum_forward_m = 8.0
+    follower.person_bypass_observation_forward_m = 10.0
     follower.person_bypass_maximum_lateral_m = 1.0
     follower.person_bypass_lateral_hysteresis_m = 0.25
     follower.tracking_state = "TRACKING"
@@ -914,6 +915,50 @@ def qualify_bypass_fixture(follower, Stamp, people=None, start=10.0):
         follower.cluster_summary = summary_at(now, people)
         permit = follower.observed_person_permit(Stamp(now))
     return permit
+
+
+def test_recorded_8m_boundary_does_not_deadlock_the_approach(monkeypatch):
+    module, Stamp, follower, permits = bypass_fixture(monkeypatch)
+    person = dict(recorded_side_person(), x=8.45, y=0.0,
+                  size=[0.2, 0.5, 1.7])
+    follower.cluster_summary = summary_at(10.0, [person])
+    threat = types.SimpleNamespace(is_person=True, parked=True)
+
+    # The 2026-08-30 run saw this same person at about 8.3 m.  It is inside
+    # the observation range, outside the maneuver range, and outside the
+    # dynamic braking envelope, so qualification starts without stopping.
+    assert follower.avoidance_for(Stamp(10.0), threat, False) == cg.CLEAR
+    assert permits[-1].reason == "QUALIFYING_STATIC_PERSON"
+    assert not permits[-1].active
+
+    # Collision distance remains fail-closed while authorization is pending.
+    follower.cluster_summary = summary_at(10.2, [person])
+    assert follower.avoidance_for(Stamp(10.2), threat, True) == module.WAIT
+
+
+def test_static_person_can_qualify_before_entering_maneuver_region(monkeypatch):
+    module, Stamp, follower, _permits = bypass_fixture(monkeypatch)
+    person = dict(recorded_side_person(), x=8.45, y=0.0,
+                  size=[0.2, 0.5, 1.7])
+    for i in range(17):
+        now = 10.0 + 0.2 * i
+        follower.cluster_summary = summary_at(now, [person])
+        permit = follower.observed_person_permit(Stamp(now))
+
+    assert not permit.active
+    assert permit.reason == "STATIC_PERSON_READY_OUTSIDE_MANEUVER_REGION"
+    assert permit.static_for_s >= 3.0
+
+    # Preserve the timer while ego motion brings the same track through 8 m.
+    for i, x_m in enumerate((8.35, 8.25, 8.05), start=17):
+        now = 10.0 + 0.2 * i
+        person["x"] = x_m
+        follower.cluster_summary = summary_at(now, [person])
+        permit = follower.observed_person_permit(Stamp(now))
+
+    assert permit.active
+    assert permit.reason == "STATIC_PERSON_BYPASS"
+    assert permit.static_for_s >= 3.0
 
 
 def test_recorded_semantic_only_side_person_qualifies_without_nearest_query(monkeypatch):
