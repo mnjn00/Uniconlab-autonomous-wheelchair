@@ -156,6 +156,57 @@ def test_blocking_track_ignores_irrelevant_observation(monkeypatch):
     assert permit is not None and permit.active and permit.track_id == 7
 
 
+@pytest.mark.parametrize("motion", ["moving", "unknown"])
+def test_second_dynamic_observation_vetoes_blocking_track(monkeypatch, motion):
+    module, Stamp, _Twist = load_follower("person_bypass_dwa_follower")
+    observation_type = getattr(
+        module.threat_observations, "__globals__")["StaticThreatObservation"]
+    follower = module.PersonBypassDwaFollower.__new__(
+        module.PersonBypassDwaFollower)
+    follower.qualifier = module.StaticThreatBypassManager()
+    follower.tracking_state = "TRACKING"
+    follower.person_bypass_maximum_forward_m = 8.0
+    follower.person_bypass_maximum_lateral_m = 1.0
+    follower.person_bypass_lateral_hysteresis_m = 0.25
+    follower._qualification_key = None
+    follower._latest_permit = None
+    blocker = types.SimpleNamespace(track_id=7)
+
+    def static_target(_summary, **_kwargs):
+        stamp_s = follower.cluster_summary.stamp_s
+        return (observation_type(
+            7, stamp_s, 1.5, 0.0, 0.5, 0.5,
+            "person", "static", "geometric"),)
+
+    monkeypatch.setattr(module, "threat_observations", static_target)
+    for tick in range(11):
+        stamp_s = round(tick * 0.2, 1)
+        follower.cluster_summary = types.SimpleNamespace(
+            usable=True, stamp_s=stamp_s)
+        permit = follower.observed_threat_permit(Stamp(stamp_s), blocker)
+    assert permit.active
+
+    # Given another dynamic observation appears beside the qualified blocker.
+    def with_dynamic(_summary, **_kwargs):
+        stamp_s = follower.cluster_summary.stamp_s
+        return (
+            observation_type(
+                7, stamp_s, 1.5, 0.0, 0.5, 0.5,
+                "person", "static", "geometric"),
+            observation_type(
+                8, stamp_s, 2.0, 0.5, 0.5, 0.5,
+                "person", motion, "geometric"),
+        )
+
+    monkeypatch.setattr(module, "threat_observations", with_dynamic)
+    follower.cluster_summary = types.SimpleNamespace(usable=True, stamp_s=2.2)
+
+    # Then the all-observation veto disables bypass despite target matching.
+    permit = follower.observed_threat_permit(Stamp(2.2), blocker)
+    assert not permit.active
+    assert permit.reason == "DYNAMIC_CONFLICT"
+
+
 def test_precommit_dropout_preserves_candidate():
     module, _Stamp, _Twist = load_follower("person_bypass_policy")
     manager = module.StaticThreatBypassManager()

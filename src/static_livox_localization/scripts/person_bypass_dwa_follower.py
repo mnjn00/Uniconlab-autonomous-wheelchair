@@ -133,8 +133,7 @@ class PersonBypassDwaFollower(DwaFollower):
         if threat is None:
             threat = self.corridor_threat(0.0)
         target_track_id = getattr(threat, "track_id", None)
-        observations = tuple(
-            observation for observation in threat_observations(
+        all_observations = threat_observations(
             self.cluster_summary,
             maximum_forward_m=self.person_bypass_maximum_forward_m,
             maximum_lateral_m=(
@@ -143,7 +142,10 @@ class PersonBypassDwaFollower(DwaFollower):
             retained_track_id=(
                 getattr(self.qualifier, "track_id", None)
                 if getattr(self.qualifier, "committed", False) else None),
-            ) if observation.track_id == target_track_id)
+            )
+        observations = tuple(
+            observation for observation in all_observations
+            if observation.track_id == target_track_id)
         summary_healthy = (
             self.cluster_summary is not None
             and self.cluster_summary.usable)
@@ -158,7 +160,7 @@ class PersonBypassDwaFollower(DwaFollower):
             return self._latest_permit
         dynamic_conflict = any(
             observation.motion.strip().lower() != STATIC
-            for observation in observations)
+            for observation in all_observations)
         permit = self.qualifier.update(
             observations, now.to_sec(), self.tracking_state == "TRACKING",
             summary_healthy=summary_healthy,
