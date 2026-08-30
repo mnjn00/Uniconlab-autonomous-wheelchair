@@ -12,7 +12,8 @@ source "$LOCALIZATION_WS/devel/setup.bash"
 
 fail() { echo "REFUSING TO START: $*" >&2; exit 1; }
 
-START_POINTPILLARS="${START_POINTPILLARS:-true}"
+# Motion authorization must use the same defaults as bring-up.
+. "$SCRIPT_DIR/perception_profile.sh"
 REQUIRE_GPU="${REQUIRE_GPU:-true}"
 POINTPILLARS_REQUIRE_RTX2060="${POINTPILLARS_REQUIRE_RTX2060:-true}"
 if [ "${REQUIRE_LEARNED+x}" = x ]; then

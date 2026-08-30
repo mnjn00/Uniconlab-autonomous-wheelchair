@@ -14,7 +14,9 @@ require_rtx2060: true
 # 300k points. The ROS node rejects incompatible inputs instead of silently
 # resizing the network geometry.
 max_points: 300000
-minimum_points: 800
+# Sparse MID-360 frames below this threshold are skipped. The field runtime
+# has used 350 successfully; 800 repeatedly produced LEARNED_STALE holds.
+minimum_points: 350
 max_cloud_age_s: 0.50
 max_inference_ms: 90.0
 normalize_livox_intensity: true
