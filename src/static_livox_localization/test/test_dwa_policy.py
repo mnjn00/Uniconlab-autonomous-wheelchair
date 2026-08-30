@@ -960,109 +960,57 @@ def test_static_object_pass_uses_ego_motion_and_excludes_only_that_track():
     assert follower.planner_excluded_track_ids() == (91,)
 
 
-def post_pass_recovery_fixture():
-    module, _Stamp = load_follower("person_bypass_dwa_follower")
+def pass_release_fixture():
+    module, Stamp = load_follower("person_bypass_dwa_follower")
     follower = module.PersonBypassDwaFollower.__new__(
         module.PersonBypassDwaFollower)
-    follower.pose_xy = np.array([10.0, 5.0])
-    follower.pose_yaw = 0.0
-    follower._post_pass_track_id = None
-    follower._post_pass_origin_xy = None
-    follower.post_pass_straight_distance_m = .8
-    follower.post_pass_straight_yaw_rate = .05
-    follower.post_pass_recovery_yaw_rate = .08
-    follower.post_pass_alignment_lateral_m = .25
-    follower.post_pass_alignment_heading_rad = .12
-    follower.route_error_m = .5
-    follower.planner = types.SimpleNamespace(
-        tree=types.SimpleNamespace(
-            query=lambda _pose: (follower.route_error_m, 0)),
-        heading=np.array([0.0]))
-    permit = types.SimpleNamespace(track_id=250)
-    follower.latch_post_pass_recovery(permit)
-    return module, follower
-
-
-def test_passed_person_holds_near_straight_then_gently_rejoins():
-    _module, follower = post_pass_recovery_fixture()
-
-    follower.pose_xy = np.array([10.4, 5.0])
-    assert follower.post_pass_yaw_cap() == pytest.approx(.05)
-
-    follower.pose_xy = np.array([11.0, 5.0])
-    assert follower.post_pass_yaw_cap() == pytest.approx(.08)
-
-    # Distance alone no longer ends recovery. It ends only after both the
-    # ideal route and its heading have been reached gently.
-    follower.pose_xy = np.array([12.01, 5.0])
-    assert follower.post_pass_yaw_cap() == pytest.approx(.08)
-    follower.route_error_m = .20
-    follower.pose_yaw = .05
-    assert follower.post_pass_yaw_cap() is None
-    assert follower._post_pass_track_id is None
-
-
-def test_post_pass_recovery_vetoes_the_recorded_half_rad_s_snap_back():
-    _module, follower = post_pass_recovery_fixture()
-    follower.pose_xy = np.array([10.4, 5.0])
-    follower.active_trajectory_permit = None
-
-    veto = follower.planner_candidate_veto(
-        types.SimpleNamespace(to_sec=lambda: 100.0), None,
-        lambda v, w: (v, w))
-
-    assert not veto(.35, .05)
-    assert veto(.35, .10)
-    assert veto(.35, .50)
-
-
-def test_ordinary_commitment_reset_keeps_post_pass_recovery():
-    _module, follower = post_pass_recovery_fixture()
     follower._committed_bypass_track_id = 250
     follower._committed_bypass_side = 1
+    follower._committed_bypass_kind = "person"
     follower._static_object_track_id = None
-    follower._static_object_world_xy = None
-    follower._static_object_half_forward_m = 0.0
-    follower._static_object_half_lateral_m = 0.0
     follower._static_object_passed_side = False
+    follower._static_object_commit_until_s = 101.5
+    follower._passed_person_track_id = None
+    follower.active_trajectory_permit = types.SimpleNamespace(active=True)
+    follower.planner = types.SimpleNamespace(max_speed=.8)
+    permit = types.SimpleNamespace(
+        reason="STATIC_PERSON_PASSED_SIDE", track_id=250)
+    return module, Stamp, follower, permit
 
-    follower.reset_bypass_commitment()
 
-    assert follower._post_pass_track_id == 250
-    assert follower.post_pass_recovery_active()
+def test_passed_person_releases_speed_and_steering_to_normal_dwa():
+    _module, Stamp, follower, permit = pass_release_fixture()
+
+    follower.activate_trajectory_bypass(permit, "already passed")
+
+    assert follower.active_trajectory_permit is None
+    assert follower._committed_bypass_side == 0
+    assert follower._committed_bypass_kind is None
+    assert follower.planner.max_speed == pytest.approx(.8)
+    assert follower.planner_candidate_veto(
+        Stamp(100.0), None, lambda v, w: (v, w)) is None
 
 
-def test_post_pass_recovery_excludes_only_the_passed_track_from_dwa():
-    _module, follower = post_pass_recovery_fixture()
-    follower._static_object_passed_side = False
-    follower._static_object_track_id = None
+def test_passed_person_is_excluded_only_from_dwa_geometry():
+    _module, _Stamp, follower, permit = pass_release_fixture()
+
+    follower.release_pass_to_dwa(permit)
 
     assert follower.planner_excluded_track_ids() == (250,)
 
 
-def test_interrupted_active_bypass_enters_gentle_recovery():
-    _module, follower = post_pass_recovery_fixture()
-    follower.reset_post_pass_recovery()
-    follower._maneuver_track_previous_cycle = 1689
-    follower._maneuver_track_this_cycle = None
-    follower.last_yaw_rate = .15
+def test_passed_static_object_keeps_exclusion_without_maneuver_control():
+    _module, Stamp, follower, _permit = pass_release_fixture()
+    follower._static_object_track_id = 91
+    follower._static_object_passed_side = True
+    permit = types.SimpleNamespace(
+        reason="STATIC_OBJECT_PASSED_SIDE", track_id=91)
 
-    follower.finish_maneuver_cycle()
+    follower.release_pass_to_dwa(permit)
 
-    assert follower._post_pass_track_id == 1689
-    assert follower.post_pass_yaw_cap() == pytest.approx(.05)
-
-
-def test_interrupted_bypass_without_a_turn_does_not_slow_the_route():
-    _module, follower = post_pass_recovery_fixture()
-    follower.reset_post_pass_recovery()
-    follower._maneuver_track_previous_cycle = 1442
-    follower._maneuver_track_this_cycle = None
-    follower.last_yaw_rate = 0.0
-
-    follower.finish_maneuver_cycle()
-
-    assert follower._post_pass_track_id is None
+    assert follower.planner_excluded_track_ids() == (91,)
+    assert follower.planner_candidate_veto(
+        Stamp(100.0), None, lambda v, w: (v, w)) is None
 
 
 def test_person_identity_coordinates_are_compensated_for_ego_rotation():
@@ -1289,7 +1237,9 @@ def test_passed_side_person_returns_to_forward_route_without_losing_safety(monke
     assert permit.active and permit.reason == "STATIC_PERSON_PASSED_SIDE"
     assert follower.avoidance_for(Stamp(14.0), None, False) == module.GO_ROUND
     assert permits[-1].reason == "STATIC_PERSON_PASSED_SIDE"
-    assert follower.active_trajectory_permit is not None
+    assert follower.active_trajectory_permit is None
+    assert follower._committed_bypass_side == 0
+    assert follower.planner_excluded_track_ids() == (person["id"],)
 
     semantic, _ = load_follower('person_bypass_semantic_supervisor')
     supervisor = semantic.PersonBypassSemanticSupervisor.__new__(

@@ -52,10 +52,7 @@ class PersonBypassDwaFollower(DwaFollower):
         self._static_object_half_lateral_m = 0.0
         self._static_object_passed_side = False
         self._static_object_commit_until_s = 0.0
-        self._post_pass_track_id = None
-        self._post_pass_origin_xy = None
-        self._maneuver_track_previous_cycle = None
-        self._maneuver_track_this_cycle = None
+        self._passed_person_track_id = None
         self.active_trajectory_permit = None
         super(PersonBypassDwaFollower, self).__init__()
         self.person_bypass_confirmation_s = float(rospy.get_param(
@@ -88,16 +85,6 @@ class PersonBypassDwaFollower(DwaFollower):
             "~static_object_slowdown_distance_m", 3.0))
         self.person_bypass_clearance_m = float(rospy.get_param(
             "~person_bypass_clearance_m", 0.50))
-        self.post_pass_straight_distance_m = float(rospy.get_param(
-            "~post_pass_straight_distance_m", 0.80))
-        self.post_pass_straight_yaw_rate = float(rospy.get_param(
-            "~post_pass_straight_yaw_rate", 0.05))
-        self.post_pass_recovery_yaw_rate = float(rospy.get_param(
-            "~post_pass_recovery_yaw_rate", 0.08))
-        self.post_pass_alignment_lateral_m = float(rospy.get_param(
-            "~post_pass_alignment_lateral_m", 0.25))
-        self.post_pass_alignment_heading_rad = float(rospy.get_param(
-            "~post_pass_alignment_heading_rad", 0.12))
         self.minimum_person_bypass_turn_rps = float(rospy.get_param(
             "/safety_gate/minimum_person_bypass_turn_rps", 0.08))
         self.qualifier = StaticPersonQualifier(
@@ -163,115 +150,22 @@ class PersonBypassDwaFollower(DwaFollower):
         self._static_object_passed_side = False
         self._static_object_commit_until_s = 0.0
 
-    def reset_post_pass_recovery(self):
-        self._post_pass_track_id = None
-        self._post_pass_origin_xy = None
+    def release_pass_to_dwa(self, permit):
+        """End maneuver-specific control once safe side passage is proven.
 
-    def remember_maneuver_cycle(self, track_id):
-        if track_id is not None:
-            self._maneuver_track_this_cycle = track_id
-
-    def route_alignment_error(self):
-        """Distance and heading error to the ideal route at the chair."""
-        pose = getattr(self, "pose_xy", None)
-        yaw = getattr(self, "pose_yaw", None)
-        planner = getattr(self, "planner", None)
-        if pose is None or yaw is None or planner is None:
-            return None
-        try:
-            distance, index = planner.tree.query(pose)
-            heading = float(planner.heading[int(index)])
-            yaw = float(yaw)
-            distance = float(distance)
-        except (AttributeError, IndexError, TypeError, ValueError):
-            return None
-        heading_error = abs(math.atan2(
-            math.sin(yaw - heading), math.cos(yaw - heading)))
-        if not math.isfinite(distance) or not math.isfinite(heading_error):
-            return None
-        return distance, heading_error
-
-    def latch_post_pass_recovery(self, permit):
-        """Remember where a safe side-pass completed.
-
-        Losing the cluster is expected just after a pass.  It must not switch
-        directly from the low-speed straight pass to unrestricted route
-        recovery: both recorded passes on 2026-08-30 jumped from w=0 to the
-        +0.50 rad/s limit as soon as the PERSON track disappeared.  Distance
-        from this map-frame origin keeps the recovery independent of cluster
-        flicker and chair rotation.
+        PASSED_SIDE is a state transition, not a new motion command.  Keep
+        only the track exclusion that prevents the already-cleared object
+        from being planned around again.  Normal DWA immediately owns speed
+        and steering; the raw trajectory gate still sees the full point cloud.
         """
-        pose = getattr(self, "pose_xy", None)
-        track_id = getattr(permit, "track_id", None)
-        self.latch_post_pass_track(track_id, pose)
-
-    def latch_post_pass_track(self, track_id, pose=None):
-        """Start gentle recovery for one completed/interrupted maneuver."""
-        if pose is None:
-            pose = getattr(self, "pose_xy", None)
-        if pose is None or track_id is None:
-            return
-        try:
-            origin = (float(pose[0]), float(pose[1]))
-        except (IndexError, TypeError, ValueError):
-            return
-        if not all(math.isfinite(value) for value in origin):
-            return
-        if self._post_pass_track_id != track_id or \
-                self._post_pass_origin_xy is None:
-            self._post_pass_track_id = track_id
-            self._post_pass_origin_xy = origin
-
-    def finish_maneuver_cycle(self):
-        previous_track = getattr(self, "_maneuver_track_previous_cycle", None)
-        current_track = getattr(self, "_maneuver_track_this_cycle", None)
-        if previous_track is not None and current_track is None and \
-                abs(float(getattr(self, "last_yaw_rate", 0.0))) >= 0.05 and \
-                not self.static_object_commitment_active():
-            # A qualified maneuver disappeared before PASSED_SIDE.  The
-            # 00:01 trial lost track 1689 during chair rotation, then the
-            # ordinary route cost selected +0.50 rad/s.  Enter the same
-            # gentle recovery used after a clean pass; semantic and raw
-            # gates still stop rather than authorizing an unseen person.
-            self.latch_post_pass_track(previous_track)
-        self._maneuver_track_previous_cycle = current_track
-
-    def post_pass_distance_m(self):
-        pose = getattr(self, "pose_xy", None)
-        origin = getattr(self, "_post_pass_origin_xy", None)
-        if pose is None or origin is None:
-            return None
-        try:
-            distance = math.hypot(
-                float(pose[0]) - float(origin[0]),
-                float(pose[1]) - float(origin[1]))
-        except (IndexError, TypeError, ValueError):
-            return None
-        return distance if math.isfinite(distance) else None
-
-    def post_pass_yaw_cap(self):
-        """Return the gentle-rejoin yaw cap until pose and heading align."""
-        distance = self.post_pass_distance_m()
-        if distance is None:
-            return None
-        straight_distance = max(
-            float(getattr(self, "post_pass_straight_distance_m", .8)), 0.0)
-        if distance < straight_distance:
-            return max(float(getattr(
-                self, "post_pass_straight_yaw_rate", .05)), 0.0)
-        alignment = self.route_alignment_error()
-        if alignment is not None and \
-                alignment[0] <= float(getattr(
-                    self, "post_pass_alignment_lateral_m", .25)) and \
-                alignment[1] <= float(getattr(
-                    self, "post_pass_alignment_heading_rad", .12)):
-            self.reset_post_pass_recovery()
-            return None
-        return max(float(getattr(
-            self, "post_pass_recovery_yaw_rate", .08)), 0.0)
-
-    def post_pass_recovery_active(self):
-        return self.post_pass_yaw_cap() is not None
+        reason = str(getattr(permit, "reason", ""))
+        if reason == "STATIC_PERSON_PASSED_SIDE":
+            self._passed_person_track_id = getattr(permit, "track_id", None)
+        self.active_trajectory_permit = None
+        self._committed_bypass_track_id = None
+        self._committed_bypass_side = 0
+        self._committed_bypass_kind = None
+        self._static_object_commit_until_s = 0.0
 
     def update_static_object_pass(self, threat):
         """Track a confirmed-static object in map coordinates.
@@ -382,10 +276,9 @@ class PersonBypassDwaFollower(DwaFollower):
         if self._static_object_passed_side and \
                 self._static_object_track_id is not None:
             excluded.append(self._static_object_track_id)
-        if self.post_pass_recovery_active() and \
-                self._post_pass_track_id is not None and \
-                self._post_pass_track_id not in excluded:
-            excluded.append(self._post_pass_track_id)
+        passed_person = getattr(self, "_passed_person_track_id", None)
+        if passed_person is not None and passed_person not in excluded:
+            excluded.append(passed_person)
         return tuple(excluded)
 
     @staticmethod
@@ -447,12 +340,12 @@ class PersonBypassDwaFollower(DwaFollower):
             float(permit.min_clearance_m))
 
     def activate_trajectory_bypass(self, permit, detail):
-        self.active_trajectory_permit = permit
-        self.remember_maneuver_cycle(getattr(permit, "track_id", None))
         reason = str(getattr(permit, "reason", ""))
-        object_permit = reason.startswith("STATIC_OBJECT_")
         if reason.endswith("_PASSED_SIDE"):
-            self.latch_post_pass_recovery(permit)
+            self.release_pass_to_dwa(permit)
+            return
+        self.active_trajectory_permit = permit
+        object_permit = reason.startswith("STATIC_OBJECT_")
         carry_object_side = (
             object_permit
             and self.static_object_commitment_active(
@@ -559,16 +452,15 @@ class PersonBypassDwaFollower(DwaFollower):
             observations, now.to_sec(), self.tracking_state == "TRACKING")
         if permit.active and \
                 str(getattr(permit, "reason", "")).endswith("_PASSED_SIDE"):
-            self.latch_post_pass_recovery(permit)
+            self.release_pass_to_dwa(permit)
+        elif not permit.active or getattr(permit, "track_id", None) != \
+                getattr(self, "_passed_person_track_id", None):
+            self._passed_person_track_id = None
         if not permit.active and permit.reason != "NO_PERSON":
             self.reset_bypass_commitment()
         return permit
 
     def avoidance_for(self, now, threat, blocking):
-        if self.post_pass_recovery_active():
-            self.planner.max_speed = min(
-                float(self.planner.max_speed),
-                float(self.person_bypass_speed_mps))
         ordinary = super(PersonBypassDwaFollower, self).avoidance_for(
             now, threat, blocking)
         permit = self.observed_person_permit(now)
@@ -592,13 +484,10 @@ class PersonBypassDwaFollower(DwaFollower):
                     ordinary == WAIT or not threat.parked):
                 return WAIT
             if permit.reason == "STATIC_PERSON_PASSED_SIDE" and threat is None:
-                # Keep the same maneuver active while the person is beside
-                # the chair. Straight is now a valid candidate when its real
-                # swept footprint is clear, but an abrupt opposite turn back
-                # to the centreline is withheld until the person has left the
-                # side region. This removes the observed S-shaped snap-back.
-                self.activate_trajectory_bypass(
-                    permit, "static person safely passing down the side")
+                self.release_pass_to_dwa(permit)
+                return GO_ROUND
+            if permit.reason == "STATIC_PERSON_PASSED_SIDE":
+                self.release_pass_to_dwa(permit)
                 return GO_ROUND
             self.activate_trajectory_bypass(
                 permit, "static-person trajectory permit")
@@ -639,18 +528,20 @@ class PersonBypassDwaFollower(DwaFollower):
         )
         self.publish_permit(permit)
         if permit.active:
-            self.activate_trajectory_bypass(
-                permit, "static-object trajectory permit")
+            if permit.reason == "STATIC_OBJECT_PASSED_SIDE":
+                self.release_pass_to_dwa(permit)
+            else:
+                self.activate_trajectory_bypass(
+                    permit, "static-object trajectory permit")
         else:
             self.reset_bypass_commitment()
         return ordinary
 
     def planner_candidate_veto(self, now, _decision, command_for_target):
-        recovery_yaw_cap = self.post_pass_yaw_cap()
         object_direction_grace = self.static_object_commitment_active(
             now.to_sec())
         if self.active_trajectory_permit is None and \
-                recovery_yaw_cap is None and not object_direction_grace:
+                not object_direction_grace:
             return None
         raw_veto = None
         committed_side = 0
@@ -668,9 +559,6 @@ class PersonBypassDwaFollower(DwaFollower):
             committed_side = self._committed_bypass_side
 
         def veto(target_v, target_w):
-            if recovery_yaw_cap is not None and \
-                    abs(float(target_w)) > recovery_yaw_cap + 1e-6:
-                return True
             # Zero yaw is intentionally allowed: if its exact raw sweep is
             # clear, continuing forward is safer and smoother than forcing a
             # turn. Only a turn toward the opposite side is suppressed.
@@ -682,7 +570,6 @@ class PersonBypassDwaFollower(DwaFollower):
 
     def step(self):
         self.active_trajectory_permit = None
-        self._maneuver_track_this_cycle = None
         self._permit_published_this_cycle = False
         saved_max_speed = float(self.planner.max_speed)
         saved_clearance = float(dwa_core.OBSTACLE_FLOOR_M)
@@ -691,7 +578,7 @@ class PersonBypassDwaFollower(DwaFollower):
         now = rospy.Time.now()
         if not getattr(self, "enabled", False) or (
                 getattr(self, "drive_mode", None) not in (None, 65)):
-            self.reset_post_pass_recovery()
+            self._passed_person_track_id = None
             self.reset_bypass_commitment(force=True)
         # Publish person evidence before the base hold ladder can return for
         # PAUSED/MANUAL/STARTUP.  Do not publish the ordinary NO_PERSON value
@@ -707,7 +594,6 @@ class PersonBypassDwaFollower(DwaFollower):
         try:
             super(PersonBypassDwaFollower, self).step()
         finally:
-            self.finish_maneuver_cycle()
             self.planner.max_speed = saved_max_speed
             dwa_core.OBSTACLE_FLOOR_M = saved_clearance
             self.planner.rejected_yaw_rates = saved_rejected_yaws
