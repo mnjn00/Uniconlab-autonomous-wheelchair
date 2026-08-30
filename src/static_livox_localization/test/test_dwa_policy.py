@@ -1012,7 +1012,7 @@ def test_person_permit_never_overrides_another_nonstatic_obstacle(monkeypatch, m
     ('moving', 'PERSON_NOT_CONFIRMED_STATIC'),
     ('unknown', 'PERSON_NOT_CONFIRMED_STATIC'),
     ('missing', 'NO_PERSON'), ('multiple', 'MULTIPLE_PEOPLE'),
-    ('id', 'QUALIFYING_STATIC_PERSON'), ('jump', 'QUALIFYING_STATIC_PERSON'),
+    ('jump', 'QUALIFYING_STATIC_PERSON'),
     ('stale', 'PERSON_OBSERVATION_STALE'),
     ('localization', 'LOCALIZATION_NOT_TRACKING'),
     ('close', 'PERSON_TOO_CLOSE'), ('learned', 'PERSON_NOT_CONFIRMED_STATIC')])
@@ -1037,6 +1037,20 @@ def test_person_evidence_changes_still_revoke_permission(monkeypatch, change, re
     # Even the base's separate remembered-person readiness cannot release.
     monkeypatch.setattr(module.DwaFollower, 'avoidance_for', lambda *a: cg.PERSON_BYPASS)
     assert follower.avoidance_for(Stamp(now), types.SimpleNamespace(is_person=True), True) == module.WAIT
+
+
+def test_qualified_side_person_track_id_handoff_keeps_permission(monkeypatch):
+    module, Stamp, follower, _permits = bypass_fixture(monkeypatch)
+    previous = qualify_bypass_fixture(follower, Stamp)
+    assert previous.active
+    item = dict(recorded_side_person(), id=5757)
+    follower.cluster_summary = summary_at(13.4, [item])
+
+    permit = follower.observed_person_permit(Stamp(13.4))
+
+    assert permit.active
+    assert permit.track_id == 5757
+    assert permit.static_for_s >= previous.static_for_s
 
 
 def test_semantic_validation_retains_same_track_in_qualifier_hysteresis(monkeypatch):

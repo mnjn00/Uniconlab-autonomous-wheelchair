@@ -253,6 +253,35 @@ class StaticPersonQualifier:
             min_clearance_m=self.min_clearance_m, reason=reason,
         )
 
+    def _can_handoff_track(self, person: PersonObservation,
+                           stamp_s: float) -> bool:
+        """Keep a completed qualification across a conservative ID change.
+
+        A tracker may allocate a new ID while the chair passes a person and
+        the box moves toward the edge of its field of view.  Requiring another
+        three seconds at that point produces a stop/replan cycle.  Identity is
+        transferred only after the old track was fully qualified and when one
+        fresh, static box remains position-continuous on the same side with
+        enough lateral clearance.  Moving/unknown, ambiguous, or jumped boxes
+        still take the normal fail-closed reset path.
+        """
+        if self.track_id is None or self.first_stamp_s is None or \
+                self.last_stamp_s is None or self.last_xy is None:
+            return False
+        static_for_s = float(self.last_stamp_s) - float(self.first_stamp_s)
+        if static_for_s + 1e-6 < self.confirmation_s:
+            return False
+        gap_s = float(stamp_s) - float(self.last_stamp_s)
+        if gap_s < -1e-6 or gap_s > self.maximum_gap_s:
+            return False
+        jump_m = math.hypot(
+            person.x_m - self.last_xy[0], person.y_m - self.last_xy[1])
+        if jump_m > self.maximum_position_jump_m:
+            return False
+        if person.lateral_clearance_m < self.min_clearance_m:
+            return False
+        return float(self.last_xy[1]) * float(person.y_m) > 0.0
+
     def update(self, observations: Sequence[PersonObservation], now_s: float,
                localization_tracking: bool) -> BypassPermit:
         now_s = float(now_s)
@@ -285,10 +314,21 @@ class StaticPersonQualifier:
             return self.inactive(
                 now_s, "NO_PERSON" if not observations else "MULTIPLE_PEOPLE")
         person = observations[0]
-        same_track = self.track_id == person.track_id
         if not person.eligible_static:
             self.reset()
             return self.inactive(now_s, "PERSON_NOT_CONFIRMED_STATIC")
+
+        stamp_s = float(person.stamp_s)
+        if stamp_s > now_s + 0.05 or now_s - stamp_s > self.maximum_gap_s:
+            self.reset()
+            return self.inactive(now_s, "PERSON_OBSERVATION_STALE")
+
+        same_track = self.track_id == person.track_id
+        if not same_track and self._can_handoff_track(person, stamp_s):
+            # Preserve first_stamp_s (the completed static evidence) while the
+            # permit follows the detector's replacement ID.
+            self.track_id = person.track_id
+            same_track = True
         if person.near_distance_m < self.minimum_near_distance_m:
             qualified = same_track and self.first_stamp_s is not None and \
                 self.last_stamp_s is not None and \
@@ -306,11 +346,6 @@ class StaticPersonQualifier:
                 abs(person.y_m) - 0.5 * person.size_y_m > lateral_limit_m:
             self.reset()
             return self.inactive(now_s, "PERSON_OUTSIDE_MANEUVER_REGION")
-
-        stamp_s = float(person.stamp_s)
-        if stamp_s > now_s + 0.05 or now_s - stamp_s > self.maximum_gap_s:
-            self.reset()
-            return self.inactive(now_s, "PERSON_OBSERVATION_STALE")
 
         if not same_track or self.last_stamp_s is None:
             self.track_id = person.track_id

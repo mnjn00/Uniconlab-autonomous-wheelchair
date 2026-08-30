@@ -164,6 +164,53 @@ def test_qualified_person_safely_beside_remains_authorized():
     assert revoked.reason == "PERSON_NOT_CONFIRMED_STATIC"
 
 
+def test_qualified_side_person_keeps_permission_across_track_id_handoff():
+    qualifier = StaticPersonQualifier(
+        confirmation_s=.4, maximum_gap_s=.45,
+        maximum_position_jump_m=.35, minimum_near_distance_m=.60,
+        min_clearance_m=.50)
+    for stamp in (1.0, 1.2, 1.4):
+        permit = qualifier.update(person_observations(summary(
+            stamp, [person(track=7, x=2.0, y=.9)])), stamp, True)
+    assert permit.active and permit.static_for_s + 1e-6 >= .4
+
+    # The tracker replaces the ID as the already-qualified person moves down
+    # the side.  The completed timer follows the continuous box instead of
+    # restarting and causing another stop/replan cycle.
+    permit = qualifier.update(person_observations(summary(
+        1.6, [person(track=81, x=1.8, y=.9)])), 1.6, True)
+
+    assert permit.active
+    assert permit.track_id == 81
+    assert permit.static_for_s >= .6
+
+
+def test_track_handoff_rejects_jump_opposite_side_and_unqualified_track():
+    for replacement in (
+            person(track=81, x=1.2, y=.9),
+            person(track=81, x=2.0, y=-.9)):
+        qualifier = StaticPersonQualifier(
+            confirmation_s=.4, maximum_position_jump_m=.35,
+            minimum_near_distance_m=.60, min_clearance_m=.50)
+        for stamp in (1.0, 1.2, 1.4):
+            qualifier.update(person_observations(summary(
+                stamp, [person(track=7, x=2.0, y=.9)])), stamp, True)
+        permit = qualifier.update(
+            person_observations(summary(1.6, [replacement])), 1.6, True)
+        assert not permit.active
+        assert permit.reason == "QUALIFYING_STATIC_PERSON"
+
+    qualifier = StaticPersonQualifier(
+        confirmation_s=1.0, minimum_near_distance_m=.60,
+        min_clearance_m=.50)
+    qualifier.update(person_observations(summary(
+        1.0, [person(track=7, x=2.0, y=.9)])), 1.0, True)
+    permit = qualifier.update(person_observations(summary(
+        1.2, [person(track=81, x=1.9, y=.9)])), 1.2, True)
+    assert not permit.active
+    assert permit.static_for_s == 0.0
+
+
 def test_person_near_the_path_cannot_use_passed_side_permission():
     qualifier = StaticPersonQualifier(
         confirmation_s=.4, minimum_near_distance_m=.60,
